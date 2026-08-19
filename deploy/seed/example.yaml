@@ -1,0 +1,68 @@
+# Example seed manifest for `control-plane seed` (Step 75, "config/data
+# seeding", §10-P6, §13.4). EVERY value below is fictional -- no real
+# person, GitHub id, repo, or organization. Copy this file, replace every
+# value with your own deployment's real data, and keep the copy OUTSIDE
+# this repository (or in a gitignored, deploy-specific location): this
+# file is customer data, not system data -- see internal/app/seed/doc.go.
+#
+# Initial-admin status is NOT declared here at all -- it comes exclusively
+# from the NARVI_INITIAL_ADMIN_EMAILS environment variable already read by
+# `control-plane serve` for the same purpose (a comma-separated list of
+# emails). A participant's email matching that list becomes role=admin at
+# CREATION time only; every other participant defaults to role=member.
+# See docs/seeding.md for the full re-run semantics per section.
+#
+# Usage:
+#   control-plane seed -manifest ./my-real-manifest.yaml -dry-run   # preview
+#   control-plane seed -manifest ./my-real-manifest.yaml            # apply
+
+participants:
+  - githubId: 100001 # the NUMERIC GitHub user id (GET /user's own "id"), never a login
+    email: ada.example@example.test
+    displayName: Ada Example
+  - githubId: 100002
+    email: mo.example@example.test
+    displayName: Mo Example
+
+secrets:
+  - scope: global
+    name: EXAMPLE_LINT_SERVICE_TOKEN
+    value: replace-with-a-real-secret-value
+  - scope: repo
+    repoFullName: example-org/widget-app
+    name: EXAMPLE_DEPLOY_TOKEN
+    value: replace-with-a-real-secret-value
+
+automations:
+  - name: nightly-dependency-sweep
+    prompt: Check for outdated dependencies and open a PR bumping them.
+    repos:
+      - name: widget-app
+        url: https://github.com/example-org/widget-app
+        branch: main
+    triggerType: cron
+    cronSchedule: "0 3 * * *"
+    envVars:
+      - name: SWEEP_MODE
+        value: nightly
+  - name: manual-release-notes-draft
+    prompt: Draft release notes from the merged PRs since the last tag.
+    repos:
+      - name: widget-app
+        url: https://github.com/example-org/widget-app
+    triggerType: manual
+
+repoSettings:
+  - repoFullName: example-org/widget-app
+    blockOnHighRisk: true
+    sentinelAutofixEnabled: false
+
+# This tool's own answer to Step 75's "integrations" checklist item --
+# see internal/app/seed/doc.go for why Slack/Linear workspace connections
+# (this codebase's OTHER meaning of "integration") are NOT seedable data
+# at all: they require a live OAuth consent flow with the third party.
+rwxPreview:
+  - repoFullName: example-org/widget-app
+    dispatchKey: replace-with-a-real-dispatch-key
+    endpointTemplate: "https://rwx.example.test/preview/{{id}}"
+    orgSlug: example-org

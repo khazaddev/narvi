@@ -1,0 +1,40 @@
+participants:
+  - githubId: 111111
+    email: ada@example.test
+    displayName: Ada Adminsson
+  - githubId: 222222
+    email: mo@example.test
+    displayName: Mo Memberson
+
+secrets:
+  - scope: global
+    name: EXAMPLE_TOOL_TOKEN
+    value: super-secret-value
+  - scope: repo
+    repoFullName: example-org/widget-app
+    name: EXAMPLE_REPO_TOKEN
+    value: another-secret-value
+
+automations:
+  - name: nightly-lint-sweep
+    prompt: Run the linter and open a PR with any auto-fixes.
+    repos:
+      - name: widget-app
+        url: https://github.com/example-org/widget-app
+        branch: main
+    triggerType: cron
+    cronSchedule: "0 3 * * *"
+    envVars:
+      - name: SWEEP_MODE
+        value: nightly
+
+repoSettings:
+  - repoFullName: example-org/widget-app
+    blockOnHighRisk: true
+    sentinelAutofixEnabled: false
+
+rwxPreview:
+  - repoFullName: example-org/widget-app
+    dispatchKey: example-dispatch-key
+    endpointTemplate: "https://preview.example.test/{{id}}"
+    orgSlug: example-org

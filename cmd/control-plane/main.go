@@ -88,16 +88,35 @@ const linearAPIBaseURL = "https://api.linear.app"
 // wiring, mirroring githubAPIBaseURL's own identical precedent exactly.
 const slackAPIBaseURL = "https://slack.com/api"
 
-// This is intentionally a bare-bones dispatch, not a flag-parsing library:
-// there is exactly one subcommand today ("serve"). Anything else prints a
-// one-line usage message to stderr and exits non-zero.
+// This is intentionally a bare-bones dispatch, not a flag-parsing
+// library: two subcommands, "serve" and "seed" (Step 75, "config/data
+// seeding", §10-P6/§13.4 -- see seed.go). "seed" lives here, as a
+// control-plane subcommand, rather than its own cmd/ binary: it needs
+// the SAME DB access and the SAME platform.Load() config "serve" already
+// has (postgres pool, TokenEncryptionKey, InitialAdminEmails), and
+// cmd/sandbox-agent's own "credential-helper" is the existing precedent
+// in this repo for a second subcommand living alongside a binary's main
+// server mode rather than forcing a whole new cmd/ tree for one
+// operator-run tool. Anything else prints a one-line usage message to
+// stderr and exits non-zero.
 func main() {
-	if len(os.Args) < 2 || os.Args[1] != "serve" {
-		fmt.Fprintln(os.Stderr, "usage: control-plane serve")
+	if len(os.Args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: control-plane <serve|seed> [args...]")
 		os.Exit(1)
 	}
 
-	if err := serve(); err != nil {
+	var err error
+	switch os.Args[1] {
+	case "serve":
+		err = serve()
+	case "seed":
+		err = runSeedCommand(os.Args[2:])
+	default:
+		fmt.Fprintln(os.Stderr, "usage: control-plane <serve|seed> [args...]")
+		os.Exit(1)
+	}
+
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
