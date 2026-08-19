@@ -1,0 +1,84 @@
+{
+  "title": "Narvi — Sandbox Lifecycle",
+  "description": "Spawn/boot latency and watchdog health for the sandbox lifecycle: how long it takes a sandbox to become usable, and how reliably the liveness watchdogs detect a genuinely dead one without false-alarming on a slow-but-alive one. Panels correspond to §5.3's own metric list (docs/TECHNICAL_PLAN.md) plus IMPLEMENTATION_PLAN.md row 77's named 'orphans' and 'boot p95' subjects. Every metric name below is checked against the real registered OTel instruments by internal/ops's own drift test (go test ./internal/ops/...) — a panel referencing a renamed or removed metric fails that build.",
+  "panels": [
+    {
+      "id": "spawn-latency-p95",
+      "title": "Sandbox spawn latency (p95)",
+      "description": "p95 of sandbox_spawn_duration_seconds — wall-clock duration of one real SandboxProvider.CreateSandbox/RestoreFromSnapshot/ResumeSandbox call (internal/app/sessionactor/dispatch.go's executeSpawn/executeRestore/executeResume). §5.3's own 'spawn latency'. Tagged by action (spawn/restore/resume) and outcome (success/failure) — break out by action to tell a slow provider apart from a slow restore path.",
+      "type": "histogram_quantile",
+      "metrics": ["sandbox_spawn_duration_seconds"],
+      "quantile": 0.95,
+      "unit": "s"
+    },
+    {
+      "id": "boot-duration-p95",
+      "title": "Sandbox boot-to-ready duration (p95)",
+      "description": "p95 of sandbox_agent_boot_duration_seconds — total wall-clock duration of one boot-to-ready sequence (repo clone/sync through RunBoot's own hook/service startup), recorded sandbox-agent-side (internal/sandboxagent/boot/telemetry.go). IMPLEMENTATION_PLAN.md row 77's own 'boot p95' subject. Tagged by boot_mode and failed.",
+      "type": "histogram_quantile",
+      "metrics": ["sandbox_agent_boot_duration_seconds"],
+      "quantile": 0.95,
+      "unit": "s"
+    },
+    {
+      "id": "hook-rerun-duration-p95",
+      "title": "Boot hook (setup.sh/start.sh) duration (p95)",
+      "description": "p95 of sandbox_agent_hook_rerun_duration_seconds — one hook's own wall-clock duration, including a workspaceMoved-triggered non-fatal setup.sh rerun under repo_image (§19.4/§19.5). §5.3's own 'boot phase durations'. Tagged by repo/hook/failed/boot_mode/workspace_moved.",
+      "type": "histogram_quantile",
+      "metrics": ["sandbox_agent_hook_rerun_duration_seconds"],
+      "quantile": 0.95,
+      "unit": "s"
+    },
+    {
+      "id": "git-fetch-duration-p95",
+      "title": "Boot-time git fetch duration (p95)",
+      "description": "p95 of sandbox_agent_git_fetch_duration_seconds — the §19.3 boot-time fetch step, one repo. §5.3's own 'boot phase durations'.",
+      "type": "histogram_quantile",
+      "metrics": ["sandbox_agent_git_fetch_duration_seconds"],
+      "quantile": 0.95,
+      "unit": "s"
+    },
+    {
+      "id": "git-checkout-duration-p95",
+      "title": "Boot-time git checkout duration (p95)",
+      "description": "p95 of sandbox_agent_git_checkout_duration_seconds — SyncAll's own checkoutBranch step, one repo. §5.3's own 'boot phase durations'.",
+      "type": "histogram_quantile",
+      "metrics": ["sandbox_agent_git_checkout_duration_seconds"],
+      "quantile": 0.95,
+      "unit": "s"
+    },
+    {
+      "id": "liveness-gap-p95",
+      "title": "Liveness gap at watchdog activation (p95)",
+      "description": "p95 of sandbox_liveness_gap_seconds — how long a sandbox had shown no sign of life by the moment a watchdog (inactivity/connecting_deadline/liveness_check) actually suspected it. §5.3's own 'liveness gaps'. Bounded below by whichever budget the firing watchdog uses (FirstConnectBudget/SteadyHeartbeatBudget/InactivityTimeout) by construction — watch for this creeping materially ABOVE that budget, which points at the timer pump itself falling behind, not genuine sandbox silence.",
+      "type": "histogram_quantile",
+      "metrics": ["sandbox_liveness_gap_seconds"],
+      "quantile": 0.95,
+      "unit": "s"
+    },
+    {
+      "id": "watchdog-activation-rate",
+      "title": "Watchdog activations (rate)",
+      "description": "Rate of watchdog_activation_total — every sandbox a liveness/inactivity watchdog suspected (transitioned to Suspect). §5.3's own 'watchdog activations'. Tagged by watchdog (inactivity/connecting_deadline/liveness_check); excludes the distinct permanent-provider-error spawn-failure path, which is not a watchdog silence.",
+      "type": "counter_rate",
+      "metrics": ["watchdog_activation_total"],
+      "unit": "{activation}/min"
+    },
+    {
+      "id": "watchdog-false-alarm-rate",
+      "title": "Watchdog false-alarm rate",
+      "description": "watchdog_false_alarm_total / watchdog_activation_total — the fraction of watchdog activations that turned out to be wrong (the sandbox recovered during its own terminal_grace window, proving it was alive the whole time). §5.3's own '...and how many were false alarms — target: ~0'.",
+      "type": "ratio",
+      "metrics": ["watchdog_false_alarm_total", "watchdog_activation_total"],
+      "unit": "ratio"
+    },
+    {
+      "id": "orphan-gc-rate",
+      "title": "Orphan sandboxes reaped (rate)",
+      "description": "Rate of orphans_reaped — provider-side sandbox instances found with no live Postgres owner and stopped by the reconciler (internal/app/reconciler). IMPLEMENTATION_PLAN.md row 77's own 'orphans' subject; §5.3's own 'orphan GC count'.",
+      "type": "counter_rate",
+      "metrics": ["orphans_reaped"],
+      "unit": "{sandbox}/min"
+    }
+  ]
+}

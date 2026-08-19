@@ -1,0 +1,38 @@
+{
+  "title": "Narvi — Turns & Outbound Delivery",
+  "description": "Turn-outcome integrity (is a turn we called Failed actually one that succeeded) and outbound-notification delivery health. Panels correspond to IMPLEMENTATION_PLAN.md row 77's own 'false failures' and 'outbox lag' subjects. Every metric name below is checked against the real registered OTel instruments by internal/ops's own drift test (go test ./internal/ops/...) — a panel referencing a renamed or removed metric fails that build.",
+  "panels": [
+    {
+      "id": "turn-false-failure-rate",
+      "title": "Turn false failures (rate)",
+      "description": "Rate of turn_false_failure_total — a late, real execution_complete{outcome:completed} arriving for a session the control plane already terminalized Failed with failure_reason=timeout. IMPLEMENTATION_PLAN.md row 77's own 'false failures' subject: a turn_deadline expiry that turned out to be wrong — the agent was still working and actually finished. Target: ~0, mirroring §5.3's own watchdog-false-alarm framing for the same class of problem (the control plane's own inference being contradicted after the fact).",
+      "type": "counter_rate",
+      "metrics": ["turn_false_failure_total"],
+      "unit": "{turn}/min"
+    },
+    {
+      "id": "outbox-lag",
+      "title": "Outbox delivery lag",
+      "description": "outbox_lag_seconds — age, in seconds, of the oldest still-due outbox row claimed at the start of the most recent pump tick (internal/app/outboxworker). IMPLEMENTATION_PLAN.md row 77's own 'outbox lag' subject; §5.3's own 'outbox lag'. Zero when nothing is due — watch this alongside outbox-due-backlog below, since this alone reads zero during a sustained outage where every pending row is mid-backoff.",
+      "type": "gauge",
+      "metrics": ["outbox_lag_seconds"],
+      "unit": "s"
+    },
+    {
+      "id": "outbox-due-backlog",
+      "title": "Outbox pending backlog (including mid-backoff)",
+      "description": "outbox_due_backlog_count — total count of 'pending' outbox rows, INCLUDING rows still mid-backoff (next_attempt_at in the future). The audit-fix companion to outbox-lag above: stays visible during a sustained outage where every pending row is currently cooling down and outbox_lag_seconds alone would misleadingly read zero.",
+      "type": "gauge",
+      "metrics": ["outbox_due_backlog_count"],
+      "unit": "{entry}"
+    },
+    {
+      "id": "outbox-dead-letter-rate",
+      "title": "Outbox dead-letters (rate)",
+      "description": "Rate of outbox_dead_letter_total — outbox entries that exhausted domain/outbox.MaxAttempts delivery attempts and were dead-lettered. Every dead-letter is a notification (a Slack/Linear/GitHub update, a plan-approval request, ...) that a user never received.",
+      "type": "counter_rate",
+      "metrics": ["outbox_dead_letter_total"],
+      "unit": "{entry}/min"
+    }
+  ]
+}

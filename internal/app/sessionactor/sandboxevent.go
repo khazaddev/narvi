@@ -294,6 +294,11 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 		// every line below sees the NOW-RECOVERED status rather than the
 		// stale "suspect" one.
 		if sandbox.State(row.Status) == sandbox.StateSuspect && row.PreSuspectStatus != nil {
+			// Captured before row is reassigned below (recErr == nil
+			// branch) -- §5.3's watchdog_false_alarm_total (opsmetrics.go)
+			// tags by this ORIGINAL pre_suspect_status, not whatever row
+			// becomes after recovery.
+			preSuspectStatus := string(*row.PreSuspectStatus)
 			recoveredTo, recErr := sandbox.Transition(sandbox.StateSuspect, int(row.Gen),
 				sandbox.RecoverTrigger(sandbox.State(*row.PreSuspectStatus)))
 			if recErr != nil {
@@ -315,6 +320,12 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 				if err := a.deleteTimer(ctx, tx, TimerTerminalGrace); err != nil {
 					return err
 				}
+				// §5.3: "(and how many were false alarms -- target: ~0)".
+				// This branch is reached only because a real, recognized
+				// inbound event just arrived from a sandbox this Step's own
+				// watchdog machinery had suspected dead -- proof, after the
+				// fact, that the suspicion was wrong.
+				a.recordWatchdogFalseAlarm(ctx, preSuspectStatus)
 				// F2 fix: a recovery landing directly back on Ready is a
 				// genuine ->Ready edge that the before/after guard a few
 				// lines below can never catch on its own -- row is already
@@ -428,8 +439,15 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 			// currently Processing (§3.3) -- see completeProcessingTurn's
 			// own doc comment (pushpr.go) for the full reasoning, including
 			// why no synthetic execution_complete is ever appended on this
-			// path.
-			sig, err := a.completeProcessingTurn(ctx, tx, row, cmd.Raw)
+			// path. inserted (this function's own appendRawEvent result,
+			// captured a few lines up) is threaded through so
+			// completeProcessingTurn's own no-turn-Processing branch can
+			// gate turn_false_failure_total on it -- a wire-level
+			// redelivery of an already-processed execution_complete
+			// (inserted == false) must never re-count the same false
+			// failure a second time (confirmed audit finding, MEDIUM; see
+			// that branch's own doc comment).
+			sig, err := a.completeProcessingTurn(ctx, tx, row, cmd.Raw, inserted)
 			if err != nil {
 				return err
 			}

@@ -351,8 +351,17 @@ func (b *Builder) recordFailure(ctx context.Context, logger *slog.Logger, row sq
 	}, now)
 
 	if decision.DeadLetter {
+		// Confirmed audit finding (LOW): docs/runbooks/outbox-delivery.md's
+		// own Confirm section already claims this log line "carries
+		// max_attempts and the last delivery error" -- it used to carry
+		// only the former. last_error (redacted -- see redact.go's own doc
+		// comment) closes that gap for real, sparing an operator the extra
+		// hop through ListDeadLetter/a direct DB read just to see WHY a
+		// dead-lettered row gave up, for the common case of triaging from
+		// logs alone.
 		logger.Warn("outboxworker: outbox entry has exhausted max delivery attempts; dead-lettering",
 			"max_attempts", domainoutbox.MaxAttempts,
+			"last_error", redactURLCredentials(lastError),
 		)
 		if _, err := b.store.MarkDeadLetter(ctx, row.ID, lastError); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {

@@ -140,6 +140,14 @@ type Actor struct {
 	// own checkContractDrift.
 	contractDriftDetected metric.Int64Counter
 
+	// opsMetrics is Step 77's ("ops: dashboards, alerts, runbooks", §5.3)
+	// own bundle of five OTel instruments -- the SAME instance every Actor
+	// this Registry hydrates shares, constructed exactly once by
+	// NewRegistry and threaded through at hydration time (hydrate.go),
+	// never reconstructed per-Actor. See opsmetrics.go's own top comment
+	// for the full gap this closes and each instrument's own call site.
+	opsMetrics opsMetrics
+
 	// repoAccessCache is the audit fix's ("warm-boot image access control",
 	// HIGH) own addition: the SAME *repoAccessCache instance every Actor
 	// this Registry hydrates shares (registry.go's own field doc comment)

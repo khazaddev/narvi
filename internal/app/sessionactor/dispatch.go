@@ -1326,7 +1326,9 @@ func (a *Actor) planResume(
 // session/gen-correlatable signal alongside the reconciler's own
 // coarser-grained, provider-id-only reaping log.
 func (a *Actor) executeSpawn(ctx context.Context, plan *spawnPlan) error {
+	start := time.Now()
 	ref, createErr := a.provider.CreateSandbox(ctx, plan.spec)
+	a.recordSpawnDuration(ctx, "spawn", time.Since(start).Seconds(), createErr != nil)
 
 	err := a.recordProviderOutcome(ctx, plan.gen, ref, createErr)
 
@@ -1360,7 +1362,9 @@ func (a *Actor) executeSpawn(ctx context.Context, plan *spawnPlan) error {
 // like a spawned one is -- see executeSpawn's own doc comment above for
 // the full writeup.
 func (a *Actor) executeRestore(ctx context.Context, plan *spawnPlan) error {
+	start := time.Now()
 	ref, restoreErr := a.provider.RestoreFromSnapshot(ctx, plan.snapshotID, plan.spec)
+	a.recordSpawnDuration(ctx, "restore", time.Since(start).Seconds(), restoreErr != nil)
 
 	err := a.recordProviderOutcome(ctx, plan.gen, ref, restoreErr)
 
@@ -1460,7 +1464,12 @@ func (a *Actor) recordSpawnFailure(ctx context.Context, tx pgx.Tx, sandboxRow sq
 		return fmt.Errorf("sessionactor: record spawn failure: %w", err)
 	}
 
-	if err := a.transitionSandboxToSuspect(ctx, tx, sandboxRow, now); err != nil {
+	// watchdog is deliberately "" here: this is a permanent, already-
+	// classified provider error, not a watchdog-style liveness silence --
+	// see watchdogKind's own doc comment (opsmetrics.go) for why this path
+	// records neither watchdog_activation_total nor
+	// sandbox_liveness_gap_seconds.
+	if err := a.transitionSandboxToSuspect(ctx, tx, sandboxRow, now, "", 0); err != nil {
 		return err
 	}
 	// connecting_deadline no longer applies -- the sandbox is Suspect now,
@@ -1499,7 +1508,9 @@ func (a *Actor) recordSpawnFailure(ctx context.Context, tx pgx.Tx, sandboxRow sq
 // is read from the return value.
 func (a *Actor) executeResume(ctx context.Context, plan *spawnPlan) error {
 	ref := ports.SandboxRef{ProviderID: plan.providerObjectID}
+	start := time.Now()
 	resumeErr := a.provider.ResumeSandbox(ctx, ref)
+	a.recordSpawnDuration(ctx, "resume", time.Since(start).Seconds(), resumeErr != nil)
 
 	err := a.recordResumeOutcome(ctx, plan.gen, resumeErr)
 

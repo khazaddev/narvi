@@ -183,7 +183,16 @@ func (a *Actor) handleInactivityTimer(ctx context.Context) error {
 			// calling a provider to actually snapshot/stop it (that's
 			// Step 12+'s SandboxProvider, out of scope here).
 			// action.ShouldSnapshot is deliberately never consulted.
-			if err := a.transitionSandboxToSuspect(ctx, tx, sandboxRow, now); err != nil {
+			//
+			// gap: EvaluateInactivityTimeout's own InactivityAction
+			// carries no elapsed figure of its own (unlike
+			// EvaluateConnectingTimeout/EvaluateHeartbeatHealth below), so
+			// it is computed here, inline, from the same state.LastActivity
+			// already read into state above -- now.Sub(state.LastActivity)
+			// is exactly "how long since this sandbox's last activity",
+			// the same quantity InactivityActionTimeout's own trip
+			// condition (inactiveTime >= cfg.Timeout) just tested.
+			if err := a.transitionSandboxToSuspect(ctx, tx, sandboxRow, now, watchdogInactivity, now.Sub(state.LastActivity)); err != nil {
 				return err
 			}
 			// The sandbox is no longer Ready -- inactivity monitoring no
@@ -236,7 +245,7 @@ func (a *Actor) handleConnectingDeadlineTimer(ctx context.Context) error {
 			return a.armTimer(ctx, tx, TimerConnectingDeadline, now.Add(a.timeouts.InactivityMinCheckInterval))
 		}
 
-		if err := a.transitionSandboxToSuspect(ctx, tx, sandboxRow, now); err != nil {
+		if err := a.transitionSandboxToSuspect(ctx, tx, sandboxRow, now, watchdogConnectingDeadline, result.Elapsed); err != nil {
 			return err
 		}
 		return a.deleteTimer(ctx, tx, TimerConnectingDeadline)
@@ -274,7 +283,7 @@ func (a *Actor) handleLivenessCheckTimer(ctx context.Context) error {
 			return a.armTimer(ctx, tx, TimerLivenessCheck, now.Add(a.timeouts.SteadyHeartbeatBudget))
 		}
 
-		if err := a.transitionSandboxToSuspect(ctx, tx, sandboxRow, now); err != nil {
+		if err := a.transitionSandboxToSuspect(ctx, tx, sandboxRow, now, watchdogLivenessCheck, health.Age); err != nil {
 			return err
 		}
 		return a.deleteTimer(ctx, tx, TimerLivenessCheck)
@@ -525,7 +534,13 @@ func (a *Actor) handleTurnDeadlineTimer(ctx context.Context) error {
 // time a recovery signal arrives, the sandbox row's own status column
 // would otherwise already read 'suspect' with no memory of what it
 // recovered FROM.
-func (a *Actor) transitionSandboxToSuspect(ctx context.Context, tx pgx.Tx, row sqlcgen.Sandbox, now time.Time) error {
+// watchdog identifies which watchdog-style timer drove this call (§5.3:
+// watchdog activations / liveness gaps -- see watchdogKind's own doc
+// comment, opsmetrics.go) -- "" for recordSpawnFailure's own distinct
+// permanent-provider-error path (dispatch.go), which records neither
+// instrument. gap is how long the sandbox had shown no sign of life by
+// the moment the watchdog fired (ignored when watchdog == "").
+func (a *Actor) transitionSandboxToSuspect(ctx context.Context, tx pgx.Tx, row sqlcgen.Sandbox, now time.Time, watchdog watchdogKind, gap time.Duration) error {
 	// The returned target is always sandbox.StateSuspect (TriggerSuspect's
 	// own single target, state.go) -- this call's own value is discarded;
 	// what matters is Transition's validation that (row.Status, Suspect)
@@ -540,6 +555,7 @@ func (a *Actor) transitionSandboxToSuspect(ctx context.Context, tx pgx.Tx, row s
 	}); err != nil {
 		return fmt.Errorf("sessionactor: update sandbox status to suspect: %w", err)
 	}
+	a.recordWatchdogActivation(ctx, watchdog, gap.Seconds())
 	return a.armTimer(ctx, tx, TimerTerminalGrace, now.Add(a.timeouts.TerminalGracePeriod))
 }
 
