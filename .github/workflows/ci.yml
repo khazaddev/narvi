@@ -341,7 +341,7 @@ jobs:
           echo "-- dockerd is up; verifying it actually works, not just that its socket exists --"
           docker exec sandbox-dockerd-smoke docker version
           docker exec sandbox-dockerd-smoke docker info | tee /tmp/docker-info.txt
-          grep -qE '^ Network:.*\bbridge\b' /tmp/docker-info.txt || {
+          grep -qE '^[[:space:]]*Network:.*\bbridge\b' /tmp/docker-info.txt || {
             echo "::error::bridge network driver did not register (the iptables failure mode Finding 1 reproduced)"
             exit 1
           }
