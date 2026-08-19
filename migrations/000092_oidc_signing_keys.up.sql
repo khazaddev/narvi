@@ -31,11 +31,19 @@
 -- per request, only a plain SELECT + a JSON array wrap.
 --
 -- retired_at NULL means this is the SINGLE currently-active signing key
--- (the one new tokens are minted with) -- enforced as an application-layer
--- invariant (internal/domain/oidckey), not a DB constraint, mirroring
--- sandbox_secrets' own "shape validated in Go, not duplicated as a second
--- CHECK" precedent for a comparably single-writer-path table. A non-NULL
--- retired_at means the key stopped signing NEW tokens at that instant but
+-- (the one new tokens are minted with) -- enforced as a REAL DB
+-- constraint (oidc_signing_keys_one_active_uniq, the partial unique index
+-- on retired_at IS NULL created below), not merely an application-layer
+-- invariant: signing with two simultaneously "active" keys would be a
+-- real, silent correctness bug (a verifier would still accept either, but
+-- WHICH one signs a given token would become nondeterministic), load-
+-- bearing enough to enforce at the storage layer rather than trust
+-- OIDCSigningKeyStore.Rotate's own retire-then-insert ordering alone --
+-- see that index's own doc comment below for the full reasoning, and
+-- internal/domain/oidckey's own IsActive doc comment, which already
+-- correctly attributes this invariant to the index rather than claiming
+-- it for the Go layer. A non-NULL retired_at means the key stopped
+-- signing NEW tokens at that instant but
 -- keeps publishing in the JWKS response (and keeps verifying already-
 -- minted tokens) until retired_at + platform.Timeouts.
 -- CloudIdentitySigningKeyOverlapWindow -- the same overlapping-validity

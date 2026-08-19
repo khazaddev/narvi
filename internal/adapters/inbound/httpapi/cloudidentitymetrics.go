@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
 
@@ -43,7 +44,7 @@ var cloudIdentityMintTotalCounter = sync.OnceValue(newCloudIdentityMintTotalCoun
 func newCloudIdentityMintTotalCounter() metric.Int64Counter {
 	c, err := otel.Meter(cloudIdentityMeterName).Int64Counter(
 		"cloud_identity_mint_total",
-		metric.WithDescription("Count of every successful POST /sessions/{id}/cloud-identity-token mint (§27.3's own \"counted as a metric\" requirement) -- incremented only after every fail-closed/audience-allowlist gate has already passed, never for a refused or errored request."),
+		metric.WithDescription("Count of every successful POST /sessions/{id}/cloud-identity-token mint (§27.3's own \"counted as a metric\" requirement) -- incremented only after every fail-closed/audience-allowlist gate has already passed, never for a refused or errored request. Tagged by the \"kind\" attribute (aws/gcp/azure/generic) -- the resolved audience's own winning binding's Kind, for per-cloud breakdown -- see recordCloudIdentityMint's own doc comment."),
 		metric.WithUnit("{mint}"),
 	)
 	if err != nil {
@@ -61,7 +62,13 @@ func newCloudIdentityMintTotalCounter() metric.Int64Counter {
 
 // recordCloudIdentityMint increments the mint counter by one -- called
 // exactly once per successful mint, after every gate in
-// MintCloudIdentityToken's own outcome table has already passed.
-func recordCloudIdentityMint(ctx context.Context) {
-	cloudIdentityMintTotalCounter().Add(ctx, 1)
+// MintCloudIdentityToken's own outcome table has already passed. kind is
+// the resolved audience's own winning cloud_identity_bindings row's Kind
+// (sqlcgen.CloudIdentityBindingKind, stringified by the caller) --
+// attached as this counter's own "kind" attribute so the metric can be
+// broken down per-cloud (aws/gcp/azure/generic), exactly as this
+// function's own earlier doc comment already claimed before this
+// attribute actually existed.
+func recordCloudIdentityMint(ctx context.Context, kind string) {
+	cloudIdentityMintTotalCounter().Add(ctx, 1, metric.WithAttributes(attribute.String("kind", kind)))
 }

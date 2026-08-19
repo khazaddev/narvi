@@ -91,6 +91,64 @@ func TestCreateGlobalCloudIdentityBinding_MaintainerAllowed(t *testing.T) {
 	}
 }
 
+// --- Capability off: binding CRUD refuses, fail-closed (§27.3) ---
+
+// TestCreateEnvironmentCloudIdentityBinding_IssuerUnset_FailsClosed and
+// TestCreateGlobalCloudIdentityBinding_IssuerUnset_FailsClosed pin §27.3's
+// own explicit requirement, verbatim: "the whole capability is off (and
+// binding CRUD refuses, fail-closed) when unset" -- repeated at the Step
+// 73 row: "capability off and binding CRUD refusing, fail-closed, when
+// unset". An adversarial review found this entirely UNIMPLEMENTED:
+// cloudidentitybindings.go's own 4 shared handler cores (create/list/
+// update/delete) took no issuerURL parameter at all, and cmd/
+// control-plane/main.go mounted both binding route groups behind
+// auth.Middleware alone -- binding CRUD stayed fail-OPEN (writable) the
+// entire time the capability was off, contradicting the spec and
+// platform.Config.CloudIdentityIssuerURL's own doc comment (which
+// incorrectly claimed every cloud-identity surface already checked this
+// field). This file previously had NO 503 assertion at all, and this
+// package's own testRig hard-codes a non-empty issuer
+// (httpapi_integration_test.go's own newTestRig) -- these two tests are
+// the missing coverage.
+//
+// Both route groups now share httpapi.RequireCloudIdentityCapability,
+// mounted once per group (cmd/control-plane/main.go's own r.Use(...),
+// mirrored in this package's own testRig router construction,
+// httpapi_integration_test.go) -- TWO tests, not one, because each group
+// carries its OWN separate r.Use(...) call that could independently
+// regress without the other noticing.
+//
+// Mutation test (run manually during verification, reverted immediately
+// after, byte-identical): removing EITHER group's own
+// r.Use(httpapi.RequireCloudIdentityCapability(...)) call (in this
+// package's own httpapi_integration_test.go AND in cmd/control-plane/
+// main.go) must make the CORRESPONDING one of these two tests fail with
+// 201 instead of 503.
+func TestCreateEnvironmentCloudIdentityBinding_IssuerUnset_FailsClosed(t *testing.T) {
+	rig := newTestRig(t, func(r *testRig) { r.cloudIdentityIssuerURL = "" })
+	ctx := context.Background()
+	env := createEnvironment(ctx, t, rig)
+	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
+
+	status := rig.doJSON(t, http.MethodPost, "/api/environments/"+env.ID.String()+"/cloud-identity-bindings",
+		[]byte(`{"kind":"aws","audience":"sts.amazonaws.com"}`), nil, token)
+	if status != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d (capability off must refuse binding CRUD, fail-closed, §27.3)", status, http.StatusServiceUnavailable)
+	}
+}
+
+func TestCreateGlobalCloudIdentityBinding_IssuerUnset_FailsClosed(t *testing.T) {
+	rig := newTestRig(t, func(r *testRig) { r.cloudIdentityIssuerURL = "" })
+	ctx := context.Background()
+	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
+
+	status := rig.doJSON(t, http.MethodPost, "/api/cloud-identity-bindings",
+		[]byte(`{"kind":"generic","audience":"vault.example.test"}`), nil, token)
+	if status != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d (capability off must refuse binding CRUD, fail-closed, §27.3)", status, http.StatusServiceUnavailable)
+	}
+}
+
 // --- Gap 3: azure + global refused ---
 
 // TestCreateGlobalCloudIdentityBinding_AzureRefused mutation-tests this

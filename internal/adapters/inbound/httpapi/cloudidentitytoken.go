@@ -107,10 +107,15 @@ type mintCloudIdentityTokenResponse struct {
 // internal/domain/cloudidentity's own scope.go doc comment). ok is false
 // when NO candidate matches -- the caller (below) turns that into a 403,
 // never minting a token for an audience nothing declared. The winning
-// candidate's own Kind/Params are never read past this point -- they play
-// no role in the minted token's own claims (internal/domain/cloudidentity
-// .Claims carries no kind/params field at all), only in confirming the
-// audience is genuinely allowed.
+// candidate's own Params never appear in the minted token's own claims
+// (internal/domain/cloudidentity.Claims carries no kind/params field at
+// all) -- but its Kind IS read past this point, by the caller, as the
+// cloud_identity_mint_total metric's own "kind" attribute (see
+// recordCloudIdentityMint's own doc comment, cloudidentitymetrics.go) --
+// the SAME reason queries/cloudidentitybindings.sql's own
+// ListCloudIdentityBindingsForResolution doc comment already gives for
+// resolving a winner at all ("to pick a deterministic winner for
+// observability").
 func resolveCloudIdentityBindingForAudience(ctx context.Context, bindings *postgres.CloudIdentityBindingStore, requestedAudience string, environmentID *string) (sqlcgen.CloudIdentityBinding, bool, error) {
 	rows, err := bindings.ListForResolution(ctx, requestedAudience, environmentID)
 	if err != nil {
@@ -241,7 +246,7 @@ func MintCloudIdentityToken(
 			return
 		}
 
-		_, matched, err := resolveCloudIdentityBindingForAudience(ctx, bindings, req.Audience, environmentID)
+		winner, matched, err := resolveCloudIdentityBindingForAudience(ctx, bindings, req.Audience, environmentID)
 		if err != nil {
 			logger.Error("httpapi: cloud-identity-token: resolve binding failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal error")
@@ -311,20 +316,42 @@ func MintCloudIdentityToken(
 			return
 		}
 
-		// cloud-identity-token minting is a metric (§27.3: "Minting is
-		// logged with correlation_id... and counted as a metric") --
-		// correlation_id is already carried by platform.Logger(ctx) on
-		// every log line above (CorrelationIDMiddleware, mounted globally
-		// -- cmd/control-plane/main.go); the counter itself is
-		// cloudIdentityMintTotal (metrics.go), incremented once here,
-		// after every fail-closed/allowlist gate above has already
-		// passed, tagged by the resolved audience's own binding kind for
-		// per-cloud breakdown.
-		recordCloudIdentityMint(ctx)
+		expiresAt := time.Unix(claims.Expiry, 0).UTC()
+
+		// cloud-identity-token minting is conjunctive in §27.3: "Minting
+		// is logged with correlation_id (§5.3) and counted as a metric".
+		// Both halves, HERE, after every fail-closed/allowlist gate above
+		// has already passed, never on a refusal/error branch (those each
+		// return immediately on their own logger.Error/Warn call above,
+		// never reaching this point):
+		//
+		//  - The LOG line: correlation_id/session_id are already carried
+		//    by `logger` (platform.Logger(ctx), fed by
+		//    CorrelationIDMiddleware + this handler's own
+		//    platform.WithSessionID(ctx, ...) call above) on every field
+		//    it emits automatically -- this call adds the fields that
+		//    aren't already on ctx (environment id, audience, kid,
+		//    expiry). NEVER the token itself -- signed is deliberately
+		//    absent from every argument below, matching this file's own
+		//    "never logs plaintext/ciphertext" discipline for the signing
+		//    key material immediately above.
+		//  - The METRIC: cloudIdentityMintTotal (cloudidentitymetrics.go),
+		//    incremented once here, tagged by the resolved audience's own
+		//    winning binding's Kind for per-cloud breakdown (see
+		//    resolveCloudIdentityBindingForAudience's own doc comment for
+		//    why reading winner.Kind here, past the allowlist check, is
+		//    exactly what that function's own doc comment says it is for).
+		logger.Info("httpapi: cloud-identity-token: minted",
+			"environment_id", *environmentID,
+			"audience", req.Audience,
+			"kid", activeKey.Kid,
+			"expires_at", expiresAt,
+		)
+		recordCloudIdentityMint(ctx, string(winner.Kind))
 
 		writeJSON(w, http.StatusOK, mintCloudIdentityTokenResponse{
 			Token:     signed,
-			ExpiresAt: time.Unix(claims.Expiry, 0).UTC(),
+			ExpiresAt: expiresAt,
 		})
 	}
 }

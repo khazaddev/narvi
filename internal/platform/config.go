@@ -851,36 +851,55 @@ func parseCommaSeparatedList(raw string) []string {
 	return out
 }
 
-// validateCloudIdentityIssuerURL enforces the URL shape
+// canonicalCloudIdentityIssuerURL enforces the URL shape
 // Config.CloudIdentityIssuerURL needs to be safely usable as the fixed
 // prefix for GET {issuer}/.well-known/openid-configuration and GET
-// {issuer}/.well-known/jwks.json (httpapi/oidcdiscovery.go): a well-formed
-// absolute URL, http or https scheme, non-empty host, and no path/query/
-// fragment of its own (a value already carrying a path would double up
-// against the fixed suffix those two handlers append). Mirrors
+// {issuer}/.well-known/jwks.json (httpapi/oidcdiscovery.go), and returns
+// the canonical "scheme://host" string Load assigns to that field: a
+// well-formed absolute URL, http or https scheme, non-empty host, and NO
+// path of its own -- not even a bare trailing slash. Mirrors
 // gitHubRelease*'s own "validate the shape now, at boot, rather than let a
 // malformed value surface as a confusing runtime failure" reasoning --
 // see cloudIdentityIssuerURLEnvVarName's own doc comment for why THIS
 // field, uniquely among this file's other optional URL-shaped values,
 // earns real validation.
-func validateCloudIdentityIssuerURL(raw string) error {
+//
+// Deliberately rejects url.Parse's own Path == "/" case -- NOT just
+// Path == "" -- unlike an earlier version of this function. A trailing
+// slash is a REAL path segment as far as plain string concatenation is
+// concerned: httpapi/oidcdiscovery.go builds jwks_uri as
+// issuerURL + "/.well-known/jwks.json" by direct concatenation, so
+// "https://cp.example.com/" would silently produce
+// "https://cp.example.com//.well-known/jwks.json" -- a double slash this
+// codebase's own chi router (mounted with no CleanPath/StripSlashes
+// middleware, cmd/control-plane/main.go) does NOT collapse, so that
+// jwks_uri 404s on every real cloud STS fetch while Narvi's own discovery
+// endpoint keeps reporting 200. Returning the canonicalized string (built
+// from parsed.Scheme/parsed.Host alone, never the caller's own raw
+// string) means the raw, unnormalized env value never reaches
+// Config.CloudIdentityIssuerURL in the first place -- every downstream
+// consumer (this discovery/JWKS concatenation AND the `iss` claim
+// cloudidentitytoken.go mints verbatim) gets the already-canonical form
+// with nothing left for either call site to remember to normalize itself.
+func canonicalCloudIdentityIssuerURL(raw string) (string, error) {
 	parsed, err := url.Parse(raw)
 	if err != nil {
-		return &InvalidCloudIdentityIssuerURLError{Value: raw, Reason: fmt.Sprintf("not a valid URL: %v", err)}
+		return "", &InvalidCloudIdentityIssuerURLError{Value: raw, Reason: fmt.Sprintf("not a valid URL: %v", err)}
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return &InvalidCloudIdentityIssuerURLError{Value: raw, Reason: "scheme must be http or https"}
+		return "", &InvalidCloudIdentityIssuerURLError{Value: raw, Reason: "scheme must be http or https"}
 	}
 	if parsed.Host == "" {
-		return &InvalidCloudIdentityIssuerURLError{Value: raw, Reason: "must include a host"}
+		return "", &InvalidCloudIdentityIssuerURLError{Value: raw, Reason: "must include a host"}
 	}
-	if parsed.Path != "" && parsed.Path != "/" {
-		return &InvalidCloudIdentityIssuerURLError{Value: raw, Reason: "must not carry a path -- the discovery/JWKS handlers append their own fixed /.well-known/... suffix"}
+	if parsed.Path != "" {
+		return "", &InvalidCloudIdentityIssuerURLError{Value: raw, Reason: "must not carry a path, including a bare trailing slash -- the discovery/JWKS handlers append their own fixed /.well-known/... suffix by plain string concatenation, so a trailing slash here would double up against it"}
 	}
 	if parsed.RawQuery != "" || parsed.Fragment != "" {
-		return &InvalidCloudIdentityIssuerURLError{Value: raw, Reason: "must not carry a query string or fragment"}
+		return "", &InvalidCloudIdentityIssuerURLError{Value: raw, Reason: "must not carry a query string or fragment"}
 	}
-	return nil
+	canonical := url.URL{Scheme: parsed.Scheme, Host: parsed.Host}
+	return canonical.String(), nil
 }
 
 // Config is the top-level, typed control-plane configuration, validated
@@ -1136,10 +1155,19 @@ type Config struct {
 	// which only works if the field can genuinely be UNSET -- PublicBaseURL
 	// is required in every stage (see its own doc comment) and so can never
 	// serve as a double-duty off-switch. Empty string means the entire
-	// cloud-identity feature (discovery/JWKS/binding CRUD/minting) is OFF
-	// -- every one of those surfaces checks this field directly rather
-	// than inferring "off" from a zero-value Timeouts field or a missing
-	// store, so there is exactly one place a deploy flips this capability.
+	// cloud-identity feature (discovery/JWKS/minting/binding CRUD/
+	// signing-key rotation) is OFF -- rather than inferring "off" from a
+	// zero-value Timeouts field or a missing store, so there is exactly
+	// one place a deploy flips this capability. Discovery/JWKS/minting
+	// (httpapi/oidcdiscovery.go, cloudidentitytoken.go) each check this
+	// field directly, inline, since each is a single free-function
+	// handler; binding CRUD and signing-key rotation (httpapi/
+	// cloudidentitybindings.go, cloudidentitykeys.go) are each mounted
+	// behind a chi route group instead, so they check it exactly once,
+	// group-wide, via httpapi.RequireCloudIdentityCapability(cfg.
+	// CloudIdentityIssuerURL) (cmd/control-plane/main.go's own r.Use(...)
+	// on all three of those groups) rather than a fourth/fifth per-handler
+	// copy of the same inline check.
 	// A non-empty value IS validated (unlike PublicBaseURL's own
 	// "non-empty only" laxness) -- see cloudIdentityIssuerURLEnvVarName's
 	// own doc comment for why this one gets real URL-shape validation:
@@ -1481,11 +1509,17 @@ func Load() (*Config, error) {
 	// cloudIdentityIssuerURL (Step 73a, §27.3): DELIBERATELY OPTIONAL --
 	// see cloudIdentityIssuerURLEnvVarName's own doc comment for the full
 	// "off when unset" gating rule and why a non-empty value gets real
-	// URL-shape validation (unlike PublicBaseURL above).
-	cloudIdentityIssuerURL := os.Getenv(cloudIdentityIssuerURLEnvVarName)
-	if cloudIdentityIssuerURL != "" {
-		if err := validateCloudIdentityIssuerURL(cloudIdentityIssuerURL); err != nil {
+	// URL-shape validation (unlike PublicBaseURL above). Assigned the
+	// CANONICAL string canonicalCloudIdentityIssuerURL returns, never the
+	// raw env value -- see that function's own doc comment for why the
+	// raw value must never reach Config.CloudIdentityIssuerURL.
+	cloudIdentityIssuerURL := ""
+	if raw := os.Getenv(cloudIdentityIssuerURLEnvVarName); raw != "" {
+		canonical, err := canonicalCloudIdentityIssuerURL(raw)
+		if err != nil {
 			errs = append(errs, err)
+		} else {
+			cloudIdentityIssuerURL = canonical
 		}
 	}
 

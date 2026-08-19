@@ -332,6 +332,65 @@ func TestMintCloudIdentityToken_GlobalBindingFallback_Succeeds(t *testing.T) {
 	}
 }
 
+// --- Observability: mint success log line (§27.3: "Minting is logged
+// with correlation_id (§5.3) and counted as a metric") ---
+
+// TestMintCloudIdentityToken_HappyPath_LogsMintSuccessLine pins the
+// success-path log line an adversarial review found entirely missing:
+// every `logger` call inside MintCloudIdentityToken was on a
+// refusal/failure branch that returns immediately, so a successful mint
+// -- the ONLY per-mint event §27.3 asks to be logged at all (audit_log
+// deliberately excludes each 5-minute refresh) -- produced no log output
+// whatsoever. Uses captureDefaultLoggerJSON/findLogEntry
+// (planapprove_integration_test.go's own established convention, same
+// package). Mutation test (run manually during verification, reverted
+// immediately after, byte-identical): deleting the logger.Info call
+// inside MintCloudIdentityToken's own success tail (cloudidentitytoken.go)
+// must make this test fail.
+func TestMintCloudIdentityToken_HappyPath_LogsMintSuccessLine(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	session := rig.createSessionWithReposAndEnvironment(ctx, t, providerCredsRepos, true)
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+	createEnvironmentBindingViaAPI(t, rig, session.EnvironmentID.String(), "aws", "sts.amazonaws.com")
+	rotated := rotateSigningKeyViaAPI(t, rig)
+
+	buf := captureDefaultLoggerJSON(t)
+
+	status, resp := postCloudIdentityToken(t, rig, session.ID.String(), "sandbox-bearer-token", "1", `{"audience":"sts.amazonaws.com"}`)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+	if resp.Token == "" {
+		t.Fatal("Token is empty")
+	}
+
+	entry := findLogEntry(t, buf, "httpapi: cloud-identity-token: minted")
+	if got, _ := entry["session_id"].(string); got != session.ID.String() {
+		t.Errorf("session_id = %q, want %q", got, session.ID.String())
+	}
+	if got, _ := entry["environment_id"].(string); got != session.EnvironmentID.String() {
+		t.Errorf("environment_id = %q, want %q", got, session.EnvironmentID.String())
+	}
+	if got, _ := entry["audience"].(string); got != "sts.amazonaws.com" {
+		t.Errorf("audience = %q, want %q", got, "sts.amazonaws.com")
+	}
+	if got, _ := entry["kid"].(string); got != rotated.ActiveKid {
+		t.Errorf("kid = %q, want %q", got, rotated.ActiveKid)
+	}
+	if _, ok := entry["expires_at"]; !ok {
+		t.Error("expires_at missing from log entry")
+	}
+	// NEVER the token itself, anywhere in the log line -- matches this
+	// handler's own "never logs plaintext/ciphertext" discipline for the
+	// signing key material.
+	for k, v := range entry {
+		if s, ok := v.(string); ok && strings.Contains(s, resp.Token) {
+			t.Errorf("log entry field %q contains the minted token verbatim: %q", k, s)
+		}
+	}
+}
+
 // --- End-to-end crypto proof: mint a real token, fetch the real JWKS,
 // verify with a standard library path, decode claims ---
 

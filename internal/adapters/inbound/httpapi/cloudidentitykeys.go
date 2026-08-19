@@ -25,7 +25,14 @@
 // issuer is unset, so OIDCJWKS itself responds 503) would be pointless
 // busywork at best, and confusing at worst -- refused up front instead,
 // with the SAME 503 status (oidcdiscovery.go's own doc comment has the
-// full "why 503, matching uploadmint.go's own precedent" reasoning).
+// full "why 503, matching uploadmint.go's own precedent" reasoning). The
+// gate itself lives ONE level up, at the route group
+// (cmd/control-plane/main.go's own r.Use(httpapi.
+// RequireCloudIdentityCapability(cfg.CloudIdentityIssuerURL))) -- this
+// handler carries no inline issuerURL check of its own, mirroring the two
+// cloud-identity-bindings route groups (cloudidentitybindings.go), so
+// there is exactly one place per request path that decides "is cloud
+// identity on" (see that middleware's own doc comment).
 
 package httpapi
 
@@ -45,11 +52,15 @@ import (
 
 // RotateCloudIdentitySigningKey backs POST /api/cloud-identity/
 // signing-keys/rotate -- see this file's own top doc comment for the
-// full design. issuerURL empty means the capability is off (fail-closed,
-// §27.3); pool/keys/auditLog/tokenEncryptionKey/timeouts are threaded
-// through exactly like every other admin-tx-writing handler in this
-// package (mirrors UpdateMemberRole's own begin/defer-rollback/commit
-// shape). Reads the wall clock directly (time.Now()) -- httpapi is an
+// full design. The capability-off fail-closed gate (§27.3) is enforced
+// ONE level up, by cmd/control-plane/main.go's own
+// r.Use(httpapi.RequireCloudIdentityCapability(...)) on this route's own
+// group -- this handler carries no issuerURL parameter or inline check of
+// its own (see RequireCloudIdentityCapability's own doc comment for why).
+// pool/keys/auditLog/tokenEncryptionKey/timeouts are threaded through
+// exactly like every other admin-tx-writing handler in this package
+// (mirrors UpdateMemberRole's own begin/defer-rollback/commit shape).
+// Reads the wall clock directly (time.Now()) -- httpapi is an
 // inbound ADAPTER, not /internal/domain, so §11's domain-purity rule does
 // not apply here; mirrors OIDCJWKS' own identical choice (that handler's
 // own doc comment has the full "why no clock injection is needed for
@@ -59,7 +70,7 @@ import (
 // arithmetic by calling THIS real handler and reading its own response,
 // bounding the observed instant against time.Now() taken immediately
 // before/after the call rather than needing to inject a fixed one).
-func RotateCloudIdentitySigningKey(pool *pgxpool.Pool, keys *postgres.OIDCSigningKeyStore, auditLog *postgres.AuditLogStore, issuerURL string, tokenEncryptionKey []byte, timeouts platform.Timeouts) http.HandlerFunc {
+func RotateCloudIdentitySigningKey(pool *pgxpool.Pool, keys *postgres.OIDCSigningKeyStore, auditLog *postgres.AuditLogStore, tokenEncryptionKey []byte, timeouts platform.Timeouts) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authz.ActionManageCloudIdentityKeys, authz.Resource{}) {
 			return
@@ -67,14 +78,6 @@ func RotateCloudIdentitySigningKey(pool *pgxpool.Pool, keys *postgres.OIDCSignin
 
 		ctx := r.Context()
 		logger := platform.Logger(ctx)
-
-		// Fail-closed: the whole capability is off when the issuer URL is
-		// unset (§27.3, this Step's own gap-1 discussion applied here
-		// too -- see this file's own top doc comment).
-		if issuerURL == "" {
-			writeError(w, http.StatusServiceUnavailable, "cloud identity federation is not configured -- set the issuer URL before rotating a signing key")
-			return
-		}
 
 		actorUserID, ok := authenticatedUserID(w, r)
 		if !ok {
@@ -138,18 +141,17 @@ func RotateCloudIdentitySigningKey(pool *pgxpool.Pool, keys *postgres.OIDCSignin
 
 		txKeys := keys.WithTx(tx)
 
-		// previousActive is read BEFORE Rotate performs its own retire
-		// (Rotate itself re-reads inside the same call) purely so this
-		// handler can report retiredKid/retiredAt/publishableUntil in its
-		// own response without a second round trip -- Rotate is still the
-		// SINGLE source of truth for what actually got retired (a race
-		// between this read and Rotate's own is impossible: both run
-		// inside the same, not-yet-committed transaction, so no other
-		// writer can interleave).
-		previousActive, prevErr := txKeys.GetActive(ctx)
-		hadPreviousActive := prevErr == nil
-
-		created, err := txKeys.Rotate(ctx, nowInstant, kid, privEncrypted, publicJWKBytes)
+		// ONE read, not two: Rotate itself is the single source of truth
+		// for what actually got retired, and returns that row directly
+		// (RetireOIDCSigningKey's own RETURNING row) rather than making
+		// this handler take a second, independently-timed GetActive read
+		// of its own to learn the same thing -- see Rotate's own doc
+		// comment for the concurrent-rotation forensic-falsification race
+		// this closes structurally (an earlier version of this handler's
+		// own "a race... is impossible" comment was itself the defect: it
+		// asserted a guarantee pool.Begin's empty TxOptions/READ COMMITTED
+		// isolation does not actually provide).
+		created, retiredKey, hadPreviousActive, err := txKeys.Rotate(ctx, nowInstant, kid, privEncrypted, publicJWKBytes)
 		if err != nil {
 			logger.Error("httpapi: rotate cloud identity signing key: rotate failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal error")
@@ -158,7 +160,7 @@ func RotateCloudIdentitySigningKey(pool *pgxpool.Pool, keys *postgres.OIDCSignin
 
 		detail := map[string]any{"new_kid": created.Kid}
 		if hadPreviousActive {
-			detail["retired_kid"] = previousActive.Kid
+			detail["retired_kid"] = retiredKey.Kid
 		}
 		// audit_log records the rotation itself (a platform-wide security
 		// posture change, §13.3) -- written in the SAME transaction as
@@ -180,9 +182,13 @@ func RotateCloudIdentitySigningKey(pool *pgxpool.Pool, keys *postgres.OIDCSignin
 			ActiveCreatedAt: created.CreatedAt.Time,
 		}
 		if hadPreviousActive {
-			retiredKid := previousActive.Kid
-			retiredAt := nowInstant
-			publishableUntil := nowInstant.Add(timeouts.CloudIdentitySigningKeyOverlapWindow)
+			// RetiredAt comes from retiredKey's own real, committed
+			// retired_at column -- not the nowInstant Go-side variable
+			// passed INTO Rotate -- so this response reports what was
+			// actually persisted, not merely what was requested.
+			retiredKid := retiredKey.Kid
+			retiredAt := retiredKey.RetiredAt.Time
+			publishableUntil := retiredAt.Add(timeouts.CloudIdentitySigningKeyOverlapWindow)
 			resp.RetiredKid = &retiredKid
 			resp.RetiredAt = &retiredAt
 			resp.PublishableUntil = &publishableUntil

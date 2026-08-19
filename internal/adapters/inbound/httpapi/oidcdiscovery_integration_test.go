@@ -60,11 +60,76 @@ func TestOIDCDiscovery_Unauthenticated(t *testing.T) {
 	if doc.Issuer != rig.cloudIdentityIssuerURL {
 		t.Errorf("Issuer = %q, want %q", doc.Issuer, rig.cloudIdentityIssuerURL)
 	}
-	if doc.JWKSURI != rig.cloudIdentityIssuerURL+"/.well-known/jwks.json" {
-		t.Errorf("JWKSURI = %q, want %q", doc.JWKSURI, rig.cloudIdentityIssuerURL+"/.well-known/jwks.json")
+	// A LITERAL expected string, not doc.JWKSURI compared against the
+	// SAME issuerURL+jwksPath concatenation oidcdiscovery.go itself
+	// performs -- that self-referential comparison would pass for any
+	// issuerURL, including a malformed one carrying its own trailing
+	// slash (a double slash concatenated against a double slash still
+	// string-equals itself). Pinning the literal value ties this test to
+	// the URL this rig's own router (built with rig.cloudIdentityIssuerURL
+	// below) actually serves at -- see
+	// TestOIDCDiscovery_TrailingSlashIssuerProducesA404JWKSURI for the
+	// dedicated trailing-slash regression this literal comparison exists
+	// to catch.
+	const wantJWKSURI = "https://issuer.narvi.example.test/.well-known/jwks.json"
+	if doc.JWKSURI != wantJWKSURI {
+		t.Errorf("JWKSURI = %q, want %q", doc.JWKSURI, wantJWKSURI)
 	}
 	if len(doc.IDTokenSigningAlgValuesSupported) != 1 || doc.IDTokenSigningAlgValuesSupported[0] != "RS256" {
 		t.Errorf("IDTokenSigningAlgValuesSupported = %v, want [RS256]", doc.IDTokenSigningAlgValuesSupported)
+	}
+}
+
+// TestOIDCDiscovery_TrailingSlashIssuerProducesA404JWKSURI is the
+// HTTP-layer half of the trailing-slash regression internal/platform's
+// own config_test.go pins at the config.Load() level ("a bare trailing
+// slash doubles up against the fixed jwks_uri suffix" invalid case,
+// TestLoadCloudIdentityIssuerURL) -- THIS test proves WHY that boot-time
+// rejection is load-bearing, against a real round-trip through this
+// package's own router (built by newTestRig below with no
+// middleware.CleanPath/StripSlashes mounted, exactly like cmd/
+// control-plane/main.go's real one, oidcdiscovery.go's own top doc
+// comment).
+//
+// platform.Load's own canonicalCloudIdentityIssuerURL is the ONLY thing
+// that keeps a trailing-slash issuer out of production
+// (platform.Config.CloudIdentityIssuerURL) -- this test bypasses it
+// deliberately (newTestRig's own mutate hook sets the rig's issuer
+// directly, the same way a hypothetical config regression could) to show
+// the failure mode that boot-time rejection exists to prevent: the
+// discovery document's own jwks_uri becomes a URL this SAME router
+// cannot serve.
+func TestOIDCDiscovery_TrailingSlashIssuerProducesA404JWKSURI(t *testing.T) {
+	rig := newTestRig(t, func(r *testRig) {
+		r.cloudIdentityIssuerURL = "https://issuer.narvi.example.test/"
+	})
+
+	var doc discoveryDocument
+	status := rig.doJSON(t, http.MethodGet, "/.well-known/openid-configuration", nil, &doc, "")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+	// oidcdiscovery.go builds jwks_uri as issuerURL + jwksPath by plain
+	// string concatenation -- a trailing-slash issuer doubles the slash.
+	const wantDoubledJWKSURI = "https://issuer.narvi.example.test//.well-known/jwks.json"
+	if doc.JWKSURI != wantDoubledJWKSURI {
+		t.Fatalf("JWKSURI = %q, want %q", doc.JWKSURI, wantDoubledJWKSURI)
+	}
+
+	// The request path a real client (a cloud's own STS) would send for
+	// that jwks_uri is "//.well-known/jwks.json" (confirmed against
+	// net/http's own http.NewRequest -- a leading empty path segment, NOT
+	// collapsed into "/.well-known/jwks.json"). This router -- built with
+	// no CleanPath/StripSlashes middleware, matching cmd/control-plane/
+	// main.go's real router exactly -- must 404 on it: the concrete,
+	// cloud-side failure this Step's own boot-time canonicalization
+	// exists to prevent ("AWS/GCP/Azure STS fetch the document, get no
+	// key, and reject every token... the failure is entirely cloud-side:
+	// Narvi logs a 200 discovery fetch and a 200 mint and sees nothing
+	// wrong").
+	status = rig.doJSON(t, http.MethodGet, "//.well-known/jwks.json", nil, nil, "")
+	if status != http.StatusNotFound {
+		t.Errorf("status = %d, want %d (a doubled-slash jwks_uri must 404 against this router)", status, http.StatusNotFound)
 	}
 }
 

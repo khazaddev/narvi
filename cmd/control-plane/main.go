@@ -1394,9 +1394,15 @@ func serve() error {
 	// identifiers, never secrets). Mounted behind auth.Middleware like
 	// every other browser-facing REST route in this package -- see
 	// httpapi/cloudidentitybindings.go's own doc comment for the full
-	// route table.
+	// route table. ALSO mounted behind httpapi's own
+	// requireCloudIdentityCapability(cfg.CloudIdentityIssuerURL) --
+	// §27.3's own explicit "binding CRUD refuses, fail-closed, when
+	// unset" requirement, applied once per group (see that middleware's
+	// own doc comment for why a group-level r.Use(...) beats a per-handler
+	// inline check repeated 4 times).
 	router.Route("/api/environments/{environmentID}/cloud-identity-bindings", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Use(httpapi.RequireCloudIdentityCapability(cfg.CloudIdentityIssuerURL))
 		r.Post("/", httpapi.CreateEnvironmentCloudIdentityBinding(pool, cloudIdentityBindingStore, auditLogStore))
 		r.Get("/", httpapi.ListEnvironmentCloudIdentityBindings(cloudIdentityBindingStore))
 		r.Put("/{bindingID}", httpapi.UpdateEnvironmentCloudIdentityBinding(pool, cloudIdentityBindingStore, auditLogStore))
@@ -1404,6 +1410,7 @@ func serve() error {
 	})
 	router.Route("/api/cloud-identity-bindings", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Use(httpapi.RequireCloudIdentityCapability(cfg.CloudIdentityIssuerURL))
 		r.Post("/", httpapi.CreateGlobalCloudIdentityBinding(pool, cloudIdentityBindingStore, auditLogStore))
 		r.Get("/", httpapi.ListGlobalCloudIdentityBindings(cloudIdentityBindingStore))
 		r.Put("/{bindingID}", httpapi.UpdateGlobalCloudIdentityBinding(pool, cloudIdentityBindingStore, auditLogStore))
@@ -1416,10 +1423,15 @@ func serve() error {
 	// resolution) and internal/domain/oidckey's own doc comment for the
 	// complete justification against §5.2's sandbox-token rotation
 	// precedent. Admin only (ActionManageCloudIdentityKeys), one row
-	// stricter than binding CRUD immediately above.
+	// stricter than binding CRUD immediately above. ALSO mounted behind
+	// the SAME requireCloudIdentityCapability gate as the two binding
+	// groups above -- RotateCloudIdentitySigningKey itself no longer
+	// carries its own inline issuerURL check, this group-level r.Use(...)
+	// is now the ONLY place that decision is made for this route.
 	router.Route("/api/cloud-identity/signing-keys", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
-		r.Post("/rotate", httpapi.RotateCloudIdentitySigningKey(pool, oidcSigningKeyStore, auditLogStore, cfg.CloudIdentityIssuerURL, cfg.TokenEncryptionKey, cfg.Timeouts))
+		r.Use(httpapi.RequireCloudIdentityCapability(cfg.CloudIdentityIssuerURL))
+		r.Post("/rotate", httpapi.RotateCloudIdentitySigningKey(pool, oidcSigningKeyStore, auditLogStore, cfg.TokenEncryptionKey, cfg.Timeouts))
 	})
 
 	// /api/environments/{environmentID}/opencode-config,

@@ -1325,15 +1325,6 @@ func TestLoadCloudIdentityIssuerURL(t *testing.T) {
 		}
 	})
 
-	t.Run("a bare-root path (trailing slash only) is accepted", func(t *testing.T) {
-		setRequiredEnv(t)
-		t.Setenv("NARVI_CLOUD_IDENTITY_ISSUER_URL", "http://localhost:8080/")
-
-		if _, err := platform.Load(); err != nil {
-			t.Fatalf("Load() error = %v, want nil (a bare trailing slash is not a real path)", err)
-		}
-	})
-
 	invalidCases := []struct {
 		name string
 		val  string
@@ -1345,6 +1336,15 @@ func TestLoadCloudIdentityIssuerURL(t *testing.T) {
 		{"carries a path", "https://issuer.narvi.example.test/tenant-a"},
 		{"carries a query string", "https://issuer.narvi.example.test?x=1"},
 		{"carries a fragment", "https://issuer.narvi.example.test#frag"},
+		// A bare trailing slash is a REAL path (url.Parse's own Path ==
+		// "/") that doubles up against the fixed "/.well-known/..."
+		// suffix httpapi/oidcdiscovery.go appends by plain string
+		// concatenation -- see canonicalCloudIdentityIssuerURL's own doc
+		// comment. This case pins the mutation the adversarial review
+		// caught: restoring the old "&& parsed.Path != \"/\"" exemption
+		// makes THIS subtest fail (Load() would return nil error instead
+		// of *InvalidCloudIdentityIssuerURLError).
+		{"a bare trailing slash doubles up against the fixed jwks_uri suffix", "http://localhost:8080/"},
 	}
 	for _, tc := range invalidCases {
 		t.Run(tc.name, func(t *testing.T) {

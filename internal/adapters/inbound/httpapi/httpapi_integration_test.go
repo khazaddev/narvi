@@ -695,6 +695,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// own doc comments).
 	router.Route("/api/environments/{environmentID}/cloud-identity-bindings", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Use(httpapi.RequireCloudIdentityCapability(rig.cloudIdentityIssuerURL))
 		r.Post("/", httpapi.CreateEnvironmentCloudIdentityBinding(rig.pool, rig.cloudIdentityBindings, rig.auditLog))
 		r.Get("/", httpapi.ListEnvironmentCloudIdentityBindings(rig.cloudIdentityBindings))
 		r.Put("/{bindingID}", httpapi.UpdateEnvironmentCloudIdentityBinding(rig.pool, rig.cloudIdentityBindings, rig.auditLog))
@@ -702,6 +703,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	})
 	router.Route("/api/cloud-identity-bindings", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Use(httpapi.RequireCloudIdentityCapability(rig.cloudIdentityIssuerURL))
 		r.Post("/", httpapi.CreateGlobalCloudIdentityBinding(rig.pool, rig.cloudIdentityBindings, rig.auditLog))
 		r.Get("/", httpapi.ListGlobalCloudIdentityBindings(rig.cloudIdentityBindings))
 		r.Put("/{bindingID}", httpapi.UpdateGlobalCloudIdentityBinding(rig.pool, rig.cloudIdentityBindings, rig.auditLog))
@@ -709,7 +711,8 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	})
 	router.Route("/api/cloud-identity/signing-keys", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
-		r.Post("/rotate", httpapi.RotateCloudIdentitySigningKey(rig.pool, rig.oidcSigningKeys, rig.auditLog, rig.cloudIdentityIssuerURL, rig.tokenEncryptionKey, platform.DefaultTimeouts()))
+		r.Use(httpapi.RequireCloudIdentityCapability(rig.cloudIdentityIssuerURL))
+		r.Post("/rotate", httpapi.RotateCloudIdentitySigningKey(rig.pool, rig.oidcSigningKeys, rig.auditLog, rig.tokenEncryptionKey, platform.DefaultTimeouts()))
 	})
 	router.Post("/sessions/{sessionID}/cloud-identity-token",
 		httpapi.MintCloudIdentityToken(rig.sessions, rig.sandboxes, rig.cloudIdentityBindings, rig.oidcSigningKeys, rig.tokenEncryptionKey, rig.cloudIdentityIssuerURL, platform.DefaultTimeouts()))
