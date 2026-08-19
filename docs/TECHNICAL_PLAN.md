@@ -4465,7 +4465,11 @@ standing rule since Step 74's identical fail-closed-twice mechanism (§27.5/§27
 engine's own turn-insert path (`internal/app/workflowengine`) and review re-triggers on an
 already-tracked PR (the REUSE branch, `coalesce.go`) never construct a session at all — they
 enqueue *turns* onto one that already exists — so neither is a creation surface this gate needs to
-cover; they are exactly why §32.4 exists as a second, independent gate.
+cover; they are exactly why §32.4 exists as a further, independent set of dispatch-time re-checks.
+The REUSE branch specifically enqueues a turn onto a session whose sandbox is typically already
+`Ready`/`Suspect` — no fresh spawn/restore/resume in the picture at all — which is precisely the
+path §32.4's own turn-dispatch re-check (not its spawn-time one) covers; see that section's own
+two-part breakdown for why one re-check alone was not enough.
 
 ### 32.2 Two-layer flag semantics
 
@@ -4524,23 +4528,56 @@ to fingerprint which check failed.
 The creation-time gate alone would make rollback a lie. A GitHub PR review session, once created,
 never returns to `CreateSessionOnTx` again — every subsequent `@mention` or label re-trigger on the
 SAME PR rides the REUSE branch (`coalesce.go`), which enqueues a *turn*, not a session, and every
-respawn/restore/resume of its sandbox is driven entirely by `app/sessionactor`'s own dispatch loop.
-De-enrolling a repo would have zero effect on any session already in flight for it.
+respawn/restore/resume of its sandbox — and every dispatch of that turn once a live sandbox already
+exists — is driven entirely by `app/sessionactor`'s own dispatch loop (`planDispatch`, `dispatch.go`).
+De-enrolling a repo must therefore stop TWO structurally distinct things that loop can do for an
+existing session, not one — this is a two-part re-check, not a single one, and an earlier version of
+this section only described the first part.
 
-`dispatch.go`'s `tryPlanSpawn` therefore re-checks, beside the identically-shaped Step 74 substrate
-check (`refuseIfSubstrateUnsupported`): `refuseIfRolloutUnenrolled`, gated to the exact same three
-action kinds that are about to attempt a real provider call (`SpawnActionSpawn`/`Restore`/`Resume`
-— an ordinary `Skip`/`Wait` is not itself reaching the provider, so it stays the same silent no-op
-it always was). It re-derives each of the session's own named repos' owner/repo identity (§32.3's
-same host-check-then-parse pairing) and re-reads `repo_settings.sessions_enabled` fresh, on the
-dispatch transaction, every single call — never a cached verdict from session-creation time. This
-is `internal/app/sessionactor.Registry`'s own `rolloutMode` field (threaded through
-`RegistryOptions`, not a required `NewRegistry` parameter — see that field's own doc comment for
-why this one is narrower than `CreateSessionOnTx`'s requirement: its zero value is
-indistinguishable from `rollout.ModeOpen`, the platform-wide safe default, not a distinct,
-weaker-but-plausible disabled state the way an omitted `*postgres.RepoSettingsStore` would be,
-since the store itself is already unconditionally available on every Actor via the existing
-`storeBundle`).
+**Part 1 — re-spawn/restore/resume.** `dispatch.go`'s `tryPlanSpawn` re-checks, beside the
+identically-shaped Step 74 substrate check (`refuseIfSubstrateUnsupported`):
+`refuseIfRolloutUnenrolled`, gated to the exact same three action kinds that are about to attempt a
+real provider call (`SpawnActionSpawn`/`Restore`/`Resume` — an ordinary `Skip`/`Wait` is not itself
+reaching the provider, so it stays the same silent no-op it always was). It re-derives each of the
+session's own named repos' owner/repo identity (§32.3's same host-check-then-parse pairing) and
+re-reads `repo_settings.sessions_enabled` fresh, on the dispatch transaction, every single call —
+never a cached verdict from session-creation time. This is `internal/app/sessionactor.Registry`'s
+own `rolloutMode` field (threaded through `RegistryOptions`, not a required `NewRegistry` parameter
+— see that field's own doc comment for why this one is narrower than `CreateSessionOnTx`'s
+requirement: its zero value is indistinguishable from `rollout.ModeOpen`, the platform-wide safe
+default, not a distinct, weaker-but-plausible disabled state the way an omitted
+`*postgres.RepoSettingsStore` would be, since the store itself is already unconditionally available
+on every Actor via the existing `storeBundle`).
+
+**Part 2 — dispatch a turn to an already-live sandbox.** This is the REUSE branch's own ACTUAL
+path, and an adversarial review of this Step found it entirely ungated in the version of this
+section that shipped first: `planDispatch`'s branch (b) — a `Pending` turn and a `Ready`/`Suspect`
+sandbox that needs no spawn/restore/resume at all — routes straight to `tryPlanDispatch`, which
+never calls `tryPlanSpawn` or `refuseIfRolloutUnenrolled`; `planReenqueueOrRespawn`'s own branch
+(b') (Step 28's turn-recovery re-enqueue, `tryPlanReenqueue`) has the identical shape and the
+identical gap. Neither function is the right place to add the check piecemeal — a third,
+future way of producing a dispatch plan could just as easily forget it. Instead the re-check lives
+in `executeDispatch` (`rolloutRefusalForDispatch`): the ONE function every dispatch plan, from
+EITHER `tryPlanDispatch` or `tryPlanReenqueue`, must pass through before
+`SandboxCommander.SendCommand` is ever called (`handleEnsureDispatched`'s own switch has exactly one
+consumer of a non-nil dispatch plan) — gating there makes the bypass structurally unrepresentable
+rather than a discipline three call sites have to remember independently. Because this runs AFTER
+the turn's own `Pending`→`Dispatched`→`Processing` transaction has already committed (this file's
+own sequencing discipline: a real network call, including this rollout read, must never run inside
+a transact holding the session row's `FOR UPDATE` lock), a refusal here cannot roll that commit
+back — it fails the turn FORWARD instead, via the exact same `Processing`→`Failed` machinery a
+genuine `SendCommand` failure already uses (`failDispatchedTurn`, `turn.TriggerTimeout`), with a
+reason string naming the rollout refusal rather than a transport error. A refused turn therefore
+reaches a real terminal state (`Failed`, a `never_started`-shaped completion, one synthetic
+`execution_complete` event) rather than sitting `Pending` to be silently re-attempted on every
+future `EnsureDispatched` round.
+
+Both parts share the identical pure decision (`internal/domain/rollout.Decide`) and the same
+`repo_settings` resolution logic (`rolloutDecisionForSession`) — only the connection scope (the
+transaction about to write a spawn claim, vs. the actor's own pool, read outside any transaction
+after the turn's own commit) and what happens on refusal (roll back an about-to-happen spawn vs.
+fail an already-`Processing` turn forward) differ between them, so the two gates can never drift to
+a different definition of "enrolled" from one another.
 
 ### 32.5 Per-channel refusal contract
 
@@ -4553,7 +4590,7 @@ wrong for a refusal that will reproduce identically on every retry, forever, sin
 
 | Channel | Non-refusal error handling (unchanged) | `RolloutRefusal` handling |
 |---|---|---|
-| REST | 403 status + message, generic `writeError` path | Same generic path already produces the right shape — `checkRolloutGate`'s own message already reads "repository not enrolled: \<repo\>"; no special-casing needed |
+| REST | 403 status + message, generic `writeError` path | Same generic path already produces the right shape — `checkRolloutGate`'s own message already reads "repository not enrolled: \<repo\>"; no special-casing needed. A transient read failure (below) reaches this SAME generic path too, with its own distinct 503 status and "repository enrollment could not be verified: \<repo\>" message — REST never branches on `RolloutRefusal` at all, so both shapes already flow through unmodified |
 | Linear | Release the delivery claim, let Linear redeliver | Takes the SAME shape as an authz denial immediately above it in `handleCreated`: acknowledge, release only the `linear_agent_sessions` claim (not the webhook-delivery claim), post an honest in-thread notice, return `ok=true` (terminal) |
 | Slack | Return `(sessionResolution{}, false)`, releasing the webhook-delivery claim for a retry | Mirrors `ackNotAuthorizedText`'s own terminal in-thread ack idiom: post `ackNotEnrolledText`, return `{Skip: true}, true` — the webhook-delivery claim is kept, never released |
 | GitHub | `errors.Is(err, ErrActorNotAuthorized)`'s own generic branch: release the webhook-delivery claim | A distinct sentinel, `github.ErrRolloutNotEnrolled`. Takes the permanent-denial idiom: acknowledge (200) WITHOUT releasing the webhook-delivery claim, and post **no reply on the PR at all** — stricter than the unlinked-actor branch (which does reply): an unenrolled repo gives a commenter no action to take, so there is nothing honest to say beyond silence. The github_pr_sessions claim row itself never commits (the WINNER path's own transaction rolls back), which is also why §32.6 below is true |
@@ -4565,6 +4602,23 @@ channel where "egress" means a visible artifact on a customer's own repository) 
 label, no status check. Every other channel gets a private, honest acknowledgment instead of
 silence, since a Slack thread or a Linear agent session is not customer-repository-visible the way
 a PR comment is.
+
+**Fail-closed and terminal are different properties.** `RolloutRefusal` is set — and a channel takes
+the terminal handling in the table above — ONLY when a refusal is a genuine, DEMONSTRATED policy
+outcome: mode is `cohort` and the named repo's own enrollment fact was actually read (an absent
+row, an explicit `sessions_enabled=false` row, or a clone URL that could never resolve to a trusted
+identity at all, §32.3 — none of these can ever produce a different answer on retry). A
+`repo_settings` read that fails for an INFRASTRUCTURE reason instead — a context cancellation, a
+query timeout, any other degraded-read condition — still refuses THIS attempt (fail-closed never
+widens: the repo is never silently admitted), but `RolloutRefusal` stays `false`. An earlier version
+of this gate conflated the two, so a momentary database blip during a refusal path came back
+indistinguishable from "this repo is permanently not enrolled" — Linear acked terminally, Slack
+posted a permanent denial, GitHub stayed silent while keeping its claim, and the sentinel-autofix
+outbox skipped terminally, all four PERMANENTLY dropping legitimate work for a repo that may be
+fully enrolled, with no retry ever attempted. With the two properties separated, a transient read
+failure instead takes each channel's own **existing, ordinary non-refusal path** in the table
+above — Linear/Slack/the sentinel-autofix outbox retry; GitHub releases its claim for a real
+redelivery — so the work is picked up again once Postgres recovers.
 
 ### 32.6 Enrollment is seed-manifest-only in v1
 
@@ -4586,12 +4640,19 @@ exactly like its five sibling fields). No REST enrollment path is added by this 
 
 ### 32.7 Observability
 
-Refusals are logged (structured `Warn`, carrying the repo, `spawn_source`, and mode) at every gate
-call site, and counted by one OTel counter, `session_rollout_refused_total` (tagged by
-`spawn_source`), constructed lazily on first use the same way `cloud_identity_mint_total` is
-(`httpapi` has no per-process constructor object to anchor eager construction to) — mirroring the
-`outbox_dead_letter_total` construction pattern (`internal/app/outboxworker/builder.go`) one layer
-over. Refusals are **never audit-logged** — this codebase's own `audit_log` table records completed
+Refusals are logged (structured `Warn`/`Error`, carrying the repo, `spawn_source`, and mode) at
+every gate call site, including a transient, read-error-caused one (logged with `transient=true` on
+the `httpapi` side specifically, so an operator can tell the two apart in the SAME log line rather
+than by absence of a metric increment alone). Only a GENUINE POLICY refusal (`RolloutRefusal ==
+true` — see §32.5's own "fail-closed and terminal are different properties") is additionally
+counted by one OTel counter, `session_rollout_refused_total` (tagged by `spawn_source`), constructed
+lazily on first use the same way `cloud_identity_mint_total` is (`httpapi` has no per-process
+constructor object to anchor eager construction to) — mirroring the `outbox_dead_letter_total`
+construction pattern (`internal/app/outboxworker/builder.go`) one layer over. This counter is
+deliberately §32's own "how many repos is the cohort gate actually keeping out" signal — a
+transient database blip is an infrastructure problem, not a rollout decision, and counting it here
+would make this metric lie to an operator about how many repos are genuinely being refused by
+policy. Refusals are **never audit-logged** — this codebase's own `audit_log` table records completed
 STATE CHANGES only (`reposettings.go`'s own `logUnknownRepoRefusal` doc comment states this
 convention explicitly for the structurally identical "role check passed but the named resource
 isn't one we know" refusal), and a policy refusal is not a state change. Flipping the flag itself,
@@ -4602,21 +4663,30 @@ transaction as the `repo_settings` write, exactly like every other seed-tool rec
 ### 32.8 Rollback: what actually happens, and what does not
 
 Flipping `repo_settings.sessions_enabled` to `false` for a repo (or `NARVI_ROLLOUT_MODE` back to
-`open` platform-wide, the coarser lever) has an immediate, provable effect on two things:
+`open` platform-wide, the coarser lever) has an immediate, provable effect on three things:
 
 1. **No new session is ever created** for that repo again — §32.1/§32.2's gate refuses at the
    funnel.
-2. **No de-enrolled session's sandbox spawns, restores, or resumes again** — §32.4's dispatch-time
-   re-check refuses the next attempt, whether that attempt is triggered by a fresh
-   `@mention`/label re-trigger (the REUSE branch enqueuing a turn) or by ordinary respawn/restore
-   machinery reacting to a stopped/stale sandbox.
+2. **No de-enrolled session's sandbox spawns, restores, or resumes again** — §32.4's Part 1
+   dispatch-time re-check (`refuseIfRolloutUnenrolled`, `tryPlanSpawn`) refuses the next
+   spawn/restore/resume attempt, whether it is triggered by ordinary respawn machinery reacting to
+   a stopped/stale sandbox or by `TriggerForceRespawn` recovering a genuinely stuck one.
+3. **No turn is ever dispatched to an already-live sandbox again** — §32.4's Part 2 dispatch-time
+   re-check (`rolloutRefusalForDispatch`, `executeDispatch`) refuses the next attempt to hand a
+   `Pending` turn to a `Ready`/`Suspect` sandbox, INCLUDING, specifically, a fresh `@mention`/label
+   re-trigger enqueuing a turn on an existing session via the REUSE branch — the exact case Part 1
+   alone never covers, since a `Ready`/`Suspect` sandbox needs no spawn/restore/resume at all. A
+   turn refused this way reaches a real terminal state (`Failed`) immediately, rather than sitting
+   `Pending` to be silently re-attempted on every future `EnsureDispatched` round.
 
 **What this does NOT do, stated plainly rather than implied**: sever a turn that is ALREADY
-running at the instant the flag flips. Nothing in this codebase writes a
+`Processing` at the instant the flag flips. Nothing in this codebase writes a
 `FailureReasonCancelled` outcome, and the session actor has no cancel command — this is an honest,
 pre-existing limitation this Step does not attempt to close (a hard-kill mechanism is out of scope
-here and would be its own Step). Concretely, rollback for an in-flight session is bounded by three
-existing, independent timers/authorities, never instant:
+here and would be its own Step). Concretely, rollback for a session with a turn ALREADY
+`Processing` at flip time is bounded by three existing, independent timers/authorities, never
+instant — a `Pending` turn on a live sandbox, by contrast, is now refused essentially immediately
+(point 3 above), not bounded by any of these three:
 
 - A turn that is actively `Processing` when the flag flips runs to its own natural conclusion, or
   is force-failed once `platform.Timeouts.TurnDeadline` elapses (the CP's own persistent
@@ -4627,9 +4697,13 @@ existing, independent timers/authorities, never instant:
   say) is eventually reclaimed by the existing reconciler orphan-GC sweep
   (`internal/app/reconciler`), the same backstop every other orphaned sandbox already relies on.
 
-De-enrollment is therefore a **stop-new-work** guarantee with a bounded, pre-existing tail for
-work already in flight — never an instant kill switch. An operator rolling back for a live
-incident should assume the tail, not assume immediacy.
+De-enrollment is therefore a **stop-new-work** guarantee — including new *turns* on an existing
+session, not just new sessions or new sandboxes — with a bounded, pre-existing tail for the one
+thing it genuinely cannot touch: a turn already `Processing` at the instant the flag flips. Never
+an instant kill switch for THAT one case. An operator rolling back for a live incident should
+assume the tail for an already-`Processing` turn specifically, not assume immediacy there — but
+should expect every OTHER form of new work (a fresh spawn, or a fresh turn dispatched to an idle,
+already-live sandbox) to stop refusing immediately.
 
 ### 32.9 Operator runbook
 
@@ -4647,12 +4721,16 @@ repos enrolled refuses every single new session platform-wide, GitHub included.
 re-run the seed tool (or a direct, deliberate `UpsertSessionsEnabled` call if the seed tool itself
 is unavailable — this is the one break-glass exception to "seed-manifest-only", since the write
 path is identical either way). Expect, per §32.8: new session-creation attempts for that repo
-refused immediately (visible as `session_rollout_refused_total{spawn_source=...}` increments and
-`"httpapi: rollout gate: session creation refused"` / `"sessionactor: refusing to spawn"` log
-lines); any turn already `Processing` at rollback time continues until it completes or
-`TurnDeadline` fires; idle sandboxes for that repo's sessions stop on the ordinary
-`ActorIdleTTL`; anything left over is reclaimed by the next reconciler orphan-GC sweep. There is
-no faster path than these three existing timers/authorities today.
+refused immediately (visible as `session_rollout_refused_total{spawn_source=...}` increments and a
+`"httpapi: rollout gate: session creation refused"` log line); a *new* turn — including a fresh
+`@mention`/label re-trigger riding the REUSE branch onto an existing session — refused essentially
+immediately too, whether or not that session's sandbox is already live (`"sessionactor: refusing to
+spawn"` for a needed spawn/restore/resume, `"sessionactor: refusing to dispatch turn"` for a
+dispatch to an already-`Ready`/`Suspect` sandbox — §32.4's own two parts); any turn already
+`Processing` at rollback time continues until it completes or `TurnDeadline` fires; idle sandboxes
+for that repo's sessions stop on the ordinary `ActorIdleTTL`; anything left over is reclaimed by
+the next reconciler orphan-GC sweep. There is no faster path for an already-`Processing` turn than
+these three existing timers/authorities today — every OTHER form of new work stops immediately.
 
 **Roll back platform-wide**: unset `NARVI_ROLLOUT_MODE` (or set it to `open`) and restart the
 control plane. This is the coarser lever — it removes the per-repo gate entirely, admitting every
@@ -4663,4 +4741,15 @@ above unless the incident is platform-wide.
 repo and confirm the channel-appropriate refusal from §32.5 (GitHub: silent 200, nothing posted;
 Slack/Linear: an honest in-thread/agent-session notice; REST: 403 "repository not enrolled"). A
 session created BEFORE the rollback continuing to run for up to `TurnDeadline`/`ActorIdleTTL`
-longer is expected, not a sign the rollback failed — see §32.8.
+longer is expected ONLY for a turn that was already `Processing` at rollback time — a fresh
+`@mention` on that same PR after rollback is refused immediately regardless (§32.4 Part 2) — not a
+sign the rollback failed. See §32.8.
+
+**Distinguishing a policy refusal from a database blip during an incident**: if refusals stop
+appearing, or a channel behaves as though a still-enrolled repo were refused, check whether the log
+line carries `transient=true` (`httpapi`) or reads `"...rollout re-check: resolve admission decision
+failed..."` (`sessionactor`) rather than an ordinary `"...refused, repo not enrolled"` /
+`"...refusing to spawn/dispatch..."` line, and whether `session_rollout_refused_total` actually
+incremented — it does NOT for a transient read failure (§32.7). A transient failure refuses that
+ONE attempt but is retried by the channel's own ordinary retry path (§32.5) once Postgres recovers;
+it is not evidence the rollback itself is broken, and does not need a rollback re-applied.
