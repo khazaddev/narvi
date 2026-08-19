@@ -4,8 +4,9 @@ The web surface is Narvi's own browser-facing REST API (`spawnSource:
 "web"`) — every route below is under `/api/...` except the three
 GitHub-OAuth sign-in routes and the live session WebSocket, both listed in
 their own sections. Every request (except sign-in itself) is authenticated
-by the `narvi_auth_session` cookie `POST /auth/github/callback` mints; a
-request with no valid cookie gets `401`.
+by the `narvi_auth_session` cookie `GET /auth/github/callback` mints (a
+GitHub OAuth redirect, never a client-initiated `POST` — see the
+machine-checked block below); a request with no valid cookie gets `401`.
 
 Two things this guide deliberately does **not** cover — see
 [README.md](README.md#what-this-check-cannot-catch) for why: the
@@ -13,7 +14,9 @@ per-automation inbound-webhook trigger
 (`POST /webhooks/automations/{automationID}`), and the sandbox-agent-only
 bearer-authenticated routes under `/sessions/{sessionID}/...` — those are
 machine-to-machine plumbing, not something a human using the web app ever
-calls.
+calls. `GET /sessions/{sessionID}/ws` (below) is a different case: it is
+NOT on that excluded list — it is the real, human-facing live-stream
+connection this guide documents.
 
 ## Sign-in
 
@@ -121,6 +124,17 @@ and Linear *drop* a message sent to a busy session (an honest in-thread
 the current one, never refuses (see [github.md](github.md)). A web client
 that gets a `409` here has to retry once the in-flight turn actually
 finishes — there is no built-in queuing to fall back on.
+
+**Negative — an awaiting-approval plan can also produce this `409`, with
+one exception.** If `planMode` is `false` and the session has a plan in
+`plan.StatusAwaitingApproval`, this same endpoint refuses with `409`
+again (same core, a different message) — UNLESS the `plan_followup`
+classifier reads the prompt as a confident amendment, in which case the
+turn is silently promoted to a real plan-revision turn instead of being
+refused. This is the exact same `createTurnLocked` mechanism
+[slack.md](slack.md)'s own "Plan mode" section documents in full — it is
+not Slack-specific, it is shared by every surface this core serves,
+including this REST endpoint.
 
 ## Plan mode
 

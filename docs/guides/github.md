@@ -8,13 +8,42 @@ Everything GitHub sends Narvi arrives at one route:
 
 HMAC-verified (`X-Hub-Signature-256`) over the raw body before anything
 else happens, and deduplicated by GitHub's own `X-GitHub-Delivery`
-header — a redelivery is acknowledged without being reprocessed. Only two
-`X-GitHub-Event` values can ever start or continue a review session:
+header — a redelivery is acknowledged without being reprocessed.
+
+**Three `X-GitHub-Event` values are ever acted on at all, not two:**
 `issue_comment` (a comment on an issue OR a pull request — GitHub's own
-API models a PR as a kind of issue; only the PR case is acted on) and
-`pull_request_review_comment` (a comment on a specific diff line). Every
-other event type — pushes, stars, issue events on a genuine (non-PR)
-issue, reviews, checks, ... — is acknowledged and silently ignored.
+API models a PR as a kind of issue; only the PR case is acted on),
+`pull_request_review_comment` (a comment on a specific diff line), and
+`pull_request` — easy to miss because none of its own real effects look
+like a "comment", but it is `parseMention`'s third dispatched case
+(`payload.go`), not a gap. A `pull_request` event only ever does
+something for three of its own `action` values, each a structurally
+different capability from the other two and from an @-mention:
+
+- `"labeled"`, naming the configured re-review label — routed through
+  the SAME `parseMention`/coalescing path as an @-mention (see
+  "What triggers a session or a turn" below): starts a brand-new review
+  session, or joins/re-triggers the existing one for that PR.
+- `"synchronize"` — GitHub's own name for "new commits landed on this
+  PR's head", i.e. what an operator would call a push. **This is the
+  automatic re-review lane (`handlePullRequestSynchronize`, §24.1), and
+  it is NOT ignored**: if a review session already exists for this PR it
+  re-arms that session's own re-review debounce timer, literally
+  continuing it — this is what "pushes" would have meant in an earlier,
+  incorrect draft of this sentence that listed them as ignored. A
+  `synchronize` event on a PR with no existing review session is a
+  no-op, same as everything below. It never starts a session by itself.
+- `"closed"` — merge gating (`handlePullRequestClosed`, §17.4/§17.5): a
+  structurally separate capability that never touches a review session
+  at all, in either direction. Listed here only because it is the third
+  real, production-wired thing this event type does — not a review
+  trigger, so it doesn't belong in "what triggers a session or a turn"
+  below.
+
+Every other `pull_request` action (`opened`, `reopened`, `edited`, an
+unconfigured label, ...), and every other event type entirely (stars,
+issue events on a genuine non-PR issue, reviews, checks, ...) is
+genuinely acknowledged and silently ignored.
 
 ## What triggers a session or a turn
 
@@ -58,6 +87,49 @@ A third, REST-only re-trigger surface exists — see [web.md](web.md)'s own
 already-known session directly rather than routing through this per-PR
 mention claim.
 
+## Other real `pull_request` actions (not review triggers)
+
+Two more `pull_request` actions are genuinely acted on but never start,
+join, or otherwise touch a review session — the intro section above
+already lists these by name; this section is where each is actually
+explained:
+
+- `"closed"` (Step 48, §17.4/§17.5) — merge gating: the bot's own
+  post-review merge decision runs here, entirely separate from review
+  session creation/continuation.
+- `"synchronize"` (Step 65, §24.1) — re-arms an *existing* review
+  session's re-review debounce timer when new commits land on the PR's
+  head. Never starts a session from nothing; a `synchronize` event on a
+  PR with no review session is a no-op.
+
+Neither is documented as a `narvi-command` block above: both are
+webhook-body dispatch on the SAME `POST /webhooks/github` route every
+other command on this page already uses, gated on `action`, not on a
+separate route or a §18.4 classifier outcome — nothing in this
+mechanism's own vocabulary (`route`/`classifier`) represents "this
+specific action value on this specific event type", so this is
+unavoidably prose, same as every other negative on this page.
+
+## Text commands dispatched before mention parsing
+
+Two exact-prefix text commands are recognized on an `issue_comment` or
+`pull_request_review_comment` comment **before `parseMention` ever
+runs** — dispatch-before-router, exactly like the merge-gating/
+re-review checks above. Neither starts, joins, or prompts a review
+session; both require the commenter's GitHub account to be linked and
+authorized, via the identical `domain/authz.Authorize` gate every other
+state-changing actor command on this surface uses.
+
+- `false positive: <reason>` (Step 63, §22.2) teaches a repo-scoped
+  false-positive review pattern.
+- `arch recap wrong: <reason>` (Step 69, §26.5) contests the deep
+  review path's own architecture-recap digest section.
+
+A comment matching neither prefix falls through to the ordinary mention
+pipeline below, completely unaffected — see "No slash commands, no
+free-text prompting" under "Honest negatives" for what that means for
+everything else.
+
 ## Review verdicts and decision inbox
 
 Posting a review verdict, applying a suggested fix, and rebutting a
@@ -98,11 +170,15 @@ structurally different refusals:
   instead — see `docs/TECHNICAL_PLAN.md` §32.5's own full per-channel
   table for why GitHub alone is silent.
 
-**No slash commands, no free-text prompting.** A GitHub PR comment is
-either a recognized @-mention (starts or joins a review) or it is
-nothing at all — there is no way to send GitHub-ingress Narvi an
-arbitrary build-mode prompt the way a Slack/Linear message can; every
-GitHub-originated turn is review-shaped.
+**No free-text prompting; two exact-prefix commands, not zero.** A
+GitHub PR comment is a recognized @-mention (starts or joins a review),
+one of the two exact-prefix capture commands above ("Text commands
+dispatched before mention parsing"), or it is nothing at all — there is
+no way to send GitHub-ingress Narvi an arbitrary build-mode prompt the
+way a Slack/Linear message can, and neither capture command is a
+"prompt" in that sense (neither ever creates, joins, or advances a
+review session — see that section for what each actually does); every
+GitHub-originated turn is still review-shaped.
 
 **No cancellation.** Identical limitation to [linear.md](linear.md)'s own
 — there is no session/turn stop command anywhere in this codebase yet;

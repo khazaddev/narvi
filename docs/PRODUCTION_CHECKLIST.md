@@ -101,14 +101,14 @@ endpoint wired anywhere in this codebase (confirmed by reading that
 function directly; `deploy/observability/alerts/reliability.json`'s own
 schema is deliberately backend-agnostic, see `internal/ops/schema.go`'s
 `PanelType`/`Alert` doc comments, precisely because no backend is
-pinned). The six alert rules committed to this repo are inert data —
+pinned). The seven alert rules committed to this repo are inert data —
 correctly derived (see [`docs/SLOS.md`](SLOS.md)), CI-checked against
 real metric names (`TestNoMetricDrift`), but **not wired to page anyone**
 — until an operator's own collector reads this deployment's metric
 stream and an alerting backend evaluates each rule's own `condition`.
 
 **Check.** The alerting backend this deployment actually uses lists all
-six alert names from `deploy/observability/alerts/reliability.json`
+seven alert names from `deploy/observability/alerts/reliability.json`
 (`OutboxLagHigh`, `OutboxDeadLetterAny`, `OrphanReapRateHigh`,
 `BootDurationP95High`, `SpawnLatencyP95High`,
 `WatchdogFalseAlarmRateHigh`, `TurnFalseFailureAny`), each pointed at the

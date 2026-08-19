@@ -1,8 +1,31 @@
 # Linear guide
 
-Everything Linear sends Narvi arrives at one route — Linear's own
-`AgentSessionEvent` webhook, both a brand-new agent session and every
-follow-up message on it:
+## Connecting a workspace
+
+Before any of the ingress below can fire, an admin has to connect a
+Linear workspace to this deployment — a human, browser-driven OAuth
+flow, not machine-to-machine wiring, so it belongs in this guide rather
+than [README.md](README.md#what-this-check-cannot-catch)'s
+machine-to-machine exclusions:
+
+```json narvi-command
+{"name": "Start connecting a Linear workspace (OAuth)", "route": "GET /auth/linear/install"}
+```
+
+```json narvi-command
+{"name": "Linear workspace OAuth callback (completes the connection)", "route": "GET /auth/linear/callback"}
+```
+
+**Negative.** Both routes require an already-signed-in Narvi user
+(`auth.Middleware`) AND `domain/authz.ActionManageIntegrations`
+(admin-only) — a maintainer or below gets `403`, and there is no
+self-service way for a non-admin to connect a workspace.
+
+## Everything else: the webhook
+
+Everything Linear sends Narvi *after* a workspace is connected arrives at
+one route — Linear's own `AgentSessionEvent` webhook, both a brand-new
+agent session and every follow-up message on it:
 
 ```json narvi-command
 {"name": "Linear AgentSessionEvent webhook", "route": "POST /webhooks/linear"}
