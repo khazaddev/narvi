@@ -343,6 +343,13 @@ type Registry struct {
 	// a mock-configured Environment's repo.
 	contractDriftDetected metric.Int64Counter
 
+	// opsMetrics is Step 77's ("ops: dashboards, alerts, runbooks", §5.3)
+	// own bundle of five OTel instruments (opsmetrics.go), constructed
+	// exactly once here from the SAME meter as contractDriftDetected
+	// above, then threaded through to every Actor this Registry hydrates
+	// -- mirroring contractDriftDetected's own threading exactly.
+	opsMetrics opsMetrics
+
 	// repoAccessCache is the audit fix's ("warm-boot image access control",
 	// HIGH) own addition: the process-wide, in-memory TTL cache backing
 	// resolveAndSetImage's own repo-access gate (imageresolve.go),
@@ -474,6 +481,16 @@ func NewRegistry(
 		return nil, fmt.Errorf("sessionactor: construct contract_drift_detected counter: %w", err)
 	}
 
+	// Step 77 ("ops: dashboards, alerts, runbooks", §5.3): the five
+	// remaining instruments §5.3's own metric list names but nothing
+	// before this Step ever registered -- see opsmetrics.go's own top
+	// comment for the full gap analysis. Built from the SAME meter as
+	// contractDriftDetected above, not a second otel.Meter(meterName) call.
+	opsMetrics, err := newOpsMetrics(meter)
+	if err != nil {
+		return nil, err
+	}
+
 	var opt RegistryOptions
 	if len(opts) > 0 {
 		opt = opts[0]
@@ -499,6 +516,7 @@ func NewRegistry(
 		reviewModelDeep:        opt.ReviewModelDeep,
 		rolloutMode:            opt.RolloutMode,
 		contractDriftDetected:  contractDriftDetected,
+		opsMetrics:             opsMetrics,
 		repoAccessCache:        newRepoAccessCache(),
 		epistemicCheckDefault:  epistemicCheckDefault,
 		lifecycleCtx:           lifecycleCtx,

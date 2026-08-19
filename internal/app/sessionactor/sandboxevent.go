@@ -294,6 +294,11 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 		// every line below sees the NOW-RECOVERED status rather than the
 		// stale "suspect" one.
 		if sandbox.State(row.Status) == sandbox.StateSuspect && row.PreSuspectStatus != nil {
+			// Captured before row is reassigned below (recErr == nil
+			// branch) -- §5.3's watchdog_false_alarm_total (opsmetrics.go)
+			// tags by this ORIGINAL pre_suspect_status, not whatever row
+			// becomes after recovery.
+			preSuspectStatus := string(*row.PreSuspectStatus)
 			recoveredTo, recErr := sandbox.Transition(sandbox.StateSuspect, int(row.Gen),
 				sandbox.RecoverTrigger(sandbox.State(*row.PreSuspectStatus)))
 			if recErr != nil {
@@ -315,6 +320,12 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 				if err := a.deleteTimer(ctx, tx, TimerTerminalGrace); err != nil {
 					return err
 				}
+				// §5.3: "(and how many were false alarms -- target: ~0)".
+				// This branch is reached only because a real, recognized
+				// inbound event just arrived from a sandbox this Step's own
+				// watchdog machinery had suspected dead -- proof, after the
+				// fact, that the suspicion was wrong.
+				a.recordWatchdogFalseAlarm(ctx, preSuspectStatus)
 				// F2 fix: a recovery landing directly back on Ready is a
 				// genuine ->Ready edge that the before/after guard a few
 				// lines below can never catch on its own -- row is already

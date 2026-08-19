@@ -194,6 +194,14 @@ func (a *Actor) completeProcessingTurn(ctx context.Context, tx pgx.Tx, sandboxRo
 	}
 	processing, ok := findProcessingTurn(turns)
 	if !ok {
+		if trig == turn.TriggerComplete {
+			if err := a.recordFalseFailureIfApplicable(ctx, tx); err != nil {
+				// Observability-only: never fail (or roll back) an
+				// otherwise-legitimate "nothing to do" outcome over a
+				// failure to READ the session row for this metric.
+				a.logger.Warn("sessionactor: false-failure check failed", "error", err)
+			}
+		}
 		a.logger.Warn("sessionactor: execution_complete arrived with no turn in processing; ignoring")
 		return nil, nil
 	}
@@ -287,6 +295,73 @@ func (a *Actor) completeProcessingTurn(ctx context.Context, tx pgx.Tx, sandboxRo
 		return nil, nil
 	}
 	return &pushSignal{gen: int(sandboxRow.Gen), repos: repos}, nil
+}
+
+// recordFalseFailureIfApplicable implements IMPLEMENTATION_PLAN.md row
+// 77's own "false failures" instrument (§5.3's metric list itself names
+// no precise definition -- this is the derived semantics, reasoned from
+// this codebase's own already-modelled §3.2/§9.3-scenario-#4 "late-
+// success reconciliation" concept).
+//
+// Called ONLY from completeProcessingTurn's own no-turn-currently-
+// Processing branch, and ONLY when the just-arrived real wire event's own
+// outcome was genuinely "completed" (trig == turn.TriggerComplete) --
+// i.e. the sandbox is, right now, telling the control plane a turn
+// succeeded, but by the time this event arrived no turn was Processing
+// anymore for this session to attach that success to.
+//
+// domain/turn.State's own transitions table (state.go) has NO Failed ->
+// Completed edge, by deliberate design (see that file's own top comment):
+// a turn this genuinely applies to is normally STILL Processing when a
+// real completion arrives, because the one case where a live sandbox can
+// go quiet long enough to legitimately lose track of it --
+// terminal_grace's Suspect-grace window, a couple of minutes -- is
+// dwarfed by turn_deadline's own independent budget (tens of minutes),
+// and Suspect-recovery-during-grace (sandboxevent.go) already reconciles
+// that case for real, completing the STILL-Processing turn in the same
+// event.
+//
+// The one way a real, late "completed" CAN still arrive with NOTHING
+// Processing is the other branch of that timing: turn_deadline itself
+// expired FIRST (handleTurnDeadlineTimer, timerfired.go) -- the control
+// plane's own inference that the turn was stuck, with no wire signal yet
+// -- terminalizing the turn Failed with failure_reason=timeout, and only
+// AFTER that does the sandbox's real execution_complete finally show up
+// reporting success. That is a genuine false failure: the control plane
+// killed a turn its own deadline said was stuck, and the agent was
+// actually still working and got there.
+//
+// This is deliberately NOT re-derived by scanning turns for the most
+// recently terminal one and asking why -- turns carry no failure_reason
+// column at all (turn.FailureReason's own doc comment: only the (from,
+// trigger) pair that PRODUCED a terminal transition knows the reason, and
+// only the caller making that transition can derive it). Instead this
+// reads the SAME already-persisted proxy rederiveSessionStatusUnchanged
+// (timerfired.go) already established for the identical problem: since
+// domain/session.DeriveStatus derives the session's own failure_reason
+// from the LAST turn's outcome, and at most one turn can ever be
+// Processing at a time (turns_one_processing_per_session), the session's
+// CURRENT failure_reason, read back right now, already IS "why the most
+// recently terminalized turn failed" -- no re-derivation needed. A
+// timeout-derived Failed session is the narrow, precise gate: a genuine
+// agent-reported failure (failure_reason=failed) or an explicit cancel
+// are not "the control plane was wrong", they are the agent's or a
+// user's own decision, and a later contradicting "completed" for either
+// would be a wire anomaly (duplicate/corrupted redelivery), not a false
+// failure -- deliberately not counted here.
+func (a *Actor) recordFalseFailureIfApplicable(ctx context.Context, tx pgx.Tx) error {
+	sessionRow, err := a.stores.session.WithTx(tx).Get(ctx, a.sessionID)
+	if err != nil {
+		return fmt.Errorf("sessionactor: get session: %w", err)
+	}
+	if sessionRow.Status != sqlcgen.SessionStatusFailed {
+		return nil
+	}
+	if sessionRow.FailureReason == nil || *sessionRow.FailureReason != sqlcgen.SessionFailureReasonTimeout {
+		return nil
+	}
+	a.recordFalseFailure(ctx)
+	return nil
 }
 
 // sendPushBestEffort implements this file's own second half's first step:
