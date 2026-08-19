@@ -74,6 +74,7 @@ func TestCreateSessionCore_NilCreator_StoresNullCreatedBy(t *testing.T) {
 	turns := narvipg.NewTurnStore(pool)
 	environments := narvipg.NewEnvironmentStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
 	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
@@ -89,7 +90,7 @@ func TestCreateSessionCore_NilCreator_StoresNullCreatedBy(t *testing.T) {
 
 	var nilCreator pgtype.UUID // Valid == false: the explicit "no human caller" case.
 
-	created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, auditLog, registry, req, nilCreator, false)
+	created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, auditLog, registry, req, nilCreator, false, platform.RolloutModeOpen, repoSettings)
 	if cerr != nil {
 		t.Fatalf("CreateSessionCore: status=%d message=%q", cerr.Status, cerr.Message)
 	}
@@ -132,6 +133,7 @@ func TestCreateSessionCore_NilCreator_WithPromptDispatches(t *testing.T) {
 	turns := narvipg.NewTurnStore(pool)
 	environments := narvipg.NewEnvironmentStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
 	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
@@ -149,7 +151,7 @@ func TestCreateSessionCore_NilCreator_WithPromptDispatches(t *testing.T) {
 
 	var nilCreator pgtype.UUID
 
-	created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, auditLog, registry, req, nilCreator, false)
+	created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, auditLog, registry, req, nilCreator, false, platform.RolloutModeOpen, repoSettings)
 	if cerr != nil {
 		t.Fatalf("CreateSessionCore: status=%d message=%q", cerr.Status, cerr.Message)
 	}
@@ -183,6 +185,7 @@ func TestCreateSessionOnTx_CallerRollback_PersistsNothing(t *testing.T) {
 	turns := narvipg.NewTurnStore(pool)
 	environments := narvipg.NewEnvironmentStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
 
 	prompt := "fix the failing check"
 	req := restdtos.CreateSessionRequest{
@@ -200,7 +203,7 @@ func TestCreateSessionOnTx_CallerRollback_PersistsNothing(t *testing.T) {
 		t.Fatalf("pool.Begin: %v", err)
 	}
 
-	created, hasPrompt, cerr := CreateSessionOnTx(ctx, tx, sessions, turns, environments, auditLog, req, nilCreator, false)
+	created, hasPrompt, cerr := CreateSessionOnTx(ctx, tx, sessions, turns, environments, auditLog, req, nilCreator, false, platform.RolloutModeOpen, repoSettings)
 	if cerr != nil {
 		// The tx is still open at this point -- roll it back before
 		// failing the test so we don't leak a connection.
@@ -250,6 +253,7 @@ func TestCreateSessionOnTx_CallerCommit_Persists(t *testing.T) {
 	turns := narvipg.NewTurnStore(pool)
 	environments := narvipg.NewEnvironmentStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
 
 	prompt := "fix the failing check"
 	req := restdtos.CreateSessionRequest{
@@ -267,7 +271,7 @@ func TestCreateSessionOnTx_CallerCommit_Persists(t *testing.T) {
 		t.Fatalf("pool.Begin: %v", err)
 	}
 
-	created, hasPrompt, cerr := CreateSessionOnTx(ctx, tx, sessions, turns, environments, auditLog, req, nilCreator, false)
+	created, hasPrompt, cerr := CreateSessionOnTx(ctx, tx, sessions, turns, environments, auditLog, req, nilCreator, false, platform.RolloutModeOpen, repoSettings)
 	if cerr != nil {
 		_ = tx.Rollback(ctx)
 		t.Fatalf("CreateSessionOnTx: status=%d message=%q", cerr.Status, cerr.Message)
@@ -314,6 +318,7 @@ func TestCreateSessionOnTx_ValidationFailure_NeverTouchesTx(t *testing.T) {
 	turns := narvipg.NewTurnStore(pool)
 	environments := narvipg.NewEnvironmentStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
 
 	req := restdtos.CreateSessionRequest{
 		SpawnSource: restdtos.CreateSessionRequestSpawnSourceGithub,
@@ -328,7 +333,7 @@ func TestCreateSessionOnTx_ValidationFailure_NeverTouchesTx(t *testing.T) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	_, hasPrompt, cerr := CreateSessionOnTx(ctx, tx, sessions, turns, environments, auditLog, req, nilCreator, false)
+	_, hasPrompt, cerr := CreateSessionOnTx(ctx, tx, sessions, turns, environments, auditLog, req, nilCreator, false, platform.RolloutModeOpen, repoSettings)
 	if cerr == nil {
 		t.Fatal("CreateSessionOnTx: got nil error, want a CreateSessionError for empty repos")
 	}
@@ -395,6 +400,7 @@ func TestCreateSessionCore_ValidationFailure_NeverAcquiresConnection(t *testing.
 	turns := narvipg.NewTurnStore(limitedPool)
 	environments := narvipg.NewEnvironmentStore(limitedPool)
 	auditLog := narvipg.NewAuditLogStore(limitedPool)
+	repoSettings := narvipg.NewRepoSettingsStore(limitedPool)
 	registry, err := sessionactor.NewRegistry(ctx, limitedPool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
@@ -410,7 +416,7 @@ func TestCreateSessionCore_ValidationFailure_NeverAcquiresConnection(t *testing.
 	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	_, cerr := CreateSessionCore(callCtx, limitedPool, sessions, turns, environments, auditLog, registry, req, nilCreator, false)
+	_, cerr := CreateSessionCore(callCtx, limitedPool, sessions, turns, environments, auditLog, registry, req, nilCreator, false, platform.RolloutModeOpen, repoSettings)
 	if cerr == nil {
 		t.Fatal("CreateSessionCore: got nil error, want a CreateSessionError for empty repos")
 	}
@@ -442,6 +448,7 @@ func TestTriggerDispatch_ExistingSession_SucceedsAndSpawns(t *testing.T) {
 	turns := narvipg.NewTurnStore(pool)
 	environments := narvipg.NewEnvironmentStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
 	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
@@ -463,7 +470,7 @@ func TestTriggerDispatch_ExistingSession_SucceedsAndSpawns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pool.Begin: %v", err)
 	}
-	created, hasPrompt, cerr := CreateSessionOnTx(ctx, tx, sessions, turns, environments, auditLog, req, nilCreator, false)
+	created, hasPrompt, cerr := CreateSessionOnTx(ctx, tx, sessions, turns, environments, auditLog, req, nilCreator, false, platform.RolloutModeOpen, repoSettings)
 	if cerr != nil {
 		_ = tx.Rollback(ctx)
 		t.Fatalf("CreateSessionOnTx: status=%d message=%q", cerr.Status, cerr.Message)

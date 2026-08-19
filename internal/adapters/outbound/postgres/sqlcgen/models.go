@@ -1934,6 +1934,7 @@ type RepoSetting struct {
 	ReviewDepthDeepPaths       []byte             `json:"review_depth_deep_paths"`
 	ReviewCostBudgetLightUsd   pgtype.Numeric     `json:"review_cost_budget_light_usd"`
 	ReviewCostBudgetDeepUsd    pgtype.Numeric     `json:"review_cost_budget_deep_usd"`
+	SessionsEnabled            bool               `json:"sessions_enabled"`
 }
 
 type ReviewDigestSectionFeedback struct {

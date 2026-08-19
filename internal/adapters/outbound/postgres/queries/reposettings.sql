@@ -137,6 +137,22 @@ ON CONFLICT (repo_full_name)
 DO UPDATE SET review_cost_budget_light_usd = EXCLUDED.review_cost_budget_light_usd, review_cost_budget_deep_usd = EXCLUDED.review_cost_budget_deep_usd, updated_at = now()
 RETURNING *;
 
+-- name: UpsertSessionsEnabled :one
+-- Step 76's own cohort-rollout enrollment gate (§10 Phase 6, §32) --
+-- idempotent create-or-update of ONLY sessions_enabled, mirroring
+-- UpsertAutoMergeToggle/UpsertAutoRetriggerReviewToggle/
+-- UpsertDescriptionAutofixToggle's own identical column-scoped shape
+-- above (§62 review finding C5's fix, generalized to this further,
+-- independently-gated toggle): every other repo_settings column is left
+-- COMPLETELY untouched, so a concurrent write to any of them can never
+-- race with this one at the database level. Written ONLY by the seed
+-- tool in v1 (§32: "seed-manifest-only") -- no REST route calls this yet.
+INSERT INTO repo_settings (repo_full_name, sessions_enabled, updated_at)
+VALUES ($1, $2, now())
+ON CONFLICT (repo_full_name)
+DO UPDATE SET sessions_enabled = EXCLUDED.sessions_enabled, updated_at = now()
+RETURNING *;
+
 -- name: ListAutoMergeEnabledRepos :many
 -- internal/app/automerge's own per-tick repo enumeration (§21.2 stage
 -- 2): every repo an admin has armed -- mirrors this table's own

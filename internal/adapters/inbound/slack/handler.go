@@ -126,6 +126,16 @@ const (
 	// equivalent ordinary-reply fallthrough (webhook.go's own
 	// handlePrompted).
 	ackNotAuthorizedReplyText = "You're not authorized to prompt this session."
+
+	// ackNotEnrolledText (Step 76, §10 Phase 6, §32) is posted instead of
+	// ackNewSessionText when checkRolloutGate refuses because this
+	// deployment's own default repo is not enrolled in the cohort
+	// rollout -- mirrors ackNotAuthorizedText's own terminal-in-thread-ack
+	// idiom immediately above (same shape, different reason): a permanent
+	// policy refusal, never a transient failure, so this is posted once
+	// and the thread is left exactly as usable as ackNotAuthorizedText
+	// leaves it (no retry ever changes the outcome).
+	ackNotEnrolledText = "This repository is not yet enrolled in Narvi's session rollout."
 )
 
 // ackPlanAwaitingText is this batch's own honest reply (Step 37/38
@@ -263,6 +273,16 @@ type Deps struct {
 	// production wiring (cmd/control-plane/main.go) passes the SAME
 	// platform.Config.EpistemicCheckDefault value every other caller does.
 	EpistemicCheckDefault bool
+
+	// RolloutMode/RepoSettings (Step 76, §10 Phase 6, §32) are threaded
+	// through to resolveOrClaimSession's own httpapi.CreateSessionCore
+	// call below exactly like EpistemicCheckDefault already is -- both
+	// are REQUIRED parameters of that function now (its own doc
+	// comment), so a zero-value RolloutMode here is indistinguishable
+	// from rollout.ModeOpen (the safe default) rather than an accidental
+	// gap.
+	RolloutMode  platform.RolloutMode
+	RepoSettings *postgres.RepoSettingsStore
 
 	SigningSecret   string
 	BotToken        string
@@ -1000,8 +1020,29 @@ func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logge
 		Repos: []restdtos.CreateSessionRequestReposElem{
 			{Name: deps.DefaultRepoName, Url: deps.DefaultRepoURL},
 		},
-	}, creator, deps.EpistemicCheckDefault)
+	}, creator, deps.EpistemicCheckDefault, deps.RolloutMode, deps.RepoSettings)
 	if cerr != nil {
+		// Step 76 (§10 Phase 6, §32): a RolloutRefusal is a PERMANENT
+		// policy refusal, never a transient failure -- checked
+		// structurally (CreateSessionError.RolloutRefusal), never by
+		// string-matching cerr.Message. Returning (sessionResolution{},
+		// false) below (the generic branch) propagates up to
+		// handleEventResult{OK: false},
+		// which releases the webhook-delivery claim for a Slack retry --
+		// but retrying would only ever reproduce this SAME refusal, since
+		// repo_settings.sessions_enabled does not change between
+		// redeliveries of the same event. Mirrors ackNotAuthorizedText's
+		// own terminal in-thread ack idiom immediately above instead:
+		// post ackNotEnrolledText and return {Skip: true}, true -- ok=true
+		// means the webhook-delivery claim is kept (never released),
+		// exactly like an authz denial.
+		if cerr.RolloutRefusal {
+			logger.Warn("slack: create bare session refused: repo not enrolled in cohort rollout", "channel", channel, "thread_key", key)
+			if ackErr := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, ackNotEnrolledText); ackErr != nil {
+				logger.Warn("slack: post not-enrolled ack failed", "error", ackErr)
+			}
+			return sessionResolution{Skip: true}, true
+		}
 		logger.Error("slack: create bare session failed", "status", cerr.Status, "message", cerr.Message)
 		return sessionResolution{}, false
 	}

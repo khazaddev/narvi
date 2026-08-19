@@ -1,0 +1,30 @@
+-- sessionsEnabled per-repo cohort-rollout gate (Step 76, §10 Phase 6, §32
+-- "Cohort rollout of sessions, and rollback"). One further column on the
+-- SAME repo_settings table Step 47 already shaped for exactly this
+-- (migrations/000044_repo_settings.up.sql's own doc comment: "ADDED as
+-- further columns on this SAME table rather than one bespoke table per
+-- toggle") -- NOT a new table. Phase 8's own Step 90 plans a further
+-- sibling column on this same row (§32 names this explicitly) -- this
+-- migration is written so that lands as a sibling, never a rival: a
+-- single ALTER TABLE ADD COLUMN, no new table, no new endpoint family.
+--
+-- sessions_enabled: NOT NULL BOOLEAN DEFAULT false. Unlike every sibling
+-- toggle on this table (block_on_high_risk, sentinel_autofix_enabled,
+-- auto_merge_enabled, auto_retrigger_review_enabled,
+-- description_autofix_enabled -- all "absent row / false = today's
+-- existing behavior unchanged"), this column's own safe default is the
+-- OPPOSITE of what governs whether it is ever consulted at all:
+-- platform.Config.RolloutMode (NARVI_ROLLOUT_MODE) is the master switch,
+-- and defaults to "open" when unset -- in "open" mode this column is
+-- never read by CreateSessionOnTx at all (§32's own "byte-for-byte no-op"
+-- property), so DEFAULT false here only matters once an operator has
+-- ALREADY opted into "cohort" mode, at which point false (absent
+-- enrollment) is unambiguously the correct fail-closed default: an
+-- unenrolled repo must never be admitted just because no admin got
+-- around to writing a row for it yet.
+--
+-- No CHECK constraint pairs sessions_enabled with any other column (unlike
+-- egress_policy_mode/egress_policy_allowlist's own pairing, migrations/
+-- 000095) -- this is a single, independent boolean, not part of a
+-- multi-column shape.
+ALTER TABLE repo_settings ADD COLUMN sessions_enabled BOOLEAN NOT NULL DEFAULT false;

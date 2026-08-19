@@ -52,7 +52,8 @@ func newWhiteboxEngine(t *testing.T) (*Engine, *narvipg.AutomationStore, *narvip
 	}
 	t.Cleanup(func() { _ = registry.Shutdown() })
 
-	engine := NewEngine(automations, invocations, runs, sessions, turns, environments, auditLog, pool, registry, platform.DefaultTimeouts(), false)
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
+	engine := NewEngine(automations, invocations, runs, sessions, turns, environments, auditLog, pool, registry, platform.DefaultTimeouts(), false, platform.RolloutModeOpen, repoSettings)
 	return engine, automations, invocations
 }
 

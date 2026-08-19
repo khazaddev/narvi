@@ -64,6 +64,12 @@ import (
 // (whether through this function, or -- as internal/app/outboxworker's
 // own sentinelAutoFixNotifier now does, since the Finding-1 audit fix --
 // through the identical CreateSessionOnTx parameter directly).
+// rolloutMode/repoSettings (Step 76, §32) mirror CreateSessionOnTx's own
+// identical required parameters -- see that function's own doc comment.
+// This function has no real production caller today (childsession.go's
+// own top doc comment), but stays parameter-complete/consistent
+// regardless, exactly like every other CreateSessionOnTx-adjacent entry
+// point in this package.
 func SpawnChildSession(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -77,6 +83,8 @@ func SpawnChildSession(
 	spawnDepth int32,
 	provenanceTag string,
 	epistemicCheckDefault bool,
+	rolloutMode platform.RolloutMode,
+	repoSettings *postgres.RepoSettingsStore,
 ) (sqlcgen.Session, *CreateSessionError) {
 	logger := platform.Logger(ctx)
 
@@ -87,12 +95,12 @@ func SpawnChildSession(
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		logger.Error("httpapi: begin spawn-child-session tx failed", "error", err)
-		return sqlcgen.Session{}, &CreateSessionError{http.StatusInternalServerError, "internal error"}
+		return sqlcgen.Session{}, &CreateSessionError{Status: http.StatusInternalServerError, Message: "internal error"}
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	tag := provenanceTag
-	created, hasPrompt, cerr := CreateSessionOnTx(ctx, tx, sessions, turns, environments, auditLog, req, pgtype.UUID{}, epistemicCheckDefault, ChildSessionOptions{
+	created, hasPrompt, cerr := CreateSessionOnTx(ctx, tx, sessions, turns, environments, auditLog, req, pgtype.UUID{}, epistemicCheckDefault, rolloutMode, repoSettings, ChildSessionOptions{
 		ParentSessionID: parentSessionID,
 		SpawnDepth:      spawnDepth,
 		ProvenanceTag:   &tag,
@@ -103,7 +111,7 @@ func SpawnChildSession(
 
 	if err := tx.Commit(ctx); err != nil {
 		logger.Error("httpapi: commit spawn-child-session tx failed", "error", err)
-		return sqlcgen.Session{}, &CreateSessionError{http.StatusInternalServerError, "internal error"}
+		return sqlcgen.Session{}, &CreateSessionError{Status: http.StatusInternalServerError, Message: "internal error"}
 	}
 
 	if hasPrompt {

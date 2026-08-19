@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/khazaddev/narvi/internal/domain/rollout"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -1083,6 +1084,70 @@ func TestLoadEpistemicCheckDefault(t *testing.T) {
 		var epistemicErr *platform.InvalidEpistemicCheckDefaultError
 		if !errors.As(err, &epistemicErr) {
 			t.Fatalf("Load() error = %v, want *platform.InvalidEpistemicCheckDefaultError", err)
+		}
+	})
+}
+
+// TestLoadRolloutMode covers Step 76's own master switch (§10 Phase 6,
+// §32) -- mirrors TestLoadEpistemicCheckDefault's own shape exactly,
+// with an explicit two-value enum in place of a boolean: unset defaults
+// to rollout.ModeOpen (§32's own "byte-for-byte no-op" requirement, the
+// reason this is NOT NARVI_STAGE's own "required, no default" shape),
+// "open"/"cohort" both carry through verbatim, and anything else is a
+// named, fail-fast InvalidRolloutModeError -- never a silent fallback to
+// open, which would be indistinguishable from a deliberately-configured
+// cohort deployment that simply mistyped its own env var.
+func TestLoadRolloutMode(t *testing.T) {
+	t.Run("unset defaults to open (§32: byte-for-byte no-op)", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_ROLLOUT_MODE", "")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil (this default is optional)", err)
+		}
+		if cfg.RolloutMode != rollout.ModeOpen {
+			t.Errorf("Load().RolloutMode = %q, want %q when unset", cfg.RolloutMode, rollout.ModeOpen)
+		}
+	})
+
+	t.Run("set open carries through", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_ROLLOUT_MODE", "open")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil", err)
+		}
+		if cfg.RolloutMode != rollout.ModeOpen {
+			t.Errorf("Load().RolloutMode = %q, want %q", cfg.RolloutMode, rollout.ModeOpen)
+		}
+	})
+
+	t.Run("set cohort carries through", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_ROLLOUT_MODE", "cohort")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil", err)
+		}
+		if cfg.RolloutMode != rollout.ModeCohort {
+			t.Errorf("Load().RolloutMode = %q, want %q", cfg.RolloutMode, rollout.ModeCohort)
+		}
+	})
+
+	t.Run("invalid value fails, and does not silently fall back to open", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_ROLLOUT_MODE", "not-a-mode")
+
+		_, err := platform.Load()
+		if err == nil {
+			t.Fatal("Load() error = nil, want error")
+		}
+		var rolloutErr *platform.InvalidRolloutModeError
+		if !errors.As(err, &rolloutErr) {
+			t.Fatalf("Load() error = %v, want *platform.InvalidRolloutModeError", err)
 		}
 	})
 }

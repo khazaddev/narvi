@@ -171,6 +171,15 @@ type Deps struct {
 	// caller does.
 	EpistemicCheckDefault bool
 
+	// RolloutMode/RepoSettings (Step 76, §10 Phase 6, §32) are threaded
+	// through to handleCreated's own httpapi.CreateSessionCore call below
+	// exactly like EpistemicCheckDefault already is -- both are REQUIRED
+	// parameters of that function now (its own doc comment), so a
+	// zero-value RolloutMode here is indistinguishable from
+	// rollout.ModeOpen (the safe default) rather than an accidental gap.
+	RolloutMode  platform.RolloutMode
+	RepoSettings *postgres.RepoSettingsStore
+
 	WebhookSecret      []byte
 	TokenEncryptionKey []byte
 	DefaultRepoName    string
@@ -497,8 +506,32 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 		return true
 	}
 
-	created, cerr := httpapi.CreateSessionCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Environments, deps.AuditLog, deps.Registry, req, creator, deps.EpistemicCheckDefault)
+	created, cerr := httpapi.CreateSessionCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Environments, deps.AuditLog, deps.Registry, req, creator, deps.EpistemicCheckDefault, deps.RolloutMode, deps.RepoSettings)
 	if cerr != nil {
+		// Step 76 (§10 Phase 6, §32): a RolloutRefusal is a PERMANENT
+		// policy refusal, never a transient failure -- checked
+		// structurally (CreateSessionError.RolloutRefusal), never by
+		// string-matching cerr.Message. Releasing the delivery claim
+		// below (the generic branch) would let Linear redelivery retry
+		// this SAME agent_session_id FOREVER, reproducing the identical
+		// refusal every time, since repo_settings.sessions_enabled does
+		// not change between redeliveries of the same event. Takes the
+		// SAME authz-denial shape the block immediately above this
+		// function's own `if !authorize(...)` uses instead: acknowledge,
+		// release ONLY the linear_agent_sessions claim (so a LATER,
+		// genuinely different agent session for this same PR/repo can
+		// still be created once the repo IS enrolled), and ack
+		// terminally (return true, never releasing the webhook-delivery
+		// claim).
+		if cerr.RolloutRefusal {
+			logger.Warn("linear: create session refused: repo not enrolled in cohort rollout", "agent_session_id", payload.AgentSession.ID)
+			if releaseErr := deps.AgentSessions.Release(ctx, payload.AgentSession.ID); releaseErr != nil {
+				logger.Error("linear: release agent session claim failed", "error", releaseErr, "agent_session_id", payload.AgentSession.ID)
+			}
+			deps.postAcknowledgment(ctx, payload.OrganizationID, payload.AgentSession.ID, appendNotice("This repository is not yet enrolled in Narvi's session rollout.", notice))
+			return true
+		}
+
 		logger.Error("linear: create session failed", "status", cerr.Status, "message", cerr.Message, "agent_session_id", payload.AgentSession.ID)
 		// H2/H3 audit fix: release BOTH claims this delivery is holding --
 		// the linear_agent_sessions claim (guarded, see this function's own

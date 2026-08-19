@@ -832,6 +832,26 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 				w.WriteHeader(http.StatusOK)
 				return
 			}
+			if errors.Is(err, ErrRolloutNotEnrolled) {
+				// Step 76's own permanent-denial idiom (§10 Phase 6, §32):
+				// this repo is not enrolled in the cohort rollout --
+				// coalesce.go's own ErrRolloutNotEnrolled doc comment for
+				// the full "why". Mirrors ErrActorNotAuthorized's own
+				// "acknowledge without releasing the claim" shape
+				// immediately above (retrying an identical GitHub
+				// redelivery would reproduce this exact same refusal every
+				// time, since repo_settings.sessions_enabled does not
+				// change between redeliveries of the SAME webhook
+				// payload) -- but, UNLIKE that branch, posts NO reply at
+				// all: §32's own "an unenrolled repo must receive zero
+				// platform egress" requirement. An unenrolled repo has no
+				// action a commenter could take to fix this themselves
+				// (unlike an unlinked actor, who can sign in), so there is
+				// nothing honest to tell them beyond silence.
+				logger.Info("github: mention refused: repo not enrolled in cohort rollout", "repo", m.RepoFullName, "pr_number", m.PRNumber)
+				w.WriteHeader(http.StatusOK)
+				return
+			}
 			if errors.Is(err, httpapi.ErrPlanAwaitingApproval) {
 				// Step 37/38 follow-up fix (Finding 1): the session's plan
 				// is currently awaiting approval, so the REUSE path's own

@@ -169,6 +169,18 @@ type RepoSetting struct {
 	AutoMergeEnabled       *bool  `yaml:"autoMergeEnabled,omitempty"`
 	AutoRetriggerReview    *bool  `yaml:"autoRetriggerReviewEnabled,omitempty"`
 	DescriptionAutofix     *bool  `yaml:"descriptionAutofixEnabled,omitempty"`
+	// SessionsEnabled (Step 76, §10 Phase 6, §32) is the cohort-rollout
+	// enrollment gate -- repo_settings.sessions_enabled, migrations/
+	// 000096_repo_settings_sessions_enabled.up.sql. Nil (the default) is
+	// left completely untouched, exactly like every sibling field on this
+	// struct; only meaningful once an operator has set
+	// NARVI_ROLLOUT_MODE=cohort (platform.Config.RolloutMode) -- §32's
+	// own "seed-manifest-only in v1" design: this is the ONLY writer of
+	// this column in this codebase (no REST route exists for it), since
+	// REST enrollment is structurally impossible for exactly the repos
+	// rollout needs to enroll (see internal/app/seed/reposettings.go's
+	// own doc comment for the full "why").
+	SessionsEnabled *bool `yaml:"sessionsEnabled,omitempty"`
 }
 
 // RWXPreview is one repo's RWX preview integration config (repo_settings.

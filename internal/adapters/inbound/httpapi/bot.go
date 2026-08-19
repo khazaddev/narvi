@@ -12,6 +12,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/intentclassifier"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/platform"
 )
 
 // CreateSessionForBot and CreateTurnForBot (below) are the two small,
@@ -43,8 +44,8 @@ import (
 // deliberately calls CreateSessionOnTx directly instead, for connection-
 // pool safety) -- kept parameter-complete/consistent regardless, exactly
 // like every other createTurnLocked-adjacent entry point in this package.
-func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, req restdtos.CreateSessionRequest, epistemicCheckDefault bool) (sqlcgen.Session, error) {
-	created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, auditLog, registry, req, pgtype.UUID{}, epistemicCheckDefault)
+func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, req restdtos.CreateSessionRequest, epistemicCheckDefault bool, rolloutMode platform.RolloutMode, repoSettings *postgres.RepoSettingsStore) (sqlcgen.Session, error) {
+	created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, auditLog, registry, req, pgtype.UUID{}, epistemicCheckDefault, rolloutMode, repoSettings)
 	if cerr != nil {
 		return sqlcgen.Session{}, cerr
 	}

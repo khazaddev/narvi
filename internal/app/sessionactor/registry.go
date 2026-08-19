@@ -366,6 +366,20 @@ type Registry struct {
 	// this codebase.
 	epistemicCheckDefault bool
 
+	// rolloutMode (Step 76, §10 Phase 6, §32) is RegistryOptions.
+	// RolloutMode's own resolved value (see that field's own doc comment
+	// for why this is an OPTIONS field, not a required NewRegistry
+	// parameter, unlike epistemicCheckDefault immediately above), threaded
+	// through to every Actor this Registry hydrates. dispatch.go's own
+	// refuseIfRolloutUnenrolled (beside refuseIfSubstrateUnsupported) is
+	// this value's one consumer: the dispatch-time HALF of §32's own
+	// "fail-closed, twice" pair, re-checked fresh on every Spawn/Restore/
+	// Resume attempt against the SAME *postgres.RepoSettingsStore already
+	// available on every Actor via stores.repoSettings (storeBundle,
+	// above) -- no new store parameter needed on NewRegistry, only this
+	// one mode value.
+	rolloutMode platform.RolloutMode
+
 	// group tracks every actor's mailbox-loop goroutine, so evicted/
 	// crashed actors are cleanly reaped and Shutdown can wait on all of
 	// them. Deliberately the zero value, NOT errgroup.WithContext(...) --
@@ -483,6 +497,7 @@ func NewRegistry(
 		githubBotHandle:        opt.GitHubBotHandle,
 		githubBotToken:         opt.GitHubBotToken,
 		reviewModelDeep:        opt.ReviewModelDeep,
+		rolloutMode:            opt.RolloutMode,
 		contractDriftDetected:  contractDriftDetected,
 		repoAccessCache:        newRepoAccessCache(),
 		epistemicCheckDefault:  epistemicCheckDefault,
@@ -515,6 +530,33 @@ type RegistryOptions struct {
 	// means "not configured" -- see internal/domain/reviewtriage.
 	// ModelAndEffort's own doc comment.
 	ReviewModelDeep string
+
+	// RolloutMode is Step 76's own master switch (§10 Phase 6, §32):
+	// platform.Config.RolloutMode, threaded through to dispatch.go's own
+	// refuseIfRolloutUnenrolled (beside refuseIfSubstrateUnsupported),
+	// the dispatch-time HALF of §32's "fail-closed, twice" pair. Placed
+	// in this options struct, NOT as a required NewRegistry parameter
+	// (unlike httpapi.CreateSessionOnTx's own rolloutMode/repoSettings,
+	// both required there) -- a deliberate, narrower choice than that
+	// function's own "an omittable gate parameter is an omitted gate"
+	// rule: THIS zero value (the empty string) is not a distinct,
+	// weaker-but-plausible state the way an omitted *postgres.
+	// RepoSettingsStore would be (a nil store cannot be read from at
+	// all, so omitting it structurally disables the check) -- an unset
+	// RolloutMode here is rollout.Mode(""), which internal/domain/
+	// rollout.Decide already treats identically to rollout.ModeOpen (its
+	// own "mode != ModeCohort admits unconditionally" gate), the exact
+	// same safe, no-op behavior every existing deployment gets when
+	// NARVI_ROLLOUT_MODE itself is unset. Leaving this field at its zero
+	// value in this registry's own ~50 existing test call sites is
+	// therefore indistinguishable from those tests running against an
+	// ordinary open-mode deployment, not a silently-disabled gate --
+	// mirroring GitHubBotToken/ReviewModelDeep's own identical "safe to
+	// default, so it belongs here, not on every call site" reasoning
+	// immediately above. Production wiring (cmd/control-plane/main.go)
+	// is this field's one real, non-test caller, and passes the actual
+	// cfg.RolloutMode value.
+	RolloutMode platform.RolloutMode
 }
 
 // Provider returns this Registry's own configured ports.SandboxProvider --

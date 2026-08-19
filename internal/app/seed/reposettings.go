@@ -25,6 +25,26 @@ import (
 // toggles) -- so when only one of the two is declared, this function
 // first reads the current row to carry the undeclared one through
 // unchanged, rather than resetting it to false.
+//
+// # SessionsEnabled (Step 76, §10 Phase 6, §32) is why this tool exists
+// for cohort rollout at all
+//
+// Under NARVI_ROLLOUT_MODE=cohort, httpapi.CreateSessionOnTx refuses
+// session creation for any named repo whose repo_settings.
+// sessions_enabled is not true (fail-closed) -- and the ONLY REST path
+// that could otherwise write a repo_settings row (PutRepoSettings,
+// httpapi/reposettings.go) is gated by confirmRepoKnown, which requires
+// an EXISTING github_pr_sessions row. That row's only writer
+// (internal/adapters/inbound/github's own coalesce.go) commits it
+// ATOMICALLY alongside the session it claims a slot for -- so for a
+// repo that has never yet had an enrolled session, the claim rolls back
+// right along with the refused session, and github_pr_sessions.RepoKnown
+// stays false forever. REST enrollment is therefore structurally
+// impossible for EXACTLY the repos cohort rollout exists to enroll --
+// this seed tool bypasses confirmRepoKnown entirely (it writes
+// deps.RepoSettings directly, never through the REST layer), which is
+// the reason enrollment is seed-manifest-only in v1, not merely a
+// convenience choice.
 func seedRepoSetting(ctx context.Context, deps Deps, s seedmanifest.RepoSetting, dryRun bool) Item {
 	key := s.RepoFullName
 
@@ -53,6 +73,9 @@ func seedRepoSetting(ctx context.Context, deps Deps, s seedmanifest.RepoSetting,
 	}
 	if s.DescriptionAutofix != nil {
 		changed = append(changed, fmt.Sprintf("descriptionAutofixEnabled=%v", *s.DescriptionAutofix))
+	}
+	if s.SessionsEnabled != nil {
+		changed = append(changed, fmt.Sprintf("sessionsEnabled=%v", *s.SessionsEnabled))
 	}
 	if len(changed) == 0 {
 		return Item{Kind: "repo_setting", Key: key, Outcome: OutcomeSkipped, Detail: "no fields declared"}
@@ -96,6 +119,11 @@ func seedRepoSetting(ctx context.Context, deps Deps, s seedmanifest.RepoSetting,
 	if s.DescriptionAutofix != nil {
 		if _, err := store.UpsertDescriptionAutofixToggle(ctx, s.RepoFullName, *s.DescriptionAutofix); err != nil {
 			return Item{Kind: "repo_setting", Key: key, Outcome: OutcomeError, Detail: "upsert description-autofix toggle: " + err.Error()}
+		}
+	}
+	if s.SessionsEnabled != nil {
+		if _, err := store.UpsertSessionsEnabled(ctx, s.RepoFullName, *s.SessionsEnabled); err != nil {
+			return Item{Kind: "repo_setting", Key: key, Outcome: OutcomeError, Detail: "upsert sessions-enabled: " + err.Error()}
 		}
 	}
 

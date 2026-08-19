@@ -60,7 +60,8 @@ func newFixture(t *testing.T) *testFixture {
 	}
 	t.Cleanup(func() { _ = registry.Shutdown() })
 
-	engine := automation.NewEngine(automations, invocations, runs, sessions, turns, environments, auditLog, pool, registry, platform.DefaultTimeouts(), false)
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
+	engine := automation.NewEngine(automations, invocations, runs, sessions, turns, environments, auditLog, pool, registry, platform.DefaultTimeouts(), false, platform.RolloutModeOpen, repoSettings)
 
 	return &testFixture{
 		pool: pool, automations: automations, invocations: invocations, runs: runs,

@@ -194,6 +194,23 @@ func (s *RepoSettingsStore) UpsertReviewCostBudget(ctx context.Context, repoFull
 	})
 }
 
+// UpsertSessionsEnabled idempotently creates-or-updates repoFullName's
+// Step 76 cohort-rollout enrollment gate (§10 Phase 6, §32) --
+// COLUMN-SCOPED (mirrors UpsertAutoMergeToggle/
+// UpsertAutoRetriggerReviewToggle/UpsertDescriptionAutofixToggle's own
+// identical shape): touches ONLY sessions_enabled, leaving every other
+// repo_settings column completely untouched. Called by the seed tool
+// only in v1 (§32: enrollment is seed-manifest-only -- see
+// internal/app/seed/reposettings.go's own doc comment for the full
+// "why REST enrollment is structurally impossible for exactly the repos
+// rollout needs to enroll" reasoning).
+func (s *RepoSettingsStore) UpsertSessionsEnabled(ctx context.Context, repoFullName string, sessionsEnabled bool) (sqlcgen.RepoSetting, error) {
+	return s.q.UpsertSessionsEnabled(ctx, sqlcgen.UpsertSessionsEnabledParams{
+		RepoFullName:    repoFullName,
+		SessionsEnabled: sessionsEnabled,
+	})
+}
+
 // ListAutoMergeEnabled returns every repo_settings row with
 // auto_merge_enabled = true -- internal/app/automerge's own per-tick
 // repo enumeration (see ListAutoMergeEnabledRepos' own generated doc

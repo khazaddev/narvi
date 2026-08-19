@@ -158,6 +158,15 @@ type Actor struct {
 	// dispatch.go, timerfired.go).
 	epistemicCheckDefault bool
 
+	// rolloutMode (Step 76, §10 Phase 6, §32) is the SAME
+	// Registry.rolloutMode value every Actor this Registry hydrates
+	// shares (registry.go's own field doc comment, and RegistryOptions.
+	// RolloutMode's own doc comment for why this is an options field, not
+	// a required NewRegistry parameter) -- consulted by dispatch.go's own
+	// refuseIfRolloutUnenrolled, the dispatch-time half of §32's "fail-
+	// closed, twice" pair.
+	rolloutMode platform.RolloutMode
+
 	// pendingBroadcast queues each event appended (via appendEvent/
 	// appendRawEvent) during the CURRENT transact attempt, in order. Safe
 	// unsynchronized: Actor.handle processes exactly one command at a time

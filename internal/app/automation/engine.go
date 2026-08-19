@@ -52,6 +52,19 @@ type Engine struct {
 	// caller, an ordinary (never review-session) build turn, so no F7-style
 	// hardcoded-false carve-out applies here.
 	epistemicCheckDefault bool
+	// rolloutMode/repoSettings (Step 76, §10 Phase 6, §32) are the SAME
+	// two REQUIRED httpapi.CreateSessionOnTx parameters every other
+	// caller now threads through -- createRunAndSession (fanout.go) is
+	// this Engine's own ONE caller. An automation-created session is
+	// never itself refused today in practice (automation targets are
+	// admin-configured, not arbitrary user input), but this Engine passes
+	// the SAME real, operator-configured values every other caller does,
+	// never a hardcoded rollout.ModeOpen bypass -- createFailedRun (below)
+	// already handles ANY CreateSessionOnTx refusal (rollout or
+	// otherwise) as a terminal RunStatusFailed row, unmodified (§32: "the
+	// existing right thing, unmodified").
+	rolloutMode  platform.RolloutMode
+	repoSettings *postgres.RepoSettingsStore
 }
 
 // NewEngine builds an Engine backed by the given stores/pool (pool is
@@ -75,6 +88,8 @@ func NewEngine(
 	registry *sessionactor.Registry,
 	timeouts platform.Timeouts,
 	epistemicCheckDefault bool,
+	rolloutMode platform.RolloutMode,
+	repoSettings *postgres.RepoSettingsStore,
 ) *Engine {
 	return &Engine{
 		automations:           automations,
@@ -88,6 +103,8 @@ func NewEngine(
 		registry:              registry,
 		timeouts:              timeouts,
 		epistemicCheckDefault: epistemicCheckDefault,
+		rolloutMode:           rolloutMode,
+		repoSettings:          repoSettings,
 	}
 }
 

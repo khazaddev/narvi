@@ -111,12 +111,13 @@ func TestCreateSessionCore_RefusesDockerRequiredSessionWhenProviderUnsupported(t
 	turns := narvipg.NewTurnStore(pool)
 	environments := narvipg.NewEnvironmentStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
 
 	req := dockerRequestFixture()
 	req.Docker = true
 
 	var nilCreator pgtype.UUID
-	_, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, auditLog, registry, req, nilCreator, false)
+	_, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, auditLog, registry, req, nilCreator, false, platform.RolloutModeOpen, repoSettings)
 	if cerr == nil {
 		t.Fatal("CreateSessionCore: got nil error, want a refusal for docker=true against a DockerInSandbox=false provider")
 	}
@@ -156,12 +157,13 @@ func TestCreateSessionCore_AllowsDockerRequiredSessionWhenProviderSupported(t *t
 	turns := narvipg.NewTurnStore(pool)
 	environments := narvipg.NewEnvironmentStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
 
 	req := dockerRequestFixture()
 	req.Docker = true
 
 	var nilCreator pgtype.UUID
-	created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, auditLog, registry, req, nilCreator, false)
+	created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, auditLog, registry, req, nilCreator, false, platform.RolloutModeOpen, repoSettings)
 	if cerr != nil {
 		t.Fatalf("CreateSessionCore: status=%d message=%q", cerr.Status, cerr.Message)
 	}
@@ -192,6 +194,7 @@ func TestCreateSessionCore_RefusesEgressAllowlistSessionWhenProviderUnsupported(
 	turns := narvipg.NewTurnStore(pool)
 	environments := narvipg.NewEnvironmentStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
 
 	req := dockerRequestFixture()
 	req.EgressPolicy = &restdtos.CreateSessionRequestEgressPolicy{
@@ -200,7 +203,7 @@ func TestCreateSessionCore_RefusesEgressAllowlistSessionWhenProviderUnsupported(
 	}
 
 	var nilCreator pgtype.UUID
-	_, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, auditLog, registry, req, nilCreator, false)
+	_, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, auditLog, registry, req, nilCreator, false, platform.RolloutModeOpen, repoSettings)
 	if cerr == nil {
 		t.Fatal("CreateSessionCore: got nil error, want a refusal for an allowlist egressPolicy against an EgressPolicy=false provider")
 	}
@@ -233,6 +236,7 @@ func TestCreateSessionCore_AllowsEgressOpenModeRegardlessOfProviderSupport(t *te
 	turns := narvipg.NewTurnStore(pool)
 	environments := narvipg.NewEnvironmentStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
 
 	req := dockerRequestFixture()
 	req.EgressPolicy = &restdtos.CreateSessionRequestEgressPolicy{
@@ -241,7 +245,7 @@ func TestCreateSessionCore_AllowsEgressOpenModeRegardlessOfProviderSupport(t *te
 	}
 
 	var nilCreator pgtype.UUID
-	created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, auditLog, registry, req, nilCreator, false)
+	created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, auditLog, registry, req, nilCreator, false, platform.RolloutModeOpen, repoSettings)
 	if cerr != nil {
 		t.Fatalf("CreateSessionCore: status=%d message=%q, want success for an open-mode egressPolicy regardless of provider support", cerr.Status, cerr.Message)
 	}

@@ -127,6 +127,8 @@ import (
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/workflowengine"
 	"github.com/khazaddev/narvi/internal/domain/environment"
+	"github.com/khazaddev/narvi/internal/domain/reposource"
+	"github.com/khazaddev/narvi/internal/domain/rollout"
 	"github.com/khazaddev/narvi/internal/domain/sandbox"
 	"github.com/khazaddev/narvi/internal/domain/turn"
 	"github.com/khazaddev/narvi/internal/platform"
@@ -736,6 +738,17 @@ func (a *Actor) tryPlanSpawn(
 			return nil, err
 		}
 
+		// Step 76's own dispatch-time half of the "fail-closed, twice"
+		// rule (§10 Phase 6, §32) -- mirrors refuseIfSubstrateUnsupported's
+		// own identical gating to ONLY Spawn/Restore/Resume immediately
+		// above, for the identical reason (a Skip/Wait is not itself
+		// trying to reach the provider at all). See
+		// refuseIfRolloutUnenrolled's own doc comment for the full "why
+		// this is what makes rollback real".
+		if err := a.refuseIfRolloutUnenrolled(ctx, tx, sessionRow); err != nil {
+			return nil, err
+		}
+
 		// §27.8's own genuinely-unresolved snapshot-parity point (Step 74
 		// brief, point D), the SAME resolution sandboxevent.go's own
 		// triggerSnapshotBestEffort already applies on the way IN to a
@@ -848,6 +861,111 @@ func (a *Actor) refuseIfSubstrateUnsupported(ctx context.Context, tx pgx.Tx, ses
 		return dockerRequired, fmt.Errorf("sessionactor: dispatch-time substrate capability re-check failed: %w", err)
 	}
 	return dockerRequired, nil
+}
+
+// refuseIfRolloutUnenrolled implements Step 76's own dispatch-time half
+// of the "fail-closed, twice" rule (§10 Phase 6, §32): re-checked HERE,
+// immediately before tryPlanSpawn is about to attempt a REAL
+// spawn/restore/resume against a.provider, using the SAME pure decision
+// (internal/domain/rollout.Decide) httpapi.CreateSessionOnTx's own
+// creation-time gate (checkRolloutGate, internal/adapters/inbound/httpapi/
+// rolloutgate.go) already ran once at session-creation time -- mirroring
+// refuseIfSubstrateUnsupported's own identical "one pure function, two
+// independent call sites" shape immediately above, one Step later.
+//
+// This is what makes §32's own documented rollback bound real, not
+// aspirational: a session created while its repo was enrolled can be
+// dispatched again -- and again -- for its entire lifetime, every time a
+// new @mention/label re-trigger enqueues a turn on it (the REUSE branch,
+// internal/adapters/inbound/github's own coalesce.go) or an idle sandbox
+// needs to respawn. None of those paths ever touch
+// httpapi.CreateSessionOnTx again -- they all reach this Actor's own
+// dispatch loop directly. Without this SECOND, independent re-check, an
+// operator flipping repo_settings.sessions_enabled back to false for a
+// repo would have zero effect on any session already in flight: every
+// future re-review turn on that PR would keep silently respawning
+// sandboxes forever, exactly the gap §32's own rollback section names
+// explicitly.
+//
+// a.rolloutMode is re-read from this SAME in-memory Actor field every
+// call (not re-queried from Postgres -- platform.Config is process-wide,
+// boot-time config, not a runtime-mutable row) -- fresh relative to
+// sessionRow's own repo_settings lookup below, which IS re-read from
+// Postgres on tx every single call, so a repo de-enrolled between two
+// consecutive dispatch attempts for the SAME session is caught on the
+// very next one.
+//
+// On refusal, this returns a real, propagated error -- deliberately NOT
+// sandbox.SpawnActionSkip's own silent (nil, nil) shape, mirroring
+// refuseIfSubstrateUnsupported's own identical reasoning: a Skip looks
+// identical to an ordinary, expected cooldown/in-progress no-op, but a
+// session whose own repo has been de-enrolled is a genuine, persistent
+// policy state that must be loud (logged at Error, surfaced to run's own
+// "command handling failed" logger) until re-enrolled, never a silent,
+// indefinitely-retried no-op that looks identical to the sandbox merely
+// waiting its turn.
+func (a *Actor) refuseIfRolloutUnenrolled(ctx context.Context, tx pgx.Tx, sessionRow sqlcgen.Session) error {
+	if a.rolloutMode != rollout.ModeCohort {
+		return nil
+	}
+
+	var repos []struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(sessionRow.Repos, &repos); err != nil {
+		return fmt.Errorf("sessionactor: dispatch-time rollout re-check: unmarshal session repos: %w", err)
+	}
+
+	admissions := make([]rollout.RepoAdmission, 0, len(repos))
+	for _, repo := range repos {
+		// Audit-hardening precedent (imageresolve.go's own
+		// repoAccessAllowedForSpawn, pushpr.go, contractdrift.go):
+		// CheckRepoHost FIRST, then ParseOwnerRepo -- reposource.
+		// ParseOwnerRepo is deliberately host-agnostic (its own doc
+		// comment), so without this pairing a spoofed cross-host URL
+		// sharing an enrolled repo's own owner/repo path would silently
+		// derive that SAME enrolled identity here too.
+		if err := reposource.CheckRepoHost(repo.URL, ports.SupportedSourceControlHosts()...); err != nil {
+			a.logger.Warn("sessionactor: dispatch-time rollout re-check: repo url does not name a supported source-control host; treating as not enrolled",
+				"session_id", a.sessionID.String(), "url", repo.URL, "error", err)
+			admissions = append(admissions, rollout.RepoAdmission{FullName: repo.URL, Enrolled: false})
+			continue
+		}
+
+		owner, name, err := reposource.ParseOwnerRepo(repo.URL)
+		if err != nil {
+			a.logger.Warn("sessionactor: dispatch-time rollout re-check: parse owner/repo from clone url failed; treating as not enrolled",
+				"session_id", a.sessionID.String(), "error", err)
+			admissions = append(admissions, rollout.RepoAdmission{FullName: repo.URL, Enrolled: false})
+			continue
+		}
+		fullName := owner + "/" + name
+
+		row, err := a.stores.repoSettings.WithTx(tx).Get(ctx, fullName)
+		switch {
+		case err == nil:
+			admissions = append(admissions, rollout.RepoAdmission{FullName: fullName, Enrolled: row.SessionsEnabled})
+		case errors.Is(err, pgx.ErrNoRows):
+			admissions = append(admissions, rollout.RepoAdmission{FullName: fullName, Enrolled: false})
+		default:
+			// A genuine read error, on the transaction about to attempt a
+			// real spawn -- fail-closed (§32, mirroring
+			// checkRolloutGate's own identical C3 precedent), never
+			// treated as "no row, so unenrolled" without comment.
+			a.logger.Warn("sessionactor: dispatch-time rollout re-check: read repo_settings failed; failing closed (treating as not enrolled)",
+				"session_id", a.sessionID.String(), "repo", fullName, "error", err)
+			admissions = append(admissions, rollout.RepoAdmission{FullName: fullName, Enrolled: false})
+		}
+	}
+
+	decision := rollout.Decide(a.rolloutMode, admissions)
+	if decision.Admitted {
+		return nil
+	}
+
+	a.logger.Error("sessionactor: refusing to spawn: configured repo is not enrolled in the cohort rollout (§10 Phase 6, §32 dispatch-time fail-closed re-check)",
+		"session_id", a.sessionID.String(), "repo", decision.RepoFullName)
+	return fmt.Errorf("sessionactor: dispatch-time rollout re-check failed: repo %q not enrolled in cohort rollout", decision.RepoFullName)
 }
 
 // planFreshSpawn implements design decision 3a's own write (token mint,
