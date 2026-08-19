@@ -13,7 +13,7 @@ import (
 
 const getRepoSettings = `-- name: GetRepoSettings :one
 
-SELECT repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd FROM repo_settings WHERE repo_full_name = $1
+SELECT repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled FROM repo_settings WHERE repo_full_name = $1
 `
 
 // Queries backing RepoSettingsStore (§8.2/Step 47, §21.2): a small,
@@ -44,12 +44,13 @@ func (q *Queries) GetRepoSettings(ctx context.Context, repoFullName string) (Rep
 		&i.ReviewDepthDeepPaths,
 		&i.ReviewCostBudgetLightUsd,
 		&i.ReviewCostBudgetDeepUsd,
+		&i.SessionsEnabled,
 	)
 	return i, err
 }
 
 const listAutoMergeEnabledRepos = `-- name: ListAutoMergeEnabledRepos :many
-SELECT repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd FROM repo_settings WHERE auto_merge_enabled = true
+SELECT repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled FROM repo_settings WHERE auto_merge_enabled = true
 `
 
 // internal/app/automerge's own per-tick repo enumeration (§21.2 stage
@@ -87,6 +88,7 @@ func (q *Queries) ListAutoMergeEnabledRepos(ctx context.Context) ([]RepoSetting,
 			&i.ReviewDepthDeepPaths,
 			&i.ReviewCostBudgetLightUsd,
 			&i.ReviewCostBudgetDeepUsd,
+			&i.SessionsEnabled,
 		); err != nil {
 			return nil, err
 		}
@@ -103,7 +105,7 @@ INSERT INTO repo_settings (repo_full_name, max_auto_approve_files_changed, sensi
 VALUES ($1, $2, $3, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET max_auto_approve_files_changed = EXCLUDED.max_auto_approve_files_changed, sensitive_blast_radius_tags = EXCLUDED.sensitive_blast_radius_tags, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled
 `
 
 type UpsertAutoApprovalEligibilityParams struct {
@@ -140,6 +142,7 @@ func (q *Queries) UpsertAutoApprovalEligibility(ctx context.Context, arg UpsertA
 		&i.ReviewDepthDeepPaths,
 		&i.ReviewCostBudgetLightUsd,
 		&i.ReviewCostBudgetDeepUsd,
+		&i.SessionsEnabled,
 	)
 	return i, err
 }
@@ -150,7 +153,7 @@ INSERT INTO repo_settings (repo_full_name, auto_merge_enabled, updated_at)
 VALUES ($1, $2, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET auto_merge_enabled = EXCLUDED.auto_merge_enabled, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled
 `
 
 type UpsertAutoMergeToggleParams struct {
@@ -207,6 +210,7 @@ func (q *Queries) UpsertAutoMergeToggle(ctx context.Context, arg UpsertAutoMerge
 		&i.ReviewDepthDeepPaths,
 		&i.ReviewCostBudgetLightUsd,
 		&i.ReviewCostBudgetDeepUsd,
+		&i.SessionsEnabled,
 	)
 	return i, err
 }
@@ -216,7 +220,7 @@ INSERT INTO repo_settings (repo_full_name, auto_retrigger_review_enabled, update
 VALUES ($1, $2, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET auto_retrigger_review_enabled = EXCLUDED.auto_retrigger_review_enabled, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled
 `
 
 type UpsertAutoRetriggerReviewToggleParams struct {
@@ -254,6 +258,7 @@ func (q *Queries) UpsertAutoRetriggerReviewToggle(ctx context.Context, arg Upser
 		&i.ReviewDepthDeepPaths,
 		&i.ReviewCostBudgetLightUsd,
 		&i.ReviewCostBudgetDeepUsd,
+		&i.SessionsEnabled,
 	)
 	return i, err
 }
@@ -263,7 +268,7 @@ INSERT INTO repo_settings (repo_full_name, description_autofix_enabled, updated_
 VALUES ($1, $2, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET description_autofix_enabled = EXCLUDED.description_autofix_enabled, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled
 `
 
 type UpsertDescriptionAutofixToggleParams struct {
@@ -300,6 +305,7 @@ func (q *Queries) UpsertDescriptionAutofixToggle(ctx context.Context, arg Upsert
 		&i.ReviewDepthDeepPaths,
 		&i.ReviewCostBudgetLightUsd,
 		&i.ReviewCostBudgetDeepUsd,
+		&i.SessionsEnabled,
 	)
 	return i, err
 }
@@ -309,7 +315,7 @@ INSERT INTO repo_settings (repo_full_name, rwx_preview_dispatch_key, rwx_preview
 VALUES ($1, $2, $3, $4, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET rwx_preview_dispatch_key = EXCLUDED.rwx_preview_dispatch_key, rwx_preview_endpoint_template = EXCLUDED.rwx_preview_endpoint_template, rwx_preview_org_slug = EXCLUDED.rwx_preview_org_slug, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled
 `
 
 type UpsertRWXPreviewSettingsParams struct {
@@ -354,6 +360,7 @@ func (q *Queries) UpsertRWXPreviewSettings(ctx context.Context, arg UpsertRWXPre
 		&i.ReviewDepthDeepPaths,
 		&i.ReviewCostBudgetLightUsd,
 		&i.ReviewCostBudgetDeepUsd,
+		&i.SessionsEnabled,
 	)
 	return i, err
 }
@@ -363,7 +370,7 @@ INSERT INTO repo_settings (repo_full_name, block_on_high_risk, sentinel_autofix_
 VALUES ($1, $2, $3, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET block_on_high_risk = EXCLUDED.block_on_high_risk, sentinel_autofix_enabled = EXCLUDED.sentinel_autofix_enabled, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled
 `
 
 type UpsertRepoSettingsParams struct {
@@ -401,6 +408,7 @@ func (q *Queries) UpsertRepoSettings(ctx context.Context, arg UpsertRepoSettings
 		&i.ReviewDepthDeepPaths,
 		&i.ReviewCostBudgetLightUsd,
 		&i.ReviewCostBudgetDeepUsd,
+		&i.SessionsEnabled,
 	)
 	return i, err
 }
@@ -410,7 +418,7 @@ INSERT INTO repo_settings (repo_full_name, review_cost_budget_light_usd, review_
 VALUES ($1, $2, $3, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET review_cost_budget_light_usd = EXCLUDED.review_cost_budget_light_usd, review_cost_budget_deep_usd = EXCLUDED.review_cost_budget_deep_usd, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled
 `
 
 type UpsertReviewCostBudgetParams struct {
@@ -449,6 +457,7 @@ func (q *Queries) UpsertReviewCostBudget(ctx context.Context, arg UpsertReviewCo
 		&i.ReviewDepthDeepPaths,
 		&i.ReviewCostBudgetLightUsd,
 		&i.ReviewCostBudgetDeepUsd,
+		&i.SessionsEnabled,
 	)
 	return i, err
 }
@@ -458,7 +467,7 @@ INSERT INTO repo_settings (repo_full_name, review_depth_mode, review_depth_deep_
 VALUES ($1, $2, $3, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET review_depth_mode = EXCLUDED.review_depth_mode, review_depth_deep_paths = EXCLUDED.review_depth_deep_paths, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled
 `
 
 type UpsertReviewDepthConfigParams struct {
@@ -497,6 +506,55 @@ func (q *Queries) UpsertReviewDepthConfig(ctx context.Context, arg UpsertReviewD
 		&i.ReviewDepthDeepPaths,
 		&i.ReviewCostBudgetLightUsd,
 		&i.ReviewCostBudgetDeepUsd,
+		&i.SessionsEnabled,
+	)
+	return i, err
+}
+
+const upsertSessionsEnabled = `-- name: UpsertSessionsEnabled :one
+INSERT INTO repo_settings (repo_full_name, sessions_enabled, updated_at)
+VALUES ($1, $2, now())
+ON CONFLICT (repo_full_name)
+DO UPDATE SET sessions_enabled = EXCLUDED.sessions_enabled, updated_at = now()
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled
+`
+
+type UpsertSessionsEnabledParams struct {
+	RepoFullName    string `json:"repo_full_name"`
+	SessionsEnabled bool   `json:"sessions_enabled"`
+}
+
+// Step 76's own cohort-rollout enrollment gate (§10 Phase 6, §32) --
+// idempotent create-or-update of ONLY sessions_enabled, mirroring
+// UpsertAutoMergeToggle/UpsertAutoRetriggerReviewToggle/
+// UpsertDescriptionAutofixToggle's own identical column-scoped shape
+// above (§62 review finding C5's fix, generalized to this further,
+// independently-gated toggle): every other repo_settings column is left
+// COMPLETELY untouched, so a concurrent write to any of them can never
+// race with this one at the database level. Written ONLY by the seed
+// tool in v1 (§32: "seed-manifest-only") -- no REST route calls this yet.
+func (q *Queries) UpsertSessionsEnabled(ctx context.Context, arg UpsertSessionsEnabledParams) (RepoSetting, error) {
+	row := q.db.QueryRow(ctx, upsertSessionsEnabled, arg.RepoFullName, arg.SessionsEnabled)
+	var i RepoSetting
+	err := row.Scan(
+		&i.RepoFullName,
+		&i.BlockOnHighRisk,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SentinelAutofixEnabled,
+		&i.RwxPreviewDispatchKey,
+		&i.RwxPreviewEndpointTemplate,
+		&i.RwxPreviewOrgSlug,
+		&i.AutoMergeEnabled,
+		&i.MaxAutoApproveFilesChanged,
+		&i.SensitiveBlastRadiusTags,
+		&i.AutoRetriggerReviewEnabled,
+		&i.DescriptionAutofixEnabled,
+		&i.ReviewDepthMode,
+		&i.ReviewDepthDeepPaths,
+		&i.ReviewCostBudgetLightUsd,
+		&i.ReviewCostBudgetDeepUsd,
+		&i.SessionsEnabled,
 	)
 	return i, err
 }

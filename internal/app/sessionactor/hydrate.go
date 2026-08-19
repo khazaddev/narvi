@@ -116,6 +116,7 @@ func (r *Registry) hydrateAndAcquire(ctx context.Context, sessionID pgtype.UUID)
 		contractDriftDetected:  r.contractDriftDetected,
 		repoAccessCache:        r.repoAccessCache,
 		epistemicCheckDefault:  r.epistemicCheckDefault,
+		rolloutMode:            r.rolloutMode,
 		registry:               r,
 		lockConn:               conn,
 		mailbox:                make(chan Command, mailboxBufferSize),

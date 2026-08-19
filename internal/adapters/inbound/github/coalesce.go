@@ -39,6 +39,27 @@ const intentClassifierSurface = "github"
 // SHOULD be retried via GitHub's own redelivery mechanism.
 var ErrActorNotAuthorized = errors.New("github: actor not authorized")
 
+// ErrRolloutNotEnrolled is CreateOrJoin's own sentinel for "the WINNER
+// path's own httpapi.CreateSessionOnTx call refused because a named repo
+// is not enrolled in Step 76's cohort rollout" (§10 Phase 6, §32:
+// CreateSessionError.RolloutRefusal, checked structurally, never by
+// string-matching cerr.Message). Deliberately DISTINCT from every other
+// CreateOrJoin error, mirroring ErrActorNotAuthorized's own identical
+// shape immediately above: this is a PERMANENT policy refusal (retrying
+// the same GitHub redelivery would reproduce the identical refusal every
+// time, since repo_settings.sessions_enabled does not change between
+// redeliveries of the SAME webhook payload), so handler.go checks for
+// this one specifically and takes §32's own permanent-denial idiom:
+// acknowledge (200) WITHOUT releasing the claimed webhook delivery (a
+// release would let GitHub redeliver into this exact same refusal
+// forever), and post NO reply on the PR thread at all -- §32's own "an
+// unenrolled repo must receive zero platform egress" requirement, one
+// step stricter than ErrActorNotAuthorized's own unlinked-actor branch
+// (which DOES post an actionable reply): an unenrolled repo has no
+// action a commenter could even take to fix this themselves, so there is
+// nothing honest to tell them beyond silence.
+var ErrRolloutNotEnrolled = errors.New("github: repo not enrolled in cohort rollout")
+
 // SessionCoalescer bundles the stores/registry CreateOrJoin needs -- a
 // small struct rather than a long positional-parameter list, constructed
 // once at wiring time (cmd/control-plane/main.go), mirroring this
@@ -148,6 +169,22 @@ type SessionCoalescer struct {
 	// means "not configured", see that function's own doc comment
 	// (internal/domain/reviewtriage/modeleffort.go).
 	ReviewModelDeep string
+
+	// RolloutMode/RepoSettings (Step 76, §10 Phase 6, §32) are threaded
+	// through to the WINNER path's own httpapi.CreateSessionOnTx call
+	// below, exactly like AuditLog/Environments already are -- both are
+	// REQUIRED parameters of that function (its own doc comment), so a
+	// zero-value RolloutMode here is indistinguishable from
+	// rollout.ModeOpen (the safe default) rather than an accidental gap.
+	// A DIFFERENT, DEDICATED field from ReviewTriage.RepoSettings above,
+	// even though both ultimately point at the same
+	// *postgres.RepoSettingsStore in production wiring (cmd/control-
+	// plane/main.go): ReviewTriage is a nested, review-domain-specific
+	// dependency bundle that could reasonably be refactored or dropped
+	// without anyone noticing this UNRELATED rollout-gating concern
+	// silently broke along with it.
+	RolloutMode  platform.RolloutMode
+	RepoSettings *postgres.RepoSettingsStore
 }
 
 // CreateOrJoin is Step 32's own per-PR coalescing entry point -- see
@@ -544,8 +581,21 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 	// forces high effort" summary.
 	req.ModelId = restdtos.CreateSessionRequestModelId(triageModelID)
 	req.Effort = restdtos.CreateSessionRequestEffort(triageEffort)
-	created, hasPrompt, cerr := httpapi.CreateSessionOnTx(ctx, tx, c.Sessions, c.Turns, c.Environments, c.AuditLog, req, actor, false, httpapi.ChildSessionOptions{ReviewHeadSHA: reviewHeadSHAPtr, ReviewDepth: reviewDepthPtr, ReviewDepthDecision: triageRecordJSON})
+	created, hasPrompt, cerr := httpapi.CreateSessionOnTx(ctx, tx, c.Sessions, c.Turns, c.Environments, c.AuditLog, req, actor, false, c.RolloutMode, c.RepoSettings, httpapi.ChildSessionOptions{ReviewHeadSHA: reviewHeadSHAPtr, ReviewDepth: reviewDepthPtr, ReviewDepthDecision: triageRecordJSON})
 	if cerr != nil {
+		if cerr.RolloutRefusal {
+			// §32's own permanent-denial idiom -- see ErrRolloutNotEnrolled's
+			// own doc comment for the full "why" (handler.go acknowledges
+			// without releasing the webhook-delivery claim, and stays
+			// silent on the PR). The deferred Rollback above undoes
+			// EnsureRow's own claim-row INSERT too (committed is still
+			// false here) -- an unenrolled repo's own github_pr_sessions
+			// row is left exactly as absent as it was before this attempt,
+			// which is also why REST enrollment (confirmRepoKnown, httpapi/
+			// reposettings.go) can never bootstrap itself for this repo --
+			// see internal/app/seed/reposettings.go's own doc comment.
+			return sqlcgen.Session{}, sqlcgen.Turn{}, false, ErrRolloutNotEnrolled
+		}
 		return sqlcgen.Session{}, sqlcgen.Turn{}, false, fmt.Errorf("github: create session: %w", cerr)
 	}
 

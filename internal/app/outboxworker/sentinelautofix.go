@@ -58,6 +58,20 @@ import (
 // unrelated one.
 const sentinelFixBranchPrefix = "narvi/sentinel-fix/"
 
+// errRolloutRefused is spawnClaimedChildSession's own sentinel for "the
+// origin PR's own repo is not enrolled in Step 76's cohort rollout" (§10
+// Phase 6, §32: CreateSessionError.RolloutRefusal, checked structurally,
+// never by string-matching). Deliver checks for this specifically and
+// maps it to the existing terminal-skip precedent (descriptionautofix.go:
+// "return nil, and the outbox marks this row delivered, never retried")
+// rather than the outbox's ordinary backoff/retry/dead-letter path --
+// unlike a transient Postgres/GitHub failure, retrying an identical
+// redelivery of this SAME outbox row would reproduce this exact same
+// refusal every time, since repo_settings.sessions_enabled does not
+// change between redeliveries. See Deliver's own doc comment for the
+// full "why".
+var errRolloutRefused = errors.New("outboxworker: sentinelAutoFixNotifier: repo not enrolled in cohort rollout")
+
 // sentinelFixBranchName derives the distinct upstream branch name Deliver
 // creates (via SourceControl.CreateBranch) and has the fix child session
 // check out and push to -- NEVER the origin PR's own head branch. Keyed
@@ -99,6 +113,16 @@ type sentinelAutoFixNotifier struct {
 	// call below is an ordinary (never review-session) build session, so
 	// no F7-style hardcoded-false carve-out applies here.
 	epistemicCheckDefault bool
+	// rolloutMode/repoSettings (Step 76, §10 Phase 6, §32) are the SAME
+	// two REQUIRED httpapi.CreateSessionOnTx parameters every other
+	// caller now threads through -- spawnClaimedChildSession's own
+	// CreateSessionOnTx call below needs both. See Deliver's own updated
+	// doc comment for how a rollout refusal here maps to the existing
+	// "confirmed negative -> nil, never retried" terminal-skip precedent
+	// (descriptionautofix.go), never the outbox's ordinary backoff/retry/
+	// dead-letter path.
+	rolloutMode  platform.RolloutMode
+	repoSettings *postgres.RepoSettingsStore
 }
 
 var _ ports.Notifier = (*sentinelAutoFixNotifier)(nil)
@@ -124,12 +148,16 @@ func NewSentinelAutoFixNotifier(
 	githubBotToken string,
 	timeouts platform.Timeouts,
 	epistemicCheckDefault bool,
+	rolloutMode platform.RolloutMode,
+	repoSettings *postgres.RepoSettingsStore,
 ) ports.Notifier {
 	return &sentinelAutoFixNotifier{
 		pool: pool, sessions: sessions, turns: turns, environments: environments,
 		auditLog: auditLog, registry: registry, sentinelFixes: sentinelFixes, reviewFindings: reviewFindings,
 		sourceControl: sourceControl, githubBotToken: githubBotToken, timeouts: timeouts,
 		epistemicCheckDefault: epistemicCheckDefault,
+		rolloutMode:           rolloutMode,
+		repoSettings:          repoSettings,
 	}
 }
 
@@ -284,6 +312,20 @@ func (n *sentinelAutoFixNotifier) Deliver(ctx context.Context, notification port
 		// simply wrong (a race against a concurrent claimant).
 		spawned, err := n.spawnClaimedChildSession(ctx, payload)
 		if err != nil {
+			if errors.Is(err, errRolloutRefused) {
+				// Step 76 (§10 Phase 6, §32): terminal-skip, mirroring
+				// descriptionautofix.go's own "confirmed negative -> nil,
+				// never retried" precedent -- see errRolloutRefused's own
+				// doc comment for the full "why this is not the ordinary
+				// backoff/retry/dead-letter path". markFindingsFixPending
+				// is deliberately NOT called below: no fix child session
+				// was ever created, so there is nothing real to record --
+				// every addressed finding is left exactly as it was
+				// (still 'open'), not falsely marked 'fix_pending'.
+				platform.Logger(ctx).Warn("outboxworker: sentinelAutoFixNotifier: fix child session refused: repo not enrolled in cohort rollout; skipping, never retried",
+					"repo", payload.RepoFullName, "origin_pr_number", payload.OriginPRNumber)
+				return nil
+			}
 			return err
 		}
 		fixChildSessionID = spawned
@@ -386,12 +428,21 @@ func (n *sentinelAutoFixNotifier) spawnClaimedChildSession(ctx context.Context, 
 	// ProvenanceTag wants a *string, and provenance.SentinelAutoFix is a
 	// Go const -- its address cannot be taken directly.
 	provenanceTag := provenance.SentinelAutoFix
-	created, hasPrompt, cerr := httpapi.CreateSessionOnTx(ctx, tx, n.sessions, n.turns, n.environments, n.auditLog, req, pgtype.UUID{}, n.epistemicCheckDefault, httpapi.ChildSessionOptions{
+	created, hasPrompt, cerr := httpapi.CreateSessionOnTx(ctx, tx, n.sessions, n.turns, n.environments, n.auditLog, req, pgtype.UUID{}, n.epistemicCheckDefault, n.rolloutMode, n.repoSettings, httpapi.ChildSessionOptions{
 		ParentSessionID: parentSessionID,
 		SpawnDepth:      1,
 		ProvenanceTag:   &provenanceTag,
 	})
 	if cerr != nil {
+		if cerr.RolloutRefusal {
+			// Step 76 (§10 Phase 6, §32): a PERMANENT policy refusal --
+			// the origin PR's own repo is not enrolled -- never a
+			// transient failure. errRolloutRefused lets Deliver (this
+			// notifier's own entry point) distinguish this from every
+			// other error this function can return, structurally
+			// (errors.Is), never by string-matching cerr.Message.
+			return pgtype.UUID{}, fmt.Errorf("outboxworker: sentinelAutoFixNotifier: spawn child session: %w", errRolloutRefused)
+		}
 		return pgtype.UUID{}, fmt.Errorf("outboxworker: sentinelAutoFixNotifier: spawn child session: %s", cerr.Message)
 	}
 

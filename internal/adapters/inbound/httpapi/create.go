@@ -277,7 +277,7 @@ const defaultContractsPath = "contracts/api"
 // intentSvc is nil-safe (see recordExplicitIntentDecision's own doc
 // comment) so every existing call site that doesn't care about Step 36
 // can keep passing nil unchanged.
-func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, intentSvc *intentclassifier.Service, epistemicCheckDefault bool) http.HandlerFunc {
+func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, intentSvc *intentclassifier.Service, epistemicCheckDefault bool, rolloutMode platform.RolloutMode, repoSettings *postgres.RepoSettingsStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
@@ -337,7 +337,17 @@ func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *p
 			return
 		}
 
-		created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, auditLog, registry, req, createdBy, epistemicCheckDefault)
+		// rolloutMode/repoSettings (Step 76, §32): a 403 with an explicit
+		// "repository not enrolled" message (checkRolloutGate's own
+		// Message) is exactly what the generic writeError(w, cerr.Status,
+		// cerr.Message) branch immediately below already produces for
+		// ANY CreateSessionError -- REST needs no special-casing of
+		// CreateSessionError.RolloutRefusal at all, unlike the three
+		// non-REST ingress channels (Linear/Slack/the sentinel-autofix
+		// outbox), which route an ordinary error down a retry path that
+		// must be bypassed for a permanent policy refusal (see each of
+		// those call sites' own doc comments).
+		created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, auditLog, registry, req, createdBy, epistemicCheckDefault, rolloutMode, repoSettings)
 		if cerr != nil {
 			writeError(w, cerr.Status, cerr.Message)
 			return
@@ -387,6 +397,19 @@ func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *p
 type CreateSessionError struct {
 	Status  int
 	Message string
+
+	// RolloutRefusal (Step 76, §10 Phase 6, §32) is true iff this error
+	// came from checkRolloutGate (rolloutgate.go) -- a PERMANENT policy
+	// refusal ("this repo is not enrolled in the cohort rollout"), never a
+	// transient failure. §32's own "machine-checkable refusal marker"
+	// requirement: three of CreateSessionOnTx's own callers (Linear,
+	// Slack, the sentinel-autofix outbox) route an ordinary create error
+	// down a RETRY path (release a claim, redeliver) that is correct for a
+	// transient DB error but actively wrong for a refusal that will
+	// reproduce identically on every retry forever -- checking this field
+	// (never Message, which is prose, not an API) is how each of those
+	// three call sites tells the two apart structurally.
+	RolloutRefusal bool
 }
 
 func (e *CreateSessionError) Error() string { return e.Message }
@@ -448,7 +471,7 @@ type validatedCreateSessionInput struct {
 // not a bug -- see CreateSessionCore's own doc comment below.
 func validateCreateSessionRequest(req restdtos.CreateSessionRequest) (validatedCreateSessionInput, *CreateSessionError) {
 	if len(req.Repos) < 1 {
-		return validatedCreateSessionInput{}, &CreateSessionError{http.StatusBadRequest, "repos must be non-empty"}
+		return validatedCreateSessionInput{}, &CreateSessionError{Status: http.StatusBadRequest, Message: "repos must be non-empty"}
 	}
 
 	// Validate every repo's Name/Url/Branch. Stops at the first failure,
@@ -457,21 +480,21 @@ func validateCreateSessionRequest(req restdtos.CreateSessionRequest) (validatedC
 	// every repo at once.
 	for i, repo := range req.Repos {
 		if err := reposource.ValidateRepoName(repo.Name); err != nil {
-			return validatedCreateSessionInput{}, &CreateSessionError{http.StatusBadRequest, fmt.Sprintf("repos[%d].name: %s", i, err)}
+			return validatedCreateSessionInput{}, &CreateSessionError{Status: http.StatusBadRequest, Message: fmt.Sprintf("repos[%d].name: %s", i, err)}
 		}
 		if err := reposource.ValidateRepoURL(repo.Url); err != nil {
-			return validatedCreateSessionInput{}, &CreateSessionError{http.StatusBadRequest, fmt.Sprintf("repos[%d].url: %s", i, err)}
+			return validatedCreateSessionInput{}, &CreateSessionError{Status: http.StatusBadRequest, Message: fmt.Sprintf("repos[%d].url: %s", i, err)}
 		}
 		if repo.Branch != nil {
 			if err := reposource.ValidateBranch(*repo.Branch); err != nil {
-				return validatedCreateSessionInput{}, &CreateSessionError{http.StatusBadRequest, fmt.Sprintf("repos[%d].branch: %s", i, err)}
+				return validatedCreateSessionInput{}, &CreateSessionError{Status: http.StatusBadRequest, Message: fmt.Sprintf("repos[%d].branch: %s", i, err)}
 			}
 		}
 	}
 
 	reposJSON, err := json.Marshal(req.Repos)
 	if err != nil {
-		return validatedCreateSessionInput{}, &CreateSessionError{http.StatusInternalServerError, "internal error"}
+		return validatedCreateSessionInput{}, &CreateSessionError{Status: http.StatusInternalServerError, Message: "internal error"}
 	}
 
 	// pathScope is OPTIONAL (contracts/rest/v1/dtos.schema.json's
@@ -488,7 +511,7 @@ func validateCreateSessionRequest(req restdtos.CreateSessionRequest) (validatedC
 
 	if hasPathScope {
 		if err := environment.ValidatePathScope(pathScope); err != nil {
-			return validatedCreateSessionInput{}, &CreateSessionError{http.StatusBadRequest, fmt.Sprintf("pathScope: %s", err)}
+			return validatedCreateSessionInput{}, &CreateSessionError{Status: http.StatusBadRequest, Message: fmt.Sprintf("pathScope: %s", err)}
 		}
 	}
 
@@ -513,7 +536,7 @@ func validateCreateSessionRequest(req restdtos.CreateSessionRequest) (validatedC
 		// it is this handler's own fixed, known-safe constant, not
 		// caller input.
 		if err := environment.ValidateContractsPath(contractsPath); err != nil {
-			return validatedCreateSessionInput{}, &CreateSessionError{http.StatusBadRequest, fmt.Sprintf("mockConfig.contractsPath: %s", err)}
+			return validatedCreateSessionInput{}, &CreateSessionError{Status: http.StatusBadRequest, Message: fmt.Sprintf("mockConfig.contractsPath: %s", err)}
 		}
 	}
 
@@ -540,7 +563,7 @@ func validateCreateSessionRequest(req restdtos.CreateSessionRequest) (validatedC
 			Allowlist: append([]string(nil), req.EgressPolicy.Allowlist...),
 		}
 		if err := environment.ValidateEgressPolicy(egressPolicy); err != nil {
-			return validatedCreateSessionInput{}, &CreateSessionError{http.StatusBadRequest, fmt.Sprintf("egressPolicy: %s", err)}
+			return validatedCreateSessionInput{}, &CreateSessionError{Status: http.StatusBadRequest, Message: fmt.Sprintf("egressPolicy: %s", err)}
 		}
 	}
 
@@ -608,7 +631,7 @@ func checkSubstrateCapabilitiesUpFront(registry *sessionactor.Registry, req rest
 	// unsupporting provider refuses.
 
 	if err := environment.CheckSubstrateCapabilities(dockerRequired, egressEnforcementRequired, caps.DockerInSandbox, caps.EgressPolicy); err != nil {
-		return &CreateSessionError{http.StatusUnprocessableEntity, err.Error()}
+		return &CreateSessionError{Status: http.StatusUnprocessableEntity, Message: err.Error()}
 	}
 	return nil
 }
@@ -680,7 +703,19 @@ func checkSubstrateCapabilitiesUpFront(registry *sessionactor.Registry, req rest
 // a hardcoded false instead -- see that call site's own doc comment for
 // why (F7: a review session must never get the builder-only preamble,
 // mirroring reviewretrigger.go's identical REUSE-branch precedent).
-func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, req restdtos.CreateSessionRequest, createdBy pgtype.UUID, epistemicCheckDefault bool, childOpts ...ChildSessionOptions) (session sqlcgen.Session, hasPrompt bool, cerr *CreateSessionError) {
+//
+// rolloutMode/repoSettings (Step 76, §10 Phase 6, §32) are REQUIRED
+// parameters, not a variadic/optional trailing slot -- deliberately
+// mirroring epistemicCheckDefault's own "every call site must
+// compile-time-decide what to pass, never a silently-defaulted zero
+// value" precedent immediately above, one level stricter: an omittable
+// gate parameter is an omitted gate, and §32's own standing rule is that
+// a check every future call site must remember is not a guard. Every
+// current and future caller of this function fails to compile until it
+// supplies both -- see rolloutgate.go's own checkRolloutGate, called
+// immediately below, right after validateCreateSessionRequest and BEFORE
+// the environment/session inserts, on this SAME tx.
+func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, req restdtos.CreateSessionRequest, createdBy pgtype.UUID, epistemicCheckDefault bool, rolloutMode platform.RolloutMode, repoSettings *postgres.RepoSettingsStore, childOpts ...ChildSessionOptions) (session sqlcgen.Session, hasPrompt bool, cerr *CreateSessionError) {
 	logger := platform.Logger(ctx)
 	opts := childSessionOptionsFrom(childOpts)
 
@@ -703,6 +738,16 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 	egressPolicy := validated.egressPolicy
 	hasEgressPolicy := validated.hasEgressPolicy
 
+	// Step 76's own primary gate (§10 Phase 6, §32): checked AFTER
+	// validation, BEFORE the environment/session inserts below, on this
+	// SAME tx -- see checkRolloutGate's own doc comment (rolloutgate.go)
+	// for the full "why here" reasoning, including the no-op short-circuit
+	// that keeps this a zero-cost no-op for every deployment that has
+	// never set NARVI_ROLLOUT_MODE=cohort.
+	if gerr := checkRolloutGate(ctx, tx, repoSettings, rolloutMode, req); gerr != nil {
+		return sqlcgen.Session{}, false, gerr
+	}
+
 	// An environments row is inserted in this SAME transaction, BEFORE
 	// the session row itself, so the session insert below can set
 	// environment_id to it directly, whenever ANY of pathScope/mockConfig/
@@ -720,7 +765,7 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 			pathScopeJSON, marshalErr = json.Marshal(pathScope)
 			if marshalErr != nil {
 				logger.Error("httpapi: marshal pathScope failed", "error", marshalErr)
-				return sqlcgen.Session{}, false, &CreateSessionError{http.StatusInternalServerError, "internal error"}
+				return sqlcgen.Session{}, false, &CreateSessionError{Status: http.StatusInternalServerError, Message: "internal error"}
 			}
 		}
 
@@ -754,7 +799,7 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 				egressPolicyAllowlistJSON, marshalErr = json.Marshal(egressPolicy.Allowlist)
 				if marshalErr != nil {
 					logger.Error("httpapi: marshal egressPolicy.allowlist failed", "error", marshalErr)
-					return sqlcgen.Session{}, false, &CreateSessionError{http.StatusInternalServerError, "internal error"}
+					return sqlcgen.Session{}, false, &CreateSessionError{Status: http.StatusInternalServerError, Message: "internal error"}
 				}
 			}
 		}
@@ -769,7 +814,7 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 		})
 		if envErr != nil {
 			logger.Error("httpapi: create environment failed", "error", envErr)
-			return sqlcgen.Session{}, false, &CreateSessionError{http.StatusInternalServerError, "internal error"}
+			return sqlcgen.Session{}, false, &CreateSessionError{Status: http.StatusInternalServerError, Message: "internal error"}
 		}
 		environmentID = env.ID
 
@@ -822,14 +867,14 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 	})
 	if err != nil {
 		logger.Error("httpapi: create session failed", "error", err)
-		return sqlcgen.Session{}, false, &CreateSessionError{http.StatusInternalServerError, "internal error"}
+		return sqlcgen.Session{}, false, &CreateSessionError{Status: http.StatusInternalServerError, Message: "internal error"}
 	}
 
 	if err := recordAuditLog(ctx, auditLog.WithTx(tx), createdBy, "session.create", "session", created.ID.String(), map[string]any{
 		"spawn_source": string(created.SpawnSource),
 	}); err != nil {
 		logger.Error("httpapi: record session.create audit log failed", "error", err)
-		return sqlcgen.Session{}, false, &CreateSessionError{http.StatusInternalServerError, "internal error"}
+		return sqlcgen.Session{}, false, &CreateSessionError{Status: http.StatusInternalServerError, Message: "internal error"}
 	}
 
 	hasPrompt = req.Prompt != nil
@@ -856,7 +901,7 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 			ReviewDepthDecision: opts.ReviewDepthDecision,
 		}); err != nil {
 			logger.Error("httpapi: create turn failed", "error", err)
-			return sqlcgen.Session{}, false, &CreateSessionError{http.StatusInternalServerError, "internal error"}
+			return sqlcgen.Session{}, false, &CreateSessionError{Status: http.StatusInternalServerError, Message: "internal error"}
 		}
 	}
 
@@ -914,7 +959,11 @@ func TriggerDispatch(ctx context.Context, registry *sessionactor.Registry, sessi
 // That caller should call CreateSessionOnTx directly, inline on its own
 // already-open tx, and call TriggerDispatch itself once its own outer
 // transaction has committed and hasPrompt is true.
-func CreateSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, req restdtos.CreateSessionRequest, createdBy pgtype.UUID, epistemicCheckDefault bool) (sqlcgen.Session, *CreateSessionError) {
+//
+// rolloutMode/repoSettings (Step 76, §32) are threaded straight through to
+// CreateSessionOnTx below, unchanged -- see that function's own doc
+// comment for why both are required, not optional.
+func CreateSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, req restdtos.CreateSessionRequest, createdBy pgtype.UUID, epistemicCheckDefault bool, rolloutMode platform.RolloutMode, repoSettings *postgres.RepoSettingsStore) (sqlcgen.Session, *CreateSessionError) {
 	logger := platform.Logger(ctx)
 
 	// Validate BEFORE ever acquiring a pooled connection -- see
@@ -945,7 +994,7 @@ func CreateSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgr
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		logger.Error("httpapi: begin create-session tx failed", "error", err)
-		return sqlcgen.Session{}, &CreateSessionError{http.StatusInternalServerError, "internal error"}
+		return sqlcgen.Session{}, &CreateSessionError{Status: http.StatusInternalServerError, Message: "internal error"}
 	}
 	// Rollback is a safety net for every return path other than a
 	// successful Commit below -- same pattern as internal/adapters/
@@ -953,14 +1002,14 @@ func CreateSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgr
 	// own transact.
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	created, hasPrompt, cerr := CreateSessionOnTx(ctx, tx, sessions, turns, environments, auditLog, req, createdBy, epistemicCheckDefault)
+	created, hasPrompt, cerr := CreateSessionOnTx(ctx, tx, sessions, turns, environments, auditLog, req, createdBy, epistemicCheckDefault, rolloutMode, repoSettings)
 	if cerr != nil {
 		return sqlcgen.Session{}, cerr
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		logger.Error("httpapi: commit create-session tx failed", "error", err)
-		return sqlcgen.Session{}, &CreateSessionError{http.StatusInternalServerError, "internal error"}
+		return sqlcgen.Session{}, &CreateSessionError{Status: http.StatusInternalServerError, Message: "internal error"}
 	}
 
 	if hasPrompt {

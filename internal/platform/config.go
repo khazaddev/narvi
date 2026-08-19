@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/khazaddev/narvi/internal/domain/reposource"
+	"github.com/khazaddev/narvi/internal/domain/rollout"
 )
 
 // Stage identifies which deployment stage the control plane is running in.
@@ -831,6 +832,60 @@ func (e *InvalidEpistemicCheckDefaultError) Error() string {
 	return fmt.Sprintf("invalid %s=%q: must be a boolean (true/false/1/0/T/F/...)", epistemicCheckDefaultEnvVarName, e.Value)
 }
 
+// RolloutMode is a type ALIAS (not a new, parallel type) for
+// internal/domain/rollout.Mode -- Config.RolloutMode below is spelled
+// platform.RolloutMode purely so every one of this Step's own call sites
+// outside internal/platform (httpapi, sessionactor, the ingress adapters)
+// can name it without importing internal/domain/rollout themselves just
+// for a type reference; being a genuine alias (`=`, not a defined type)
+// means platform.RolloutMode and rollout.Mode are the IDENTICAL type, so
+// there is still exactly one enum in this codebase, never two that could
+// drift out of sync (see rollout.Mode's own doc comment for the full
+// "why one, not two" reasoning).
+type RolloutMode = rollout.Mode
+
+// RolloutModeOpen/RolloutModeCohort re-export rollout.ModeOpen/
+// rollout.ModeCohort under this package's own name -- purely a
+// convenience so a caller that already imports internal/platform (every
+// adapter package in this codebase) can write platform.RolloutModeOpen
+// without ALSO importing internal/domain/rollout just for a constant
+// reference. Identical values either way (RolloutMode is a genuine type
+// alias, above) -- these are not a second, independently-defined pair
+// that could drift from rollout.Mode's own two constants.
+const (
+	RolloutModeOpen   = rollout.ModeOpen
+	RolloutModeCohort = rollout.ModeCohort
+)
+
+// rolloutModeEnvVarName configures Step 76's ("feature-flagged cohort
+// rollout of sessions, with documented rollback", §10 Phase 6, §32) own
+// master switch, read from NARVI_ROLLOUT_MODE. Optional -- unlike
+// NARVI_STAGE (required, no default: envVarName's own doc comment), an
+// unset value here has a genuinely safe default (rollout.ModeOpen)
+// mirroring epistemicCheckDefaultEnvVarName's own "optional, safe
+// default" precedent immediately above, NOT envVarName's own
+// "required, no default" one -- §32's own central requirement is that
+// this Step lands as a byte-for-byte no-op for every existing deployment
+// and for CI, which an unset-means-required-error default would violate
+// outright.
+const rolloutModeEnvVarName = "NARVI_ROLLOUT_MODE"
+
+// InvalidRolloutModeError is returned by Load when NARVI_ROLLOUT_MODE is
+// set to a value that is not (case-sensitively) one of rollout.ModeOpen
+// ("open") or rollout.ModeCohort ("cohort") -- mirrors InvalidStageError's
+// own identical "named, typed, fail-fast" shape (§5.4, §11): an invalid
+// value refuses to boot rather than silently falling back to open (which
+// would be indistinguishable from a deliberately-configured cohort
+// deployment that simply mistyped its own env var, silently disabling
+// the enrollment gate it thought it had armed).
+type InvalidRolloutModeError struct {
+	Value string
+}
+
+func (e *InvalidRolloutModeError) Error() string {
+	return fmt.Sprintf("invalid %s=%q: must be one of %q, %q", rolloutModeEnvVarName, e.Value, rollout.ModeOpen, rollout.ModeCohort)
+}
+
 // parseCommaSeparatedList splits raw on commas, trims whitespace from each
 // entry, and drops empty entries — used for every optional
 // comma-separated-list env var this file reads (the 3 allowlist mechanisms
@@ -1054,6 +1109,18 @@ type Config struct {
 	// direction (internal/domain/turn.ResolveEpistemicCheckEnabled) — this
 	// field is consulted only when that override is unset (NULL).
 	EpistemicCheckDefault bool
+
+	// RolloutMode is Step 76's own master switch (§10 Phase 6, §32:
+	// "feature-flagged cohort rollout of sessions"), read from
+	// NARVI_ROLLOUT_MODE. Optional: defaults to rollout.ModeOpen when
+	// unset (§32: "so this Step lands as a byte-for-byte no-op for every
+	// existing deployment and for CI"). In rollout.ModeCohort,
+	// httpapi.CreateSessionOnTx's own per-repo repo_settings.
+	// sessions_enabled read (on the same transaction as the session
+	// insert) and internal/app/sessionactor's own dispatch-time re-check
+	// both gate on this value -- see internal/domain/rollout's own doc
+	// comment for the shared pure decision both sites call.
+	RolloutMode rollout.Mode
 
 	// ModalBaseURL and ModalAuthToken configure the real
 	// internal/adapters/outbound/modal.Provider cmd/control-plane/main.go
@@ -1414,6 +1481,22 @@ func Load() (*Config, error) {
 		}
 	}
 
+	// rolloutMode (Step 76, §32): optional, default rollout.ModeOpen --
+	// mirrors epistemicCheckDefault's own identical "empty means unset,
+	// parse only when present" idiom immediately above, but with an
+	// explicit two-value switch (like Stage, envVarName's own block
+	// above) rather than strconv.ParseBool, since this is a two-value
+	// enum, not a boolean.
+	rolloutMode := rollout.ModeOpen
+	if raw := os.Getenv(rolloutModeEnvVarName); raw != "" {
+		switch rollout.Mode(raw) {
+		case rollout.ModeOpen, rollout.ModeCohort:
+			rolloutMode = rollout.Mode(raw)
+		default:
+			errs = append(errs, &InvalidRolloutModeError{Value: raw})
+		}
+	}
+
 	modalBaseURL := os.Getenv(modalBaseURLEnvVarName)
 	if modalBaseURL == "" {
 		errs = append(errs, &MissingRequiredEnvError{EnvVar: modalBaseURLEnvVarName})
@@ -1628,6 +1711,7 @@ func Load() (*Config, error) {
 		AllowedEmails:              allowedEmails,
 		InitialAdminEmails:         initialAdminEmails,
 		EpistemicCheckDefault:      epistemicCheckDefault,
+		RolloutMode:                rolloutMode,
 		ModalBaseURL:               modalBaseURL,
 		ModalAuthToken:             modalAuthToken,
 		ModalEgressProxyURL:        modalEgressProxyURL,

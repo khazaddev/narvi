@@ -50,6 +50,7 @@ func TestCreateSessionForBot_CreatesNullCreatorSession(t *testing.T) {
 	turns := narvipg.NewTurnStore(pool)
 	environments := narvipg.NewEnvironmentStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
 	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
@@ -65,7 +66,7 @@ func TestCreateSessionForBot_CreatesNullCreatorSession(t *testing.T) {
 		},
 	}
 
-	created, err := CreateSessionForBot(ctx, pool, sessions, turns, environments, auditLog, registry, req, false)
+	created, err := CreateSessionForBot(ctx, pool, sessions, turns, environments, auditLog, registry, req, false, platform.RolloutModeOpen, repoSettings)
 	if err != nil {
 		t.Fatalf("CreateSessionForBot: %v", err)
 	}
@@ -100,6 +101,7 @@ func TestCreateSessionForBot_ValidationFailureSurfacesAsError(t *testing.T) {
 	turns := narvipg.NewTurnStore(pool)
 	environments := narvipg.NewEnvironmentStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
 	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
@@ -111,7 +113,7 @@ func TestCreateSessionForBot_ValidationFailureSurfacesAsError(t *testing.T) {
 		Repos:       []restdtos.CreateSessionRequestReposElem{}, // empty -- rejected before any Postgres write.
 	}
 
-	if _, err := CreateSessionForBot(ctx, pool, sessions, turns, environments, auditLog, registry, req, false); err == nil {
+	if _, err := CreateSessionForBot(ctx, pool, sessions, turns, environments, auditLog, registry, req, false, platform.RolloutModeOpen, repoSettings); err == nil {
 		t.Fatal("CreateSessionForBot() error = nil, want non-nil for an empty repos list")
 	}
 }
@@ -131,6 +133,7 @@ func TestCreateTurnForBot_EnqueuesTurnOnExistingSession(t *testing.T) {
 	environments := narvipg.NewEnvironmentStore(pool)
 	plans := narvipg.NewPlanStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
 	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
@@ -142,7 +145,7 @@ func TestCreateTurnForBot_EnqueuesTurnOnExistingSession(t *testing.T) {
 		Repos: []restdtos.CreateSessionRequestReposElem{
 			{Name: "widgets", Url: "https://github.com/acme/widgets.git"},
 		},
-	}, false)
+	}, false, platform.RolloutModeOpen, repoSettings)
 	if err != nil {
 		t.Fatalf("CreateSessionForBot (setup): %v", err)
 	}
@@ -186,6 +189,7 @@ func TestCreateTurnForBot_WritesAuditLogRowWithActor(t *testing.T) {
 	environments := narvipg.NewEnvironmentStore(pool)
 	plans := narvipg.NewPlanStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
 	users := narvipg.NewUserStore(pool)
 	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
@@ -205,7 +209,7 @@ func TestCreateTurnForBot_WritesAuditLogRowWithActor(t *testing.T) {
 		Repos: []restdtos.CreateSessionRequestReposElem{
 			{Name: "widgets", Url: "https://github.com/acme/widgets.git"},
 		},
-	}, false)
+	}, false, platform.RolloutModeOpen, repoSettings)
 	if err != nil {
 		t.Fatalf("CreateSessionForBot (setup): %v", err)
 	}
@@ -263,6 +267,7 @@ func TestCreateTurnForBot_PlanAwaitingApproval_PreservesSentinel(t *testing.T) {
 	environments := narvipg.NewEnvironmentStore(pool)
 	plans := narvipg.NewPlanStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
 	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
@@ -274,7 +279,7 @@ func TestCreateTurnForBot_PlanAwaitingApproval_PreservesSentinel(t *testing.T) {
 		Repos: []restdtos.CreateSessionRequestReposElem{
 			{Name: "widgets", Url: "https://github.com/acme/widgets.git"},
 		},
-	}, false)
+	}, false, platform.RolloutModeOpen, repoSettings)
 	if err != nil {
 		t.Fatalf("CreateSessionForBot (setup): %v", err)
 	}

@@ -247,6 +247,11 @@ func serve() error {
 			GitHubBotHandle:   cfg.GitHubBotHandle,
 			ReviewDiffFetcher: sourceControl,
 			ReviewModelDeep:   cfg.ReviewModelDeep,
+			// RolloutMode (Step 76, §10 Phase 6, §32): dispatch.go's own
+			// refuseIfRolloutUnenrolled -- the dispatch-time half of the
+			// "fail-closed, twice" pair -- consults this on every
+			// Spawn/Restore/Resume attempt.
+			RolloutMode: cfg.RolloutMode,
 		})
 	if err != nil {
 		return fmt.Errorf("construct session actor registry: %w", err)
@@ -593,6 +598,7 @@ func serve() error {
 		automationStore, automationInvocationStore, automationRunStore,
 		sessionStore, turnStore, environmentStore, auditLogStore,
 		pool, registry, cfg.Timeouts, cfg.EpistemicCheckDefault,
+		cfg.RolloutMode, repoSettingsStore,
 	)
 
 	// The 3 stores backing Step 20's ("auth v1", §13.1/§13.4) own GitHub
@@ -842,13 +848,18 @@ func serve() error {
 		// value every other CreateTurnCore-reaching caller below also
 		// receives.
 		EpistemicCheckDefault: cfg.EpistemicCheckDefault,
-		SigningSecret:         cfg.SlackSigningSecret,
-		BotToken:              cfg.SlackBotToken,
-		DefaultRepoName:       cfg.SlackDefaultRepoName,
-		DefaultRepoURL:        cfg.SlackDefaultRepoURL,
-		TimestampWindow:       cfg.Timeouts.WebhookTimestampFreshnessWindow,
-		SlackAPIBaseURL:       slackAPIBaseURL,
-		AckTimeout:            cfg.Timeouts.SlackAckTimeout,
+		// RolloutMode/RepoSettings (Step 76, §10 Phase 6, §32): the SAME
+		// cfg.RolloutMode/repoSettingsStore every other CreateSessionCore-
+		// reaching caller in this file also receives.
+		RolloutMode:     cfg.RolloutMode,
+		RepoSettings:    repoSettingsStore,
+		SigningSecret:   cfg.SlackSigningSecret,
+		BotToken:        cfg.SlackBotToken,
+		DefaultRepoName: cfg.SlackDefaultRepoName,
+		DefaultRepoURL:  cfg.SlackDefaultRepoURL,
+		TimestampWindow: cfg.Timeouts.WebhookTimestampFreshnessWindow,
+		SlackAPIBaseURL: slackAPIBaseURL,
+		AckTimeout:      cfg.Timeouts.SlackAckTimeout,
 		// IdentityLink/SlackClient/Timeouts (Step 39, "identities + full
 		// RBAC", §13.2): SlackClient reuses the SAME slackNotifier
 		// instance already constructed above (for the outbox delivery
@@ -935,6 +946,14 @@ func serve() error {
 				Sessions:       sessionStore,
 			},
 			ReviewModelDeep: cfg.ReviewModelDeep,
+			// RolloutMode/RepoSettings (Step 76, §10 Phase 6, §32): the
+			// SAME cfg.RolloutMode/repoSettingsStore every other
+			// CreateSessionOnTx-reaching caller in this file also
+			// receives -- a DEDICATED field pair, not a reuse of
+			// ReviewTriage.RepoSettings immediately above (see
+			// SessionCoalescer.RolloutMode's own doc comment for why).
+			RolloutMode:  cfg.RolloutMode,
+			RepoSettings: repoSettingsStore,
 			// F7 correction (adversarial review, Step 61): SessionCoalescer
 			// no longer has an EpistemicCheckDefault field -- both of its
 			// own CreateSessionOnTx/CreateTurnForBot call sites now
@@ -1207,7 +1226,7 @@ func serve() error {
 	// Authorization header.
 	router.Route("/api/sessions", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
-		r.Post("/", httpapi.CreateSession(pool, sessionStore, turnStore, environmentStore, auditLogStore, registry, intentClassifierSvc, cfg.EpistemicCheckDefault))
+		r.Post("/", httpapi.CreateSession(pool, sessionStore, turnStore, environmentStore, auditLogStore, registry, intentClassifierSvc, cfg.EpistemicCheckDefault, cfg.RolloutMode, repoSettingsStore))
 		r.Get("/{sessionID}", httpapi.GetSession(sessionStore))
 		r.Get("/{sessionID}/events", httpapi.ListEvents(sessionStore, eventStore))
 		r.Get("/{sessionID}/artifacts", httpapi.ListArtifacts(sessionStore, artifactStore))
@@ -1623,6 +1642,11 @@ func serve() error {
 		// value every other CreateTurnCore-reaching caller above also
 		// receives.
 		EpistemicCheckDefault: cfg.EpistemicCheckDefault,
+		// RolloutMode/RepoSettings (Step 76, §10 Phase 6, §32): the SAME
+		// cfg.RolloutMode/repoSettingsStore every other CreateSessionCore-
+		// reaching caller in this file also receives.
+		RolloutMode:  cfg.RolloutMode,
+		RepoSettings: repoSettingsStore,
 	}))
 
 	// Outbox delivery worker (Step 35, "outbox delivery", §5.1/§9.3
@@ -1662,7 +1686,7 @@ func serve() error {
 	// sentinelAutoFixNotifier (Step 48, "sentinels + suggestions", §17.2)
 	// spawns the child session -- reviewFindingStore/sentinelFixStore are
 	// the SAME instances every other caller above already uses.
-	sentinelAutoFixNotifier := outboxworker.NewSentinelAutoFixNotifier(pool, sessionStore, turnStore, environmentStore, auditLogStore, registry, sentinelFixStore, reviewFindingStore, sourceControl, cfg.GitHubBotToken, cfg.Timeouts, cfg.EpistemicCheckDefault)
+	sentinelAutoFixNotifier := outboxworker.NewSentinelAutoFixNotifier(pool, sessionStore, turnStore, environmentStore, auditLogStore, registry, sentinelFixStore, reviewFindingStore, sourceControl, cfg.GitHubBotToken, cfg.Timeouts, cfg.EpistemicCheckDefault, cfg.RolloutMode, repoSettingsStore)
 	// handoffNotifier (Step 49, "handoff-readiness sentinel", §14.4) posts
 	// the handoff-readiness comment and applies the "handoff" label on a
 	// scoped session's PR -- the SAME sourceControl/cfg.GitHubBotToken

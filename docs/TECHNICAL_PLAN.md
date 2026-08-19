@@ -4420,3 +4420,336 @@ mode A alone. Step 100 (entitlement) runs in parallel and gates Steps 103 (`kb_s
 corpus tables, so neither exists at all under a kill decision. Two prerequisites are in flight as
 independent changes and are dependencies, not Steps: the four-handler repository-authorization fix
 and G1's write-path sanitization (§31.4, §31.7).
+
+## 32. Cohort rollout of sessions, and rollback
+
+Step 76 (§10 Phase 6). Problem this solves: before cohort rollout, `NARVI_STAGE=production` means
+every repository named on any incoming session-creation request gets a real sandbox the instant a
+request reaches the control plane — REST, Slack, Linear, or a GitHub `@mention`. That is the
+correct steady-state behavior, but it is the wrong FIRST behavior for a production deployment: an
+operator needs to bring customer repositories onto the platform one at a time, and needs a real,
+tested way to take one back off again if something goes wrong. This section specifies that gate —
+two independent layers, both fail-closed — and is equally explicit about the one thing it does
+NOT do: sever a turn that is already running.
+
+### 32.1 The creation-surface invariant
+
+Every `sqlcgen.CreateSessionParams` insert in this codebase — grepped, not assumed — is built in
+exactly one place: `CreateSessionOnTx` (`internal/adapters/inbound/httpapi/create.go`). Nothing
+else constructs one. Seven paths reach it, six of them live in production:
+
+| Entry point | Call site |
+|---|---|
+| REST `POST /api/sessions` | `httpapi/create.go` (`CreateSession` → `CreateSessionCore`) |
+| GitHub PR-mention ingress | `github/coalesce.go` (`CreateOrJoin`'s WINNER path, inline on its own claim tx) |
+| Slack ingress | `slack/handler.go` (`resolveOrClaimSession` → `CreateSessionCore`) |
+| Linear agent-session ingress | `linear/webhook.go` (`handleCreated` → `CreateSessionCore`) |
+| Automation fan-out | `app/automation/fanout.go` (`createRunAndSession`, inline) |
+| Sentinel-auto-fix child sessions | `app/outboxworker/sentinelautofix.go` (`spawnClaimedChildSession`, inline) |
+| `bot.go`'s `CreateSessionForBot` / `childsession.go`'s `SpawnChildSession` | exported, no production caller today |
+
+Two shapes feed `CreateSessionOnTx`: a direct inline call on a transaction the caller already
+holds a different lock on (GitHub, sentinel-autofix, automation fan-out — each avoids opening a
+second pooled connection while the first is still held, see each call site's own doc comment), or
+`CreateSessionCore`, a thin `pool.Begin`/commit wrapper four callers share (REST, Slack, Linear,
+and the two currently-unused bot/child-session entry points).
+
+**Normative invariant**: `CreateSessionOnTx` takes `rolloutMode platform.RolloutMode` and
+`repoSettings *postgres.RepoSettingsStore` as REQUIRED, non-variadic parameters — not folded into
+`ChildSessionOptions`, this function's own existing trailing-variadic slot for genuinely optional
+extras. A new session-creation path that does not thread both **does not compile**. This is a
+deliberate departure from this codebase's own variadic-options convention for exactly this
+function (`ChildSessionOptions` sits right next to it): an omittable gate parameter is an omitted
+gate, and a check every future call site must remember to add is not a guard — this project's
+standing rule since Step 74's identical fail-closed-twice mechanism (§27.5/§27.6). The workflow
+engine's own turn-insert path (`internal/app/workflowengine`) and review re-triggers on an
+already-tracked PR (the REUSE branch, `coalesce.go`) never construct a session at all — they
+enqueue *turns* onto one that already exists — so neither is a creation surface this gate needs to
+cover; they are exactly why §32.4 exists as a further, independent set of dispatch-time re-checks.
+The REUSE branch specifically enqueues a turn onto a session whose sandbox is typically already
+`Ready`/`Suspect` — no fresh spawn/restore/resume in the picture at all — which is precisely the
+path §32.4's own turn-dispatch re-check (not its spawn-time one) covers; see that section's own
+two-part breakdown for why one re-check alone was not enough.
+
+### 32.2 Two-layer flag semantics
+
+**Layer 1 — the master switch.** `platform.Config.RolloutMode` (`NARVI_ROLLOUT_MODE`), one of
+`open`/`cohort` (`internal/domain/rollout.Mode` — `platform.RolloutMode` is a genuine Go type
+alias for it, not a second, parallel enum that could drift). Unset → `open`, validated fail-fast
+at boot otherwise (`platform.InvalidRolloutModeError`, mirroring `NARVI_STAGE`'s own named-error
+convention, §5.4/§11) — an operator who mistypes `NARVI_ROLLOUT_MODE=cohrot` gets a boot failure,
+never a silent fallback to unenforced `open`. **`open` is a byte-for-byte no-op**: every call site
+short-circuits before touching `repo_settings` or deriving a single owner/repo identity, so an
+existing deployment (and CI, which never sets this variable) behaves identically to before this
+Step landed, including for a repo with no `repo_settings` row at all.
+
+**Layer 2 — per-repo enrollment.** `repo_settings.sessions_enabled` (migrations/
+`000096_repo_settings_sessions_enabled.up.sql`), a further `BOOLEAN NOT NULL DEFAULT false`
+column on the SAME shared `repo_settings` table five other admin-configured, per-repo policy
+booleans already live on (migrations/`000044_repo_settings.up.sql`'s own "one shared table, not
+one bespoke table per toggle" design) — Phase 8's own Step 90 plans its own further sibling column
+there, so this lands as a sibling, never a rival. A column-scoped `RepoSettingsStore.
+UpsertSessionsEnabled` follows the established per-column upsert convention (`UpsertAutoMergeToggle`
+et al.) — touches only this one column, so a concurrent write to any other `repo_settings` column
+can never race with it at the database level.
+
+**The shared decision.** Both layers combine through exactly one pure function,
+`internal/domain/rollout.Decide(mode, []RepoAdmission)` — no I/O, no clock, no randomness — mirroring
+`internal/domain/environment.CheckSubstrateCapabilities`'s own "one pure function, two independent
+call sites" shape from Step 74. `mode != ModeCohort` admits unconditionally without even inspecting
+its second argument. Under `ModeCohort`, **every named repo must be enrolled** — a multi-repo session
+refuses on the first unenrolled repo, in request order (stop-at-first-failure, mirroring
+`validateCreateSessionRequest`'s own identical precedent). **Fail-closed** on every degraded read: an
+absent `repo_settings` row, any other Postgres read error, or a repo whose clone URL cannot be
+resolved to a trusted identity at all (§32.3) are all folded into `RepoAdmission.Enrolled == false`
+before `Decide` ever runs — §62 finding C3 already established that widening policy on a degraded
+read is backwards, and this gate is no exception. This is nearly free here specifically: the read
+runs inside the SAME transaction that is about to insert the session two statements later, on the
+SAME Postgres connection — there is no real state where `repo_settings` is unreadable but that
+insert would have gone on to succeed.
+
+### 32.3 Host verification against enrollment spoofing
+
+`reposource.ParseOwnerRepo` is deliberately host-agnostic (its own doc comment: "it never inspects
+rawURL's host at all") — `https://evil.example/acme/widgets.git` derives the identical
+`acme/widgets` a genuine `https://github.com/acme/widgets.git` would. Both gate halves therefore
+run `reposource.CheckRepoHost(url, ports.SupportedSourceControlHosts()...)` FIRST, exactly the
+pairing six existing call sites in this codebase already establish (`app/sessionactor`'s
+`pushpr.go`/`contractdrift.go`/`imageresolve.go`, `app/outboxworker`'s `sentinelautofix.go`,
+`app/imagebuild`'s `builder.go`, and now this Step's own `rolloutgate.go`/`dispatch.go`). Without
+this pairing, an attacker naming a foreign host that happens to reuse an enrolled repo's own
+owner/repo path would be silently treated as that same enrolled repo. A URL that fails the host
+check, or that parses but does not resolve to an `owner/repo` shape at all, is treated identically
+to an unenrolled repo — refused, never distinguished by a different error shape a caller could use
+to fingerprint which check failed.
+
+### 32.4 The dispatch-time re-check: what makes rollback real
+
+The creation-time gate alone would make rollback a lie. A GitHub PR review session, once created,
+never returns to `CreateSessionOnTx` again — every subsequent `@mention` or label re-trigger on the
+SAME PR rides the REUSE branch (`coalesce.go`), which enqueues a *turn*, not a session, and every
+respawn/restore/resume of its sandbox — and every dispatch of that turn once a live sandbox already
+exists — is driven entirely by `app/sessionactor`'s own dispatch loop (`planDispatch`, `dispatch.go`).
+De-enrolling a repo must therefore stop TWO structurally distinct things that loop can do for an
+existing session, not one — this is a two-part re-check, not a single one, and an earlier version of
+this section only described the first part.
+
+**Part 1 — re-spawn/restore/resume.** `dispatch.go`'s `tryPlanSpawn` re-checks, beside the
+identically-shaped Step 74 substrate check (`refuseIfSubstrateUnsupported`):
+`refuseIfRolloutUnenrolled`, gated to the exact same three action kinds that are about to attempt a
+real provider call (`SpawnActionSpawn`/`Restore`/`Resume` — an ordinary `Skip`/`Wait` is not itself
+reaching the provider, so it stays the same silent no-op it always was). It re-derives each of the
+session's own named repos' owner/repo identity (§32.3's same host-check-then-parse pairing) and
+re-reads `repo_settings.sessions_enabled` fresh, on the dispatch transaction, every single call —
+never a cached verdict from session-creation time. This is `internal/app/sessionactor.Registry`'s
+own `rolloutMode` field (threaded through `RegistryOptions`, not a required `NewRegistry` parameter
+— see that field's own doc comment for why this one is narrower than `CreateSessionOnTx`'s
+requirement: its zero value is indistinguishable from `rollout.ModeOpen`, the platform-wide safe
+default, not a distinct, weaker-but-plausible disabled state the way an omitted
+`*postgres.RepoSettingsStore` would be, since the store itself is already unconditionally available
+on every Actor via the existing `storeBundle`).
+
+**Part 2 — dispatch a turn to an already-live sandbox.** This is the REUSE branch's own ACTUAL
+path, and an adversarial review of this Step found it entirely ungated in the version of this
+section that shipped first: `planDispatch`'s branch (b) — a `Pending` turn and a `Ready`/`Suspect`
+sandbox that needs no spawn/restore/resume at all — routes straight to `tryPlanDispatch`, which
+never calls `tryPlanSpawn` or `refuseIfRolloutUnenrolled`; `planReenqueueOrRespawn`'s own branch
+(b') (Step 28's turn-recovery re-enqueue, `tryPlanReenqueue`) has the identical shape and the
+identical gap. Neither function is the right place to add the check piecemeal — a third,
+future way of producing a dispatch plan could just as easily forget it. Instead the re-check lives
+in `executeDispatch` (`rolloutRefusalForDispatch`): the ONE function every dispatch plan, from
+EITHER `tryPlanDispatch` or `tryPlanReenqueue`, must pass through before
+`SandboxCommander.SendCommand` is ever called (`handleEnsureDispatched`'s own switch has exactly one
+consumer of a non-nil dispatch plan) — gating there makes the bypass structurally unrepresentable
+rather than a discipline three call sites have to remember independently. Because this runs AFTER
+the turn's own `Pending`→`Dispatched`→`Processing` transaction has already committed (this file's
+own sequencing discipline: a real network call, including this rollout read, must never run inside
+a transact holding the session row's `FOR UPDATE` lock), a refusal here cannot roll that commit
+back — it fails the turn FORWARD instead, via the exact same `Processing`→`Failed` machinery a
+genuine `SendCommand` failure already uses (`failDispatchedTurn`, `turn.TriggerTimeout`), with a
+reason string naming the rollout refusal rather than a transport error. A refused turn therefore
+reaches a real terminal state (`Failed`, a `never_started`-shaped completion, one synthetic
+`execution_complete` event) rather than sitting `Pending` to be silently re-attempted on every
+future `EnsureDispatched` round.
+
+Both parts share the identical pure decision (`internal/domain/rollout.Decide`) and the same
+`repo_settings` resolution logic (`rolloutDecisionForSession`) — only the connection scope (the
+transaction about to write a spawn claim, vs. the actor's own pool, read outside any transaction
+after the turn's own commit) and what happens on refusal (roll back an about-to-happen spawn vs.
+fail an already-`Processing` turn forward) differ between them, so the two gates can never drift to
+a different definition of "enrolled" from one another.
+
+### 32.5 Per-channel refusal contract
+
+`CreateSessionError` gained one field: `RolloutRefusal bool` — a machine-checkable marker distinct
+from `Status`/`Message`, so a caller can tell a permanent policy refusal apart from a transient
+failure structurally, never by string-matching `Message`. Three of the six live creation paths
+used to route ANY `CreateSessionOnTx`/`CreateSessionCore` error down a retry-shaped path; that is
+wrong for a refusal that will reproduce identically on every retry, forever, since
+`repo_settings.sessions_enabled` does not change between redeliveries of the same event.
+
+| Channel | Non-refusal error handling (unchanged) | `RolloutRefusal` handling |
+|---|---|---|
+| REST | 403 status + message, generic `writeError` path | Same generic path already produces the right shape — `checkRolloutGate`'s own message already reads "repository not enrolled: \<repo\>"; no special-casing needed. A transient read failure (below) reaches this SAME generic path too, with its own distinct 503 status and "repository enrollment could not be verified: \<repo\>" message — REST never branches on `RolloutRefusal` at all, so both shapes already flow through unmodified |
+| Linear | Release the delivery claim, let Linear redeliver | Takes the SAME shape as an authz denial immediately above it in `handleCreated`: acknowledge, release only the `linear_agent_sessions` claim (not the webhook-delivery claim), post an honest in-thread notice, return `ok=true` (terminal) |
+| Slack | Return `(sessionResolution{}, false)`, releasing the webhook-delivery claim for a retry | Mirrors `ackNotAuthorizedText`'s own terminal in-thread ack idiom: post `ackNotEnrolledText`, return `{Skip: true}, true` — the webhook-delivery claim is kept, never released |
+| GitHub | `errors.Is(err, ErrActorNotAuthorized)`'s own generic branch: release the webhook-delivery claim | A distinct sentinel, `github.ErrRolloutNotEnrolled`. Takes the permanent-denial idiom: acknowledge (200) WITHOUT releasing the webhook-delivery claim, and post **no reply on the PR at all** — stricter than the unlinked-actor branch (which does reply): an unenrolled repo gives a commenter no action to take, so there is nothing honest to say beyond silence. The github_pr_sessions claim row itself never commits (the WINNER path's own transaction rolls back), which is also why §32.6 below is true |
+| Sentinel-autofix outbox | Return the error; the outbox's own backoff/retry/dead-letter machinery retries | A sentinel, `errRolloutRefused`. `Deliver` maps it to the existing terminal-skip precedent (`descriptionautofix.go`'s "confirmed negative → nil, never retried"): logs a Warn and returns `nil` — `markFindingsFixPending` is deliberately never called, since no fix session exists to record against any finding |
+| Automation fan-out | `createFailedRun` records a terminal `RunStatusFailed` row with `session_id` NULL | Unmodified — this path already does the structurally correct thing for ANY `CreateSessionOnTx` refusal, rollout or otherwise |
+
+An unenrolled repo therefore produces **zero platform egress on GitHub** specifically (the one
+channel where "egress" means a visible artifact on a customer's own repository) — no comment, no
+label, no status check. Every other channel gets a private, honest acknowledgment instead of
+silence, since a Slack thread or a Linear agent session is not customer-repository-visible the way
+a PR comment is.
+
+**Fail-closed and terminal are different properties.** `RolloutRefusal` is set — and a channel takes
+the terminal handling in the table above — ONLY when a refusal is a genuine, DEMONSTRATED policy
+outcome: mode is `cohort` and the named repo's own enrollment fact was actually read (an absent
+row, an explicit `sessions_enabled=false` row, or a clone URL that could never resolve to a trusted
+identity at all, §32.3 — none of these can ever produce a different answer on retry). A
+`repo_settings` read that fails for an INFRASTRUCTURE reason instead — a context cancellation, a
+query timeout, any other degraded-read condition — still refuses THIS attempt (fail-closed never
+widens: the repo is never silently admitted), but `RolloutRefusal` stays `false`. An earlier version
+of this gate conflated the two, so a momentary database blip during a refusal path came back
+indistinguishable from "this repo is permanently not enrolled" — Linear acked terminally, Slack
+posted a permanent denial, GitHub stayed silent while keeping its claim, and the sentinel-autofix
+outbox skipped terminally, all four PERMANENTLY dropping legitimate work for a repo that may be
+fully enrolled, with no retry ever attempted. With the two properties separated, a transient read
+failure instead takes each channel's own **existing, ordinary non-refusal path** in the table
+above — Linear/Slack/the sentinel-autofix outbox retry; GitHub releases its claim for a real
+redelivery — so the work is picked up again once Postgres recovers.
+
+### 32.6 Enrollment is seed-manifest-only in v1
+
+The existing admin repo-settings REST writes (`PutRepoSettings` et al., `httpapi/reposettings.go`)
+are gated by `confirmRepoKnown`, which requires an EXISTING `github_pr_sessions` row for that repo.
+That row's only writer anywhere in this codebase is `github/coalesce.go`'s own webhook ingress, and
+it commits ATOMICALLY alongside the session it claims a slot for (`EnsureRow` → `LockForUpdate` →
+`CreateSessionOnTx` → `SetSessionID`, one transaction) — a refused `CreateSessionOnTx` call rolls
+that entire transaction back, `github_pr_sessions` row included. **A repo can therefore never
+acquire the one signal REST enrollment requires by the exact mechanism this gate exists to
+refuse**: under `ModeCohort`, an unenrolled repo's first-ever mention attempt is refused, which
+means its claim row never commits, which means `confirmRepoKnown` keeps reporting it unknown
+forever — REST enrollment is structurally impossible for exactly the repos cohort rollout needs to
+enroll. `internal/app/seed`'s tool is the only writer of `sessions_enabled` in v1 for exactly this
+reason: it calls `RepoSettingsStore.UpsertSessionsEnabled` directly, bypassing `confirmRepoKnown`
+entirely, the same way it already bypasses that gate for every other `repo_settings` column
+(`seedmanifest.RepoSetting.SessionsEnabled`, a `*bool`, reconciled by `seed/reposettings.go`
+exactly like its five sibling fields). No REST enrollment path is added by this Step.
+
+### 32.7 Observability
+
+Refusals are logged (structured `Warn`/`Error`, carrying the repo, `spawn_source`, and mode) at
+every gate call site, including a transient, read-error-caused one (logged with `transient=true` on
+the `httpapi` side specifically, so an operator can tell the two apart in the SAME log line rather
+than by absence of a metric increment alone). Only a GENUINE POLICY refusal (`RolloutRefusal ==
+true` — see §32.5's own "fail-closed and terminal are different properties") is additionally
+counted by one OTel counter, `session_rollout_refused_total` (tagged by `spawn_source`), constructed
+lazily on first use the same way `cloud_identity_mint_total` is (`httpapi` has no per-process
+constructor object to anchor eager construction to) — mirroring the `outbox_dead_letter_total`
+construction pattern (`internal/app/outboxworker/builder.go`) one layer over. This counter is
+deliberately §32's own "how many repos is the cohort gate actually keeping out" signal — a
+transient database blip is an infrastructure problem, not a rollout decision, and counting it here
+would make this metric lie to an operator about how many repos are genuinely being refused by
+policy. Refusals are **never audit-logged** — this codebase's own `audit_log` table records completed
+STATE CHANGES only (`reposettings.go`'s own `logUnknownRepoRefusal` doc comment states this
+convention explicitly for the structurally identical "role check passed but the named resource
+isn't one we know" refusal), and a policy refusal is not a state change. Flipping the flag itself,
+by contrast, IS a state change: the seed tool's own `seedRepoSetting` writes a
+`seed.repo_setting_upserted` `audit_log` row for every `sessions_enabled` change, on the same
+transaction as the `repo_settings` write, exactly like every other seed-tool reconciliation.
+
+### 32.8 Rollback: what actually happens, and what does not
+
+Flipping `repo_settings.sessions_enabled` to `false` for a repo (or `NARVI_ROLLOUT_MODE` back to
+`open` platform-wide, the coarser lever) has an immediate, provable effect on three things:
+
+1. **No new session is ever created** for that repo again — §32.1/§32.2's gate refuses at the
+   funnel.
+2. **No de-enrolled session's sandbox spawns, restores, or resumes again** — §32.4's Part 1
+   dispatch-time re-check (`refuseIfRolloutUnenrolled`, `tryPlanSpawn`) refuses the next
+   spawn/restore/resume attempt, whether it is triggered by ordinary respawn machinery reacting to
+   a stopped/stale sandbox or by `TriggerForceRespawn` recovering a genuinely stuck one.
+3. **No turn is ever dispatched to an already-live sandbox again** — §32.4's Part 2 dispatch-time
+   re-check (`rolloutRefusalForDispatch`, `executeDispatch`) refuses the next attempt to hand a
+   `Pending` turn to a `Ready`/`Suspect` sandbox, INCLUDING, specifically, a fresh `@mention`/label
+   re-trigger enqueuing a turn on an existing session via the REUSE branch — the exact case Part 1
+   alone never covers, since a `Ready`/`Suspect` sandbox needs no spawn/restore/resume at all. A
+   turn refused this way reaches a real terminal state (`Failed`) immediately, rather than sitting
+   `Pending` to be silently re-attempted on every future `EnsureDispatched` round.
+
+**What this does NOT do, stated plainly rather than implied**: sever a turn that is ALREADY
+`Processing` at the instant the flag flips. Nothing in this codebase writes a
+`FailureReasonCancelled` outcome, and the session actor has no cancel command — this is an honest,
+pre-existing limitation this Step does not attempt to close (a hard-kill mechanism is out of scope
+here and would be its own Step). Concretely, rollback for a session with a turn ALREADY
+`Processing` at flip time is bounded by three existing, independent timers/authorities, never
+instant — a `Pending` turn on a live sandbox, by contrast, is now refused essentially immediately
+(point 3 above), not bounded by any of these three:
+
+- A turn that is actively `Processing` when the flag flips runs to its own natural conclusion, or
+  is force-failed once `platform.Timeouts.TurnDeadline` elapses (the CP's own persistent
+  `turn_deadline` timer) — whichever comes first.
+- A sandbox with no turn in flight is subject to the ordinary session-idle authority
+  (`platform.Timeouts.ActorIdleTTL`) exactly like any other idle sandbox, de-enrolled or not.
+- A sandbox that is neither cleanly stopped nor ever revisited by this Actor again (a crashed pod,
+  say) is eventually reclaimed by the existing reconciler orphan-GC sweep
+  (`internal/app/reconciler`), the same backstop every other orphaned sandbox already relies on.
+
+De-enrollment is therefore a **stop-new-work** guarantee — including new *turns* on an existing
+session, not just new sessions or new sandboxes — with a bounded, pre-existing tail for the one
+thing it genuinely cannot touch: a turn already `Processing` at the instant the flag flips. Never
+an instant kill switch for THAT one case. An operator rolling back for a live incident should
+assume the tail for an already-`Processing` turn specifically, not assume immediacy there — but
+should expect every OTHER form of new work (a fresh spawn, or a fresh turn dispatched to an idle,
+already-live sandbox) to stop refusing immediately.
+
+### 32.9 Operator runbook
+
+**Enroll a repository** (v1, seed-manifest-only — §32.6): add or update a `repoSettings` entry in
+the seed manifest with `sessionsEnabled: true` for the target `owner/repo`, then run the seed tool
+against the target deployment. Confirm via `repo_settings.sessions_enabled` for that row, or the
+`seed.repo_setting_upserted` `audit_log` row the seed tool just wrote.
+
+**Arm cohort mode platform-wide**: set `NARVI_ROLLOUT_MODE=cohort` and restart the control plane
+(boot-time config, §5.4 — never a live-reloadable value). Before doing this in production, confirm
+every repository that must keep working is already enrolled (§32.6) — arming cohort mode with no
+repos enrolled refuses every single new session platform-wide, GitHub included.
+
+**Roll back one repository**: set that repo's `sessionsEnabled: false` in the seed manifest and
+re-run the seed tool (or a direct, deliberate `UpsertSessionsEnabled` call if the seed tool itself
+is unavailable — this is the one break-glass exception to "seed-manifest-only", since the write
+path is identical either way). Expect, per §32.8: new session-creation attempts for that repo
+refused immediately (visible as `session_rollout_refused_total{spawn_source=...}` increments and a
+`"httpapi: rollout gate: session creation refused"` log line); a *new* turn — including a fresh
+`@mention`/label re-trigger riding the REUSE branch onto an existing session — refused essentially
+immediately too, whether or not that session's sandbox is already live (`"sessionactor: refusing to
+spawn"` for a needed spawn/restore/resume, `"sessionactor: refusing to dispatch turn"` for a
+dispatch to an already-`Ready`/`Suspect` sandbox — §32.4's own two parts); any turn already
+`Processing` at rollback time continues until it completes or `TurnDeadline` fires; idle sandboxes
+for that repo's sessions stop on the ordinary `ActorIdleTTL`; anything left over is reclaimed by
+the next reconciler orphan-GC sweep. There is no faster path for an already-`Processing` turn than
+these three existing timers/authorities today — every OTHER form of new work stops immediately.
+
+**Roll back platform-wide**: unset `NARVI_ROLLOUT_MODE` (or set it to `open`) and restart the
+control plane. This is the coarser lever — it removes the per-repo gate entirely, admitting every
+repo unconditionally again, not just the ones currently enrolled. Prefer the per-repository lever
+above unless the incident is platform-wide.
+
+**Verify a rollback took effect**: attempt a fresh `@mention`/REST create against the de-enrolled
+repo and confirm the channel-appropriate refusal from §32.5 (GitHub: silent 200, nothing posted;
+Slack/Linear: an honest in-thread/agent-session notice; REST: 403 "repository not enrolled"). A
+session created BEFORE the rollback continuing to run for up to `TurnDeadline`/`ActorIdleTTL`
+longer is expected ONLY for a turn that was already `Processing` at rollback time — a fresh
+`@mention` on that same PR after rollback is refused immediately regardless (§32.4 Part 2) — not a
+sign the rollback failed. See §32.8.
+
+**Distinguishing a policy refusal from a database blip during an incident**: if refusals stop
+appearing, or a channel behaves as though a still-enrolled repo were refused, check whether the log
+line carries `transient=true` (`httpapi`) or reads `"...rollout re-check: resolve admission decision
+failed..."` (`sessionactor`) rather than an ordinary `"...refused, repo not enrolled"` /
+`"...refusing to spawn/dispatch..."` line, and whether `session_rollout_refused_total` actually
+incremented — it does NOT for a transient read failure (§32.7). A transient failure refuses that
+ONE attempt but is retried by the channel's own ordinary retry path (§32.5) once Postgres recovers;
+it is not evidence the rollback itself is broken, and does not need a rollback re-applied.

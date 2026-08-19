@@ -176,6 +176,14 @@ type testRig struct {
 	repoSettings *narvipg.RepoSettingsStore
 	botHandle    string
 
+	// rolloutMode (Step 76, §10 Phase 6, §32) backs this rig's own
+	// CreateSession route below -- defaults to platform.RolloutModeOpen
+	// (today's existing, unchanged behavior for every test in this file
+	// that doesn't care about cohort rollout), overridable via
+	// newTestRig's own mutate func exactly like every other rig field
+	// with a meaningful non-zero default.
+	rolloutMode platform.RolloutMode
+
 	// reviewFindings/sentinelFixes (Step 48, "sentinels + suggestions",
 	// §17/§22.1) back this rig's own findings-upsert/rebut/apply-
 	// suggestion routes (reviewfindings_integration_test.go) and the
@@ -358,6 +366,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		prSessions:            narvipg.NewGitHubPRSessionStore(pool),
 		repoSettings:          narvipg.NewRepoSettingsStore(pool),
 		botHandle:             "narvi-test-bot",
+		rolloutMode:           platform.RolloutModeOpen,
 		reviewFindings:        narvipg.NewReviewFindingStore(pool),
 		sentinelFixes:         narvipg.NewSentinelFixStore(pool),
 		falsePositivePatterns: narvipg.NewFalsePositivePatternStore(pool),
@@ -406,7 +415,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 
 	router.Route("/api/sessions", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
-		r.Post("/", httpapi.CreateSession(rig.pool, rig.sessions, rig.turns, rig.environments, rig.auditLog, rig.registry, nil, false))
+		r.Post("/", httpapi.CreateSession(rig.pool, rig.sessions, rig.turns, rig.environments, rig.auditLog, rig.registry, nil, false, rig.rolloutMode, rig.repoSettings))
 		r.Get("/{sessionID}", httpapi.GetSession(rig.sessions))
 		r.Get("/{sessionID}/events", httpapi.ListEvents(rig.sessions, rig.events))
 		r.Get("/{sessionID}/artifacts", httpapi.ListArtifacts(rig.sessions, rig.artifacts))
