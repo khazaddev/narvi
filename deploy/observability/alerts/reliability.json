@@ -1,0 +1,67 @@
+{
+  "alerts": [
+    {
+      "name": "OutboxLagHigh",
+      "description": "The oldest still-due outbox row has been waiting longer than this system's own maximum legitimate backoff delay — delivery is genuinely stuck, not merely cooling down.",
+      "metrics": ["outbox_lag_seconds"],
+      "condition": "p95(outbox_lag_seconds) > 300s for 10m",
+      "severity": "warning",
+      "thresholdDerivation": "300s mirrors platform.Timeouts.OutboxBackoffMax (internal/platform/timeouts.go) — domain/outbox.EvaluateBackoff's own schedule never delays a retry longer than that ceiling, so a row still showing this much lag has exhausted every legitimate backoff window.",
+      "runbook": "docs/runbooks/outbox-delivery.md"
+    },
+    {
+      "name": "OutboxDeadLetterAny",
+      "description": "At least one outbox entry exhausted its full retry budget and was dead-lettered — a notification a user never received.",
+      "metrics": ["outbox_dead_letter_total"],
+      "condition": "increase(outbox_dead_letter_total[5m]) > 0",
+      "severity": "warning",
+      "thresholdDerivation": "Presence, not a rate: dead-lettering only happens after domain/outbox.MaxAttempts delivery attempts are exhausted (internal/app/outboxworker/builder.go) — there is no 'normal' rate of exhausting a full retry budget, so any occurrence at all is worth a look.",
+      "runbook": "docs/runbooks/outbox-delivery.md"
+    },
+    {
+      "name": "OrphanReapRateHigh",
+      "description": "The reconciler is reaping orphaned provider-side sandboxes at a rate well above the single-race noise this mechanism is known to produce occasionally on its own.",
+      "metrics": ["orphans_reaped"],
+      "condition": "increase(orphans_reaped[10m]) > 5",
+      "severity": "warning",
+      "thresholdDerivation": "internal/app/reconciler/reconciler.go's own doc comment names an inherent, benign single-orphan case: a reconcile tick landing in the narrow window between a real CreateSandbox success and its provider_id actually committing looks, for exactly one tick, identical to a genuine orphan — an occasional single reap is expected, not a bug. 5 in one 10-minute window (10x platform.Timeouts.ReconcilerInterval, internal/platform/timeouts.go) is well above that noise floor and reads as a sustained pattern.",
+      "runbook": "docs/runbooks/orphan-sandboxes.md"
+    },
+    {
+      "name": "BootDurationP95High",
+      "description": "Sandbox boot-to-ready duration is approaching the SAME budget the connecting_deadline watchdog itself uses to decide a booting sandbox has gone quiet too long.",
+      "metrics": ["sandbox_agent_boot_duration_seconds"],
+      "condition": "p95(sandbox_agent_boot_duration_seconds) > 240s for 15m",
+      "severity": "warning",
+      "thresholdDerivation": "240s is platform.Timeouts.FirstConnectBudget (internal/platform/timeouts.go, §3.2, explicit) — the exact figure EvaluateConnectingTimeout (internal/domain/sandbox/liveness.go) uses to decide a booting sandbox has been quiet too long. A p95 boot time at or near it means a material fraction of ordinary boots are now at real risk of being watchdog-suspected purely for being slow, not stuck.",
+      "runbook": "docs/runbooks/slow-boot-and-spawn.md"
+    },
+    {
+      "name": "SpawnLatencyP95High",
+      "description": "Real provider spawn/restore/resume calls are taking as long as the worst-case cold start this system's whole timeout hierarchy was calibrated against.",
+      "metrics": ["sandbox_spawn_duration_seconds"],
+      "condition": "p95(sandbox_spawn_duration_seconds) > 220s for 15m",
+      "severity": "warning",
+      "thresholdDerivation": "220s is platform.Timeouts.ProviderWorstColdStart (internal/platform/timeouts.go, §4.1's own '220s+' floor) — the figure ProviderHTTPClientTimeout (5m) is required to clear with margin (§5.4's own invariant chain: 'providerHTTPClientTimeout > provider worst cold start'). A p95 spawn latency at or above it means the provider's real-world performance has drifted past what the rest of the hierarchy assumes.",
+      "runbook": "docs/runbooks/slow-boot-and-spawn.md"
+    },
+    {
+      "name": "WatchdogFalseAlarmRateHigh",
+      "description": "A meaningful fraction of watchdog activations are turning out to be wrong — the sandbox was alive the whole time.",
+      "metrics": ["watchdog_false_alarm_total", "watchdog_activation_total"],
+      "condition": "ratio(watchdog_false_alarm_total, watchdog_activation_total) > 0.10 over 30m, minimum 5 activations in the window",
+      "severity": "warning",
+      "thresholdDerivation": "§5.3 states a target of '~0' but gives no numeric figure, and no platform.Timeouts constant governs a RATE (a behavioral property, not a fixed duration) — this threshold is an explicit judgment call, not derived from a Go constant, following platform/timeouts.go's own 'not specified; chosen' convention for exactly this situation, flagged as a choice rather than presented as derived. 10% sits well above the occasional single-heartbeat-racing-the-boundary noise the two-budget liveness model (internal/domain/sandbox/liveness.go) can produce on its own. The minimum-activation floor avoids a misleading ratio from a tiny sample (e.g. 1-of-1 reading as 100%).",
+      "runbook": "docs/runbooks/watchdog-false-alarms.md"
+    },
+    {
+      "name": "TurnFalseFailureAny",
+      "description": "A turn the control plane terminalized Failed on its own turn_deadline inference was, in fact, still genuinely working and finished successfully.",
+      "metrics": ["turn_false_failure_total"],
+      "condition": "increase(turn_false_failure_total[30m]) > 0",
+      "severity": "warning",
+      "thresholdDerivation": "Any occurrence: unlike an orphan reap, a turn_false_failure_total increment has no documented benign single-race explanation — every one means platform.Timeouts.TurnDeadline (60m, internal/platform/timeouts.go — 'chosen with margin below SupervisorTurnCap') fired on a turn that was, in fact, still genuinely working. Worth a look every time, not just above some rate.",
+      "runbook": "docs/runbooks/turn-false-failures.md"
+    }
+  ]
+}

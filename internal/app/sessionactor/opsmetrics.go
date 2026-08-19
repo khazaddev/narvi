@@ -26,6 +26,7 @@
 // NewRegistry already resolves for contractDriftDetected, then threaded
 // through to every Actor this Registry hydrates via hydrate.go, exactly
 // like every other Actor-shared field.
+
 package sessionactor
 
 import (
