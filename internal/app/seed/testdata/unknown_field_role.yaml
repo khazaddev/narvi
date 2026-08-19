@@ -1,0 +1,5 @@
+participants:
+  - githubId: 111111
+    email: ada@example.test
+    displayName: Ada Adminsson
+    role: admin
