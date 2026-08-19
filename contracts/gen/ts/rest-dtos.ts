@@ -117,6 +117,17 @@ export interface CreateSessionRequest {
      */
     contractsPath?: string | null;
   } | null;
+  /**
+   * Optional (Step 74, 'sandbox substrate: docker, egress policy, toolchain', §27.5). Deliberately stays OUT of this schema's own top-level required list (unlike planMode) so every existing caller that does not yet send this key keeps working unchanged -- mirrors capabilityRestricted's own precedent in the session-config schema, not planMode's. true creates (or attaches to) this session's own session-scoped Environment (like pathScope/mockConfig below) with docker_required=true -- refused up front, before any Postgres write, if the configured sandbox provider does not report DockerInSandbox support (internal/domain/environment.CheckSubstrateCapabilities, checked again independently at dispatch time).
+   */
+  docker?: boolean;
+  /**
+   * Optional (Step 74, §27.6). Like pathScope/mockConfig above, this key is genuinely OPTIONAL (may be absent from the request body entirely) and independent of docker/pathScope/mockConfig -- presence alone (with mode/allowlist both required inside it, unlike this key itself) creates a session-scoped Environment carrying this egress_policy. mode "allowlist" is refused up front, before any Postgres write, if the configured sandbox provider does not report EgressPolicy support -- the SAME CheckSubstrateCapabilities check docker uses. The server-appended allowlist floor (CP host + this session's own git hosts) is never accepted from the caller here -- it is computed and appended fresh, every time a SessionConfig is assembled from the resulting Environment row, never merely validated against what this request supplied.
+   */
+  egressPolicy?: {
+    mode: 'open' | 'allowlist';
+    allowlist: string[];
+  } | null;
 }
 /**
  * POST /api/sessions/:id/turns (Step 28, 'turn recovery', §8.7 'relaunch-and-resume: conversation id replay'). Enqueues a new turn on an EXISTING session -- mirrors CreateSessionRequest's own prompt/modelId/planMode fields exactly (same shape, not reinvented) for the turn's own dispatch-time inputs. Deliberately has NO 'resume'/'conversationId' field of its own: sessions.opencode_conversation_id (already persisted across turns, §3.3) is threaded into every dispatched Prompt automatically by the control plane's own dispatch logic, so a new turn on a session that already has one continues that same OpenCode conversation with no separate request field needed.

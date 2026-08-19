@@ -18,6 +18,7 @@ import (
 	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	appreviewtriage "github.com/khazaddev/narvi/internal/app/reviewtriage"
+	"github.com/khazaddev/narvi/internal/domain/environment"
 	"github.com/khazaddev/narvi/internal/domain/provenance"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/platform"
@@ -69,44 +70,102 @@ func reposFromJSON(raw []byte) ([]sessionconfig.SessionConfigReposElem, error) {
 	return repos, nil
 }
 
-// environmentPathScope resolves the session's own Environment.PathScope
-// (§14.1), when one is attached, for threading into the assembled
-// SessionConfig's own optional pathScope field (Step 29, "gitstate
-// in-sandbox" -- §14.1's own clone-step enforcement needs the sandbox
-// process to actually receive these glob patterns, since sandbox-agent is
-// a separate process from the control plane and only knows what it's told
-// via NARVI_SESSION_CONFIG). Returns (nil, nil) when environmentID is
-// invalid (pgtype.UUID's own zero value) -- the overwhelming common,
-// unscoped case -- WITHOUT ever querying the environments table at all,
-// mirroring contractdrift.go's own checkContractDrift precedent ("no
+// environmentSubstrate resolves everything assembleSessionConfig needs
+// from the session's own Environment row in exactly ONE Postgres read:
+// PathScope (§14.1, Step 29 -- §14.1's own clone-step enforcement needs
+// the sandbox process to actually receive these glob patterns, since
+// sandbox-agent is a separate process from the control plane and only
+// knows what it's told via NARVI_SESSION_CONFIG), DockerRequired (§27.5,
+// Step 74), and EgressPolicy (§27.6, Step 74) -- Step 74 folds its own
+// two new derivations into what Step 29's own environmentPathScope
+// (now this function) already fetched, rather than adding two more
+// independent queries against the SAME row inside the SAME transact.
+//
+// Returns every zero value (nil pathScope, false dockerRequired, the
+// EgressPolicy zero value) when environmentID is invalid (pgtype.UUID's
+// own zero value) -- the overwhelming common, unscoped case -- WITHOUT
+// ever querying the environments table at all, mirroring
+// contractdrift.go's own checkContractDrift precedent ("no
 // environment_id, ... a plain, logged, no-op") for the identical "no
 // Environment attached" gate. Uses tx (the SAME already-open transact
 // planFreshSpawn/planRestore run this from), not a's own pool, since this
 // runs inside their transact, not after it.
-func (a *Actor) environmentPathScope(ctx context.Context, tx pgx.Tx, environmentID pgtype.UUID) ([]string, error) {
+func (a *Actor) environmentSubstrate(ctx context.Context, tx pgx.Tx, environmentID pgtype.UUID) (pathScope []string, dockerRequired bool, egressPolicy environment.EgressPolicy, err error) {
 	if !environmentID.Valid {
-		return nil, nil
+		return nil, false, environment.EgressPolicy{}, nil
 	}
 
 	env, err := a.stores.environment.WithTx(tx).Get(ctx, environmentID)
 	if err != nil {
-		return nil, fmt.Errorf("sessionactor: get environment for path scope: %w", err)
+		return nil, false, environment.EgressPolicy{}, fmt.Errorf("sessionactor: get environment: %w", err)
 	}
 
-	if len(env.PathScope) == 0 {
-		// An Environment can be created for its mock_config alone, with no
-		// path_scope attached (§14.1: "an optional path_scope ... and an
-		// optional mock_config" -- two independent optional attributes,
-		// same reasoning as contractdrift.go's own MockConfigured check) --
-		// nothing to unmarshal, nothing to report.
-		return nil, nil
+	if len(env.PathScope) > 0 {
+		// An Environment can be created for its mock_config/docker/
+		// egressPolicy alone, with no path_scope attached (§14.1: "an
+		// optional path_scope ... and an optional mock_config" -- several
+		// independent optional attributes, same reasoning as
+		// contractdrift.go's own MockConfigured check) -- nothing to
+		// unmarshal, nothing to report, when it is absent.
+		if err := json.Unmarshal(env.PathScope, &pathScope); err != nil {
+			return nil, false, environment.EgressPolicy{}, fmt.Errorf("sessionactor: unmarshal environment path_scope: %w", err)
+		}
 	}
 
-	var pathScope []string
-	if err := json.Unmarshal(env.PathScope, &pathScope); err != nil {
-		return nil, fmt.Errorf("sessionactor: unmarshal environment path_scope: %w", err)
+	dockerRequired = env.DockerRequired
+
+	if env.EgressPolicyMode != nil {
+		var allowlist []string
+		if len(env.EgressPolicyAllowlist) > 0 {
+			if err := json.Unmarshal(env.EgressPolicyAllowlist, &allowlist); err != nil {
+				return nil, false, environment.EgressPolicy{}, fmt.Errorf("sessionactor: unmarshal environment egress_policy_allowlist: %w", err)
+			}
+		}
+		egressPolicy = environment.EgressPolicy{Mode: environment.EgressMode(*env.EgressPolicyMode), Allowlist: allowlist}
 	}
-	return pathScope, nil
+
+	return pathScope, dockerRequired, egressPolicy, nil
+}
+
+// allowlistFloorHosts computes §27.6's own non-negotiable allowlist
+// floor for THIS session: the control plane's own WS/API host (derived
+// from a.publicBaseURL, the SAME value publicWsBaseURL above already
+// derives the sandbox WS URL from) plus this session's own ACTUAL git
+// hosts (derived from sessionRow.Repos, never a static list -- a
+// customer's own repos may live on a self-hosted GitLab/Bitbucket host
+// this control plane has no other opinion about). Best-effort: a repo
+// clone URL (or the public base URL itself) that fails to parse is
+// simply omitted from the floor rather than blocking the whole spawn
+// (environment.HostFromURL's own doc comment) -- an honest degrade, not
+// a silent one: logged at Warn so a malformed value is still visible.
+// Deduplicated (case-insensitively, matching AppendAllowlistFloor's own
+// comparison) before being handed to that function.
+func (a *Actor) allowlistFloorHosts(ctx context.Context, repos []sessionconfig.SessionConfigReposElem) []string {
+	logger := platform.Logger(ctx)
+
+	seen := make(map[string]bool, len(repos)+1)
+	var floor []string
+
+	addHost := func(source, rawURL string) {
+		host, ok := environment.HostFromURL(rawURL)
+		if !ok {
+			logger.Warn("sessionactor: allowlist floor: could not derive a host; omitting from the server-appended floor",
+				"source", source, "value", rawURL)
+			return
+		}
+		key := strings.ToLower(host)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		floor = append(floor, host)
+	}
+
+	addHost("control_plane", a.publicBaseURL)
+	for _, repo := range repos {
+		addHost("repo:"+repo.Name, repo.Url)
+	}
+	return floor
 }
 
 // reviewCounterReviewerModel resolves Step 69's own §26.4 opposing-model-
@@ -280,10 +339,20 @@ func reviewCredentialRepoFullNames(rawRepos []byte) ([]string, error) {
 //     minted one -- SessionConfig.CorrelationId's own doc comment: "Null
 //     only when no upstream correlation id exists").
 //   - Gen: the sandbox row's own just-bumped gen.
-//   - PathScope: Step 29's own addition -- environmentPathScope(ctx, tx,
+//   - PathScope: Step 29's own addition -- environmentSubstrate(ctx, tx,
 //     sessionRow.EnvironmentID), above; nil (absent from the wire document
 //     entirely, via its own omitempty) for the overwhelming common,
 //     unscoped case.
+//   - Docker/EgressPolicy: Step 74's own additions (§27.5/§27.6) -- the
+//     SAME environmentSubstrate call's other two return values. Docker is
+//     env.DockerRequired verbatim (a plain bool, no further processing).
+//     EgressPolicy, when its Mode == EgressModeAllowlist, is threaded
+//     through environment.AppendAllowlistFloor with THIS session's own
+//     freshly-computed floor (allowlistFloorHosts, below) before ever
+//     reaching the wire -- computed fresh on every assembly, never read
+//     back from a previously-appended value, so the floor can never go
+//     stale (brief point B: "appended on the server as the policy is
+//     built, never merely validated at input").
 //   - Repos: read back from sessions.repos.
 //   - SandboxId: sandboxID, the caller's already-known sandboxes.id
 //     (row.ID.String() at the one production call site, tryPlanSpawn) --
@@ -308,7 +377,7 @@ func (a *Actor) assembleSessionConfig(
 		return sessionconfig.SessionConfig{}, err
 	}
 
-	pathScope, err := a.environmentPathScope(ctx, tx, sessionRow.EnvironmentID)
+	pathScope, dockerRequired, egressPolicy, err := a.environmentSubstrate(ctx, tx, sessionRow.EnvironmentID)
 	if err != nil {
 		return sessionconfig.SessionConfig{}, err
 	}
@@ -316,6 +385,36 @@ func (a *Actor) assembleSessionConfig(
 	if len(pathScope) > 0 {
 		typed := sessionconfig.SessionConfigPathScope(pathScope)
 		pathScopeField = &typed
+	}
+
+	// egressPolicyField stays nil (absent from the wire document, §27.6's
+	// own "genuinely OPTIONAL... absent or null both mean no egress
+	// policy is attached") unless egressPolicy actually has a Mode set --
+	// environment.EgressPolicy's own zero value ("not configured") must
+	// never round-trip onto the wire as an empty-but-present object.
+	var egressPolicyField *sessionconfig.SessionConfigEgressPolicy
+	if egressPolicy.Mode != "" {
+		if egressPolicy.RequiresEnforcement() {
+			// Point B (brief): the floor is appended HERE, structurally,
+			// every single time -- never merely validated once when the
+			// customer's own allowlist was first saved. See
+			// allowlistFloorHosts' own doc comment for what it computes.
+			egressPolicy = environment.AppendAllowlistFloor(egressPolicy, a.allowlistFloorHosts(ctx, repos))
+		}
+		// allowlist is normalized to a non-nil (possibly empty) slice
+		// before hitting the wire -- the schema types "allowlist" as a
+		// plain (non-nullable) array; a nil Go slice would otherwise
+		// marshal as JSON null, which satisfies the generated decoder's
+		// own "key present" check but is not the array shape the schema
+		// actually declares.
+		allowlist := egressPolicy.Allowlist
+		if allowlist == nil {
+			allowlist = []string{}
+		}
+		egressPolicyField = &sessionconfig.SessionConfigEgressPolicy{
+			Mode:      sessionconfig.SessionConfigEgressPolicyMode(egressPolicy.Mode),
+			Allowlist: allowlist,
+		}
 	}
 
 	sessionID := sessionRow.ID.String()
@@ -327,6 +426,8 @@ func (a *Actor) assembleSessionConfig(
 		CorrelationId:     nil,
 		Gen:               gen,
 		PathScope:         pathScopeField,
+		Docker:            dockerRequired,
+		EgressPolicy:      egressPolicyField,
 		Repos:             repos,
 		SandboxId:         sandboxID,
 		SandboxToken:      plaintextToken,

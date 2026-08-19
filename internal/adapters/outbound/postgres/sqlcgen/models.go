@@ -1718,11 +1718,14 @@ type DigestSendState struct {
 }
 
 type Environment struct {
-	ID             pgtype.UUID        `json:"id"`
-	PathScope      []byte             `json:"path_scope"`
-	MockConfigured bool               `json:"mock_configured"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	ContractsPath  *string            `json:"contracts_path"`
+	ID                    pgtype.UUID        `json:"id"`
+	PathScope             []byte             `json:"path_scope"`
+	MockConfigured        bool               `json:"mock_configured"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	ContractsPath         *string            `json:"contracts_path"`
+	DockerRequired        bool               `json:"docker_required"`
+	EgressPolicyMode      *string            `json:"egress_policy_mode"`
+	EgressPolicyAllowlist []byte             `json:"egress_policy_allowlist"`
 }
 
 type Event struct {

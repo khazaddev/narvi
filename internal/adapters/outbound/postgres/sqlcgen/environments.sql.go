@@ -13,15 +13,18 @@ import (
 
 const createEnvironment = `-- name: CreateEnvironment :one
 
-INSERT INTO environments (path_scope, mock_configured, contracts_path)
-VALUES ($1, $2, $3)
-RETURNING id, path_scope, mock_configured, created_at, contracts_path
+INSERT INTO environments (path_scope, mock_configured, contracts_path, docker_required, egress_policy_mode, egress_policy_allowlist)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, path_scope, mock_configured, created_at, contracts_path, docker_required, egress_policy_mode, egress_policy_allowlist
 `
 
 type CreateEnvironmentParams struct {
-	PathScope      []byte  `json:"path_scope"`
-	MockConfigured bool    `json:"mock_configured"`
-	ContractsPath  *string `json:"contracts_path"`
+	PathScope             []byte  `json:"path_scope"`
+	MockConfigured        bool    `json:"mock_configured"`
+	ContractsPath         *string `json:"contracts_path"`
+	DockerRequired        bool    `json:"docker_required"`
+	EgressPolicyMode      *string `json:"egress_policy_mode"`
+	EgressPolicyAllowlist []byte  `json:"egress_policy_allowlist"`
 }
 
 // Queries backing the environments table (§14.1, migrations/000021_environments.up.sql,
@@ -38,13 +41,28 @@ type CreateEnvironmentParams struct {
 // contracts_path=NULL (the ordinary, unscoped-mock case) when the
 // request's mockConfig key was absent; see httpapi.CreateSession's own
 // doc comment for exactly how these three are resolved from one request.
-// Extended in place, as a single INSERT accepting all three columns,
+// docker_required/egress_policy_mode/egress_policy_allowlist (Step 74,
+// §27.5/§27.6) are the caller's own resolved docker/egressPolicy presence
+// -- docker_required=false and both egress_policy_* columns NULL (the
+// ordinary, no-substrate-requirement case) when the request carried
+// neither key. The egress_policy_allowlist value stored here is the
+// CUSTOMER's own configured allowlist ONLY -- see migrations/
+// 000095_environment_docker_egress.up.sql's own doc comment for why the
+// non-negotiable floor is never persisted into this column.
+// Extended in place, as a single INSERT accepting all five columns,
 // rather than adding a second UPDATE query: environments rows are ALWAYS
 // created inline at session-creation time (this table's own doc comment),
 // never updated afterward, so there is no separate "attach a mock_config
 // later" path for a second query to serve.
 func (q *Queries) CreateEnvironment(ctx context.Context, arg CreateEnvironmentParams) (Environment, error) {
-	row := q.db.QueryRow(ctx, createEnvironment, arg.PathScope, arg.MockConfigured, arg.ContractsPath)
+	row := q.db.QueryRow(ctx, createEnvironment,
+		arg.PathScope,
+		arg.MockConfigured,
+		arg.ContractsPath,
+		arg.DockerRequired,
+		arg.EgressPolicyMode,
+		arg.EgressPolicyAllowlist,
+	)
 	var i Environment
 	err := row.Scan(
 		&i.ID,
@@ -52,12 +70,15 @@ func (q *Queries) CreateEnvironment(ctx context.Context, arg CreateEnvironmentPa
 		&i.MockConfigured,
 		&i.CreatedAt,
 		&i.ContractsPath,
+		&i.DockerRequired,
+		&i.EgressPolicyMode,
+		&i.EgressPolicyAllowlist,
 	)
 	return i, err
 }
 
 const getEnvironment = `-- name: GetEnvironment :one
-SELECT id, path_scope, mock_configured, created_at, contracts_path FROM environments
+SELECT id, path_scope, mock_configured, created_at, contracts_path, docker_required, egress_policy_mode, egress_policy_allowlist FROM environments
 WHERE id = $1
 `
 
@@ -73,6 +94,9 @@ func (q *Queries) GetEnvironment(ctx context.Context, id pgtype.UUID) (Environme
 		&i.MockConfigured,
 		&i.CreatedAt,
 		&i.ContractsPath,
+		&i.DockerRequired,
+		&i.EgressPolicyMode,
+		&i.EgressPolicyAllowlist,
 	)
 	return i, err
 }

@@ -113,6 +113,16 @@ type fakeSpawnProvider struct {
 	// test in this file, so BuildImage returns immediately for all of
 	// them, unchanged.
 	buildBlock chan struct{}
+
+	// dockerSupported/egressPolicySupported are Step 74's own extension
+	// (§27.5/§27.6), mirroring resumeSupported's own identical
+	// per-test-configurable-Capabilities-field shape exactly: false (the
+	// SAME value Capabilities() already hardcoded before this Step, via
+	// the struct literal's implicit zero value for these two new fields)
+	// for every pre-existing test in this file, so nothing here changes
+	// their behavior.
+	dockerSupported       bool
+	egressPolicySupported bool
 }
 
 // fakeRestoreCall records one RestoreFromSnapshot invocation's own
@@ -127,7 +137,14 @@ type fakeRestoreCall struct {
 var _ ports.SandboxProvider = (*fakeSpawnProvider)(nil)
 
 func (f *fakeSpawnProvider) Capabilities() ports.Capabilities {
-	return ports.Capabilities{Snapshots: true, Resume: f.resumeSupported, ExplicitStop: false, ImageBuilds: false}
+	return ports.Capabilities{
+		Snapshots:       true,
+		Resume:          f.resumeSupported,
+		ExplicitStop:    false,
+		ImageBuilds:     false,
+		DockerInSandbox: f.dockerSupported,
+		EgressPolicy:    f.egressPolicySupported,
+	}
 }
 
 func (f *fakeSpawnProvider) CreateSandbox(ctx context.Context, spec ports.CreateSpec) (ports.SandboxRef, error) {
