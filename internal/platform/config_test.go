@@ -1289,3 +1289,76 @@ func flattenJoinedErrors(err error) []error {
 	}
 	return out
 }
+
+// TestLoadCloudIdentityIssuerURL covers Step 73a's ("cloud identity: OIDC
+// issuer", §27.3) own NARVI_CLOUD_IDENTITY_ISSUER_URL -- DELIBERATELY
+// optional (unset means the whole cloud-identity capability is off,
+// fail-closed -- see Config.CloudIdentityIssuerURL's own doc comment),
+// unlike GitHubImageBuildToken/GitHubReReviewLabel above which are
+// optional but never VALIDATED when present -- this field is, since a
+// malformed value here breaks federation silently, cloud-side (see
+// cloudIdentityIssuerURLEnvVarName's own doc comment).
+func TestLoadCloudIdentityIssuerURL(t *testing.T) {
+	t.Run("unset succeeds with an empty value (capability off)", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_CLOUD_IDENTITY_ISSUER_URL", "")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil (this field is optional)", err)
+		}
+		if cfg.CloudIdentityIssuerURL != "" {
+			t.Errorf("Load().CloudIdentityIssuerURL = %q, want empty when unset", cfg.CloudIdentityIssuerURL)
+		}
+	})
+
+	t.Run("a well-formed https URL with no path carries through", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_CLOUD_IDENTITY_ISSUER_URL", "https://issuer.narvi.example.test")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil", err)
+		}
+		if cfg.CloudIdentityIssuerURL != "https://issuer.narvi.example.test" {
+			t.Errorf("Load().CloudIdentityIssuerURL = %q, want %q", cfg.CloudIdentityIssuerURL, "https://issuer.narvi.example.test")
+		}
+	})
+
+	invalidCases := []struct {
+		name string
+		val  string
+	}{
+		{"not a URL at all", "://not a url"},
+		{"missing scheme", "issuer.narvi.example.test"},
+		{"non-http(s) scheme", "ftp://issuer.narvi.example.test"},
+		{"missing host", "https:///.well-known"},
+		{"carries a path", "https://issuer.narvi.example.test/tenant-a"},
+		{"carries a query string", "https://issuer.narvi.example.test?x=1"},
+		{"carries a fragment", "https://issuer.narvi.example.test#frag"},
+		// A bare trailing slash is a REAL path (url.Parse's own Path ==
+		// "/") that doubles up against the fixed "/.well-known/..."
+		// suffix httpapi/oidcdiscovery.go appends by plain string
+		// concatenation -- see canonicalCloudIdentityIssuerURL's own doc
+		// comment. This case pins the mutation the adversarial review
+		// caught: restoring the old "&& parsed.Path != \"/\"" exemption
+		// makes THIS subtest fail (Load() would return nil error instead
+		// of *InvalidCloudIdentityIssuerURLError).
+		{"a bare trailing slash doubles up against the fixed jwks_uri suffix", "http://localhost:8080/"},
+	}
+	for _, tc := range invalidCases {
+		t.Run(tc.name, func(t *testing.T) {
+			setRequiredEnv(t)
+			t.Setenv("NARVI_CLOUD_IDENTITY_ISSUER_URL", tc.val)
+
+			_, err := platform.Load()
+			if err == nil {
+				t.Fatalf("Load() error = nil, want *platform.InvalidCloudIdentityIssuerURLError for %q", tc.val)
+			}
+			var urlErr *platform.InvalidCloudIdentityIssuerURLError
+			if !errors.As(err, &urlErr) {
+				t.Fatalf("Load() error = %v, want *platform.InvalidCloudIdentityIssuerURLError", err)
+			}
+		})
+	}
+}

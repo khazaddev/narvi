@@ -208,6 +208,15 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"member cannot manage workflow definitions", authz.RoleMember, authz.ActionManageWorkflowDefinitions, false, false},
 		{"member cannot manage workflow definitions even if ownedOrJoined", authz.RoleMember, authz.ActionManageWorkflowDefinitions, true, false},
 		{"viewer cannot manage workflow definitions", authz.RoleViewer, authz.ActionManageWorkflowDefinitions, false, false},
+		// Step 73a (§27.3): cloud-identity binding CRUD (environment AND
+		// global scope both) -- this SAME maintainer+ row, no member
+		// own/joined carve-out (asserted with ownedOrJoined=true for
+		// member to prove it genuinely does not exist here).
+		{"admin manages cloud identity bindings", authz.RoleAdmin, authz.ActionManageCloudIdentityBindings, false, true},
+		{"maintainer manages cloud identity bindings", authz.RoleMaintainer, authz.ActionManageCloudIdentityBindings, false, true},
+		{"member cannot manage cloud identity bindings", authz.RoleMember, authz.ActionManageCloudIdentityBindings, false, false},
+		{"member cannot manage cloud identity bindings even if ownedOrJoined", authz.RoleMember, authz.ActionManageCloudIdentityBindings, true, false},
+		{"viewer cannot manage cloud identity bindings", authz.RoleViewer, authz.ActionManageCloudIdentityBindings, false, false},
 
 		// Row 5: review verdicts/re-trigger/auto-approve config --
 		// admin/maintainer only.
@@ -247,6 +256,13 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"maintainer cannot manage global secrets", authz.RoleMaintainer, authz.ActionManageGlobalSecrets, false, false},
 		{"member cannot manage global secrets", authz.RoleMember, authz.ActionManageGlobalSecrets, false, false},
 		{"viewer cannot manage global secrets", authz.RoleViewer, authz.ActionManageGlobalSecrets, false, false},
+		// Step 73a (§27.3): admin-triggered OIDC signing-key rotation --
+		// admin ONLY, not even maintainer (see that action's own doc
+		// comment for why this sits one row below binding CRUD).
+		{"admin manages cloud identity keys", authz.RoleAdmin, authz.ActionManageCloudIdentityKeys, false, true},
+		{"maintainer cannot manage cloud identity keys", authz.RoleMaintainer, authz.ActionManageCloudIdentityKeys, false, false},
+		{"member cannot manage cloud identity keys", authz.RoleMember, authz.ActionManageCloudIdentityKeys, false, false},
+		{"viewer cannot manage cloud identity keys", authz.RoleViewer, authz.ActionManageCloudIdentityKeys, false, false},
 		{"admin activates prompt template", authz.RoleAdmin, authz.ActionActivatePromptTemplate, false, true},
 		{"maintainer cannot activate prompt template", authz.RoleMaintainer, authz.ActionActivatePromptTemplate, false, false},
 		{"member cannot activate prompt template", authz.RoleMember, authz.ActionActivatePromptTemplate, false, false},

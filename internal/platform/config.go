@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -646,6 +647,40 @@ const intentClassifierActiveSurfacesEnvVarName = "NARVI_INTENT_CLASSIFIER_ACTIVE
 // (never a silent substitution) -- see internal/adapters/outbound/llm's
 // own model-recognition table.
 
+// cloudIdentityIssuerURLEnvVarName is the env var Load reads for
+// Config.CloudIdentityIssuerURL (Step 73a, §27.3). DELIBERATELY OPTIONAL --
+// an empty value means the entire cloud-identity feature is off, fail-
+// closed (see that field's own doc comment) -- but a NON-empty value gets
+// real validation (InvalidCloudIdentityIssuerURLError below), unlike most
+// of this file's other optional URL-shaped fields (e.g.
+// SlackDefaultRepoURL is validated by a domain validator for a different
+// reason -- routability, not URL shape): AWS/GCP/Azure STS fetch this
+// value's own discovery/JWKS documents over the public internet with no
+// Narvi credential at all (this Step's own gap-1 resolution, see
+// httpapi/oidcdiscovery.go's own doc comment) -- a malformed value here
+// would silently break every customer's federation attempt, cloud-side,
+// with an error Narvi itself never observes, so Load catches the
+// shape-level mistakes (missing scheme, missing host, a trailing slash
+// that would double up against the fixed "/.well-known/..." suffixes)
+// as early and as loudly as possible instead.
+const cloudIdentityIssuerURLEnvVarName = "NARVI_CLOUD_IDENTITY_ISSUER_URL"
+
+// InvalidCloudIdentityIssuerURLError is returned by Load when
+// NARVI_CLOUD_IDENTITY_ISSUER_URL is set but is not a well-formed absolute
+// http(s) URL with no path/query/fragment (the discovery/JWKS handlers
+// append fixed "/.well-known/..." suffixes themselves -- see
+// httpapi/oidcdiscovery.go -- so a value already carrying a path would
+// produce a malformed, doubled-up URL no cloud's own STS could ever
+// successfully fetch).
+type InvalidCloudIdentityIssuerURLError struct {
+	Value  string
+	Reason string
+}
+
+func (e *InvalidCloudIdentityIssuerURLError) Error() string {
+	return fmt.Sprintf("invalid %s=%q: %s", cloudIdentityIssuerURLEnvVarName, e.Value, e.Reason)
+}
+
 // objectStoreEndpointEnvVarName, objectStorePublicEndpointEnvVarName,
 // objectStoreRegionEnvVarName, objectStoreBucketEnvVarName,
 // objectStoreAccessKeyIDEnvVarName, objectStoreSecretAccessKeyEnvVarName,
@@ -814,6 +849,57 @@ func parseCommaSeparatedList(raw string) []string {
 		out = append(out, trimmed)
 	}
 	return out
+}
+
+// canonicalCloudIdentityIssuerURL enforces the URL shape
+// Config.CloudIdentityIssuerURL needs to be safely usable as the fixed
+// prefix for GET {issuer}/.well-known/openid-configuration and GET
+// {issuer}/.well-known/jwks.json (httpapi/oidcdiscovery.go), and returns
+// the canonical "scheme://host" string Load assigns to that field: a
+// well-formed absolute URL, http or https scheme, non-empty host, and NO
+// path of its own -- not even a bare trailing slash. Mirrors
+// gitHubRelease*'s own "validate the shape now, at boot, rather than let a
+// malformed value surface as a confusing runtime failure" reasoning --
+// see cloudIdentityIssuerURLEnvVarName's own doc comment for why THIS
+// field, uniquely among this file's other optional URL-shaped values,
+// earns real validation.
+//
+// Deliberately rejects url.Parse's own Path == "/" case -- NOT just
+// Path == "" -- unlike an earlier version of this function. A trailing
+// slash is a REAL path segment as far as plain string concatenation is
+// concerned: httpapi/oidcdiscovery.go builds jwks_uri as
+// issuerURL + "/.well-known/jwks.json" by direct concatenation, so
+// "https://cp.example.com/" would silently produce
+// "https://cp.example.com//.well-known/jwks.json" -- a double slash this
+// codebase's own chi router (mounted with no CleanPath/StripSlashes
+// middleware, cmd/control-plane/main.go) does NOT collapse, so that
+// jwks_uri 404s on every real cloud STS fetch while Narvi's own discovery
+// endpoint keeps reporting 200. Returning the canonicalized string (built
+// from parsed.Scheme/parsed.Host alone, never the caller's own raw
+// string) means the raw, unnormalized env value never reaches
+// Config.CloudIdentityIssuerURL in the first place -- every downstream
+// consumer (this discovery/JWKS concatenation AND the `iss` claim
+// cloudidentitytoken.go mints verbatim) gets the already-canonical form
+// with nothing left for either call site to remember to normalize itself.
+func canonicalCloudIdentityIssuerURL(raw string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", &InvalidCloudIdentityIssuerURLError{Value: raw, Reason: fmt.Sprintf("not a valid URL: %v", err)}
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", &InvalidCloudIdentityIssuerURLError{Value: raw, Reason: "scheme must be http or https"}
+	}
+	if parsed.Host == "" {
+		return "", &InvalidCloudIdentityIssuerURLError{Value: raw, Reason: "must include a host"}
+	}
+	if parsed.Path != "" {
+		return "", &InvalidCloudIdentityIssuerURLError{Value: raw, Reason: "must not carry a path, including a bare trailing slash -- the discovery/JWKS handlers append their own fixed /.well-known/... suffix by plain string concatenation, so a trailing slash here would double up against it"}
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", &InvalidCloudIdentityIssuerURLError{Value: raw, Reason: "must not carry a query string or fragment"}
+	}
+	canonical := url.URL{Scheme: parsed.Scheme, Host: parsed.Host}
+	return canonical.String(), nil
 }
 
 // Config is the top-level, typed control-plane configuration, validated
@@ -1057,6 +1143,39 @@ type Config struct {
 	// value saying so") -- optional, an empty/unset value means every
 	// surface runs in shadow.
 	IntentClassifierActiveSurfaces []string
+
+	// CloudIdentityIssuerURL (Step 73a, §27.3) is the public, externally
+	// reachable base URL the control plane's own OIDC issuer serves
+	// discovery/JWKS from (GET {CloudIdentityIssuerURL}/.well-known/
+	// openid-configuration, GET {CloudIdentityIssuerURL}/.well-known/
+	// jwks.json), read from NARVI_CLOUD_IDENTITY_ISSUER_URL --
+	// deliberately a SEPARATE field from PublicBaseURL above, not a reuse
+	// of it: §27.3 gives this capability its own fail-closed gate ("the
+	// whole capability is off, and binding CRUD refuses, when unset"),
+	// which only works if the field can genuinely be UNSET -- PublicBaseURL
+	// is required in every stage (see its own doc comment) and so can never
+	// serve as a double-duty off-switch. Empty string means the entire
+	// cloud-identity feature (discovery/JWKS/minting/binding CRUD/
+	// signing-key rotation) is OFF -- rather than inferring "off" from a
+	// zero-value Timeouts field or a missing store, so there is exactly
+	// one place a deploy flips this capability. Discovery/JWKS/minting
+	// (httpapi/oidcdiscovery.go, cloudidentitytoken.go) each check this
+	// field directly, inline, since each is a single free-function
+	// handler; binding CRUD and signing-key rotation (httpapi/
+	// cloudidentitybindings.go, cloudidentitykeys.go) are each mounted
+	// behind a chi route group instead, so they check it exactly once,
+	// group-wide, via httpapi.RequireCloudIdentityCapability(cfg.
+	// CloudIdentityIssuerURL) (cmd/control-plane/main.go's own r.Use(...)
+	// on all three of those groups) rather than a fourth/fifth per-handler
+	// copy of the same inline check.
+	// A non-empty value IS validated (unlike PublicBaseURL's own
+	// "non-empty only" laxness) -- see cloudIdentityIssuerURLEnvVarName's
+	// own doc comment for why this one gets real URL-shape validation:
+	// AWS/GCP/Azure STS parse this value themselves to build discovery/
+	// JWKS fetch URLs, so a malformed value here fails silently and
+	// externally (a customer-side federation error Narvi never sees)
+	// rather than loudly at boot.
+	CloudIdentityIssuerURL string
 
 	// ObjectStorage is Step 58's ("uploads, blob storage & the in-sandbox
 	// download_file tool", §28.7) typed, boot-validated object-storage
@@ -1387,6 +1506,23 @@ func Load() (*Config, error) {
 
 	intentClassifierActiveSurfaces := parseCommaSeparatedList(os.Getenv(intentClassifierActiveSurfacesEnvVarName))
 
+	// cloudIdentityIssuerURL (Step 73a, §27.3): DELIBERATELY OPTIONAL --
+	// see cloudIdentityIssuerURLEnvVarName's own doc comment for the full
+	// "off when unset" gating rule and why a non-empty value gets real
+	// URL-shape validation (unlike PublicBaseURL above). Assigned the
+	// CANONICAL string canonicalCloudIdentityIssuerURL returns, never the
+	// raw env value -- see that function's own doc comment for why the
+	// raw value must never reach Config.CloudIdentityIssuerURL.
+	cloudIdentityIssuerURL := ""
+	if raw := os.Getenv(cloudIdentityIssuerURLEnvVarName); raw != "" {
+		canonical, err := canonicalCloudIdentityIssuerURL(raw)
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			cloudIdentityIssuerURL = canonical
+		}
+	}
+
 	// Object storage (§28.7): feature-flagged on objectStoreEndpointEnvVarName
 	// alone -- see that const's own doc comment for the full gating rule.
 	// Every other NARVI_OBJECT_STORE_* var is read and validated ONLY
@@ -1514,6 +1650,8 @@ func Load() (*Config, error) {
 		IntentClassifierModel:    intentClassifierModel,
 
 		IntentClassifierActiveSurfaces: intentClassifierActiveSurfaces,
+
+		CloudIdentityIssuerURL: cloudIdentityIssuerURL,
 
 		ObjectStorage: objectStorage,
 	}, nil

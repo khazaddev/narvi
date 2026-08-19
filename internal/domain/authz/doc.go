@@ -62,6 +62,12 @@
 //     (ActionConfigureBlockOnHighRisk, §8.2/Step 47): GetRepoSettings/
 //     PutRepoSettings, gating admin-only read/write of a repo's own
 //     blockOnHighRisk formal-review-gate policy flag.
+//   - internal/adapters/inbound/httpapi's cloudidentitybindings.go
+//     (ActionManageCloudIdentityBindings, Step 73a, §27.3): binding
+//     create/list/update/delete, both environment and global scope.
+//   - internal/adapters/inbound/httpapi's cloudidentitykeys.go
+//     (ActionManageCloudIdentityKeys, Step 73a, §27.3): the admin-only
+//     signing-key rotation trigger.
 //   - Every other Action below (automations, environments, secrets,
 //     review verdicts, integrations, sentinel auto-fix) has NO caller
 //     yet — those features don't exist as of this Step (Phase 3 ingress

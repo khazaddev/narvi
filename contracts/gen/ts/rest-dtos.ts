@@ -1772,3 +1772,111 @@ export interface FalsePositivePattern {
 export interface ListFalsePositivePatternsResponse {
   patterns: FalsePositivePattern[];
 }
+/**
+ * One cloud_identity_bindings row's own REST wire shape (Step 73a, §27.3, migrations/000093_cloud_identity_bindings.up.sql). Returned by the create/list/update routes mounted at /api/environments/{environmentID}/cloud-identity-bindings and /api/cloud-identity-bindings (global) -- scope/scopeTarget are always implied by WHICH of the 2 route groups a request hit, never accepted as a separate request field, mirroring ProviderCredential's own identical convention. params carries no secret material (identifiers only -- a role ARN, a client id, an env-var name -- never a credential value), unlike ProviderCredential.maskedValue/SandboxSecret, so it is returned in full, not masked.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "CloudIdentityBinding".
+ */
+export interface CloudIdentityBinding {
+  id: string;
+  /**
+   * Matches Postgres cloud_identity_binding_scope exactly -- deliberately narrower than ProviderCredentialScope/SandboxSecretScope (no repo scope: §27.3, "a deployment target is an Environment property, not a repo property").
+   */
+  scope: 'environment' | 'global';
+  /**
+   * The environments.id (stringified, IMMUTABLE id -- environments has no name column) for scope=environment, or null for scope=global.
+   */
+  scopeTarget: string | null;
+  /**
+   * Matches Postgres cloud_identity_binding_kind exactly. A binding with kind=azure can never have scope=global -- refused at creation (400) -- see CreateCloudIdentityBindingRequest's own description for why.
+   */
+  kind: 'aws' | 'gcp' | 'azure' | 'generic';
+  /**
+   * The `aud` claim value a minted token carries when this binding is the one that matched a POST /sessions/{id}/cloud-identity-token request -- customer-set, per-binding, whatever the target cloud/consumer documents it expects (§27.3).
+   */
+  audience: string;
+  /**
+   * Identifiers, never secrets (§27.3: "params are identifiers not secrets... stored plaintext, readable") -- AWS: role ARN; GCP: workload-identity-provider resource name + optional service-account email; Azure: client id + tenant id; generic: the env-var name to publish the token path under. Modeled as an opaque raw-JSON passthrough (goJSONSchema -> encoding/json.RawMessage), the SAME precision-preserving convention AuditLogEntry.detail already establishes in this schema, rather than a decoded map[string]interface{} -- this codebase does not itself enforce a fixed key set per kind (each cloud's own expected shape is documented, not schema-validated, exactly like ProviderCredential's own precedent of not validating a value's own internal shape).
+   */
+  params: {
+    [k: string]: unknown;
+  };
+  /**
+   * The EXACT `sub` claim string (narvi:environment:<environment_id>) a customer must paste into their cloud-side trust policy for this binding to take effect -- Step 73a's own gap-4 resolution: the management API surfaces this directly rather than making the customer construct the string format themselves. Non-null only for scope=environment (a single, fixed, well-defined Environment); null for scope=global, since a global-scope binding's own token carries a DIFFERENT sub per Environment it is ever minted for -- there is no single string to surface (see this Step's own cloudidentity package doc comment for the full "what global scope means for sub" discussion, gap 3).
+   */
+  sub: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+/**
+ * POST request body for both cloud-identity-bindings route groups (environment/global -- see CloudIdentityBinding's own doc comment for why scope/scopeTarget are never body fields). Gated by authz.ActionManageCloudIdentityBindings (maintainer+, §13.3's own environments row). A duplicate (scope, scopeTarget, kind) is rejected 409 -- rotate the existing binding via PUT instead of creating a second row for it. kind=azure at the global route group is rejected 400 (ErrAzureGlobalScopeForbidden, internal/domain/cloudidentity) -- Azure's federated-credential matching is exact-match only on `sub`, which is always per-Environment, so a single global-scope azure binding cannot honestly promise to trust every Environment (this Step's own gap-3 resolution -- see internal/domain/cloudidentity's own doc comment for the full reasoning).
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "CreateCloudIdentityBindingRequest".
+ */
+export interface CreateCloudIdentityBindingRequest {
+  kind: 'aws' | 'gcp' | 'azure' | 'generic';
+  /**
+   * See CloudIdentityBinding.audience's own description.
+   */
+  audience: string;
+  /**
+   * Optional -- defaults to {} when omitted. See CloudIdentityBinding.params' own description.
+   */
+  params?: {
+    [k: string]: unknown;
+  };
+}
+/**
+ * PUT request body for /{scope-route}/cloud-identity-bindings/{id} -- rotates ONLY audience/params. scope/scopeTarget/kind are immutable once a row is created (delete-then-create if a different scope/target/kind is actually wanted), mirroring UpdateProviderCredentialRequest's own identical "identity fields immutable, payload fields rotate in place" posture.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "UpdateCloudIdentityBindingRequest".
+ */
+export interface UpdateCloudIdentityBindingRequest {
+  /**
+   * The new audience value, replacing the old one.
+   */
+  audience: string;
+  /**
+   * Optional -- omitted means "leave params unchanged" is NOT supported; an omitted value is treated as {} (matching CreateCloudIdentityBindingRequest.params' own default), since this is a full-replace PUT, not a partial PATCH.
+   */
+  params?: {
+    [k: string]: unknown;
+  };
+}
+/**
+ * GET response body for both cloud-identity-bindings route groups -- every row at that one (scope, scopeTarget) pair, one per configured kind. Unbounded (no pagination, matching ListProviderCredentialsResponse's own identical precedent) -- bounded in practice to at most 4 rows (one per Kind) per (scope, scopeTarget).
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ListCloudIdentityBindingsResponse".
+ */
+export interface ListCloudIdentityBindingsResponse {
+  cloudIdentityBindings: CloudIdentityBinding[];
+}
+/**
+ * 200 response body for POST /api/cloud-identity/signing-keys/rotate (Step 73a, §27.3/§27.8: "manual, admin-triggered rotation with the overlap window is v1" -- this Step's own gap-2 resolution, internal/domain/oidckey's own doc comment). Gated by authz.ActionManageCloudIdentityKeys (admin only). Never returns any key MATERIAL (private or public) -- only kid/timestamp metadata, proving a rotation happened and telling the caller exactly when the just-retired key (if any) stops verifying.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "RotateCloudIdentitySigningKeyResponse".
+ */
+export interface RotateCloudIdentitySigningKeyResponse {
+  /**
+   * The freshly created signing key's own kid -- the one every NEW token is minted with from this point forward.
+   */
+  activeKid: string;
+  activeCreatedAt: string;
+  /**
+   * The PREVIOUSLY active key's own kid, now retired -- null only on the very first-ever rotation (bootstrapping the first key, nothing to retire).
+   */
+  retiredKid: string | null;
+  /**
+   * When retiredKid stopped signing NEW tokens -- null iff retiredKid is null. goJSONSchema forces the literal *time.Time type -- see Plan.decidedAt's own doc comment for why a named pointer-type wrapper silently breaks encoding/json here.
+   */
+  retiredAt: string | null;
+  /**
+   * retiredAt + platform.Timeouts.CloudIdentitySigningKeyOverlapWindow -- the instant retiredKid drops out of the JWKS response and stops verifying ANY token, even one already minted. Null iff retiredKid is null.
+   */
+  publishableUntil: string | null;
+}
