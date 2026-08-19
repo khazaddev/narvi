@@ -1,15 +1,15 @@
-// This file (rollout.go) implements Step 76's own ("feature-flagged
-// cohort rollout of sessions, with documented rollback", §10 Phase 6,
-// §32) ONE pure admission decision -- shared, byte-for-byte identically,
-// between BOTH of §32's two independent gates: the primary,
-// session-creation-time gate (internal/adapters/inbound/httpapi.
-// CreateSessionOnTx, run once per create, inside the same transaction
-// that is about to insert the session) and the dispatch-time re-check
-// (internal/app/sessionactor's own tryPlanSpawn, run fresh on every
-// Spawn/Restore/Resume attempt for the session's entire lifetime) --
-// mirroring Step 74's own identical "one pure function, two independent
-// call sites" shape exactly (internal/domain/environment.
-// CheckSubstrateCapabilities is that Step's own twin of this package).
+// Package rollout implements Step 76's own ("feature-flagged cohort
+// rollout of sessions, with documented rollback", §10 Phase 6, §32) ONE
+// pure admission decision -- shared, byte-for-byte identically, between
+// BOTH of §32's two independent gates: the primary, session-creation-time
+// gate (internal/adapters/inbound/httpapi.CreateSessionOnTx, run once per
+// create, inside the same transaction that is about to insert the
+// session) and the dispatch-time re-check (internal/app/sessionactor's
+// own tryPlanSpawn, run fresh on every Spawn/Restore/Resume attempt for
+// the session's entire lifetime) -- mirroring Step 74's own identical
+// "one pure function, two independent call sites" shape exactly
+// (internal/domain/environment.CheckSubstrateCapabilities is that Step's
+// own twin of this package).
 //
 // Pure: no I/O, no clock, no randomness (CLAUDE.md §11: "no I/O ...  in
 // /internal/domain"). Both call sites do their own I/O (a repo_settings

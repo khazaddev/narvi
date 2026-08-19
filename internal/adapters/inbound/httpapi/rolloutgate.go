@@ -17,6 +17,7 @@
 // its repo_settings.sessions_enabled row (fail-closed), and turning the
 // result into a *CreateSessionError every caller of CreateSessionOnTx
 // already knows how to propagate.
+
 package httpapi
 
 import (
