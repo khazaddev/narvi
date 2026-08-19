@@ -315,6 +315,92 @@ func (ns NullAutomationTriggerType) Value() (driver.Value, error) {
 	return string(ns.AutomationTriggerType), nil
 }
 
+type CloudIdentityBindingKind string
+
+const (
+	CloudIdentityBindingKindAws     CloudIdentityBindingKind = "aws"
+	CloudIdentityBindingKindGcp     CloudIdentityBindingKind = "gcp"
+	CloudIdentityBindingKindAzure   CloudIdentityBindingKind = "azure"
+	CloudIdentityBindingKindGeneric CloudIdentityBindingKind = "generic"
+)
+
+func (e *CloudIdentityBindingKind) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = CloudIdentityBindingKind(s)
+	case string:
+		*e = CloudIdentityBindingKind(s)
+	default:
+		return fmt.Errorf("unsupported scan type for CloudIdentityBindingKind: %T", src)
+	}
+	return nil
+}
+
+type NullCloudIdentityBindingKind struct {
+	CloudIdentityBindingKind CloudIdentityBindingKind `json:"cloud_identity_binding_kind"`
+	Valid                    bool                     `json:"valid"` // Valid is true if CloudIdentityBindingKind is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullCloudIdentityBindingKind) Scan(value interface{}) error {
+	if value == nil {
+		ns.CloudIdentityBindingKind, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.CloudIdentityBindingKind.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullCloudIdentityBindingKind) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.CloudIdentityBindingKind), nil
+}
+
+type CloudIdentityBindingScope string
+
+const (
+	CloudIdentityBindingScopeEnvironment CloudIdentityBindingScope = "environment"
+	CloudIdentityBindingScopeGlobal      CloudIdentityBindingScope = "global"
+)
+
+func (e *CloudIdentityBindingScope) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = CloudIdentityBindingScope(s)
+	case string:
+		*e = CloudIdentityBindingScope(s)
+	default:
+		return fmt.Errorf("unsupported scan type for CloudIdentityBindingScope: %T", src)
+	}
+	return nil
+}
+
+type NullCloudIdentityBindingScope struct {
+	CloudIdentityBindingScope CloudIdentityBindingScope `json:"cloud_identity_binding_scope"`
+	Valid                     bool                      `json:"valid"` // Valid is true if CloudIdentityBindingScope is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullCloudIdentityBindingScope) Scan(value interface{}) error {
+	if value == nil {
+		ns.CloudIdentityBindingScope, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.CloudIdentityBindingScope.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullCloudIdentityBindingScope) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.CloudIdentityBindingScope), nil
+}
+
 type DigestSendStatus string
 
 const (
@@ -1546,6 +1632,17 @@ type ChatgptLinkAttempt struct {
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 }
 
+type CloudIdentityBinding struct {
+	ID            pgtype.UUID               `json:"id"`
+	Scope         CloudIdentityBindingScope `json:"scope"`
+	ScopeTargetID *string                   `json:"scope_target_id"`
+	Kind          CloudIdentityBindingKind  `json:"kind"`
+	Audience      string                    `json:"audience"`
+	Params        []byte                    `json:"params"`
+	CreatedAt     pgtype.Timestamptz        `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz        `json:"updated_at"`
+}
+
 type ContractDriftSnapshot struct {
 	RepoKey                  string             `json:"repo_key"`
 	LastRepoSha              string             `json:"last_repo_sha"`
@@ -1675,6 +1772,14 @@ type LinearInstallation struct {
 	ConnectedByUserID     pgtype.UUID        `json:"connected_by_user_id"`
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+}
+
+type OidcSigningKey struct {
+	Kid                 string             `json:"kid"`
+	PrivateKeyEncrypted []byte             `json:"private_key_encrypted"`
+	PublicJwk           []byte             `json:"public_jwk"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	RetiredAt           pgtype.Timestamptz `json:"retired_at"`
 }
 
 type OpencodeConfig struct {

@@ -644,6 +644,191 @@ func (j *ChatGPTLinkStatus) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// One cloud_identity_bindings row's own REST wire shape (Step 73a, §27.3,
+// migrations/000093_cloud_identity_bindings.up.sql). Returned by the
+// create/list/update routes mounted at
+// /api/environments/{environmentID}/cloud-identity-bindings and
+// /api/cloud-identity-bindings (global) -- scope/scopeTarget are always implied by
+// WHICH of the 2 route groups a request hit, never accepted as a separate request
+// field, mirroring ProviderCredential's own identical convention. params carries
+// no secret material (identifiers only -- a role ARN, a client id, an env-var name
+// -- never a credential value), unlike
+// ProviderCredential.maskedValue/SandboxSecret, so it is returned in full, not
+// masked.
+type CloudIdentityBinding struct {
+	// The `aud` claim value a minted token carries when this binding is the one that
+	// matched a POST /sessions/{id}/cloud-identity-token request -- customer-set,
+	// per-binding, whatever the target cloud/consumer documents it expects (§27.3).
+	Audience string `json:"audience" yaml:"audience" mapstructure:"audience"`
+
+	// CreatedAt corresponds to the JSON schema field "createdAt".
+	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
+
+	// Id corresponds to the JSON schema field "id".
+	Id string `json:"id" yaml:"id" mapstructure:"id"`
+
+	// Matches Postgres cloud_identity_binding_kind exactly. A binding with kind=azure
+	// can never have scope=global -- refused at creation (400) -- see
+	// CreateCloudIdentityBindingRequest's own description for why.
+	Kind CloudIdentityBindingKind `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// Identifiers, never secrets (§27.3: "params are identifiers not secrets...
+	// stored plaintext, readable") -- AWS: role ARN; GCP: workload-identity-provider
+	// resource name + optional service-account email; Azure: client id + tenant id;
+	// generic: the env-var name to publish the token path under. Modeled as an opaque
+	// raw-JSON passthrough (goJSONSchema -> encoding/json.RawMessage), the SAME
+	// precision-preserving convention AuditLogEntry.detail already establishes in
+	// this schema, rather than a decoded map[string]interface{} -- this codebase does
+	// not itself enforce a fixed key set per kind (each cloud's own expected shape is
+	// documented, not schema-validated, exactly like ProviderCredential's own
+	// precedent of not validating a value's own internal shape).
+	Params json.RawMessage `json:"params" yaml:"params" mapstructure:"params"`
+
+	// Matches Postgres cloud_identity_binding_scope exactly -- deliberately narrower
+	// than ProviderCredentialScope/SandboxSecretScope (no repo scope: §27.3, "a
+	// deployment target is an Environment property, not a repo property").
+	Scope CloudIdentityBindingScope `json:"scope" yaml:"scope" mapstructure:"scope"`
+
+	// The environments.id (stringified, IMMUTABLE id -- environments has no name
+	// column) for scope=environment, or null for scope=global.
+	ScopeTarget CloudIdentityBindingScopeTarget `json:"scopeTarget" yaml:"scopeTarget" mapstructure:"scopeTarget"`
+
+	// The EXACT `sub` claim string (narvi:environment:<environment_id>) a customer
+	// must paste into their cloud-side trust policy for this binding to take effect
+	// -- Step 73a's own gap-4 resolution: the management API surfaces this directly
+	// rather than making the customer construct the string format themselves.
+	// Non-null only for scope=environment (a single, fixed, well-defined
+	// Environment); null for scope=global, since a global-scope binding's own token
+	// carries a DIFFERENT sub per Environment it is ever minted for -- there is no
+	// single string to surface (see this Step's own cloudidentity package doc comment
+	// for the full "what global scope means for sub" discussion, gap 3).
+	Sub CloudIdentityBindingSub `json:"sub" yaml:"sub" mapstructure:"sub"`
+
+	// UpdatedAt corresponds to the JSON schema field "updatedAt".
+	UpdatedAt time.Time `json:"updatedAt" yaml:"updatedAt" mapstructure:"updatedAt"`
+}
+
+type CloudIdentityBindingKind string
+
+const CloudIdentityBindingKindAws CloudIdentityBindingKind = "aws"
+const CloudIdentityBindingKindAzure CloudIdentityBindingKind = "azure"
+const CloudIdentityBindingKindGcp CloudIdentityBindingKind = "gcp"
+const CloudIdentityBindingKindGeneric CloudIdentityBindingKind = "generic"
+
+var enumValues_CloudIdentityBindingKind = []interface{}{
+	"aws",
+	"gcp",
+	"azure",
+	"generic",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CloudIdentityBindingKind) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_CloudIdentityBindingKind {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_CloudIdentityBindingKind, v)
+	}
+	*j = CloudIdentityBindingKind(v)
+	return nil
+}
+
+type CloudIdentityBindingScope string
+
+const CloudIdentityBindingScopeEnvironment CloudIdentityBindingScope = "environment"
+const CloudIdentityBindingScopeGlobal CloudIdentityBindingScope = "global"
+
+// The environments.id (stringified, IMMUTABLE id -- environments has no name
+// column) for scope=environment, or null for scope=global.
+type CloudIdentityBindingScopeTarget *string
+
+var enumValues_CloudIdentityBindingScope = []interface{}{
+	"environment",
+	"global",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CloudIdentityBindingScope) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_CloudIdentityBindingScope {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_CloudIdentityBindingScope, v)
+	}
+	*j = CloudIdentityBindingScope(v)
+	return nil
+}
+
+// The EXACT `sub` claim string (narvi:environment:<environment_id>) a customer
+// must paste into their cloud-side trust policy for this binding to take effect --
+// Step 73a's own gap-4 resolution: the management API surfaces this directly
+// rather than making the customer construct the string format themselves. Non-null
+// only for scope=environment (a single, fixed, well-defined Environment); null for
+// scope=global, since a global-scope binding's own token carries a DIFFERENT sub
+// per Environment it is ever minted for -- there is no single string to surface
+// (see this Step's own cloudidentity package doc comment for the full "what global
+// scope means for sub" discussion, gap 3).
+type CloudIdentityBindingSub *string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CloudIdentityBinding) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["audience"]; raw != nil && !ok {
+		return fmt.Errorf("field audience in CloudIdentityBinding: required")
+	}
+	if _, ok := raw["createdAt"]; raw != nil && !ok {
+		return fmt.Errorf("field createdAt in CloudIdentityBinding: required")
+	}
+	if _, ok := raw["id"]; raw != nil && !ok {
+		return fmt.Errorf("field id in CloudIdentityBinding: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in CloudIdentityBinding: required")
+	}
+	if _, ok := raw["params"]; raw != nil && !ok {
+		return fmt.Errorf("field params in CloudIdentityBinding: required")
+	}
+	if _, ok := raw["scope"]; raw != nil && !ok {
+		return fmt.Errorf("field scope in CloudIdentityBinding: required")
+	}
+	if _, ok := raw["scopeTarget"]; raw != nil && !ok {
+		return fmt.Errorf("field scopeTarget in CloudIdentityBinding: required")
+	}
+	if _, ok := raw["sub"]; raw != nil && !ok {
+		return fmt.Errorf("field sub in CloudIdentityBinding: required")
+	}
+	if _, ok := raw["updatedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field updatedAt in CloudIdentityBinding: required")
+	}
+	type Plain CloudIdentityBinding
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = CloudIdentityBinding(plain)
+	return nil
+}
+
 // Response to POST /api/sessions/:id/uploads/:uploadId/complete (§28.4/§28.6):
 // tells the caller the RECORDED outcome -- the artifacts row and its
 // broadcast/persisted event are the durable truth regardless of what this response
@@ -899,6 +1084,88 @@ func (j *CreateAutomationResponse) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = CreateAutomationResponse(plain)
+	return nil
+}
+
+// POST request body for both cloud-identity-bindings route groups
+// (environment/global -- see CloudIdentityBinding's own doc comment for why
+// scope/scopeTarget are never body fields). Gated by
+// authz.ActionManageCloudIdentityBindings (maintainer+, §13.3's own environments
+// row). A duplicate (scope, scopeTarget, kind) is rejected 409 -- rotate the
+// existing binding via PUT instead of creating a second row for it. kind=azure at
+// the global route group is rejected 400 (ErrAzureGlobalScopeForbidden,
+// internal/domain/cloudidentity) -- Azure's federated-credential matching is
+// exact-match only on `sub`, which is always per-Environment, so a single
+// global-scope azure binding cannot honestly promise to trust every Environment
+// (this Step's own gap-3 resolution -- see internal/domain/cloudidentity's own doc
+// comment for the full reasoning).
+type CreateCloudIdentityBindingRequest struct {
+	// See CloudIdentityBinding.audience's own description.
+	Audience string `json:"audience" yaml:"audience" mapstructure:"audience"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind CreateCloudIdentityBindingRequestKind `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// Optional -- defaults to {} when omitted. See CloudIdentityBinding.params' own
+	// description.
+	Params *json.RawMessage `json:"params,omitempty,omitzero" yaml:"params,omitempty" mapstructure:"params,omitempty"`
+}
+
+type CreateCloudIdentityBindingRequestKind string
+
+const CreateCloudIdentityBindingRequestKindAws CreateCloudIdentityBindingRequestKind = "aws"
+const CreateCloudIdentityBindingRequestKindAzure CreateCloudIdentityBindingRequestKind = "azure"
+const CreateCloudIdentityBindingRequestKindGcp CreateCloudIdentityBindingRequestKind = "gcp"
+const CreateCloudIdentityBindingRequestKindGeneric CreateCloudIdentityBindingRequestKind = "generic"
+
+var enumValues_CreateCloudIdentityBindingRequestKind = []interface{}{
+	"aws",
+	"gcp",
+	"azure",
+	"generic",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CreateCloudIdentityBindingRequestKind) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_CreateCloudIdentityBindingRequestKind {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_CreateCloudIdentityBindingRequestKind, v)
+	}
+	*j = CreateCloudIdentityBindingRequestKind(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CreateCloudIdentityBindingRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["audience"]; raw != nil && !ok {
+		return fmt.Errorf("field audience in CreateCloudIdentityBindingRequest: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in CreateCloudIdentityBindingRequest: required")
+	}
+	type Plain CreateCloudIdentityBindingRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.Audience)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "audience", 1)
+	}
+	*j = CreateCloudIdentityBindingRequest(plain)
 	return nil
 }
 
@@ -2364,6 +2631,35 @@ func (j *ListAutomationsResponse) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = ListAutomationsResponse(plain)
+	return nil
+}
+
+// GET response body for both cloud-identity-bindings route groups -- every row at
+// that one (scope, scopeTarget) pair, one per configured kind. Unbounded (no
+// pagination, matching ListProviderCredentialsResponse's own identical precedent)
+// -- bounded in practice to at most 4 rows (one per Kind) per (scope,
+// scopeTarget).
+type ListCloudIdentityBindingsResponse struct {
+	// CloudIdentityBindings corresponds to the JSON schema field
+	// "cloudIdentityBindings".
+	CloudIdentityBindings []CloudIdentityBinding `json:"cloudIdentityBindings" yaml:"cloudIdentityBindings" mapstructure:"cloudIdentityBindings"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ListCloudIdentityBindingsResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["cloudIdentityBindings"]; raw != nil && !ok {
+		return fmt.Errorf("field cloudIdentityBindings in ListCloudIdentityBindingsResponse: required")
+	}
+	type Plain ListCloudIdentityBindingsResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ListCloudIdentityBindingsResponse(plain)
 	return nil
 }
 
@@ -5347,6 +5643,71 @@ func (j *RotateAutomationWebhookTokenResponse) UnmarshalJSON(value []byte) error
 	return nil
 }
 
+// 200 response body for POST /api/cloud-identity/signing-keys/rotate (Step 73a,
+// §27.3/§27.8: "manual, admin-triggered rotation with the overlap window is v1" --
+// this Step's own gap-2 resolution, internal/domain/oidckey's own doc comment).
+// Gated by authz.ActionManageCloudIdentityKeys (admin only). Never returns any key
+// MATERIAL (private or public) -- only kid/timestamp metadata, proving a rotation
+// happened and telling the caller exactly when the just-retired key (if any) stops
+// verifying.
+type RotateCloudIdentitySigningKeyResponse struct {
+	// ActiveCreatedAt corresponds to the JSON schema field "activeCreatedAt".
+	ActiveCreatedAt time.Time `json:"activeCreatedAt" yaml:"activeCreatedAt" mapstructure:"activeCreatedAt"`
+
+	// The freshly created signing key's own kid -- the one every NEW token is minted
+	// with from this point forward.
+	ActiveKid string `json:"activeKid" yaml:"activeKid" mapstructure:"activeKid"`
+
+	// retiredAt + platform.Timeouts.CloudIdentitySigningKeyOverlapWindow -- the
+	// instant retiredKid drops out of the JWKS response and stops verifying ANY
+	// token, even one already minted. Null iff retiredKid is null.
+	PublishableUntil *time.Time `json:"publishableUntil" yaml:"publishableUntil" mapstructure:"publishableUntil"`
+
+	// When retiredKid stopped signing NEW tokens -- null iff retiredKid is null.
+	// goJSONSchema forces the literal *time.Time type -- see Plan.decidedAt's own doc
+	// comment for why a named pointer-type wrapper silently breaks encoding/json
+	// here.
+	RetiredAt *time.Time `json:"retiredAt" yaml:"retiredAt" mapstructure:"retiredAt"`
+
+	// The PREVIOUSLY active key's own kid, now retired -- null only on the very
+	// first-ever rotation (bootstrapping the first key, nothing to retire).
+	RetiredKid RotateCloudIdentitySigningKeyResponseRetiredKid `json:"retiredKid" yaml:"retiredKid" mapstructure:"retiredKid"`
+}
+
+// The PREVIOUSLY active key's own kid, now retired -- null only on the very
+// first-ever rotation (bootstrapping the first key, nothing to retire).
+type RotateCloudIdentitySigningKeyResponseRetiredKid *string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *RotateCloudIdentitySigningKeyResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["activeCreatedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field activeCreatedAt in RotateCloudIdentitySigningKeyResponse: required")
+	}
+	if _, ok := raw["activeKid"]; raw != nil && !ok {
+		return fmt.Errorf("field activeKid in RotateCloudIdentitySigningKeyResponse: required")
+	}
+	if _, ok := raw["publishableUntil"]; raw != nil && !ok {
+		return fmt.Errorf("field publishableUntil in RotateCloudIdentitySigningKeyResponse: required")
+	}
+	if _, ok := raw["retiredAt"]; raw != nil && !ok {
+		return fmt.Errorf("field retiredAt in RotateCloudIdentitySigningKeyResponse: required")
+	}
+	if _, ok := raw["retiredKid"]; raw != nil && !ok {
+		return fmt.Errorf("field retiredKid in RotateCloudIdentitySigningKeyResponse: required")
+	}
+	type Plain RotateCloudIdentitySigningKeyResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = RotateCloudIdentitySigningKeyResponse(plain)
+	return nil
+}
+
 // One sandbox_secrets row's own REST wire shape (Step 72, §27.1,
 // migrations/000090_sandbox_secrets.up.sql). Returned by the create/get/list
 // routes mounted at /api/repos/{owner}/{repo}/sandbox-secrets,
@@ -5961,6 +6322,42 @@ func (j *UpdateAutoRetriggerReviewToggleRequest) UnmarshalJSON(value []byte) err
 		return err
 	}
 	*j = UpdateAutoRetriggerReviewToggleRequest(plain)
+	return nil
+}
+
+// PUT request body for /{scope-route}/cloud-identity-bindings/{id} -- rotates ONLY
+// audience/params. scope/scopeTarget/kind are immutable once a row is created
+// (delete-then-create if a different scope/target/kind is actually wanted),
+// mirroring UpdateProviderCredentialRequest's own identical "identity fields
+// immutable, payload fields rotate in place" posture.
+type UpdateCloudIdentityBindingRequest struct {
+	// The new audience value, replacing the old one.
+	Audience string `json:"audience" yaml:"audience" mapstructure:"audience"`
+
+	// Optional -- omitted means "leave params unchanged" is NOT supported; an omitted
+	// value is treated as {} (matching CreateCloudIdentityBindingRequest.params' own
+	// default), since this is a full-replace PUT, not a partial PATCH.
+	Params *json.RawMessage `json:"params,omitempty,omitzero" yaml:"params,omitempty" mapstructure:"params,omitempty"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *UpdateCloudIdentityBindingRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["audience"]; raw != nil && !ok {
+		return fmt.Errorf("field audience in UpdateCloudIdentityBindingRequest: required")
+	}
+	type Plain UpdateCloudIdentityBindingRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.Audience)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "audience", 1)
+	}
+	*j = UpdateCloudIdentityBindingRequest(plain)
 	return nil
 }
 

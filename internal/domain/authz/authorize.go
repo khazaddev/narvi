@@ -148,6 +148,10 @@ var matrix = map[Action]actionRule{
 	ActionManageRepoSecrets:         {allow: roles(RoleAdmin, RoleMaintainer)},
 	ActionManageEnvSecrets:          {allow: roles(RoleAdmin, RoleMaintainer)},
 	ActionManageWorkflowDefinitions: {allow: roles(RoleAdmin, RoleMaintainer)},
+	// Step 73a (§27.3): cloud-identity binding CRUD (both environment and
+	// global scope) -- maintainer+, this SAME row, per that action's own
+	// doc comment.
+	ActionManageCloudIdentityBindings: {allow: roles(RoleAdmin, RoleMaintainer)},
 
 	// Row 5: review verdicts/re-trigger/auto-approve config --
 	// admin/maintainer. Step 63 (§22.2/§22.4) adds the learned
@@ -172,8 +176,11 @@ var matrix = map[Action]actionRule{
 	// that section's explicit "same row as ActionActivatePromptTemplate"
 	// instruction (see action.go for why activation is a system-posture
 	// change, not row-4 authoring).
-	ActionManageIntegrations:       {allow: roles(RoleAdmin)},
-	ActionManageGlobalSecrets:      {allow: roles(RoleAdmin)},
+	ActionManageIntegrations:  {allow: roles(RoleAdmin)},
+	ActionManageGlobalSecrets: {allow: roles(RoleAdmin)},
+	// Step 73a (§27.3): admin-triggered OIDC signing-key rotation -- this
+	// SAME admin-only row, per that action's own doc comment.
+	ActionManageCloudIdentityKeys:  {allow: roles(RoleAdmin)},
 	ActionActivatePromptTemplate:   {allow: roles(RoleAdmin)},
 	ActionManageMembers:            {allow: roles(RoleAdmin)},
 	ActionToggleSentinelAutoFix:    {allow: roles(RoleAdmin)},

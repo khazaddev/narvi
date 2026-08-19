@@ -2299,6 +2299,33 @@ type Timeouts struct {
 	OpenCodeConfigFetchMaxAttempts    int
 	OpenCodeConfigFetchRetryBaseDelay time.Duration
 	OpenCodeConfigFetchRetryMaxDelay  time.Duration
+
+	// CloudIdentityTokenLifetime (Step 73a, §27.3) is how long a CP-minted
+	// cloud-identity OIDC token (POST /sessions/{id}/cloud-identity-token)
+	// remains valid before its own `exp` claim expires. §27.3 gives this
+	// explicitly: "exp ≈ 10 minutes" -- taken literally as 10 * time.Minute,
+	// the plan's own stated approximation, not tightened or loosened
+	// further without a stated reason.
+	CloudIdentityTokenLifetime time.Duration
+
+	// CloudIdentitySigningKeyOverlapWindow (Step 73a, §27.3) is how long a
+	// just-retired oidc_signing_keys row keeps publishing in the JWKS
+	// response after RotateSigningKeys marks its own retired_at, before it
+	// drops out entirely -- §27.3's own rotation rule: "an overlap window
+	// >= max token lifetime -- the same overlapping-validity discipline
+	// §5.2 already applies to sandbox-token rotation" (that section's own
+	// "previous-gen grace window during overlapping spawns"). A token
+	// signed with the old key just before rotation must still verify for
+	// the rest of its own natural life, so this must stay strictly above
+	// CloudIdentityTokenLifetime (checked below, this chain's own single
+	// link) -- not merely "greater or equal", the same explicit-margin
+	// discipline §5.4 requires of every other pairwise link in this file.
+	// Not specified numerically beyond that floor; chosen as 15min --
+	// comfortably above the 10min token lifetime with margin to spare
+	// (§27.8's own "clock skew between CP and cloud STS endpoints bounds
+	// how short exp can safely go" concern cuts the other way, toward a
+	// longer overlap being safer, never shorter).
+	CloudIdentitySigningKeyOverlapWindow time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -2496,6 +2523,9 @@ func DefaultTimeouts() Timeouts {
 		OpenCodeConfigFetchMaxAttempts:    3,                      // adversarial-review MEDIUM fix; mirrors SandboxSecretFetchMaxAttempts
 		OpenCodeConfigFetchRetryBaseDelay: 500 * time.Millisecond, // adversarial-review MEDIUM fix; mirrors SandboxSecretFetchRetryBaseDelay
 		OpenCodeConfigFetchRetryMaxDelay:  2 * time.Second,        // adversarial-review MEDIUM fix; mirrors SandboxSecretFetchRetryMaxDelay
+
+		CloudIdentityTokenLifetime:           10 * time.Minute, // Step 73a, §27.3, explicit ("exp ≈ 10 minutes")
+		CloudIdentitySigningKeyOverlapWindow: 15 * time.Minute, // Step 73a, §27.3; not specified numerically beyond ">= max token lifetime", chosen with margin -- see field doc comment
 	}
 }
 
@@ -2639,6 +2669,16 @@ func (t Timeouts) Validate() error {
 	// identical pairwise reasoning.
 	check("UploadPendingSweepAfter > UploadAbandonmentSweepInterval",
 		"UploadPendingSweepAfter", t.UploadPendingSweepAfter, "UploadAbandonmentSweepInterval", t.UploadAbandonmentSweepInterval)
+
+	// Step 73a (§27.3): CloudIdentitySigningKeyOverlapWindow must stay at
+	// least MinTimeoutMargin above CloudIdentityTokenLifetime, or a token
+	// minted right before rotation could outlive the grace window its own
+	// signing key is still published for -- see
+	// CloudIdentitySigningKeyOverlapWindow's own doc comment for the full
+	// "why" (the same overlapping-validity discipline §5.2 already
+	// requires of sandbox-token rotation).
+	check("CloudIdentitySigningKeyOverlapWindow > CloudIdentityTokenLifetime",
+		"CloudIdentitySigningKeyOverlapWindow", t.CloudIdentitySigningKeyOverlapWindow, "CloudIdentityTokenLifetime", t.CloudIdentityTokenLifetime)
 
 	return errors.Join(errs...)
 }

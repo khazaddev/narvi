@@ -379,6 +379,14 @@ func serve() error {
 	// providerCredentialStore's own identical "one store, shared" pattern.
 	sandboxSecretStore := postgres.NewSandboxSecretStore(pool)
 	openCodeConfigStore := postgres.NewOpenCodeConfigStore(pool)
+	// cloudIdentityBindingStore/oidcSigningKeyStore (Step 73a, "cloud
+	// identity: OIDC issuer, bindings, minting", §27.3) back the binding
+	// management CRUD route groups, the signing-key rotation trigger, the
+	// public discovery/JWKS routes, AND the sandbox-facing minting
+	// endpoint (cloudidentitytoken.go) -- mirrors providerCredentialStore/
+	// sandboxSecretStore's own identical "one store, shared" pattern.
+	cloudIdentityBindingStore := postgres.NewCloudIdentityBindingStore(pool)
+	oidcSigningKeyStore := postgres.NewOIDCSigningKeyStore(pool)
 	// chatGPTLinkAttemptStore/chatGPTDeviceFlow (Step 59, "models: Codex
 	// via ChatGPT-account OAuth", §29.3/§29.5/§29.9) back the self-service
 	// link-flow REST routes (chatgptlink.go) AND the refresh pump
@@ -609,6 +617,32 @@ func serve() error {
 	// and stacking chi's competing convention on top would give every
 	// request two different request-identity mechanisms.
 	router.Get("/health", healthHandler(pool, cfg.Timeouts))
+
+	// OIDC discovery + JWKS (Step 73a, "cloud identity: OIDC issuer,
+	// bindings, minting", §27.3): deliberately mounted PUBLICLY,
+	// UNAUTHENTICATED -- outside auth.Middleware AND, unlike every other
+	// route this file mounts outside that middleware (scm-credentials,
+	// provider-credentials, sandbox-secrets/opencode-config below,
+	// snapshot-mint, review/verdict, workflow/step-outcome, turn/
+	// epistemic-outcome, uploads, the Slack/GitHub webhook routes, the
+	// identity-link consume route), with NO sandbox-bearer-token or
+	// provider-signature check of any kind either. This is deliberate,
+	// not an oversight: AWS/GCP/Azure's own STS implementations fetch
+	// BOTH of these documents directly, over the public internet, with no
+	// Narvi credential whatsoever -- a cloud's STS has no mechanism to
+	// present one, because establishing that trust is the very
+	// capability federation grants, not a precondition of it (the exact
+	// pattern GitHub Actions' own OIDC provider already uses for
+	// CI<->cloud federation, §27.3's own stated precedent -- see
+	// httpapi/oidcdiscovery.go's own top doc comment for the FULL "why
+	// public, and why this would silently break federation entirely if
+	// it were ever gated" reasoning, and its own _test.go for the pinning
+	// test proving a request with NO credential at all gets 200 from
+	// both). Both handlers fail closed (503) when cfg.CloudIdentityIssuerURL
+	// is unset -- "the whole capability is off... when unset" (§27.3).
+	router.Get("/.well-known/openid-configuration", httpapi.OIDCDiscovery(cfg.CloudIdentityIssuerURL))
+	router.Get("/.well-known/jwks.json", httpapi.OIDCJWKS(oidcSigningKeyStore, cfg.CloudIdentityIssuerURL, cfg.Timeouts))
+
 	router.Get("/sessions/{sessionID}/ws", wshub.NewHandler(
 		wshub.NewSandboxHandler(registry, sandboxStore, commander, cfg.Timeouts),
 		wshub.NewClientHandler(registry, sessionStore, turnStore, sandboxStore, eventStore, artifactStore, wsTokenStore, hub, cfg.Timeouts),
@@ -645,6 +679,22 @@ func serve() error {
 		httpapi.SandboxSecretsDelivery(sessionStore, sandboxStore, sandboxSecretStore, cfg.TokenEncryptionKey))
 	router.Post("/sessions/{sessionID}/opencode-config",
 		httpapi.OpenCodeConfigDelivery(sessionStore, sandboxStore, openCodeConfigStore))
+
+	// cloud-identity-token (Step 73a, "cloud identity: OIDC issuer,
+	// bindings, minting", §27.3): deliberately mounted OUTSIDE
+	// /api/sessions and outside auth.Middleware entirely, mirroring
+	// provider-credentials/sandbox-secrets immediately above VERBATIM
+	// (see httpapi/cloudidentitytoken.go's own doc comment) -- another
+	// sandbox-bearer-token-authenticated route, not a browser-facing one.
+	// Refuses any audience no binding for this session's Environment (or
+	// global fallback) declares, and fails closed (503) when the cloud-
+	// identity capability itself is off (cfg.CloudIdentityIssuerURL
+	// unset) -- distinct from the /.well-known/... routes above, which
+	// are PUBLIC and unauthenticated; this one still goes through the
+	// full sandbox-bearer handshake, only the issuer's own discovery
+	// metadata is public.
+	router.Post("/sessions/{sessionID}/cloud-identity-token",
+		httpapi.MintCloudIdentityToken(sessionStore, sandboxStore, cloudIdentityBindingStore, oidcSigningKeyStore, cfg.TokenEncryptionKey, cfg.CloudIdentityIssuerURL, cfg.Timeouts))
 
 	// snapshot-mint (Step 22, "snapshots & restore", design decision 2):
 	// deliberately mounted OUTSIDE /api/sessions and outside auth.
@@ -1330,6 +1380,46 @@ func serve() error {
 		r.Get("/", httpapi.ListGlobalSandboxSecrets(sandboxSecretStore))
 		r.Put("/{secretID}", httpapi.UpdateGlobalSandboxSecretValue(sandboxSecretStore, cfg.TokenEncryptionKey))
 		r.Delete("/{secretID}", httpapi.DeleteGlobalSandboxSecret(sandboxSecretStore))
+	})
+
+	// /api/environments/{environmentID}/cloud-identity-bindings,
+	// /api/cloud-identity-bindings (Step 73a, "cloud identity: OIDC
+	// issuer, bindings, minting", §27.3): the 2 scope-partitioned CRUD
+	// route groups over cloud_identity_bindings -- narrower than
+	// provider-credentials/sandbox-secrets' own 3-way split (no repo
+	// scope, §27.3), and BOTH groups share the SAME action
+	// (ActionManageCloudIdentityBindings, maintainer+) rather than
+	// escalating global scope to admin-only the way those two tables do
+	// -- see that action's own doc comment for why (params here are
+	// identifiers, never secrets). Mounted behind auth.Middleware like
+	// every other browser-facing REST route in this package -- see
+	// httpapi/cloudidentitybindings.go's own doc comment for the full
+	// route table.
+	router.Route("/api/environments/{environmentID}/cloud-identity-bindings", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Post("/", httpapi.CreateEnvironmentCloudIdentityBinding(pool, cloudIdentityBindingStore, auditLogStore))
+		r.Get("/", httpapi.ListEnvironmentCloudIdentityBindings(cloudIdentityBindingStore))
+		r.Put("/{bindingID}", httpapi.UpdateEnvironmentCloudIdentityBinding(pool, cloudIdentityBindingStore, auditLogStore))
+		r.Delete("/{bindingID}", httpapi.DeleteEnvironmentCloudIdentityBinding(pool, cloudIdentityBindingStore, auditLogStore))
+	})
+	router.Route("/api/cloud-identity-bindings", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Post("/", httpapi.CreateGlobalCloudIdentityBinding(pool, cloudIdentityBindingStore, auditLogStore))
+		r.Get("/", httpapi.ListGlobalCloudIdentityBindings(cloudIdentityBindingStore))
+		r.Put("/{bindingID}", httpapi.UpdateGlobalCloudIdentityBinding(pool, cloudIdentityBindingStore, auditLogStore))
+		r.Delete("/{bindingID}", httpapi.DeleteGlobalCloudIdentityBinding(pool, cloudIdentityBindingStore, auditLogStore))
+	})
+	// /api/cloud-identity/signing-keys/rotate (Step 73a, §27.3/§27.8):
+	// the admin-only, manual rotation TRIGGER -- see
+	// httpapi/cloudidentitykeys.go's own doc comment for the full
+	// "why manual, admin-triggered" design (this Step's own gap-2
+	// resolution) and internal/domain/oidckey's own doc comment for the
+	// complete justification against §5.2's sandbox-token rotation
+	// precedent. Admin only (ActionManageCloudIdentityKeys), one row
+	// stricter than binding CRUD immediately above.
+	router.Route("/api/cloud-identity/signing-keys", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Post("/rotate", httpapi.RotateCloudIdentitySigningKey(pool, oidcSigningKeyStore, auditLogStore, cfg.CloudIdentityIssuerURL, cfg.TokenEncryptionKey, cfg.Timeouts))
 	})
 
 	// /api/environments/{environmentID}/opencode-config,

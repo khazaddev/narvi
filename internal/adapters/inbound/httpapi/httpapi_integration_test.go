@@ -284,6 +284,25 @@ type testRig struct {
 	// (upload_integration_test.go), mirroring diffFetcher/sourceControl's
 	// own identical "nil by default, override via mutate" precedent above.
 	broadcaster ports.EventBroadcaster
+
+	// cloudIdentityBindings/oidcSigningKeys (Step 73a, "cloud identity:
+	// OIDC issuer, bindings, minting", §27.3) back this rig's own 2
+	// scoped cloud-identity-bindings CRUD route groups
+	// (cloudidentitybindings_integration_test.go), the signing-key
+	// rotation trigger, the public discovery/JWKS routes, and the
+	// sandbox-facing minting route (cloudidentitytoken_integration_test.go)
+	// -- mirrors providerCredentials/sandboxSecrets' own identical "one
+	// store, shared" pattern. cloudIdentityIssuerURL defaults to a fixed,
+	// non-empty test value (unlike diffFetcher/sourceControl's own
+	// "absent by default" precedent) since the capability being OFF is
+	// itself a distinct, separately-tested case
+	// (TestMintCloudIdentityToken_IssuerUnset_MutationPin et al.) rather
+	// than this rig's own default posture -- a test that specifically
+	// wants the capability off overrides it via newTestRig's own mutate
+	// func.
+	cloudIdentityBindings  *narvipg.CloudIdentityBindingStore
+	oidcSigningKeys        *narvipg.OIDCSigningKeyStore
+	cloudIdentityIssuerURL string
 }
 
 // newTestRig builds the default rig. mutate (variadic so every EXISTING
@@ -357,6 +376,9 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 			MaxUploadBytes:        1024,
 			MaxSessionUploadBytes: 1500,
 		},
+		cloudIdentityBindings:  narvipg.NewCloudIdentityBindingStore(pool),
+		oidcSigningKeys:        narvipg.NewOIDCSigningKeyStore(pool),
+		cloudIdentityIssuerURL: "https://issuer.narvi.example.test",
 	}
 	t.Cleanup(func() { _ = rig.registry.Shutdown() })
 
@@ -365,6 +387,15 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	}
 
 	router := chi.NewRouter()
+	// OIDC discovery + JWKS (Step 73a, §27.3) -- mounted PUBLICLY,
+	// UNAUTHENTICATED, exactly like cmd/control-plane/main.go's own real
+	// wiring (see httpapi/oidcdiscovery.go's own doc comment for the
+	// full "why" and cloudidentitydiscovery_integration_test.go's own
+	// pinning test: a request with NO credential of any kind must get
+	// 200 from both).
+	router.Get("/.well-known/openid-configuration", httpapi.OIDCDiscovery(rig.cloudIdentityIssuerURL))
+	router.Get("/.well-known/jwks.json", httpapi.OIDCJWKS(rig.oidcSigningKeys, rig.cloudIdentityIssuerURL, platform.DefaultTimeouts()))
+
 	router.Route("/api/sessions", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
 		r.Post("/", httpapi.CreateSession(rig.pool, rig.sessions, rig.turns, rig.environments, rig.auditLog, rig.registry, nil, false))
@@ -655,6 +686,33 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	})
 	router.Post("/sessions/{sessionID}/sandbox-secrets",
 		httpapi.SandboxSecretsDelivery(rig.sessions, rig.sandboxes, rig.sandboxSecrets, rig.tokenEncryptionKey))
+	// /api/environments/{environmentID}/cloud-identity-bindings,
+	// /api/cloud-identity-bindings, /api/cloud-identity/signing-keys/rotate,
+	// and the sandbox-facing minting route (Step 73a, "cloud identity:
+	// OIDC issuer, bindings, minting", §27.3) -- mounted exactly like
+	// cmd/control-plane/main.go's own wiring (see httpapi/
+	// cloudidentitybindings.go/cloudidentitykeys.go/cloudidentitytoken.go's
+	// own doc comments).
+	router.Route("/api/environments/{environmentID}/cloud-identity-bindings", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Post("/", httpapi.CreateEnvironmentCloudIdentityBinding(rig.pool, rig.cloudIdentityBindings, rig.auditLog))
+		r.Get("/", httpapi.ListEnvironmentCloudIdentityBindings(rig.cloudIdentityBindings))
+		r.Put("/{bindingID}", httpapi.UpdateEnvironmentCloudIdentityBinding(rig.pool, rig.cloudIdentityBindings, rig.auditLog))
+		r.Delete("/{bindingID}", httpapi.DeleteEnvironmentCloudIdentityBinding(rig.pool, rig.cloudIdentityBindings, rig.auditLog))
+	})
+	router.Route("/api/cloud-identity-bindings", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Post("/", httpapi.CreateGlobalCloudIdentityBinding(rig.pool, rig.cloudIdentityBindings, rig.auditLog))
+		r.Get("/", httpapi.ListGlobalCloudIdentityBindings(rig.cloudIdentityBindings))
+		r.Put("/{bindingID}", httpapi.UpdateGlobalCloudIdentityBinding(rig.pool, rig.cloudIdentityBindings, rig.auditLog))
+		r.Delete("/{bindingID}", httpapi.DeleteGlobalCloudIdentityBinding(rig.pool, rig.cloudIdentityBindings, rig.auditLog))
+	})
+	router.Route("/api/cloud-identity/signing-keys", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Post("/rotate", httpapi.RotateCloudIdentitySigningKey(rig.pool, rig.oidcSigningKeys, rig.auditLog, rig.cloudIdentityIssuerURL, rig.tokenEncryptionKey, platform.DefaultTimeouts()))
+	})
+	router.Post("/sessions/{sessionID}/cloud-identity-token",
+		httpapi.MintCloudIdentityToken(rig.sessions, rig.sandboxes, rig.cloudIdentityBindings, rig.oidcSigningKeys, rig.tokenEncryptionKey, rig.cloudIdentityIssuerURL, platform.DefaultTimeouts()))
 	// /api/environments/{environmentID}/opencode-config, /api/opencode-config,
 	// and their sandbox-facing delivery route (Step 72, §27.2) -- mounted
 	// exactly like cmd/control-plane/main.go's own wiring (see

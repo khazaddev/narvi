@@ -151,6 +151,22 @@ const (
 	// could express. No caller exists yet — Steps 55-56 own the first
 	// handlers.
 	ActionManageWorkflowDefinitions Action = "manage_workflow_definitions"
+	// ActionManageCloudIdentityBindings covers creating/editing/deleting a
+	// cloud_identity_bindings row (Step 73a, "cloud identity: OIDC
+	// issuer, bindings, minting", §27.3) -- both scope=environment AND
+	// scope=global rows share this ONE action, per §27.3's own explicit
+	// instruction ("params are... maintainer+ managed (the §13.3
+	// environments row)"), unlike provider_credentials/sandbox_secrets'
+	// own 3-way split (ActionManageRepoSecrets/ActionManageEnvSecrets/
+	// ActionManageGlobalSecrets, the last of which is admin-only, row 6).
+	// A binding's own params are identifiers, not secrets (this Step's
+	// own migration doc comment), so a global-scope binding is not the
+	// same security-sensitivity class provider_credentials'/
+	// sandbox_secrets' own global-scoped SECRET rows are -- it stays in
+	// THIS row rather than escalating to row 6 the way those two tables'
+	// global scope does. internal/adapters/inbound/httpapi/
+	// cloudidentitybindings.go is this Action's own caller.
+	ActionManageCloudIdentityBindings Action = "manage_cloud_identity_bindings"
 
 	// -- Row 5: "Edit review verdicts; re-trigger reviews; auto-approval
 	// eligibility config" — admin, maintainer only.
@@ -248,6 +264,23 @@ const (
 	// ActionManageGlobalSecrets covers org-wide (non-repo/env-scoped)
 	// secret management.
 	ActionManageGlobalSecrets Action = "manage_global_secrets"
+	// ActionManageCloudIdentityKeys covers Step 73a's own ("cloud
+	// identity: OIDC issuer, bindings, minting", §27.3) admin-triggered
+	// OIDC signing-key rotation (POST /api/cloud-identity/signing-keys/
+	// rotate) -- admin only, in THIS row, deliberately NOT the same row
+	// as ActionManageCloudIdentityBindings (row 4, maintainer+): a
+	// binding CRUD change affects one Environment (or the global
+	// fallback) at a time and touches no secret material at all (that
+	// row's own doc comment); rotating the issuer's own signing key is a
+	// platform-wide security-posture change affecting EVERY Environment's
+	// currently-mintable tokens at once, the same class of "changes what
+	// runs/verifies unattended, org-wide" judgment call
+	// ActionManageIntegrations/ActionManageGlobalSecrets immediately
+	// above already sit at admin-only for. See internal/domain/oidckey's
+	// own doc comment for the full "why manual, admin-triggered rotation"
+	// design decision (this Step's own gap-2 resolution) that this Action
+	// gates the trigger for.
+	ActionManageCloudIdentityKeys Action = "manage_cloud_identity_keys"
 	// ActionActivatePromptTemplate covers activating/deactivating a
 	// prompt template.
 	ActionActivatePromptTemplate Action = "activate_prompt_template"
@@ -404,6 +437,7 @@ var AllActions = []Action{
 	ActionManageRepoSecrets,
 	ActionManageEnvSecrets,
 	ActionManageWorkflowDefinitions,
+	ActionManageCloudIdentityBindings,
 	ActionEditReviewVerdict,
 	ActionRetriggerReview,
 	ActionConfigureAutoApprove,
@@ -412,6 +446,7 @@ var AllActions = []Action{
 	ActionContestArchRecap,
 	ActionManageIntegrations,
 	ActionManageGlobalSecrets,
+	ActionManageCloudIdentityKeys,
 	ActionActivatePromptTemplate,
 	ActionManageMembers,
 	ActionToggleSentinelAutoFix,
