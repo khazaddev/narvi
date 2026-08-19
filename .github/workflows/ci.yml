@@ -246,3 +246,108 @@ jobs:
 
       - name: Test (integration, group ${{ matrix.group }})
         run: make test-integration-group-${{ matrix.group }}
+
+  # sandbox-image (Step 74's own adversarial review, Finding 2, MEDIUM):
+  # before this job, no workflow in this repo built deploy/sandbox-image/
+  # Dockerfile at all -- the ONE artifact in this repo with zero
+  # automated verification, which is exactly why Finding 1 (the image
+  # could not start dockerd under ANY configuration -- the tarball
+  # install list dropped docker-proxy/docker-init, and the apt list
+  # shipped no iptables) landed there undetected. A lint-only check would
+  # NOT have caught either half: both were RUNTIME failures (dockerd's
+  # own config validation, then its bridge-driver/iptables network-
+  # controller init), not syntax errors a linter can see.
+  #
+  # Coverage: builds the Dockerfile's own `runtime-base` stage for real
+  # (debian:bookworm-slim + the apt/iptables layer + the Docker CLI/
+  # engine binary layer -- see that file's own top doc comment for why
+  # this is its own named stage) and runs a real `dockerd` inside it,
+  # asserting it reaches a live, ready socket with the bridge network
+  # driver registered -- the exact two failure points Finding 1
+  # reproduced (verified against this exact job's own approach during
+  # the review: builds cleanly, `dockerd` gets past config validation,
+  # the bridge driver registers, `docker info`/`docker version` succeed
+  # against the live daemon). `runtime-base` shares no dependency edge
+  # with the `builder` stage (the Go compile) or the later `toolchain`
+  # stage (ripgrep/Node/typescript-language-server/Playwright+Chromium/
+  # the cloud SDKs) -- `--target=runtime-base` builds neither, so this
+  # job pays for none of that.
+  #
+  # Gated on a path filter, computed by hand via `git diff` (mirroring
+  # the commit-scope job above, rather than adding a third-party paths-
+  # filter action this repo doesn't otherwise depend on) so ordinary PRs
+  # that never touch deploy/sandbox-image/ pay nothing for this job
+  # beyond the fixed checkout/job-startup overhead every job already
+  # pays.
+  #
+  # NOT covered: the toolchain stage and the final image (+ the Go
+  # builder stage compiling sandbox-agent itself) are untouched here -- a
+  # full end-to-end image build stays a manual/local check (this Step's
+  # own PR description has real output from one) until a registry/push
+  # pipeline exists for this image to warrant a CI job paying Chromium's
+  # own ~1GB cost on every relevant PR (out of this Step's scope, same
+  # "external build service" boundary the Dockerfile's own top comment
+  # already draws for the push/registry side of this same problem).
+  sandbox-image:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Check for deploy/sandbox-image/ changes
+        id: changes
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if git diff --name-only "$BASE" "$HEAD" -- deploy/sandbox-image/ | grep -q .; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "No changes under deploy/sandbox-image/ -- skipping the image build/smoke check."
+          fi
+
+      - name: Build runtime-base (debian-slim + apt/iptables + Docker CLI/engine)
+        if: steps.changes.outputs.relevant == 'true'
+        run: |
+          docker build --target=runtime-base \
+            -t narvi-sandbox-runtime-base:ci \
+            -f deploy/sandbox-image/Dockerfile .
+
+      - name: Smoke-check dockerd starts and becomes ready
+        if: steps.changes.outputs.relevant == 'true'
+        run: |
+          set -euo pipefail
+          docker run -d --privileged --name sandbox-dockerd-smoke narvi-sandbox-runtime-base:ci dockerd
+
+          ready=""
+          for _ in $(seq 1 30); do
+            if docker exec sandbox-dockerd-smoke test -S /var/run/docker.sock; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ -z "$ready" ]; then
+            echo "::error::dockerd never created its socket within 30s"
+            docker logs sandbox-dockerd-smoke
+            exit 1
+          fi
+
+          echo "-- dockerd is up; verifying it actually works, not just that its socket exists --"
+          docker exec sandbox-dockerd-smoke docker version
+          docker exec sandbox-dockerd-smoke docker info | tee /tmp/docker-info.txt
+          grep -qE '^ Network:.*\bbridge\b' /tmp/docker-info.txt || {
+            echo "::error::bridge network driver did not register (the iptables failure mode Finding 1 reproduced)"
+            exit 1
+          }
+
+      - name: Clean up
+        if: always()
+        run: |
+          docker rm -f sandbox-dockerd-smoke >/dev/null 2>&1 || true
+          docker rmi narvi-sandbox-runtime-base:ci >/dev/null 2>&1 || true
