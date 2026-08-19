@@ -10,7 +10,7 @@
 # `control-plane serve` for the same purpose (a comma-separated list of
 # emails). A participant's email matching that list becomes role=admin at
 # CREATION time only; every other participant defaults to role=member.
-# See docs/design/seeding.md for the full re-run semantics per section.
+# See docs/seeding.md for the full re-run semantics per section.
 #
 # Usage:
 #   control-plane seed -manifest ./my-real-manifest.yaml -dry-run   # preview

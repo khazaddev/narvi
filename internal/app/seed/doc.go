@@ -30,7 +30,7 @@
 // # Idempotency semantics, decided per resource, not by one blanket rule
 //
 // "Safe to re-run" does not mean "every re-run is a no-op" -- see
-// docs/design/seeding.md for the operator-facing version of this. Each
+// docs/seeding.md for the operator-facing version of this. Each
 // resource's semantics below were picked to match what that resource's
 // OWN existing store methods already support, not an arbitrary uniform
 // policy:
