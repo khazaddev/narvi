@@ -158,8 +158,16 @@ func TestRunDocker_CrashBeforeReadyIsFatal(t *testing.T) {
 	stopAllOnCleanup(t, sup)
 	collector := &eventCollector{}
 
+	// 5s, not services_test.go's own more typical 2s: this specific test
+	// proved flaky under a full, heavily-parallel `go test -race ./...`
+	// run (the reap goroutine that populates proc.Exited() can be
+	// scheduling-delayed under enough concurrent OS-process contention
+	// across the whole suite) even though it passed reliably every time
+	// in isolation -- a larger budget costs nothing on the fast, common
+	// path (the fake dockerd here exits near-instantly) and removes the
+	// flake under load.
 	err := boot.RunDocker(context.Background(), sup, dockerd, socketPath, nil, collector.report,
-		2*time.Second, 20*time.Millisecond)
+		5*time.Second, 20*time.Millisecond)
 	if err == nil {
 		t.Fatal("RunDocker() error = nil, want an error for a dockerd that exited before becoming ready")
 	}

@@ -115,7 +115,14 @@ func TestRunBootSequence_DockerRequired_SpawnsDockerdBeforeRunBoot(t *testing.T)
 	bootErr := runBootSequence(ctx, sup, cfg, timeouts, secretEnv, nil, noopProgress, noopGitSync)
 	t.Logf("runBootSequence() returned: %v (outcome depends on this machine's own real docker socket state; not asserted on)", bootErr)
 
-	deadline := time.Now().Add(2 * time.Second)
+	// 10s, not a tighter budget: this test proved flaky under a full,
+	// heavily-parallel `go test -tags=integration -race ./...` run (many
+	// concurrent testcontainers-backed packages competing for process-
+	// scheduling and disk I/O can delay even a near-instant fake script
+	// from being scheduled/writing its marker) despite passing reliably
+	// in isolation -- mirrors internal/sandboxagent/boot/docker_test.go's
+	// own identical fix for the same class of flake.
+	deadline := time.Now().Add(10 * time.Second)
 	for {
 		if _, err := os.Stat(markerPath); err == nil {
 			break
