@@ -490,6 +490,48 @@ func (ns NullImageBuildStatus) Value() (driver.Value, error) {
 	return string(ns.ImageBuildStatus), nil
 }
 
+type OpencodeConfigScope string
+
+const (
+	OpencodeConfigScopeEnvironment OpencodeConfigScope = "environment"
+	OpencodeConfigScopeGlobal      OpencodeConfigScope = "global"
+)
+
+func (e *OpencodeConfigScope) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = OpencodeConfigScope(s)
+	case string:
+		*e = OpencodeConfigScope(s)
+	default:
+		return fmt.Errorf("unsupported scan type for OpencodeConfigScope: %T", src)
+	}
+	return nil
+}
+
+type NullOpencodeConfigScope struct {
+	OpencodeConfigScope OpencodeConfigScope `json:"opencode_config_scope"`
+	Valid               bool                `json:"valid"` // Valid is true if OpencodeConfigScope is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullOpencodeConfigScope) Scan(value interface{}) error {
+	if value == nil {
+		ns.OpencodeConfigScope, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.OpencodeConfigScope.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullOpencodeConfigScope) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.OpencodeConfigScope), nil
+}
+
 type OutboxStatus string
 
 const (
@@ -704,6 +746,50 @@ func (ns NullProviderCredentialScope) Value() (driver.Value, error) {
 		return nil, nil
 	}
 	return string(ns.ProviderCredentialScope), nil
+}
+
+type SandboxSecretScope string
+
+const (
+	SandboxSecretScopeAutomation  SandboxSecretScope = "automation"
+	SandboxSecretScopeEnvironment SandboxSecretScope = "environment"
+	SandboxSecretScopeRepo        SandboxSecretScope = "repo"
+	SandboxSecretScopeGlobal      SandboxSecretScope = "global"
+)
+
+func (e *SandboxSecretScope) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = SandboxSecretScope(s)
+	case string:
+		*e = SandboxSecretScope(s)
+	default:
+		return fmt.Errorf("unsupported scan type for SandboxSecretScope: %T", src)
+	}
+	return nil
+}
+
+type NullSandboxSecretScope struct {
+	SandboxSecretScope SandboxSecretScope `json:"sandbox_secret_scope"`
+	Valid              bool               `json:"valid"` // Valid is true if SandboxSecretScope is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullSandboxSecretScope) Scan(value interface{}) error {
+	if value == nil {
+		ns.SandboxSecretScope, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.SandboxSecretScope.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullSandboxSecretScope) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.SandboxSecretScope), nil
 }
 
 type SandboxStatus string
@@ -1591,6 +1677,15 @@ type LinearInstallation struct {
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 }
 
+type OpencodeConfig struct {
+	ID            pgtype.UUID         `json:"id"`
+	Scope         OpencodeConfigScope `json:"scope"`
+	ScopeTargetID *string             `json:"scope_target_id"`
+	Document      []byte              `json:"document"`
+	CreatedAt     pgtype.Timestamptz  `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz  `json:"updated_at"`
+}
+
 type Outbox struct {
 	ID            pgtype.UUID        `json:"id"`
 	SessionID     pgtype.UUID        `json:"session_id"`
@@ -1780,6 +1875,16 @@ type SandboxHistory struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 	ArchivedAt pgtype.Timestamptz `json:"archived_at"`
 	SnapshotID *string            `json:"snapshot_id"`
+}
+
+type SandboxSecret struct {
+	ID             pgtype.UUID        `json:"id"`
+	Scope          SandboxSecretScope `json:"scope"`
+	ScopeTargetID  *string            `json:"scope_target_id"`
+	Name           string             `json:"name"`
+	ValueEncrypted []byte             `json:"value_encrypted"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
 type SentinelFix struct {

@@ -2199,6 +2199,35 @@ type Timeouts struct {
 	// rather than adding a second, near-duplicate shutdown field -- it is
 	// sequenced into that SAME bounded teardown window, not a separate one.
 	ReviewCostBudgetServerReadHeaderTimeout time.Duration
+
+	// SandboxSecretFetchTimeout (Step 72, "sandbox secrets & opencode
+	// config", §27.1) bounds a single call to CP's
+	// /sessions/{id}/sandbox-secrets delivery endpoint
+	// (internal/sandboxagent/credentials.CPClient.FetchSandboxSecrets),
+	// made once at boot, before the first hook runs and before `opencode
+	// serve` spawns (cmd/sandbox-agent/main.go). Not specified in the
+	// plan; chosen the SAME as ProviderCredentialFetchTimeout's own 10s --
+	// mirrors that field's own "lightweight mint call, not a large data
+	// transfer" reasoning exactly: this call resolves and decrypts at
+	// most a handful of name-keyed rows server-side, comparably
+	// lightweight. Deliberately its own field, not a reuse of
+	// ProviderCredentialFetchTimeout -- the two calls hit different CP
+	// endpoints for a different secret-storage table, and mirroring a
+	// SEPARATE field per delivery endpoint is this codebase's own
+	// established precedent (ProviderCredentialFetchTimeout's own doc
+	// comment makes the identical "deliberately its own field" choice
+	// against CredentialFetchTimeout).
+	SandboxSecretFetchTimeout time.Duration
+
+	// OpenCodeConfigFetchTimeout (Step 72, §27.2) bounds a single call to
+	// CP's /sessions/{id}/opencode-config delivery endpoint
+	// (internal/sandboxagent/credentials.CPClient.FetchOpenCodeConfig),
+	// made once at boot alongside SandboxSecretFetchTimeout's own call,
+	// before `opencode serve` spawns. Not specified in the plan; chosen
+	// the SAME 10s -- this call returns at most 2 small JSON documents
+	// (global + this session's own environment config), comparably
+	// lightweight to the other 2 delivery-endpoint fetches above.
+	OpenCodeConfigFetchTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -2387,6 +2416,9 @@ func DefaultTimeouts() Timeouts {
 		ReviewRetriggerDebounce: 2 * time.Minute, // Step 65, §24.2; not specified, chosen -- long enough to collapse a short burst of fixup-commit pushes into one quiet window, short enough that a single push still reviews promptly
 
 		ReviewCostBudgetServerReadHeaderTimeout: 5 * time.Second, // Step 70, §26.7/§26.9; not specified, chosen -- matches RepoSHADiscoveryTimeout/CredentialFetchTimeout's own "lightweight, purely local" precedent, see field doc comment
+
+		SandboxSecretFetchTimeout:  10 * time.Second, // Step 72, §27.1; not specified, chosen, matches ProviderCredentialFetchTimeout's own reasoning
+		OpenCodeConfigFetchTimeout: 10 * time.Second, // Step 72, §27.2; not specified, chosen, matches ProviderCredentialFetchTimeout's own reasoning
 	}
 }
 

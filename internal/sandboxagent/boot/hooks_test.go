@@ -173,6 +173,49 @@ func TestRunHooks_EnvExcludesSessionConfig(t *testing.T) {
 	}
 }
 
+// TestRunHooks_SeesProcessEnvSetAfterPackageLoadedIncludingSandboxSecrets is
+// the direct, end-to-end proof of Step 72's own injection mechanism
+// (§27.1, cmd/sandbox-agent's own sandboxsecrets.go top doc comment): "a
+// caller uses [EnvWithout] when a child has confirmed no legitimate need
+// for one or more specific things sandbox-agent's own process environment
+// happens to carry" -- i.e. EnvWithout is a SUBTRACTIVE filter over
+// whatever sandbox-agent's own os.Environ() holds at call time, so
+// anything ADDED to that environment (via os.Setenv, exactly what Step
+// 72's applySandboxSecretEnv/cmd/sandbox-agent does) automatically flows
+// through to a REAL spawned hook script with ZERO changes to this
+// package's own RunHooks/runRepoHooks/EnvWithout call sites. This test
+// does not import or call anything from cmd/sandbox-agent (that package
+// cannot import back into this one) -- it proves the SAME underlying
+// property this package alone is responsible for: RunHooks' own spawned
+// process sees whatever this TEST process's own os.Environ() carries,
+// simulating exactly what a real os.Setenv("MY_SECRET", ...) call ahead
+// of RunHooks would produce.
+func TestRunHooks_SeesProcessEnvSetAfterPackageLoadedIncludingSandboxSecrets(t *testing.T) {
+	// Not t.Parallel(): t.Setenv forbids combining the two.
+	t.Setenv("MY_SANDBOX_SECRET", "resolved-secret-value")
+
+	workspaceDir := t.TempDir()
+	probeFile := filepath.Join(t.TempDir(), "probe")
+	writeScript(t, filepath.Join(workspaceDir, "repo-a", "setup.sh"),
+		`printf '%s' "$MY_SANDBOX_SECRET" > `+probeFile)
+
+	sup := supervisor.New()
+	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
+
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil, nil, 5*time.Second, time.Second, time.Millisecond)
+	if err != nil {
+		t.Fatalf("RunHooks() error = %v, want nil", err)
+	}
+
+	got, readErr := os.ReadFile(probeFile)
+	if readErr != nil {
+		t.Fatalf("read probe file: %v", readErr)
+	}
+	if string(got) != "resolved-secret-value" {
+		t.Errorf("MY_SANDBOX_SECRET as seen by the spawned setup.sh = %q, want %q -- a value set on sandbox-agent's own process environment (exactly what applySandboxSecretEnv, cmd/sandbox-agent, does for a resolved sandbox_secrets row) must reach every hook script through the EXISTING EnvWithout seam, with no code change to this package", got, "resolved-secret-value")
+	}
+}
+
 func TestRunHooks_TimeoutIsFatalWhenPolicyFatal(t *testing.T) {
 	t.Parallel()
 

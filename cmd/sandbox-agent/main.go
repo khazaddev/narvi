@@ -1099,6 +1099,32 @@ func run() error {
 			}
 		}
 
+		// Step 72 ("sandbox secrets & opencode config", §27.1/§27.2):
+		// resolve this session's own general sandbox secrets and OpenCode
+		// config documents BEFORE spawning `opencode serve` and BEFORE the
+		// boot sequence's own first hook run (runBootSequence, below) --
+		// §27.1's own explicit ordering requirement ("sandbox-agent
+		// fetches before the first hook"). Both fetches are deliberately
+		// best-effort (see fetchSandboxSecrets'/fetchOpenCodeConfig's own
+		// doc comments) and applied via os.Setenv onto sandbox-agent's own
+		// process environment (sandboxsecrets.go's own top doc comment
+		// explains why this, rather than a threaded parameter, is this
+		// Step's own injection mechanism) -- so this MUST run before
+		// EnvWithout is ever called anywhere in this binary, which is
+		// exactly what placing it here, ahead of opencodeproc.Spawn (the
+		// very first EnvWithout call site in run()) and runBootSequence
+		// (the second), achieves.
+		sandboxSecrets := fetchSandboxSecrets(ctx, cfg, timeouts.SandboxSecretFetchTimeout)
+		applySandboxSecretEnv(sandboxSecrets)
+
+		homeDir, homeErr := os.UserHomeDir()
+		if homeErr != nil {
+			slog.Warn("sandbox-agent: resolve home directory failed, skipping opencode global config injection", "error", homeErr)
+		} else {
+			openCodeConfigDelivery := fetchOpenCodeConfig(ctx, cfg, timeouts.OpenCodeConfigFetchTimeout)
+			applyOpenCodeConfig(openCodeConfigDelivery, homeDir, openCodeEnvironmentConfigPath)
+		}
+
 		// Step 53 ("provider credential injection", §25.1/§25.3): resolve
 		// this session's own provider credentials (repo/environment/global/
 		// user scoped, most-specific-wins) BEFORE spawning `opencode serve`

@@ -372,6 +372,13 @@ func serve() error {
 	// AND the sandbox-facing delivery endpoint (providercredentialsdelivery.go)
 	// -- one store, shared, never a second independently-constructed copy.
 	providerCredentialStore := postgres.NewProviderCredentialStore(pool)
+	// sandboxSecretStore/openCodeConfigStore (Step 72, "sandbox secrets &
+	// opencode config", §27.1/§27.2) back their own scoped management CRUD
+	// route groups below AND their own sandbox-facing delivery endpoints
+	// (sandboxsecretsdelivery.go/opencodeconfigdelivery.go) -- mirrors
+	// providerCredentialStore's own identical "one store, shared" pattern.
+	sandboxSecretStore := postgres.NewSandboxSecretStore(pool)
+	openCodeConfigStore := postgres.NewOpenCodeConfigStore(pool)
 	// chatGPTLinkAttemptStore/chatGPTDeviceFlow (Step 59, "models: Codex
 	// via ChatGPT-account OAuth", §29.3/§29.5/§29.9) back the self-service
 	// link-flow REST routes (chatgptlink.go) AND the refresh pump
@@ -627,6 +634,17 @@ func serve() error {
 	// browser-facing one.
 	router.Post("/sessions/{sessionID}/provider-credentials",
 		httpapi.ProviderCredentialsDelivery(sessionStore, sandboxStore, providerCredentialStore, cfg.TokenEncryptionKey))
+
+	// sandbox-secrets / opencode-config (Step 72, "sandbox secrets &
+	// opencode config", §27.1/§27.2): deliberately mounted OUTSIDE
+	// /api/sessions and outside auth.Middleware entirely, mirroring
+	// provider-credentials immediately above VERBATIM (see
+	// httpapi/sandboxsecretsdelivery.go's own doc comment) -- two more
+	// sandbox-bearer-token-authenticated routes, not browser-facing ones.
+	router.Post("/sessions/{sessionID}/sandbox-secrets",
+		httpapi.SandboxSecretsDelivery(sessionStore, sandboxStore, sandboxSecretStore, cfg.TokenEncryptionKey))
+	router.Post("/sessions/{sessionID}/opencode-config",
+		httpapi.OpenCodeConfigDelivery(sessionStore, sandboxStore, openCodeConfigStore))
 
 	// snapshot-mint (Step 22, "snapshots & restore", design decision 2):
 	// deliberately mounted OUTSIDE /api/sessions and outside auth.
@@ -1281,6 +1299,60 @@ func serve() error {
 		r.Get("/", httpapi.ListGlobalProviderCredentials(providerCredentialStore))
 		r.Put("/{credentialID}", httpapi.UpdateGlobalProviderCredentialValue(providerCredentialStore, cfg.TokenEncryptionKey))
 		r.Delete("/{credentialID}", httpapi.DeleteGlobalProviderCredential(providerCredentialStore))
+	})
+
+	// /api/repos/{owner}/{repo}/sandbox-secrets,
+	// /api/environments/{environmentID}/sandbox-secrets,
+	// /api/sandbox-secrets (Step 72, "sandbox secrets & opencode config",
+	// §27.1): the 3 scope-partitioned CRUD route groups over
+	// sandbox_secrets -- mirrors the 3 provider-credentials route groups
+	// immediately above verbatim (see httpapi/sandboxsecrets.go's own doc
+	// comment for the full route table and RBAC-per-scope rationale).
+	// Deliberately NO automation-scoped route group -- §27.1's own
+	// schema-only carve-out for that scope.
+	router.Route("/api/repos/{owner}/{repo}/sandbox-secrets", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Post("/", httpapi.CreateRepoSandboxSecret(sandboxSecretStore, cfg.TokenEncryptionKey, githubPRSessionStore))
+		r.Get("/", httpapi.ListRepoSandboxSecrets(sandboxSecretStore, githubPRSessionStore))
+		r.Put("/{secretID}", httpapi.UpdateRepoSandboxSecretValue(sandboxSecretStore, cfg.TokenEncryptionKey, githubPRSessionStore))
+		r.Delete("/{secretID}", httpapi.DeleteRepoSandboxSecret(sandboxSecretStore, githubPRSessionStore))
+	})
+	router.Route("/api/environments/{environmentID}/sandbox-secrets", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Post("/", httpapi.CreateEnvironmentSandboxSecret(sandboxSecretStore, cfg.TokenEncryptionKey))
+		r.Get("/", httpapi.ListEnvironmentSandboxSecrets(sandboxSecretStore))
+		r.Put("/{secretID}", httpapi.UpdateEnvironmentSandboxSecretValue(sandboxSecretStore, cfg.TokenEncryptionKey))
+		r.Delete("/{secretID}", httpapi.DeleteEnvironmentSandboxSecret(sandboxSecretStore))
+	})
+	router.Route("/api/sandbox-secrets", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Post("/", httpapi.CreateGlobalSandboxSecret(sandboxSecretStore, cfg.TokenEncryptionKey))
+		r.Get("/", httpapi.ListGlobalSandboxSecrets(sandboxSecretStore))
+		r.Put("/{secretID}", httpapi.UpdateGlobalSandboxSecretValue(sandboxSecretStore, cfg.TokenEncryptionKey))
+		r.Delete("/{secretID}", httpapi.DeleteGlobalSandboxSecret(sandboxSecretStore))
+	})
+
+	// /api/environments/{environmentID}/opencode-config,
+	// /api/opencode-config (Step 72, §27.2): the 2 scope-partitioned
+	// GET/PUT/DELETE singleton route groups over opencode_configs --
+	// reuses the SAME 2 actions (ActionManageEnvSecrets/
+	// ActionManageGlobalSecrets) the sandbox-secrets/provider-credentials
+	// environment/global route groups already use (see
+	// httpapi/opencodeconfig.go's own doc comment for the full RBAC
+	// rationale). Deliberately no repo-scoped route group -- §27.2 has no
+	// repo scope at all (a repo's own committed opencode.json already
+	// occupies OpenCode's native project slot).
+	router.Route("/api/environments/{environmentID}/opencode-config", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Get("/", httpapi.GetEnvironmentOpenCodeConfig(openCodeConfigStore))
+		r.Put("/", httpapi.PutEnvironmentOpenCodeConfig(openCodeConfigStore))
+		r.Delete("/", httpapi.DeleteEnvironmentOpenCodeConfigHandler(openCodeConfigStore))
+	})
+	router.Route("/api/opencode-config", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Get("/", httpapi.GetGlobalOpenCodeConfig(openCodeConfigStore))
+		r.Put("/", httpapi.PutGlobalOpenCodeConfig(openCodeConfigStore))
+		r.Delete("/", httpapi.DeleteGlobalOpenCodeConfigHandler(openCodeConfigStore))
 	})
 
 	// /api/automations (Step 52, "automations: triggers & extras", §8.4):

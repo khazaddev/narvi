@@ -1139,6 +1139,108 @@ export interface ListProviderCredentialsResponse {
   providerCredentials: ProviderCredential[];
 }
 /**
+ * One sandbox_secrets row's own REST wire shape (Step 72, §27.1, migrations/000090_sandbox_secrets.up.sql). Returned by the create/get/list routes mounted at /api/repos/{owner}/{repo}/sandbox-secrets, /api/environments/{environmentID}/sandbox-secrets, and /api/sandbox-secrets (global) -- scope/scopeTarget are always implied by WHICH of the 3 route groups a request hit, never accepted as a separate request field, mirroring ProviderCredential's own identical posture exactly. The underlying secret value is NEVER included here -- see maskedValue.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "SandboxSecret".
+ */
+export interface SandboxSecret {
+  id: string;
+  /**
+   * Matches Postgres sandbox_secret_scope, EXCLUDING 'automation' -- that scope is schema-only as of Step 72 (§27.1: no CRUD endpoint reaches it yet, mirroring how ProviderCredentialScope's own DTO excludes 'user', a scope managed through a completely separate flow).
+   */
+  scope: 'repo' | 'environment' | 'global';
+  /**
+   * The repo_full_name ('owner/repo') for scope=repo, the environments.id (stringified) for scope=environment, or null for scope=global.
+   */
+  scopeTarget: string | null;
+  /**
+   * The POSIX-shaped environment variable name this secret is injected as into every hook/service/opencode serve process a session spawns -- validated server-side (internal/domain/sandboxsecret.ValidateName): rejects the reserved NARVI_* namespace and every name providercredential.EnvVarNames already owns.
+   */
+  name: string;
+  /**
+   * A FIXED, non-secret placeholder (never a partial reveal of the real value, never derived from it) proving a secret is configured for this (scope, scopeTarget, name) -- the real value is write-only from this API's own perspective and is never returned by any route, ever.
+   */
+  maskedValue: string;
+  createdAt: string;
+  updatedAt: string;
+}
+/**
+ * POST request body for all 3 sandbox-secrets route groups (repo/environment/global -- see SandboxSecret's own doc comment for why scope/scopeTarget are never body fields). Gated by authz.ActionManageRepoSecrets/ActionManageEnvSecrets/ActionManageGlobalSecrets respectively -- the SAME 3 already-reserved actions ProviderCredential's own routes use (§27.1: 'Step 53's idioms reused throughout'). A duplicate (scope, scopeTarget, name) is rejected 409 -- rotate the existing secret via PUT instead of creating a second row for it.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "CreateSandboxSecretRequest".
+ */
+export interface CreateSandboxSecretRequest {
+  /**
+   * POSIX env-var-shaped name (uppercase letters, digits, underscore; must not start with a digit), rejected if it starts with NARVI_ or exactly matches a name providercredential.EnvVarNames already owns -- the httpapi handler enforces this server-side (internal/domain/sandboxsecret.ValidateName) regardless of this field's own bare string type.
+   */
+  name: string;
+  /**
+   * The plaintext secret value -- encrypted at rest (platform.EncryptToken, AES-256-GCM) immediately server-side, never logged, never echoed back in any response. Must not contain a NUL byte (U+0000), mirroring CreateProviderCredentialRequest.value's own identical rule and rationale.
+   */
+  value: string;
+}
+/**
+ * PUT request body for /{scope-route}/sandbox-secrets/{id} -- rotates ONLY the encrypted value. scope/scopeTarget/name are immutable once a row is created (delete-then-create if a different scope/target/name is actually wanted) -- this DTO deliberately carries no fields for any of the three, mirroring UpdateProviderCredentialRequest exactly.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "UpdateSandboxSecretRequest".
+ */
+export interface UpdateSandboxSecretRequest {
+  /**
+   * The new plaintext secret value, replacing the old one -- same encrypt-immediately, never-logged, never-echoed handling as CreateSandboxSecretRequest.value, and the same NUL-byte (U+0000) exclusion.
+   */
+  value: string;
+}
+/**
+ * GET response body for all 3 sandbox-secrets route groups -- every row at that one (scope, scopeTarget) pair. Unbounded (no pagination, matching ListProviderCredentialsResponse's own identical precedent) -- in practice bounded by however many distinct secret names an admin/maintainer has configured at that one scope target.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ListSandboxSecretsResponse".
+ */
+export interface ListSandboxSecretsResponse {
+  sandboxSecrets: SandboxSecret[];
+}
+/**
+ * One opencode_configs row's own REST wire shape (Step 72, §27.2, migrations/000091_opencode_configs.up.sql). Returned by GET/PUT /api/environments/{environmentID}/opencode-config and GET/PUT /api/opencode-config (global). UNLIKE SandboxSecret/ProviderCredential, document is returned in FULL, plaintext -- this is configuration a human reads and edits in Settings, not secret material (that table's own top migration comment); anything secret-shaped belongs in sandbox_secrets and is referenced from document via OpenCode's own {env:VAR} substitution.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "OpenCodeConfig".
+ */
+export interface OpenCodeConfig {
+  /**
+   * Matches Postgres opencode_config_scope exactly -- deliberately no 'repo' (a repo's own committed opencode.json already occupies OpenCode's native 'project' slot, no Narvi table needed) and no 'automation' (no per-automation OpenCode config concept exists).
+   */
+  scope: 'environment' | 'global';
+  /**
+   * The environments.id (stringified) for scope=environment, or null for scope=global.
+   */
+  scopeTarget: string | null;
+  /**
+   * The raw OpenCode config document (opencode.json shape) -- validated at save only as 'parses as a JSON object, bounded size' (§27.2: OpenCode's own schema drifts with its version, so a Narvi-side copy of it would be a second, staler validator). May reference a sandbox_secrets name via OpenCode's own {env:VAR} substitution syntax; never contains a secret value directly.
+   */
+  document: {
+    [k: string]: unknown;
+  };
+  createdAt: string;
+  updatedAt: string;
+}
+/**
+ * PUT request body for /api/environments/{environmentID}/opencode-config and /api/opencode-config (global) -- create-or-replace (§27.2's own 'at most one row per scope target' singleton, upserted rather than a separate POST/PUT-by-id pair the way ProviderCredential/SandboxSecret use, since there is no id for a caller to ever learn or pass). Gated by authz.ActionManageEnvSecrets (environment scope, maintainer+ -- the §13.3 row that owns environments/env secrets) / authz.ActionManageGlobalSecrets (global scope, admin only -- the §13.3 row that owns integrations/global secrets), reusing the SAME 2 already-reserved actions rather than a new OpenCode-config-specific action (§27.1's 'Step 53's idioms reused throughout' extended to §27.2).
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "PutOpenCodeConfigRequest".
+ */
+export interface PutOpenCodeConfigRequest {
+  /**
+   * Same validation as OpenCodeConfig.document: must parse as a JSON object; nothing deeper is checked server-side.
+   */
+  document: {
+    [k: string]: unknown;
+  };
+}
+/**
  * One explicit (from step, outcome) -> to step routing rule (Step 54, §25.10's 'Edges' entity; one workflow_edges row). Named WorkflowEdge rather than the plan's bare 'Edges'/'Edge': restdtos is a flat namespace and an unprefixed generated 'Edge' type would be needlessly generic -- AutomationReposElem's own entity-prefixed-helper precedent. onStatus is the ONLY thing an edge may condition on (§25.4): the closed 3-value step-outcome vocabulary, a DISTINCT axis from review's Shippable (which is never routed through it). With no explicit edge, 'ok' advances to the next step in order and 'needs_fix'/'blocked' escalate -- fail-conservative; a retry loop is always wired explicitly (internal/domain/workflow.NextStep owns these semantics).
  *
  * This interface was referenced by `RestDtos`'s JSON-Schema

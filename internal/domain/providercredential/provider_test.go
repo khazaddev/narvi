@@ -70,3 +70,36 @@ func TestAllProviders_EveryEntryIsValid(t *testing.T) {
 		}
 	}
 }
+
+// TestAllEnvVarNames_IsTheUnionAcrossEveryProvider pins AllEnvVarNames'
+// own documented contract (Step 72, §27.1): the flattened union of every
+// Provider's own EnvVarNames, in AllProviders' own declaration order --
+// this is the exact set internal/domain/sandboxsecret.ValidateName rejects
+// as sandbox_secrets names, so a drift here would silently reopen the
+// "one owning mechanism per env-var name" collision §27.1 exists to close.
+func TestAllEnvVarNames_IsTheUnionAcrossEveryProvider(t *testing.T) {
+	want := []string{
+		"GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "GEMINI_API_KEY",
+		"ANTHROPIC_API_KEY",
+		"OPENAI_API_KEY",
+	}
+	got := AllEnvVarNames()
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("AllEnvVarNames() = %v, want %v", got, want)
+	}
+}
+
+// TestAllEnvVarNames_ReturnsDefensiveCopy mirrors
+// TestEnvVarNames_ReturnsDefensiveCopy above -- AllEnvVarNames builds its
+// own fresh slice via append, so it never shares backing storage with
+// envVarNames' own package-level map values, but this pins that property
+// directly rather than leaving it to inference from EnvVarNames' own test.
+func TestAllEnvVarNames_ReturnsDefensiveCopy(t *testing.T) {
+	got := AllEnvVarNames()
+	got[0] = "MUTATED"
+
+	again := AllEnvVarNames()
+	if again[0] != "GOOGLE_API_KEY" {
+		t.Errorf("second call's first element = %q, want %q (mutating a previous return value must not leak through)", again[0], "GOOGLE_API_KEY")
+	}
+}

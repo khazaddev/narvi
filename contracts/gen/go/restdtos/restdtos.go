@@ -982,6 +982,59 @@ func (j *CreateProviderCredentialRequest) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// POST request body for all 3 sandbox-secrets route groups
+// (repo/environment/global -- see SandboxSecret's own doc comment for why
+// scope/scopeTarget are never body fields). Gated by
+// authz.ActionManageRepoSecrets/ActionManageEnvSecrets/ActionManageGlobalSecrets
+// respectively -- the SAME 3 already-reserved actions ProviderCredential's own
+// routes use (§27.1: 'Step 53's idioms reused throughout'). A duplicate (scope,
+// scopeTarget, name) is rejected 409 -- rotate the existing secret via PUT instead
+// of creating a second row for it.
+type CreateSandboxSecretRequest struct {
+	// POSIX env-var-shaped name (uppercase letters, digits, underscore; must not
+	// start with a digit), rejected if it starts with NARVI_ or exactly matches a
+	// name providercredential.EnvVarNames already owns -- the httpapi handler
+	// enforces this server-side (internal/domain/sandboxsecret.ValidateName)
+	// regardless of this field's own bare string type.
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+
+	// The plaintext secret value -- encrypted at rest (platform.EncryptToken,
+	// AES-256-GCM) immediately server-side, never logged, never echoed back in any
+	// response. Must not contain a NUL byte (U+0000), mirroring
+	// CreateProviderCredentialRequest.value's own identical rule and rationale.
+	Value string `json:"value" yaml:"value" mapstructure:"value"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CreateSandboxSecretRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in CreateSandboxSecretRequest: required")
+	}
+	if _, ok := raw["value"]; raw != nil && !ok {
+		return fmt.Errorf("field value in CreateSandboxSecretRequest: required")
+	}
+	type Plain CreateSandboxSecretRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.Name)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "name", 1)
+	}
+	if matched, _ := regexp.MatchString(`^[^\x00]*$`, string(plain.Value)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Value", `^[^\x00]*$`)
+	}
+	if utf8.RuneCountInString(string(plain.Value)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "value", 1)
+	}
+	*j = CreateSandboxSecretRequest(plain)
+	return nil
+}
+
 // The one CreateSessionRequest shape used by every ingress surface (§10 Phase-3
 // milestone: 'atomic dedupe, one CreateSessionRequest').
 type CreateSessionRequest struct {
@@ -2527,6 +2580,34 @@ func (j *ListProviderCredentialsResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// GET response body for all 3 sandbox-secrets route groups -- every row at that
+// one (scope, scopeTarget) pair. Unbounded (no pagination, matching
+// ListProviderCredentialsResponse's own identical precedent) -- in practice
+// bounded by however many distinct secret names an admin/maintainer has configured
+// at that one scope target.
+type ListSandboxSecretsResponse struct {
+	// SandboxSecrets corresponds to the JSON schema field "sandboxSecrets".
+	SandboxSecrets []SandboxSecret `json:"sandboxSecrets" yaml:"sandboxSecrets" mapstructure:"sandboxSecrets"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ListSandboxSecretsResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["sandboxSecrets"]; raw != nil && !ok {
+		return fmt.Errorf("field sandboxSecrets in ListSandboxSecretsResponse: required")
+	}
+	type Plain ListSandboxSecretsResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ListSandboxSecretsResponse(plain)
+	return nil
+}
+
 // One member's own REST wire shape -- role + every identity currently linked to
 // them (§13.3: 'linked identity chips'). role matches the Postgres user_role enum
 // exactly. Every endpoint that returns a Member (ListMembers, UpdateMemberRole)
@@ -2976,6 +3057,103 @@ func (j *ModelCatalog) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = ModelCatalog(plain)
+	return nil
+}
+
+// One opencode_configs row's own REST wire shape (Step 72, §27.2,
+// migrations/000091_opencode_configs.up.sql). Returned by GET/PUT
+// /api/environments/{environmentID}/opencode-config and GET/PUT
+// /api/opencode-config (global). UNLIKE SandboxSecret/ProviderCredential, document
+// is returned in FULL, plaintext -- this is configuration a human reads and edits
+// in Settings, not secret material (that table's own top migration comment);
+// anything secret-shaped belongs in sandbox_secrets and is referenced from
+// document via OpenCode's own {env:VAR} substitution.
+type OpenCodeConfig struct {
+	// CreatedAt corresponds to the JSON schema field "createdAt".
+	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
+
+	// The raw OpenCode config document (opencode.json shape) -- validated at save
+	// only as 'parses as a JSON object, bounded size' (§27.2: OpenCode's own schema
+	// drifts with its version, so a Narvi-side copy of it would be a second, staler
+	// validator). May reference a sandbox_secrets name via OpenCode's own {env:VAR}
+	// substitution syntax; never contains a secret value directly.
+	Document json.RawMessage `json:"document" yaml:"document" mapstructure:"document"`
+
+	// Matches Postgres opencode_config_scope exactly -- deliberately no 'repo' (a
+	// repo's own committed opencode.json already occupies OpenCode's native 'project'
+	// slot, no Narvi table needed) and no 'automation' (no per-automation OpenCode
+	// config concept exists).
+	Scope OpenCodeConfigScope `json:"scope" yaml:"scope" mapstructure:"scope"`
+
+	// The environments.id (stringified) for scope=environment, or null for
+	// scope=global.
+	ScopeTarget OpenCodeConfigScopeTarget `json:"scopeTarget" yaml:"scopeTarget" mapstructure:"scopeTarget"`
+
+	// UpdatedAt corresponds to the JSON schema field "updatedAt".
+	UpdatedAt time.Time `json:"updatedAt" yaml:"updatedAt" mapstructure:"updatedAt"`
+}
+
+type OpenCodeConfigScope string
+
+const OpenCodeConfigScopeEnvironment OpenCodeConfigScope = "environment"
+const OpenCodeConfigScopeGlobal OpenCodeConfigScope = "global"
+
+// The environments.id (stringified) for scope=environment, or null for
+// scope=global.
+type OpenCodeConfigScopeTarget *string
+
+var enumValues_OpenCodeConfigScope = []interface{}{
+	"environment",
+	"global",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *OpenCodeConfigScope) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_OpenCodeConfigScope {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_OpenCodeConfigScope, v)
+	}
+	*j = OpenCodeConfigScope(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *OpenCodeConfig) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["createdAt"]; raw != nil && !ok {
+		return fmt.Errorf("field createdAt in OpenCodeConfig: required")
+	}
+	if _, ok := raw["document"]; raw != nil && !ok {
+		return fmt.Errorf("field document in OpenCodeConfig: required")
+	}
+	if _, ok := raw["scope"]; raw != nil && !ok {
+		return fmt.Errorf("field scope in OpenCodeConfig: required")
+	}
+	if _, ok := raw["scopeTarget"]; raw != nil && !ok {
+		return fmt.Errorf("field scopeTarget in OpenCodeConfig: required")
+	}
+	if _, ok := raw["updatedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field updatedAt in OpenCodeConfig: required")
+	}
+	type Plain OpenCodeConfig
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = OpenCodeConfig(plain)
 	return nil
 }
 
@@ -4272,6 +4450,40 @@ func (j *ProviderCredential) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// PUT request body for /api/environments/{environmentID}/opencode-config and
+// /api/opencode-config (global) -- create-or-replace (§27.2's own 'at most one row
+// per scope target' singleton, upserted rather than a separate POST/PUT-by-id pair
+// the way ProviderCredential/SandboxSecret use, since there is no id for a caller
+// to ever learn or pass). Gated by authz.ActionManageEnvSecrets (environment
+// scope, maintainer+ -- the §13.3 row that owns environments/env secrets) /
+// authz.ActionManageGlobalSecrets (global scope, admin only -- the §13.3 row that
+// owns integrations/global secrets), reusing the SAME 2 already-reserved actions
+// rather than a new OpenCode-config-specific action (§27.1's 'Step 53's idioms
+// reused throughout' extended to §27.2).
+type PutOpenCodeConfigRequest struct {
+	// Same validation as OpenCodeConfig.document: must parse as a JSON object;
+	// nothing deeper is checked server-side.
+	Document json.RawMessage `json:"document" yaml:"document" mapstructure:"document"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PutOpenCodeConfigRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["document"]; raw != nil && !ok {
+		return fmt.Errorf("field document in PutOpenCodeConfigRequest: required")
+	}
+	type Plain PutOpenCodeConfigRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = PutOpenCodeConfigRequest(plain)
+	return nil
+}
+
 // Request body for POST /api/sessions/:id/review/findings/:identityHash/rebut
 // (Step 48, §22.1) -- maintainer+ only (authz.ActionEditReviewVerdict).
 type RebutFindingRequest struct {
@@ -5135,6 +5347,119 @@ func (j *RotateAutomationWebhookTokenResponse) UnmarshalJSON(value []byte) error
 	return nil
 }
 
+// One sandbox_secrets row's own REST wire shape (Step 72, §27.1,
+// migrations/000090_sandbox_secrets.up.sql). Returned by the create/get/list
+// routes mounted at /api/repos/{owner}/{repo}/sandbox-secrets,
+// /api/environments/{environmentID}/sandbox-secrets, and /api/sandbox-secrets
+// (global) -- scope/scopeTarget are always implied by WHICH of the 3 route groups
+// a request hit, never accepted as a separate request field, mirroring
+// ProviderCredential's own identical posture exactly. The underlying secret value
+// is NEVER included here -- see maskedValue.
+type SandboxSecret struct {
+	// CreatedAt corresponds to the JSON schema field "createdAt".
+	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
+
+	// Id corresponds to the JSON schema field "id".
+	Id string `json:"id" yaml:"id" mapstructure:"id"`
+
+	// A FIXED, non-secret placeholder (never a partial reveal of the real value,
+	// never derived from it) proving a secret is configured for this (scope,
+	// scopeTarget, name) -- the real value is write-only from this API's own
+	// perspective and is never returned by any route, ever.
+	MaskedValue string `json:"maskedValue" yaml:"maskedValue" mapstructure:"maskedValue"`
+
+	// The POSIX-shaped environment variable name this secret is injected as into
+	// every hook/service/opencode serve process a session spawns -- validated
+	// server-side (internal/domain/sandboxsecret.ValidateName): rejects the reserved
+	// NARVI_* namespace and every name providercredential.EnvVarNames already owns.
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+
+	// Matches Postgres sandbox_secret_scope, EXCLUDING 'automation' -- that scope is
+	// schema-only as of Step 72 (§27.1: no CRUD endpoint reaches it yet, mirroring
+	// how ProviderCredentialScope's own DTO excludes 'user', a scope managed through
+	// a completely separate flow).
+	Scope SandboxSecretScope `json:"scope" yaml:"scope" mapstructure:"scope"`
+
+	// The repo_full_name ('owner/repo') for scope=repo, the environments.id
+	// (stringified) for scope=environment, or null for scope=global.
+	ScopeTarget SandboxSecretScopeTarget `json:"scopeTarget" yaml:"scopeTarget" mapstructure:"scopeTarget"`
+
+	// UpdatedAt corresponds to the JSON schema field "updatedAt".
+	UpdatedAt time.Time `json:"updatedAt" yaml:"updatedAt" mapstructure:"updatedAt"`
+}
+
+type SandboxSecretScope string
+
+const SandboxSecretScopeEnvironment SandboxSecretScope = "environment"
+const SandboxSecretScopeGlobal SandboxSecretScope = "global"
+const SandboxSecretScopeRepo SandboxSecretScope = "repo"
+
+// The repo_full_name ('owner/repo') for scope=repo, the environments.id
+// (stringified) for scope=environment, or null for scope=global.
+type SandboxSecretScopeTarget *string
+
+var enumValues_SandboxSecretScope = []interface{}{
+	"repo",
+	"environment",
+	"global",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *SandboxSecretScope) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_SandboxSecretScope {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_SandboxSecretScope, v)
+	}
+	*j = SandboxSecretScope(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *SandboxSecret) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["createdAt"]; raw != nil && !ok {
+		return fmt.Errorf("field createdAt in SandboxSecret: required")
+	}
+	if _, ok := raw["id"]; raw != nil && !ok {
+		return fmt.Errorf("field id in SandboxSecret: required")
+	}
+	if _, ok := raw["maskedValue"]; raw != nil && !ok {
+		return fmt.Errorf("field maskedValue in SandboxSecret: required")
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in SandboxSecret: required")
+	}
+	if _, ok := raw["scope"]; raw != nil && !ok {
+		return fmt.Errorf("field scope in SandboxSecret: required")
+	}
+	if _, ok := raw["scopeTarget"]; raw != nil && !ok {
+		return fmt.Errorf("field scopeTarget in SandboxSecret: required")
+	}
+	if _, ok := raw["updatedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field updatedAt in SandboxSecret: required")
+	}
+	type Plain SandboxSecret
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = SandboxSecret(plain)
+	return nil
+}
+
 // Mirrors the sessions table (migrations/000004_sessions.up.sql).
 // status/failureReason/spawnSource enums match
 // session_status/session_failure_reason/session_spawn_source exactly.
@@ -5878,6 +6203,42 @@ func (j *UpdateReviewDepthConfigRequest) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = UpdateReviewDepthConfigRequest(plain)
+	return nil
+}
+
+// PUT request body for /{scope-route}/sandbox-secrets/{id} -- rotates ONLY the
+// encrypted value. scope/scopeTarget/name are immutable once a row is created
+// (delete-then-create if a different scope/target/name is actually wanted) -- this
+// DTO deliberately carries no fields for any of the three, mirroring
+// UpdateProviderCredentialRequest exactly.
+type UpdateSandboxSecretRequest struct {
+	// The new plaintext secret value, replacing the old one -- same
+	// encrypt-immediately, never-logged, never-echoed handling as
+	// CreateSandboxSecretRequest.value, and the same NUL-byte (U+0000) exclusion.
+	Value string `json:"value" yaml:"value" mapstructure:"value"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *UpdateSandboxSecretRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["value"]; raw != nil && !ok {
+		return fmt.Errorf("field value in UpdateSandboxSecretRequest: required")
+	}
+	type Plain UpdateSandboxSecretRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[^\x00]*$`, string(plain.Value)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Value", `^[^\x00]*$`)
+	}
+	if utf8.RuneCountInString(string(plain.Value)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "value", 1)
+	}
+	*j = UpdateSandboxSecretRequest(plain)
 	return nil
 }
 
