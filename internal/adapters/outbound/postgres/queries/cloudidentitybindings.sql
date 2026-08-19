@@ -72,3 +72,26 @@ WHERE audience = sqlc.arg('audience')
   AND (scope = 'global'
    OR (scope = 'environment' AND scope_target_id IS NOT NULL AND scope_target_id = sqlc.narg('environment_id')))
 ORDER BY kind;
+
+-- name: ListCloudIdentityBindingsForSession :many
+-- Step 73b's own ("cloud identity: sandbox-side consumption + kubeconfig
+-- injection", §27.3) sandbox-facing delivery endpoint's own single,
+-- session-scoped read: EVERY candidate binding (global, plus this
+-- session's own environment_id if it has one) regardless of audience --
+-- unlike ListCloudIdentityBindingsForResolution (above), which filters to
+-- one REQUESTED audience for the minting endpoint's own allowlist check,
+-- this query answers a DIFFERENT question sandbox-agent asks at boot:
+-- "which bindings apply to my session at all, so I know which kinds to
+-- prepare a token file for and what audience/params each one declares" --
+-- the caller (httpapi's own cloud-identity-config delivery handler) then
+-- groups the result by Kind and resolves environment-vs-global via
+-- internal/domain/providercredential.Resolve, mirroring
+-- resolveCloudIdentityBindingForAudience's own identical resolution
+-- shape, just without the audience pre-filter. environment_id is
+-- sqlc.narg, NULL when the session has none (matches nothing at that
+-- scope, never a wildcard -- mirrors ListCloudIdentityBindingsForResolution's
+-- own identical environment_id convention).
+SELECT * FROM cloud_identity_bindings
+WHERE scope = 'global'
+   OR (scope = 'environment' AND scope_target_id IS NOT NULL AND scope_target_id = sqlc.narg('environment_id'))
+ORDER BY kind;

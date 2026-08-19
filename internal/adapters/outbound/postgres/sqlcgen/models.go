@@ -401,6 +401,49 @@ func (ns NullCloudIdentityBindingScope) Value() (driver.Value, error) {
 	return string(ns.CloudIdentityBindingScope), nil
 }
 
+type ClusterBindingAuthKind string
+
+const (
+	ClusterBindingAuthKindCloud  ClusterBindingAuthKind = "cloud"
+	ClusterBindingAuthKindOidc   ClusterBindingAuthKind = "oidc"
+	ClusterBindingAuthKindStatic ClusterBindingAuthKind = "static"
+)
+
+func (e *ClusterBindingAuthKind) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = ClusterBindingAuthKind(s)
+	case string:
+		*e = ClusterBindingAuthKind(s)
+	default:
+		return fmt.Errorf("unsupported scan type for ClusterBindingAuthKind: %T", src)
+	}
+	return nil
+}
+
+type NullClusterBindingAuthKind struct {
+	ClusterBindingAuthKind ClusterBindingAuthKind `json:"cluster_binding_auth_kind"`
+	Valid                  bool                   `json:"valid"` // Valid is true if ClusterBindingAuthKind is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullClusterBindingAuthKind) Scan(value interface{}) error {
+	if value == nil {
+		ns.ClusterBindingAuthKind, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.ClusterBindingAuthKind.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullClusterBindingAuthKind) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.ClusterBindingAuthKind), nil
+}
+
 type DigestSendStatus string
 
 const (
@@ -1641,6 +1684,18 @@ type CloudIdentityBinding struct {
 	Params        []byte                    `json:"params"`
 	CreatedAt     pgtype.Timestamptz        `json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz        `json:"updated_at"`
+}
+
+type ClusterBinding struct {
+	ID            pgtype.UUID            `json:"id"`
+	EnvironmentID string                 `json:"environment_id"`
+	Name          string                 `json:"name"`
+	ServerUrl     *string                `json:"server_url"`
+	CaBundle      *string                `json:"ca_bundle"`
+	AuthKind      ClusterBindingAuthKind `json:"auth_kind"`
+	Params        []byte                 `json:"params"`
+	CreatedAt     pgtype.Timestamptz     `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz     `json:"updated_at"`
 }
 
 type ContractDriftSnapshot struct {

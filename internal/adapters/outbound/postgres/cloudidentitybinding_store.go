@@ -101,3 +101,16 @@ func (s *CloudIdentityBindingStore) ListForResolution(ctx context.Context, reque
 		EnvironmentID: environmentID,
 	})
 }
+
+// ListForSession fetches EVERY candidate binding (global, plus this
+// session's own environment if it has one) regardless of audience --
+// Step 73b's own sandbox-facing cloud-identity-config delivery endpoint's
+// single read (see queries/cloudidentitybindings.sql's own
+// ListCloudIdentityBindingsForSession doc comment for the full "why this
+// differs from ListForResolution"). environmentID nil means "this
+// session has no attached Environment" (matches nothing at that scope,
+// never a wildcard), mirroring ListForResolution's own identical
+// convention.
+func (s *CloudIdentityBindingStore) ListForSession(ctx context.Context, environmentID *string) ([]sqlcgen.CloudIdentityBinding, error) {
+	return s.q.ListCloudIdentityBindingsForSession(ctx, environmentID)
+}

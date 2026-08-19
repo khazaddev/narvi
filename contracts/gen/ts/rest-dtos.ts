@@ -1880,3 +1880,66 @@ export interface RotateCloudIdentitySigningKeyResponse {
    */
   publishableUntil: string | null;
 }
+/**
+ * One cluster_bindings row's own REST wire shape (Step 73b, §27.4, migrations/000094_cluster_bindings.up.sql). Returned by GET/PUT /api/environments/{environmentID}/cluster-binding -- environmentId is always implied by the route, never a separate request field, mirroring CloudIdentityBinding's own identical convention. Unlike cloud_identity_bindings there is no global scope at all (§27.4: "one cluster per Environment in v1"), so this shape carries no scope/scopeTarget pair. params carries no secret material (identifiers only), so it is returned in full, never masked -- see CloudIdentityBinding.params' own identical rationale.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ClusterBinding".
+ */
+export interface ClusterBinding {
+  /**
+   * The environments.id (stringified, IMMUTABLE id) this cluster is bound to.
+   */
+  environmentId: string;
+  /**
+   * The cluster's own name -- a human-readable label AND, for authKind='cloud', the literal cluster-name argument the cloud's own exec-credential plugin needs (see migrations/000094_cluster_bindings.up.sql's own top comment).
+   */
+  name: string;
+  /**
+   * The Kubernetes API server endpoint -- required for authKind IN ('cloud','oidc'), null/omitted for authKind='static' (that rung's own uploaded kubeconfig already carries its own server URL -- see PutClusterBindingRequest's own description).
+   */
+  serverUrl: string | null;
+  /**
+   * The PEM-encoded cluster CA certificate -- same presence rule as serverUrl.
+   */
+  caBundle: string | null;
+  /**
+   * Matches Postgres cluster_binding_auth_kind exactly -- the 3 auth rungs §27.4 names, in preference order (cloud > oidc > static). See internal/domain/clusterbinding's own doc comment for what each rung requires of serverUrl/caBundle/params.
+   */
+  authKind: 'cloud' | 'oidc' | 'static';
+  /**
+   * Auth-kind-specific identifiers, never secrets -- authKind='cloud': {cloud: "aws"|"gcp"|"azure"[, region]}; authKind='oidc': {clientId}; authKind='static': {secretName} (the Step 72 sandbox_secrets NAME whose value is the complete kubeconfig file content). Modeled as an opaque raw-JSON passthrough, the SAME precision-preserving convention CloudIdentityBinding.params already establishes in this schema.
+   */
+  params: {
+    [k: string]: unknown;
+  };
+  createdAt: string;
+  updatedAt: string;
+}
+/**
+ * PUT request body for /api/environments/{environmentID}/cluster-binding -- create-or-replace (upsert), mirroring PutOpenCodeConfigRequest's own identical singleton-resource shape (there is no separate POST/id-based-PUT pair, since a caller never needs to learn or pass an id for a resource unique per Environment). Gated by authz.ActionManageClusterBindings (maintainer+, §13.3's own environments row -- see that action's own doc comment). serverUrl/caBundle are required for authKind IN ('cloud','oidc') and optional (ignored if present) for authKind='static' -- internal/domain/clusterbinding.Validate enforces this server-side (400 on a missing one); internal/domain/clusterbinding.ValidateParams enforces the matching required key inside params for each rung.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "PutClusterBindingRequest".
+ */
+export interface PutClusterBindingRequest {
+  /**
+   * See ClusterBinding.name's own description.
+   */
+  name: string;
+  /**
+   * See ClusterBinding.serverUrl's own description. Optional -- omitted/null is only valid for authKind='static'.
+   */
+  serverUrl?: string | null;
+  /**
+   * See ClusterBinding.caBundle's own description. Optional -- omitted/null is only valid for authKind='static'.
+   */
+  caBundle?: string | null;
+  authKind: 'cloud' | 'oidc' | 'static';
+  /**
+   * Optional -- defaults to {} when omitted, though every authKind's own ValidateParams check then requires its own specific key (cloud/clientId/secretName) to be present, so an omitted params is only ever actually accepted transiently before that check runs. See ClusterBinding.params' own description.
+   */
+  params?: {
+    [k: string]: unknown;
+  };
+}

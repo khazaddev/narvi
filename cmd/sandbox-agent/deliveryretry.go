@@ -62,3 +62,69 @@ func classifyDeliveryFetchError(err error) error {
 	}
 	return platform.Permanent(err)
 }
+
+// classifyMintTokenError is Step 73b's own ("cloud identity: sandbox-side
+// consumption + kubeconfig injection", §27.3) sibling to
+// classifyDeliveryFetchError, for cloud-identity-token minting
+// (credentials.CPClient.MintCloudIdentityToken) specifically -- NOT a
+// reuse of classifyDeliveryFetchError, because that endpoint's OWN 503
+// means something classifyDeliveryFetchError's generic "5xx is always
+// retryable" rule gets wrong for this one call: httpapi.
+// MintCloudIdentityToken (internal/adapters/inbound/httpapi/
+// cloudidentitytoken.go) returns 503 for EXACTLY two config-level, non-
+// transient conditions -- "cloud identity federation is not configured"
+// (platform.Config.CloudIdentityIssuerURL unset, the whole capability
+// off) and "no active signing key configured" (nobody has ever called
+// RotateCloudIdentitySigningKey) -- never for a generic internal error
+// (that branch returns 500, same as every other handler in this
+// codebase). Retrying either condition burns this call's own bounded
+// retry budget for zero chance of a different outcome within one boot's
+// own short window (an admin fixing either config mid-boot is not a
+// scenario worth spending retries on) -- exactly the same
+// "this session's own state is what's wrong, not a transient blip" logic
+// classifyDeliveryFetchError's own doc comment already gives for
+// 401/403/404/410.
+//
+// This Step's own explicit gap resolution (spec brief: "decide and
+// document what sandbox-agent does when minting returns 503... 403...
+// or a transient failure"):
+//   - 401/403/404/410: this delivery's own terminal handshake fences,
+//     IDENTICAL to classifyDeliveryFetchError -- 403 additionally covers
+//     §27.3's own audience-allowlist refusal ("no cloud identity binding
+//     for this session declares the requested audience"), which can
+//     never resolve differently on a later attempt within the same boot
+//     either (the binding CONFIGURATION is what would need to change,
+//     not network conditions).
+//   - 503: ALSO terminal, per this func's own doc comment above -- the
+//     one deliberate divergence from classifyDeliveryFetchError.
+//   - Any other non-5xx: terminal (conservative, matching
+//     classifyDeliveryFetchError's own identical "unrecognized non-5xx is
+//     more likely client-side" reasoning).
+//   - Any OTHER 5xx (500, 502, 504, ...), or a transport-level failure
+//     that never reached credentials.DeliveryStatusError at all: still
+//     retryable -- a genuine transient CP-side blip, the SAME class
+//     classifyDeliveryFetchError already retries.
+//
+// The caller (cmd/sandbox-agent/cloudidentity.go's mintCloudIdentityToken,
+// and the kube-credential subcommand) degrades warn-and-continue on
+// EITHER outcome (retries exhausted, or a first-attempt terminal
+// classification) -- see that file's own doc comment for the full
+// "what happens to the token file" resolution, consistent with the same
+// posture Step 72 established.
+func classifyMintTokenError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var statusErr *credentials.DeliveryStatusError
+	if !errors.As(err, &statusErr) {
+		return err
+	}
+	switch statusErr.StatusCode {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusGone, http.StatusServiceUnavailable:
+		return platform.Permanent(err)
+	}
+	if statusErr.StatusCode >= 500 && statusErr.StatusCode < 600 {
+		return err
+	}
+	return platform.Permanent(err)
+}

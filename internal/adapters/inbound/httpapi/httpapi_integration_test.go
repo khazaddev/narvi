@@ -303,6 +303,13 @@ type testRig struct {
 	cloudIdentityBindings  *narvipg.CloudIdentityBindingStore
 	oidcSigningKeys        *narvipg.OIDCSigningKeyStore
 	cloudIdentityIssuerURL string
+
+	// clusterBindings (Step 73b, "cloud identity: sandbox-side consumption
+	// + kubeconfig injection", §27.4) backs this rig's own cluster-binding
+	// management route group (clusterbindings_integration_test.go) and the
+	// sandbox-facing cloud-identity-config delivery route
+	// (cloudidentityconfigdelivery_integration_test.go).
+	clusterBindings *narvipg.ClusterBindingStore
 }
 
 // newTestRig builds the default rig. mutate (variadic so every EXISTING
@@ -379,6 +386,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		cloudIdentityBindings:  narvipg.NewCloudIdentityBindingStore(pool),
 		oidcSigningKeys:        narvipg.NewOIDCSigningKeyStore(pool),
 		cloudIdentityIssuerURL: "https://issuer.narvi.example.test",
+		clusterBindings:        narvipg.NewClusterBindingStore(pool),
 	}
 	t.Cleanup(func() { _ = rig.registry.Shutdown() })
 
@@ -716,6 +724,19 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	})
 	router.Post("/sessions/{sessionID}/cloud-identity-token",
 		httpapi.MintCloudIdentityToken(rig.sessions, rig.sandboxes, rig.cloudIdentityBindings, rig.oidcSigningKeys, rig.tokenEncryptionKey, rig.cloudIdentityIssuerURL, platform.DefaultTimeouts()))
+	// /api/environments/{environmentID}/cluster-binding and its
+	// sandbox-facing cloud-identity-config delivery route (Step 73b,
+	// §27.3/§27.4) -- mounted exactly like cmd/control-plane/main.go's own
+	// wiring (see httpapi/clusterbindings.go/cloudidentityconfigdelivery.go's
+	// own doc comments).
+	router.Route("/api/environments/{environmentID}/cluster-binding", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Get("/", httpapi.GetEnvironmentClusterBinding(rig.clusterBindings))
+		r.Put("/", httpapi.PutEnvironmentClusterBinding(rig.clusterBindings))
+		r.Delete("/", httpapi.DeleteEnvironmentClusterBinding(rig.clusterBindings))
+	})
+	router.Post("/sessions/{sessionID}/cloud-identity-config",
+		httpapi.CloudIdentityConfigDelivery(rig.sessions, rig.sandboxes, rig.cloudIdentityBindings, rig.clusterBindings))
 	// /api/environments/{environmentID}/opencode-config, /api/opencode-config,
 	// and their sandbox-facing delivery route (Step 72, §27.2) -- mounted
 	// exactly like cmd/control-plane/main.go's own wiring (see

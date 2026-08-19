@@ -2326,6 +2326,76 @@ type Timeouts struct {
 	// how short exp can safely go" concern cuts the other way, toward a
 	// longer overlap being safer, never shorter).
 	CloudIdentitySigningKeyOverlapWindow time.Duration
+
+	// CloudIdentityConfigFetchTimeout (Step 73b, "cloud identity: sandbox-
+	// side consumption + kubeconfig injection", §27.3/§27.4) bounds a
+	// SINGLE ATTEMPT at CP's /sessions/{id}/cloud-identity-config delivery
+	// endpoint (internal/sandboxagent/credentials.CPClient.
+	// FetchCloudIdentityConfig), tried up to
+	// CloudIdentityConfigFetchMaxAttempts times (below) at boot, alongside
+	// SandboxSecretFetchTimeout/OpenCodeConfigFetchTimeout's own calls,
+	// before the first per-binding mint attempt. Not specified in the
+	// plan; chosen the SAME 10s as every other boot-time delivery-endpoint
+	// fetch in this file -- this call resolves at most a handful of
+	// identifier-only rows server-side (bindings grouped by kind, plus one
+	// cluster row), comparably lightweight.
+	CloudIdentityConfigFetchTimeout time.Duration
+
+	// CloudIdentityConfigFetchMaxAttempts/CloudIdentityConfigFetchRetryBaseDelay/
+	// CloudIdentityConfigFetchRetryMaxDelay mirror
+	// SandboxSecretFetchMaxAttempts/SandboxSecretFetchRetryBaseDelay/
+	// SandboxSecretFetchRetryMaxDelay's own identical shape and identical
+	// values (3 attempts / 500ms base / 2s max), for
+	// cmd/sandbox-agent/cloudidentity.go's own fetchCloudIdentityConfig
+	// call to CPClient.FetchCloudIdentityConfig -- see those fields' own
+	// doc comment for the full worst-case-budget arithmetic (which already
+	// accounts for every sequential boot-time fetch summing to well under
+	// FirstConnectBudget; this fetch's own worst case, 3*10s+2*2s=34s,
+	// stacks onto that SAME running total, still comfortably inside the
+	// 240s ceiling alongside every other boot-time activity).
+	CloudIdentityConfigFetchMaxAttempts    int
+	CloudIdentityConfigFetchRetryBaseDelay time.Duration
+	CloudIdentityConfigFetchRetryMaxDelay  time.Duration
+
+	// CloudIdentityTokenMintTimeout (Step 73b, §27.3) bounds a SINGLE
+	// ATTEMPT at CP's /sessions/{id}/cloud-identity-token minting endpoint
+	// (internal/sandboxagent/credentials.CPClient.MintCloudIdentityToken),
+	// tried up to CloudIdentityTokenMintMaxAttempts times (below) --
+	// called once per resolved binding at boot (cmd/sandbox-agent/
+	// cloudidentity.go's own populateCloudIdentityTokenFiles), again on
+	// every half-life refresh (the SAME function's own background loop,
+	// woken every CloudIdentityTokenLifetime/2 -- a computed interval, not
+	// a second stored duration, so it can never drift out of sync with
+	// the lifetime it is literally half of), and once per kube-credential
+	// subcommand invocation (main.go's runKubeCredentialHelper, for the
+	// AuthKindOIDC cluster rung). Not specified in the plan; chosen the
+	// SAME 10s as CloudIdentityConfigFetchTimeout immediately above -- an
+	// RS256 sign is a fast, CPU-only operation server-side (no external
+	// STS round trip; §27.3 is explicit that the cloud's own STS exchange
+	// happens IN-SANDBOX, never CP-side), so this is, if anything, a
+	// generous bound for a lightweight mint call.
+	CloudIdentityTokenMintTimeout time.Duration
+
+	// CloudIdentityTokenMintMaxAttempts/CloudIdentityTokenMintRetryBaseDelay/
+	// CloudIdentityTokenMintRetryMaxDelay mirror
+	// CloudIdentityConfigFetchMaxAttempts/CloudIdentityConfigFetchRetryBaseDelay/
+	// CloudIdentityConfigFetchRetryMaxDelay's own identical shape and
+	// identical values -- classifyMintTokenError (cmd/sandbox-agent/
+	// deliveryretry.go) is this call's own retry-classification rule
+	// (401/403/404/410/503 terminal, 5xx-other-than-503 and transport
+	// errors retryable -- see that function's own doc comment for the
+	// full "why 503 differs from every other delivery endpoint's own
+	// retryable-5xx default" reasoning, this Step's own explicit gap
+	// resolution). A background refresh call's own worst case
+	// (3*10s+2*2s=34s) is bounded well below the token's own remaining
+	// validity window at the moment a half-life refresh fires (half of
+	// CloudIdentityTokenLifetime, i.e. 5 minutes at the shipped default --
+	// see cmd/sandbox-agent/cloudidentity.go's own doc comment for the
+	// full "why there is a real window to retry in" reasoning, this
+	// Step's own first spec-gap resolution).
+	CloudIdentityTokenMintMaxAttempts    int
+	CloudIdentityTokenMintRetryBaseDelay time.Duration
+	CloudIdentityTokenMintRetryMaxDelay  time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -2526,6 +2596,15 @@ func DefaultTimeouts() Timeouts {
 
 		CloudIdentityTokenLifetime:           10 * time.Minute, // Step 73a, §27.3, explicit ("exp ≈ 10 minutes")
 		CloudIdentitySigningKeyOverlapWindow: 15 * time.Minute, // Step 73a, §27.3; not specified numerically beyond ">= max token lifetime", chosen with margin -- see field doc comment
+
+		CloudIdentityConfigFetchTimeout:        10 * time.Second,       // Step 73b, §27.3/§27.4; not specified, chosen, matches every other boot-time delivery fetch's own reasoning
+		CloudIdentityConfigFetchMaxAttempts:    3,                      // mirrors SandboxSecretFetchMaxAttempts
+		CloudIdentityConfigFetchRetryBaseDelay: 500 * time.Millisecond, // mirrors SandboxSecretFetchRetryBaseDelay
+		CloudIdentityConfigFetchRetryMaxDelay:  2 * time.Second,        // mirrors SandboxSecretFetchRetryMaxDelay
+		CloudIdentityTokenMintTimeout:          10 * time.Second,       // Step 73b, §27.3; not specified, chosen -- see field doc comment
+		CloudIdentityTokenMintMaxAttempts:      3,                      // mirrors CloudIdentityConfigFetchMaxAttempts
+		CloudIdentityTokenMintRetryBaseDelay:   500 * time.Millisecond, // mirrors CloudIdentityConfigFetchRetryBaseDelay
+		CloudIdentityTokenMintRetryMaxDelay:    2 * time.Second,        // mirrors CloudIdentityConfigFetchRetryMaxDelay
 	}
 }
 
