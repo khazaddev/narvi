@@ -1323,3 +1323,24 @@ func TestValidate_ReportsAllViolations(t *testing.T) {
 		t.Errorf("Validate() reported %d distinct violated chains, want exactly 2 (got: %v)", len(gotChains), gotChains)
 	}
 }
+
+// TestDefaultTimeouts_Step75StandaloneField proves this Step's own
+// ("config/data seeding", §10-P6/§13.4) addition -- SeedRunTimeout --
+// ships with a sensible, non-zero default and does not disturb either
+// invariant chain (it is a standalone field, wired into neither).
+func TestDefaultTimeouts_Step75StandaloneField(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.SeedRunTimeout <= 0 {
+		t.Errorf("SeedRunTimeout = %v, want > 0", to.SeedRunTimeout)
+	}
+	if to.SeedRunTimeout != 5*time.Minute {
+		t.Errorf("SeedRunTimeout = %v, want %v", to.SeedRunTimeout, 5*time.Minute)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (this field must not disturb either invariant chain)", err)
+	}
+}

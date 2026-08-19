@@ -2420,6 +2420,27 @@ type Timeouts struct {
 	// no second poll-interval field needed for what is structurally the
 	// same "poll until ready or timeout" shape.
 	DockerReadinessTimeout time.Duration
+
+	// --- Step 75 standalone addition ("config/data seeding", §10-P6,
+	// §13.4): no ordering relationship with either invariant chain above,
+	// so -- per every prior Step's own standalone-addition precedent -- a
+	// plain field with a sensible default, not wired into a fake
+	// invariant link.
+
+	// SeedRunTimeout bounds cmd/control-plane's own "seed" subcommand's
+	// ENTIRE run (context.WithTimeout wrapping every item internal/app/
+	// seed.Run processes, not a per-item bound) -- not specified in the
+	// plan; chosen generously: a seed manifest processes a small,
+	// operator-authored, human-scale list of rows (participants,
+	// secrets, automations, repo settings), each one a handful of plain
+	// INSERT/UPDATE statements, but the whole run is still a single CLI
+	// invocation with no partial-progress resumption of its own (each
+	// item IS individually idempotent -- see internal/app/seed/doc.go --
+	// so a timed-out run is always safe to simply re-run) -- 5 minutes
+	// leaves comfortable headroom for a large manifest against a
+	// slow/contended database without letting a genuinely stuck
+	// connection hang the operator's terminal indefinitely.
+	SeedRunTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -2631,6 +2652,8 @@ func DefaultTimeouts() Timeouts {
 		CloudIdentityTokenMintRetryMaxDelay:    2 * time.Second,        // mirrors CloudIdentityConfigFetchRetryMaxDelay
 
 		DockerReadinessTimeout: 60 * time.Second, // Step 74, §27.5; not specified, chosen generously -- see field doc comment
+
+		SeedRunTimeout: 5 * time.Minute, // Step 75, §10-P6/§13.4; not specified, chosen generously -- see field doc comment
 	}
 }
 
