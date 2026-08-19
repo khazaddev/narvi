@@ -1,7 +1,12 @@
 // Package ops implements Step 77's ("ops: dashboards, alerts, runbooks",
 // §5.3) own structural guard: dashboards and alerts are committed to the
 // repo as data (deploy/observability/{dashboards,alerts}/*.json), and this
-// package is what keeps them honest as the code moves.
+// package is what keeps them honest as the code moves. Step 78 ("launch
+// readiness", §10-P6) extends the SAME mechanism to a second, sibling
+// hazard: the per-surface user guide (docs/guides/*.md) it ships is
+// committed as data too, and this package is equally what keeps ITS own
+// documented commands honest as the code moves — see "The guide-drift
+// extension" below.
 //
 // # Why this exists
 //
@@ -34,4 +39,34 @@
 // `make test`, already a required CI step) against the REAL repo tree and
 // the REAL deploy/observability directory — no separate CI job needed,
 // and no dashboard/alert can ship naming a metric nothing emits.
+//
+// # The guide-drift extension (Step 78)
+//
+// "the two checks are the same idea over different sources": every piece
+// above has a direct sibling scanning a DIFFERENT part of this repo's own
+// source rather than a second, forked mechanism.
+//
+//   - ScanRegisteredRoutes (routes.go) is instruments.go's own shape
+//     applied to cmd/control-plane/main.go's chi route wiring instead of
+//     OTel instrument registration: a go/ast walk collecting every real
+//     "METHOD /path" this binary actually serves.
+//   - ScanIntentVocabulary (intentvocab.go) is the same shape again,
+//     applied to internal/domain/intent's own exported string constants
+//     (plus sqlcgen's SessionSpawnSource enum) — every real Surface/
+//     Target/Mode/(record-level) Source value §18.4's IntentDecisionRecord
+//     can actually carry.
+//   - LoadGuides (guide.go) is LoadDashboards/LoadAlerts's own shape
+//     applied to docs/guides/*.md instead of deploy/observability/*.json:
+//     one file, one concern (one ingress surface), loaded in
+//     deterministic order, every structural problem (a missing title, an
+//     unterminated code fence, malformed embedded JSON, a command naming
+//     neither or both of its two binding kinds) failing the load
+//     immediately rather than being silently skipped.
+//   - CheckGuideDrift (guidedrift.go) is CheckDrift's own shape: compare
+//     every guide's own claims against the two scanners' real output,
+//     report one GuideDriftError per unregistered reference.
+//
+// guidedrift_test.go wires TestNoGuideDrift into the exact same `go test
+// ./...` path TestNoMetricDrift already uses — one CI-enforced guard, not
+// two, over two structurally identical hazards.
 package ops
