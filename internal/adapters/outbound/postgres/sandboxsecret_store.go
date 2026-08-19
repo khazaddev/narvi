@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -25,6 +26,23 @@ type SandboxSecretStore struct {
 // NewSandboxSecretStore builds a SandboxSecretStore backed by pool.
 func NewSandboxSecretStore(pool *pgxpool.Pool) *SandboxSecretStore {
 	return &SandboxSecretStore{q: sqlcgen.New(pool)}
+}
+
+// WithTx returns a SandboxSecretStore whose queries run on tx instead of
+// the pool this store was built with -- mirrors every other store's own
+// identical WithTx convention (EnvironmentStore, RepoSettingsStore,
+// AutomationStore, UserStore, IdentityStore, AuditLogStore). No existing
+// caller needed this before Step 75 ("config/data seeding", §13.4):
+// internal/adapters/inbound/httpapi/sandboxsecrets.go's own
+// createSandboxSecret writes a row with no accompanying audit-log entry
+// in the same transaction (see that file's own top doc comment -- it has
+// none at all today), so it never needed a shared-transaction handle.
+// internal/app/seed does: §13.3 requires "audit_log ... written in the
+// same transaction as the change", and this store's own Create is that
+// change, so it needs the same WithTx seam every other store already
+// has.
+func (s *SandboxSecretStore) WithTx(tx pgx.Tx) *SandboxSecretStore {
+	return &SandboxSecretStore{q: s.q.WithTx(tx)}
 }
 
 // Create inserts a new sandbox_secrets row. scopeTargetID is nil for
