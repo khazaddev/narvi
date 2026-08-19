@@ -49,6 +49,18 @@ import (
 // path (runSetupRerunLadder's own doc comment), so it is a safe input
 // regardless of which branch (services.yml or hook-contract) a given repo
 // actually takes.
+//
+// secretEnv (Step 72, §27.1, adversarial-review HIGH fix) is zero or more
+// already-built "NAME=VALUE" entries -- a session's own resolved general
+// sandbox_secrets rows -- passed straight through to runRepoHooks for the
+// hook-contract branch, and appended to services.Run's own env for the
+// services.yml branch (both AFTER supervisor.EnvWithout(SessionConfigEnvVar),
+// exactly mirroring that call's own existing append shape) -- §27.1's own
+// two remaining named spawn targets besides opencode serve (threaded at
+// its own call site, cmd/sandbox-agent/main.go, since RunBoot has no
+// opencode-serve call of its own). See runHook's/RunHooks' own doc
+// comments for why this is threaded rather than os.Setenv onto
+// sandbox-agent's own process.
 func RunBoot(
 	ctx context.Context,
 	sup *supervisor.Supervisor,
@@ -57,6 +69,7 @@ func RunBoot(
 	mode sandboxboot.BootMode,
 	workspaceMoved map[string]bool,
 	ladder map[string]SetupRerunLadder,
+	secretEnv []string,
 	reporter services.ProgressReporter,
 	hookTimeout, stopGrace, readinessTimeout, readinessPollInterval, setupRetryDelay time.Duration,
 ) error {
@@ -69,7 +82,7 @@ func RunBoot(
 		}
 
 		if !found {
-			if err := runRepoHooks(ctx, sup, workspaceDir, repo, mode, workspaceMoved, ladder, hookTimeout, stopGrace, setupRetryDelay); err != nil {
+			if err := runRepoHooks(ctx, sup, workspaceDir, repo, mode, workspaceMoved, ladder, secretEnv, hookTimeout, stopGrace, setupRetryDelay); err != nil {
 				return err
 			}
 			continue
@@ -87,8 +100,10 @@ func RunBoot(
 		// see services.Run's own doc comment for why this package computes
 		// the exclusion itself rather than services.Run importing this
 		// package back (which would create an import cycle, since this
-		// package already imports services).
-		if err := services.Run(ctx, sup, repoDir, manifest, supervisor.EnvWithout(SessionConfigEnvVar), reporter, readinessTimeout, readinessPollInterval); err != nil {
+		// package already imports services). secretEnv is appended on top
+		// of that filtered base -- §27.1's own explicit "services.yml
+		// services" spawn target.
+		if err := services.Run(ctx, sup, repoDir, manifest, append(supervisor.EnvWithout(SessionConfigEnvVar), secretEnv...), reporter, readinessTimeout, readinessPollInterval); err != nil {
 			return fmt.Errorf("boot: services.yml supervision for %s failed: %w", repo.Name, err)
 		}
 	}

@@ -1012,6 +1012,18 @@ func run() error {
 	// (mirroring agentRuntime's own identical need) so both call sites see
 	// the exact same fetched snapshot.
 	var resolvedCredentials map[string]credentials.AuthValue
+	// sandboxSecretEnv (Step 72, §27.1, adversarial-review HIGH fix) and
+	// bootDegradeNotes (§27.1, adversarial-review LOW fix) are populated
+	// inside the SAME block below and consumed AFTER it closes: this
+	// binary's own single opencodeproc.Spawn call sits inside this block
+	// (sandboxSecretEnv feeds it directly), but runBootSequence (which
+	// threads sandboxSecretEnv on into boot.RunBoot for hooks/services.yml,
+	// and folds bootDegradeNotes into the generated AGENTS.md manifest) is
+	// called LATER, OUTSIDE this block -- both declared at this outer
+	// scope for the same reason resolvedCredentials/agentRuntime already
+	// are.
+	var sandboxSecretEnv []string
+	var bootDegradeNotes []string
 	if cfg.SessionConfig != nil {
 		// opencodeproc.Spawn's own Dir is cfg.WorkspaceDir -- normally
 		// created by gitclone.CloneAll (runBootSequence, below), which
@@ -1099,6 +1111,52 @@ func run() error {
 			}
 		}
 
+		// Step 72 ("sandbox secrets & opencode config", §27.1/§27.2):
+		// resolve this session's own general sandbox secrets and OpenCode
+		// config documents BEFORE spawning `opencode serve` and BEFORE the
+		// boot sequence's own first hook run (runBootSequence, below) --
+		// §27.1's own explicit ordering requirement ("sandbox-agent
+		// fetches before the first hook"). Both fetches are deliberately
+		// best-effort (see fetchSandboxSecrets'/fetchOpenCodeConfig's own
+		// doc comments) and THREADED explicitly into sandboxSecretEnv
+		// (adversarial-review HIGH fix -- an earlier version instead
+		// os.Setenv'd onto sandbox-agent's own process; see
+		// sandboxsecrets.go's own top doc comment for the full incident
+		// this fixes) -- so sandboxSecretEnv must be fully built here,
+		// ahead of opencodeproc.Spawn (below) and runBootSequence (which
+		// threads it on into boot.RunBoot for hooks/services.yml).
+		resolvedSandboxSecrets, sandboxSecretsFetchOK := fetchSandboxSecrets(ctx, cfg, timeouts)
+		sandboxSecretEnv = sandboxSecretSpawnEnv(resolvedSandboxSecrets)
+		if !sandboxSecretsFetchOK {
+			// §27.1: "recorded in the boot log [already done, inside
+			// fetchSandboxSecrets itself] and AGENTS.md" (adversarial-review
+			// LOW fix) -- folded into the generated manifest by
+			// runBootSequence's own gitclone.WriteAgentsManifest call,
+			// below, so the agent that boots into this session is told
+			// plainly when its secrets are missing rather than silently
+			// misbehaving.
+			bootDegradeNotes = append(bootDegradeNotes, "sandbox secrets: boot-time fetch failed after retrying; this session booted with NO sandbox secrets injected (warn-and-continue degrade policy, §27.1) -- env vars a repo's setup.sh/start.sh/services.yml or opencode may normally expect from a configured sandbox secret may be missing")
+		}
+
+		homeDir, homeErr := os.UserHomeDir()
+		if homeErr != nil {
+			slog.Warn("sandbox-agent: resolve home directory failed, skipping opencode global config injection", "error", homeErr)
+		} else {
+			openCodeConfigDelivery, openCodeConfigFetchOK := fetchOpenCodeConfig(ctx, cfg, timeouts)
+			openCodeConfigEnv := applyOpenCodeConfig(openCodeConfigDelivery, openCodeConfigFetchOK, homeDir, openCodeEnvironmentConfigPath)
+			// §27.1's own explicit ordering ("appended before
+			// providerCredentialEnv") applies to the WHOLE sandboxSecretEnv
+			// slice opencodeproc.Spawn receives, not just the general
+			// sandbox_secrets rows -- OPENCODE_CONFIG is disjoint from both
+			// (internal/domain/sandboxsecret's own OPENCODE_ reservation),
+			// so append order here is a documentation nicety, not a
+			// collision-avoidance requirement.
+			sandboxSecretEnv = append(sandboxSecretEnv, openCodeConfigEnv...)
+			if !openCodeConfigFetchOK {
+				bootDegradeNotes = append(bootDegradeNotes, "opencode config: boot-time fetch failed after retrying; this session booted with whatever OpenCode config document (if any) was already on disk from a prior boot, never a fresh one (warn-and-continue degrade policy, §27.1/§27.2)")
+			}
+		}
+
 		// Step 53 ("provider credential injection", §25.1/§25.3): resolve
 		// this session's own provider credentials (repo/environment/global/
 		// user scoped, most-specific-wins) BEFORE spawning `opencode serve`
@@ -1110,7 +1168,7 @@ func run() error {
 		resolvedCredentials = fetchProviderCredentials(ctx, cfg, timeouts.ProviderCredentialFetchTimeout)
 		providerCredentialEnv := providerCredentialSpawnEnv(resolvedCredentials)
 
-		result, spawnErr := opencodeproc.Spawn(ctx, sup, cfg.WorkspaceDir, providerCredentialEnv,
+		result, spawnErr := opencodeproc.Spawn(ctx, sup, cfg.WorkspaceDir, providerCredentialEnv, sandboxSecretEnv,
 			timeouts.OpenCodeReadinessTimeout, timeouts.OpenCodeReadinessPollInterval)
 		if spawnErr != nil {
 			// Best-effort cleanup of whatever sup may already be tracking
@@ -1361,7 +1419,7 @@ func run() error {
 	// regardless of bootErr (tagged failed=bootErr!=nil): even a failed
 	// boot's own elapsed time is a real data point, not one to discard.
 	bootStart := time.Now()
-	bootErr := runBootSequence(ctx, sup, cfg, timeouts, reportBootProgress, onGitSync)
+	bootErr := runBootSequence(ctx, sup, cfg, timeouts, sandboxSecretEnv, bootDegradeNotes, reportBootProgress, onGitSync)
 	boot.RecordBootDuration(ctx, string(cfg.BootMode), time.Since(bootStart).Seconds(), bootErr != nil)
 	if bootErr != nil {
 		// A boot failure needs the same graceful convergence a fatal WS
@@ -1568,11 +1626,29 @@ func logRepoMissingFromManifest(manifest boot.ImageManifest, currentSHAs map[str
 // "stash-if-dirty -> checkout session branch -> stash pop") -- CloneAll is
 // never called on this path at all; cloning again into a non-empty
 // directory would conflict with what is already there.
+//
+// secretEnv (Step 72, §27.1, adversarial-review HIGH fix) is run()'s own
+// already-built sandboxSecretEnv slice -- passed straight through to
+// boot.RunBoot, which threads it on into every hook/services.yml spawn.
+// nil is a correct, safe input (every existing test call site already
+// passes nil, matching this parameter's own pre-Step-72 absence).
+//
+// degradeNotes (§27.1, adversarial-review LOW fix) is run()'s own
+// bootDegradeNotes slice -- zero or more human-readable notes about a
+// boot-time fetch that degraded via warn-and-continue (a sandbox-secrets
+// or opencode-config fetch that exhausted every retry attempt) -- folded
+// into the generated AGENTS.md manifest below (gitclone.WriteAgentsManifest),
+// §27.1's own explicit "recorded in the boot log and AGENTS.md"
+// requirement. nil/empty (the overwhelming common case: every boot-time
+// fetch succeeded, or a session has none of this Step's own fetches to
+// begin with) omits the manifest's own degrade-notice section entirely.
 func runBootSequence(
 	ctx context.Context,
 	sup *supervisor.Supervisor,
 	cfg boot.Config,
 	timeouts platform.Timeouts,
+	secretEnv []string,
+	degradeNotes []string,
 	reportBootProgress services.ProgressReporter,
 	onGitSync gitclone.OnGitSync,
 ) error {
@@ -1654,7 +1730,7 @@ func runBootSequence(
 			}
 		}
 
-		if err := gitclone.WriteAgentsManifest(cfg.WorkspaceDir, manifestInput); err != nil {
+		if err := gitclone.WriteAgentsManifest(cfg.WorkspaceDir, manifestInput, degradeNotes); err != nil {
 			return fmt.Errorf("write AGENTS.md: %w", err)
 		}
 
@@ -1726,7 +1802,7 @@ func runBootSequence(
 	// package-registry reinstall inside the boot sequence, which has its
 	// own separate budget and a slower, network-bound failure profile.
 	// Equal values today are a coincidence of tuning, not one concept.
-	if err := boot.RunBoot(ctx, sup, cfg.WorkspaceDir, repos, cfg.BootMode, workspaceMoved, setupRerunLadder, reportBootProgress,
+	if err := boot.RunBoot(ctx, sup, cfg.WorkspaceDir, repos, cfg.BootMode, workspaceMoved, setupRerunLadder, secretEnv, reportBootProgress,
 		timeouts.HookTimeout, timeouts.ProcessStopGracePeriod,
 		timeouts.ServiceReadinessTimeout, timeouts.ServiceReadinessPollInterval,
 		timeouts.SetupRerunRetryBackoff); err != nil {

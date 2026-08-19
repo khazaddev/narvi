@@ -69,3 +69,22 @@ func EnvVarNames(p Provider) []string {
 	copy(out, names)
 	return out
 }
+
+// AllEnvVarNames returns the UNION of every recognized Provider's own
+// EnvVarNames, across AllProviders, in AllProviders' own declaration
+// order (google's 3 names, then anthropic's 1, then openai's 1) --
+// exported specifically for Step 72's own sandbox_secrets name-validation
+// rule (§27.1: "the exact names providercredential.EnvVarNames covers...
+// rejected too, so every env-var name has exactly one owning mechanism").
+// A caller validating a NEW env-var-shaped name (internal/domain/
+// sandboxsecret.ValidateName) calls this ONCE to get the full reserved
+// set, rather than hand-maintaining a second, driftable copy of these 5
+// literal strings -- this function is the single source of truth
+// envVarNames itself already is, just flattened across every Provider.
+func AllEnvVarNames() []string {
+	var out []string
+	for _, p := range AllProviders {
+		out = append(out, EnvVarNames(p)...)
+	}
+	return out
+}

@@ -42,11 +42,11 @@
 //     global, this value wins")."
 //
 // Both independently give the SAME order, automation first (most
-// specific) down to global (least specific) -- automation is out of
-// scope for this Step (§8.4/Step 52's own "per-automation secrets"
-// deferral is for a LATER, focused follow-up, not this table), so for the
-// 3 scopes this Step actually builds, the real, doubly-confirmed
-// precedence is:
+// specific) down to global (least specific) -- automation was out of
+// scope for Step 53 itself (§8.4/Step 52's own "per-automation secrets"
+// deferral was for a LATER, focused follow-up, not provider_credentials),
+// so for the 3 scopes THAT Step actually built, the real, doubly-confirmed
+// precedence was:
 //
 //	environment  (most specific)
 //	repo
@@ -55,6 +55,45 @@
 // i.e. an environment-scoped credential shadows a repo-scoped one for the
 // SAME provider, which in turn shadows the global one. This is the
 // opposite of "repo before environment" -- a genuine, verified correction
-// against the Step brief's own paraphrase, not a guess; see this Step's
+// against the Step brief's own paraphrase, not a guess; see that Step's
 // own PR description for the same note.
+//
+// # Step 72 (§27.1): this package's own Scope/Resolve now serve a SECOND
+// table
+//
+// sandbox_secrets (migrations/000090_sandbox_secrets.up.sql) is a
+// deliberately SEPARATE table from provider_credentials (see that
+// migration's own top comment for why a second table, not a widened
+// ENUM), but it resolves through THIS package's Scope type and Resolve
+// function, unchanged, per §27.1's own explicit instruction: "resolution
+// automation -> environment -> repo -> global via the SAME generic
+// providercredential.Resolve... only the scopePriority table gains the
+// fourth row." That fourth row is ScopeAutomation (scope.go) -- the most
+// specific of sandbox_secrets' own 4 scopes, confirmed by the SAME two
+// sources this file already cites above (§12.2 item 5's Settings mockup
+// and automation/doc.go both independently give "automation ->
+// environment -> repo -> global", automation first) for the ADDITIONAL
+// automation level neither source needed to justify back when this file
+// was written for Step 53 alone.
+//
+// Two consequences worth stating plainly, since they are easy to miss
+// reading this package in isolation:
+//
+//  1. This package's own name ("providercredential") is now narrower than
+//     its own charter -- Scope/Resolve are genuinely provider-agnostic
+//     generic vocabulary, reused by a table that has nothing to do with
+//     LLM provider credentials at all. This was a deliberate choice (the
+//     Step 72 brief's own instruction, not a drift this package's own
+//     author introduced unprompted): a new, differently-named package for
+//     4 lines of generic scope-priority logic would fork the ONE piece
+//     Step 53 built specifically to be reused (Candidate[T]/Resolve's own
+//     doc comment: "generic... specifically so this package never has to
+//     know or care whether the caller has already decrypted..."). Renaming
+//     this package is left as a possible future cleanup, not done here,
+//     to keep Step 72's diff to the addition it actually is.
+//  2. ScopeUser (Step 59, provider_credentials only) and ScopeAutomation
+//     (Step 72, sandbox_secrets only) are two DIFFERENT tables' own most-
+//     specific level, sharing this one priority map purely for
+//     convenience -- see Scope's own doc comment for why the two never
+//     actually compete inside a single Resolve call.
 package providercredential

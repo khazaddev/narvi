@@ -497,7 +497,7 @@ func TestWriteAgentsManifest(t *testing.T) {
 		},
 	}
 
-	if err := gitclone.WriteAgentsManifest(workspaceDir, results); err != nil {
+	if err := gitclone.WriteAgentsManifest(workspaceDir, results, nil); err != nil {
 		t.Fatalf("WriteAgentsManifest() error = %v", err)
 	}
 
@@ -514,6 +514,46 @@ func TestWriteAgentsManifest(t *testing.T) {
 	}
 	if strings.Contains(content, "failed-repo") {
 		t.Errorf("manifest includes failed-repo, want it skipped; content:\n%s", content)
+	}
+	if strings.Contains(content, "Boot-time degrade notices") {
+		t.Errorf("manifest includes a degrade-notices section with nil degradeNotes, want it omitted entirely; content:\n%s", content)
+	}
+}
+
+// TestWriteAgentsManifest_DegradeNotes proves Step 72's own adversarial-
+// review LOW fix (§27.1: "recorded in the boot log and AGENTS.md"): a
+// non-empty degradeNotes slice produces an additive section in the
+// generated manifest, alongside (never instead of) the ordinary repo
+// table.
+func TestWriteAgentsManifest_DegradeNotes(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	results := []gitclone.CloneResult{
+		{
+			Repo:    sessionconfig.SessionConfigReposElem{Name: "primary-repo"},
+			Primary: true,
+			Dir:     filepath.Join(workspaceDir, "primary-repo"),
+		},
+	}
+	degradeNotes := []string{
+		"sandbox secrets: boot-time fetch failed after retrying; this session booted with NO sandbox secrets injected",
+	}
+
+	if err := gitclone.WriteAgentsManifest(workspaceDir, results, degradeNotes); err != nil {
+		t.Fatalf("WriteAgentsManifest() error = %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(workspaceDir, "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("read AGENTS.md: %v", err)
+	}
+	content := string(data)
+
+	for _, want := range []string{"primary-repo", "Boot-time degrade notices", "sandbox secrets: boot-time fetch failed after retrying"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("manifest missing %q; content:\n%s", want, content)
+		}
 	}
 }
 

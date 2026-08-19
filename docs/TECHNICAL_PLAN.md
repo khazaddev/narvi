@@ -1925,10 +1925,21 @@ sandbox_secrets(id, scope sandbox_secret_scope ENUM('automation','environment','
   this Step's.
 - **Name validation, fail-closed at save time**: POSIX env-var shape; the `NARVI_*` namespace
   rejected outright (§19.8's reservation — the live namespace is the eight `NARVI_*` vars
-  `boot/config.go:33-40` already defines); the exact names `providercredential.EnvVarNames` covers
+  `boot/config.go:33-40` already defines); the entire `OPENCODE_*` namespace rejected outright
+  too (see §27.2 — a whole namespace rather than the two names that are live today, because
+  every OpenCode env var OpenCode itself may add later is by construction a slot that outranks
+  or redirects something Narvi injects, and a name-by-name list would go stale the moment the
+  pinned engine version moves); the exact names `providercredential.EnvVarNames` covers
   (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, the three Google names) rejected too, so every env-var
   name has exactly one owning mechanism and a shadowing conflict between the two tables is
   unrepresentable.
+- **The same validation runs again at the injection boundary**, not only at save time:
+  sandbox-agent re-runs it over the map the delivery endpoint returns and drops what fails,
+  per-entry, warn-and-continue. Save-time validation alone would make the reservation a rule
+  every future writer has to remember, which §30 rules is not a guard; re-validating at the one
+  point where a name actually becomes an env var makes the shadowing unreachable however the row
+  got there — a second write path added by a later Step, a hand-run `INSERT`, or a control plane
+  rolled back to a build predating the reservation.
 - **Encryption, RBAC, management API**: `platform.EncryptToken` at rest; the same three
   already-reserved actions (`ActionManageRepoSecrets`/`ActionManageEnvSecrets`/
   `ActionManageGlobalSecrets`) govern this table exactly as they govern `provider_credentials` —
@@ -1980,6 +1991,13 @@ documented slots rather than inventing a merge:
   with zero Narvi-side merge code: org-global < environment < repo-committed project config < the
   sentinel-fix capability-restriction write (§17.2/Step 48, which targets the project slot) —
   i.e. **a customer-authored config can never override the security-relevant agent restriction**,
+  *provided nothing else can reach a slot above project*. That proviso is load-bearing and is
+  exactly what `sandbox_secrets`' `OPENCODE_*` reservation buys: `OPENCODE_CONFIG_CONTENT` is
+  OpenCode's **inline** slot, which outranks project, so an environment-scoped secret under that
+  name would re-enable unrestricted tools for every capability-restricted sentinel-fix session in
+  that environment — and `OPENCODE_CONFIG` would redirect the environment document this Step owns.
+  Neither is expressible because the namespace is reserved on both the write and the injection
+  path; the guarantee above is stated as structural on that basis and on no other,
   by the engine's own documented ordering, not by a Narvi convention.
 - **RBAC**: global scope admin-only (the §13.3 row that owns integrations/global secrets);
   environment scope maintainer+ (the row that owns environments/env secrets).

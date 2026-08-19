@@ -21,7 +21,24 @@ const agentsManifestFilename = "AGENTS.md"
 // convention: no contracts/ schema governs it, exactly like Step 14
 // documented its own invented Readiness.Health shape. A later Step is free
 // to change the rendering without needing to touch any wire contract.
-func WriteAgentsManifest(workspaceDir string, results []CloneResult) error {
+//
+// degradeNotes (Step 72, §27.1, adversarial-review LOW fix) is zero or
+// more human-readable notes about a boot-time feature that degraded via
+// the "warn and continue" policy (§27.1's own explicit words: a fetch
+// failure is "recorded in the boot log and AGENTS.md, never a boot
+// failure") -- e.g. a sandbox_secrets fetch that exhausted every retry
+// attempt. §27.1's own stated RATIONALE for warn-and-continue being an
+// acceptable degrade policy at all is exactly this: "a running agent that
+// can diagnose a missing env var beats a dead sandbox" -- which only
+// holds if the agent actually CAN diagnose it, i.e. this manifest (the
+// one document AGENTS.md-reading tooling/agents are guaranteed to see)
+// says so plainly, rather than leaving the agent to silently misbehave as
+// if a normally-injected mechanism simply never existed. nil/empty (the
+// overwhelming common case: every boot-time fetch succeeded, or this
+// session has none of Step 72's own fetches to begin with) omits this
+// section entirely -- this is an ADDITIVE section, never a replacement
+// for the repo table above.
+func WriteAgentsManifest(workspaceDir string, results []CloneResult, degradeNotes []string) error {
 	var b strings.Builder
 
 	b.WriteString("# AGENTS.md\n\n")
@@ -46,6 +63,17 @@ func WriteAgentsManifest(workspaceDir string, results []CloneResult) error {
 		}
 
 		fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", r.Repo.Name, role, r.Dir, branch)
+	}
+
+	if len(degradeNotes) > 0 {
+		b.WriteString("\n## Boot-time degrade notices\n\n")
+		b.WriteString("The following boot-time features could not be fully applied for this\n")
+		b.WriteString("session (warn-and-continue degrade policy, §27.1 -- never a boot\n")
+		b.WriteString("failure). This agent is running WITHOUT them; diagnose accordingly\n")
+		b.WriteString("rather than assuming they are simply unconfigured:\n\n")
+		for _, note := range degradeNotes {
+			fmt.Fprintf(&b, "- %s\n", note)
+		}
 	}
 
 	path := filepath.Join(workspaceDir, agentsManifestFilename)

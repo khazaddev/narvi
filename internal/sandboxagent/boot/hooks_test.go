@@ -45,7 +45,7 @@ func TestRunHooks_EmptyRepos(t *testing.T) {
 	t.Parallel()
 
 	sup := supervisor.New()
-	err := boot.RunHooks(context.Background(), sup, t.TempDir(), nil, sandboxboot.BootModeFresh, nil, nil, 5*time.Second, time.Second, time.Millisecond)
+	err := boot.RunHooks(context.Background(), sup, t.TempDir(), nil, sandboxboot.BootModeFresh, nil, nil, nil, 5*time.Second, time.Second, time.Millisecond)
 	if err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil for an empty repos slice", err)
 	}
@@ -64,7 +64,7 @@ func TestRunHooks_AbsentHookSkipped(t *testing.T) {
 	sup := supervisor.New()
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
 
-	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil, nil, 5*time.Second, time.Second, time.Millisecond)
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil, nil, nil, 5*time.Second, time.Second, time.Millisecond)
 	if err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil (absent hooks are a routine no-op)", err)
 	}
@@ -89,7 +89,7 @@ func TestRunHooks_SuccessContinuesToLaterHooksAndRepos(t *testing.T) {
 	// fresh mode: repo-a's setup.sh runs (non-fatal); repo-b's start.sh
 	// runs (non-fatal, secondary). Both succeed, so RunHooks must run
 	// every hook across both repos.
-	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil, nil, 5*time.Second, time.Second, time.Millisecond)
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil, nil, nil, 5*time.Second, time.Second, time.Millisecond)
 	if err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil", err)
 	}
@@ -117,7 +117,7 @@ func TestRunHooks_FatalFailureStopsImmediately(t *testing.T) {
 		{Name: "repo-b", Primary: false},
 	}
 
-	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil, nil, 5*time.Second, time.Second, time.Millisecond)
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil, nil, nil, 5*time.Second, time.Second, time.Millisecond)
 	if err == nil {
 		t.Fatal("RunHooks() error = nil, want an error (build mode's setup.sh failure is fatal)")
 	}
@@ -142,7 +142,7 @@ func TestRunHooks_NonFatalFailureContinues(t *testing.T) {
 		{Name: "repo-b", Primary: false},
 	}
 
-	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil, nil, 5*time.Second, time.Second, time.Millisecond)
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil, nil, nil, 5*time.Second, time.Second, time.Millisecond)
 	if err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil (a secondary repo's start.sh failure is only a warning)", err)
 	}
@@ -167,9 +167,81 @@ func TestRunHooks_EnvExcludesSessionConfig(t *testing.T) {
 	sup := supervisor.New()
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
 
-	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil, nil, 5*time.Second, time.Second, time.Millisecond)
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil, nil, nil, 5*time.Second, time.Second, time.Millisecond)
 	if err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil (the spawned setup.sh must not see NARVI_SESSION_CONFIG)", err)
+	}
+}
+
+// TestRunHooks_SecretEnvReachesRealSpawnedHook is the direct, end-to-end
+// proof of Step 72's own injection mechanism (§27.1) AFTER the
+// adversarial-review HIGH fix: RunHooks' own new secretEnv parameter --
+// NOT a value os.Setenv'd onto sandbox-agent's own process environment (the
+// PRE-fix mechanism this test used to exercise; see git history for the
+// prior version, TestRunHooks_SeesProcessEnvSetAfterPackageLoadedIncludingSandboxSecrets) --
+// reaches a REAL spawned hook script's own environment. The pre-fix
+// mechanism relied on EnvWithout's own SUBTRACTIVE-filter-over-os.Environ()
+// behavior picking up anything a caller had ADDED to sandbox-agent's own
+// process first -- which meant a resolved secret literally named "PATH" or
+// "HOME" corrupted sandbox-agent's OWN process (see opencodeproc.Spawn's
+// own doc comment for the full incident this fixes). secretEnv is
+// deliberately NOT set via t.Setenv here at all -- proving this value
+// reaches the spawned script ONLY through the explicit parameter, with the
+// TEST process's own ambient environment carrying no trace of it, is the
+// whole point of the threaded fix.
+func TestRunHooks_SecretEnvReachesRealSpawnedHook(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	probeFile := filepath.Join(t.TempDir(), "probe")
+	writeScript(t, filepath.Join(workspaceDir, "repo-a", "setup.sh"),
+		`printf '%s' "$MY_SANDBOX_SECRET" > `+probeFile)
+
+	sup := supervisor.New()
+	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
+	secretEnv := []string{"MY_SANDBOX_SECRET=resolved-secret-value"}
+
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil, nil, secretEnv, 5*time.Second, time.Second, time.Millisecond)
+	if err != nil {
+		t.Fatalf("RunHooks() error = %v, want nil", err)
+	}
+
+	got, readErr := os.ReadFile(probeFile)
+	if readErr != nil {
+		t.Fatalf("read probe file: %v", readErr)
+	}
+	if string(got) != "resolved-secret-value" {
+		t.Errorf("MY_SANDBOX_SECRET as seen by the spawned setup.sh = %q, want %q -- RunHooks' own secretEnv parameter (a session's own resolved sandbox_secrets, threaded explicitly -- never os.Setenv onto sandbox-agent's own process) must reach every hook script", got, "resolved-secret-value")
+	}
+}
+
+// TestRunHooks_SecretEnvNeverMutatesTestProcessEnvironment is the
+// complementary proof: passing secretEnv touches ONLY the spawned child's
+// own environment, never the calling (here, the test) process's own
+// os.Environ() -- the exact property the pre-fix os.Setenv-based mechanism
+// broke (see TestRunHooks_SecretEnvReachesRealSpawnedHook's own doc
+// comment).
+func TestRunHooks_SecretEnvNeverMutatesTestProcessEnvironment(t *testing.T) {
+	t.Parallel()
+
+	if v, present := os.LookupEnv("MY_OTHER_SANDBOX_SECRET"); present {
+		t.Fatalf("MY_OTHER_SANDBOX_SECRET already present in this test process's own environment (%q) -- test precondition violated", v)
+	}
+
+	workspaceDir := t.TempDir()
+	writeScript(t, filepath.Join(workspaceDir, "repo-a", "setup.sh"), "true")
+
+	sup := supervisor.New()
+	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
+	secretEnv := []string{"MY_OTHER_SANDBOX_SECRET=should-never-leak-into-this-process"}
+
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil, nil, secretEnv, 5*time.Second, time.Second, time.Millisecond)
+	if err != nil {
+		t.Fatalf("RunHooks() error = %v, want nil", err)
+	}
+
+	if v, present := os.LookupEnv("MY_OTHER_SANDBOX_SECRET"); present {
+		t.Errorf("MY_OTHER_SANDBOX_SECRET leaked into the TEST process's own environment (%q) -- secretEnv must only ever reach the spawned CHILD's environment", v)
 	}
 }
 
@@ -182,7 +254,7 @@ func TestRunHooks_TimeoutIsFatalWhenPolicyFatal(t *testing.T) {
 	sup := supervisor.New()
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
 
-	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil, nil,
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil, nil, nil,
 		200*time.Millisecond, 200*time.Millisecond, time.Millisecond)
 	if err == nil {
 		t.Fatal("RunHooks() error = nil, want an error (hook exceeded hookTimeout, fatal per build mode's setup.sh policy)")
@@ -214,7 +286,7 @@ func TestRunHooks_LogsSetupRerunDecision(t *testing.T) {
 	repos := []boot.RepoInfo{{Name: "repo-decision-test", Primary: true}}
 	workspaceMoved := map[string]bool{"repo-decision-test": true}
 
-	if err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved, nil,
+	if err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved, nil, nil,
 		5*time.Second, time.Second, time.Millisecond); err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil", err)
 	}

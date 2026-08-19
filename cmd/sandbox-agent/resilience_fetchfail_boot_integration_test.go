@@ -112,7 +112,7 @@ func runBootSequenceRepoImage(t *testing.T, workspaceDir string, branch *string)
 	noopProgress := func(services.BootProgressEvent) {}
 	noopGitSync := func(string, string, string) {}
 
-	return runBootSequence(ctx, sup, cfg, platform.DefaultTimeouts(), noopProgress, noopGitSync)
+	return runBootSequence(ctx, sup, cfg, platform.DefaultTimeouts(), nil, nil, noopProgress, noopGitSync)
 }
 
 // TestResilienceScenario_FetchFailBoot_InventedBranch_DegradesAndBootSucceeds

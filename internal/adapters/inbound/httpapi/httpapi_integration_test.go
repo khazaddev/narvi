@@ -222,6 +222,17 @@ type testRig struct {
 	// integration_test.go).
 	providerCredentials *narvipg.ProviderCredentialStore
 
+	// sandboxSecrets/openCodeConfigs (Step 72, "sandbox secrets & opencode
+	// config", §27.1/§27.2) back this rig's own sandbox-secrets CRUD route
+	// groups + sandbox-facing delivery route
+	// (sandboxsecrets_integration_test.go/sandboxsecretsdelivery_
+	// integration_test.go) and opencode-config GET/PUT/DELETE route groups
+	// + sandbox-facing delivery route (opencodeconfig_integration_test.go/
+	// opencodeconfigdelivery_integration_test.go), mirroring
+	// providerCredentials' own identical "one store, shared" pattern.
+	sandboxSecrets  *narvipg.SandboxSecretStore
+	openCodeConfigs *narvipg.OpenCodeConfigStore
+
 	// chatGPTLinkAttempts/chatGPTDeviceFlow (Step 59, "models: Codex via
 	// ChatGPT-account OAuth", §29.3) back this rig's own /api/me/
 	// chatgpt-link route group (chatgptlink_integration_test.go).
@@ -328,6 +339,8 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		automations:           narvipg.NewAutomationStore(pool),
 		automationInvocations: narvipg.NewAutomationInvocationStore(pool),
 		providerCredentials:   narvipg.NewProviderCredentialStore(pool),
+		sandboxSecrets:        narvipg.NewSandboxSecretStore(pool),
+		openCodeConfigs:       narvipg.NewOpenCodeConfigStore(pool),
 		chatGPTLinkAttempts:   narvipg.NewChatGPTLinkAttemptStore(pool),
 		chatGPTDeviceFlow:     chatgptoauth.New(http.DefaultClient, "http://127.0.0.1:1", time.Second),
 		workflows:             narvipg.NewWorkflowStore(pool),
@@ -614,6 +627,52 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// comment.
 	router.Post("/sessions/{sessionID}/provider-credentials",
 		httpapi.ProviderCredentialsDelivery(rig.sessions, rig.sandboxes, rig.providerCredentials, rig.tokenEncryptionKey))
+	// /api/repos/{owner}/{repo}/sandbox-secrets,
+	// /api/environments/{environmentID}/sandbox-secrets,
+	// /api/sandbox-secrets, and their sandbox-facing delivery route (Step
+	// 72, §27.1) -- mounted exactly like cmd/control-plane/main.go's own
+	// wiring (see sandboxsecrets.go's own doc comment).
+	router.Route("/api/repos/{owner}/{repo}/sandbox-secrets", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Post("/", httpapi.CreateRepoSandboxSecret(rig.sandboxSecrets, rig.tokenEncryptionKey, rig.prSessions))
+		r.Get("/", httpapi.ListRepoSandboxSecrets(rig.sandboxSecrets, rig.prSessions))
+		r.Put("/{secretID}", httpapi.UpdateRepoSandboxSecretValue(rig.sandboxSecrets, rig.tokenEncryptionKey, rig.prSessions))
+		r.Delete("/{secretID}", httpapi.DeleteRepoSandboxSecret(rig.sandboxSecrets, rig.prSessions))
+	})
+	router.Route("/api/environments/{environmentID}/sandbox-secrets", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Post("/", httpapi.CreateEnvironmentSandboxSecret(rig.sandboxSecrets, rig.tokenEncryptionKey))
+		r.Get("/", httpapi.ListEnvironmentSandboxSecrets(rig.sandboxSecrets))
+		r.Put("/{secretID}", httpapi.UpdateEnvironmentSandboxSecretValue(rig.sandboxSecrets, rig.tokenEncryptionKey))
+		r.Delete("/{secretID}", httpapi.DeleteEnvironmentSandboxSecret(rig.sandboxSecrets))
+	})
+	router.Route("/api/sandbox-secrets", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Post("/", httpapi.CreateGlobalSandboxSecret(rig.sandboxSecrets, rig.tokenEncryptionKey))
+		r.Get("/", httpapi.ListGlobalSandboxSecrets(rig.sandboxSecrets))
+		r.Put("/{secretID}", httpapi.UpdateGlobalSandboxSecretValue(rig.sandboxSecrets, rig.tokenEncryptionKey))
+		r.Delete("/{secretID}", httpapi.DeleteGlobalSandboxSecret(rig.sandboxSecrets))
+	})
+	router.Post("/sessions/{sessionID}/sandbox-secrets",
+		httpapi.SandboxSecretsDelivery(rig.sessions, rig.sandboxes, rig.sandboxSecrets, rig.tokenEncryptionKey))
+	// /api/environments/{environmentID}/opencode-config, /api/opencode-config,
+	// and their sandbox-facing delivery route (Step 72, §27.2) -- mounted
+	// exactly like cmd/control-plane/main.go's own wiring (see
+	// opencodeconfig.go's own doc comment).
+	router.Route("/api/environments/{environmentID}/opencode-config", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Get("/", httpapi.GetEnvironmentOpenCodeConfig(rig.openCodeConfigs))
+		r.Put("/", httpapi.PutEnvironmentOpenCodeConfig(rig.openCodeConfigs))
+		r.Delete("/", httpapi.DeleteEnvironmentOpenCodeConfigHandler(rig.openCodeConfigs))
+	})
+	router.Route("/api/opencode-config", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Get("/", httpapi.GetGlobalOpenCodeConfig(rig.openCodeConfigs))
+		r.Put("/", httpapi.PutGlobalOpenCodeConfig(rig.openCodeConfigs))
+		r.Delete("/", httpapi.DeleteGlobalOpenCodeConfigHandler(rig.openCodeConfigs))
+	})
+	router.Post("/sessions/{sessionID}/opencode-config",
+		httpapi.OpenCodeConfigDelivery(rig.sessions, rig.sandboxes, rig.openCodeConfigs))
 	// /api/automations (Step 52, "automations: triggers & extras", §8.4) --
 	// mounted exactly like cmd/control-plane/main.go's own wiring (see
 	// automations.go's own doc comment).

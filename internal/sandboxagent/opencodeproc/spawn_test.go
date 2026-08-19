@@ -59,7 +59,7 @@ func TestSpawn_RealBinary(t *testing.T) {
 		_ = sup.StopAll(stopCtx, 5*time.Second)
 	})
 
-	result, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, 150*time.Second, 250*time.Millisecond)
+	result, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, nil, 150*time.Second, 250*time.Millisecond)
 	if err != nil {
 		t.Fatalf("Spawn() error = %v, want nil (real opencode binary should be on PATH)", err)
 	}
@@ -100,7 +100,7 @@ func TestSpawn_BadBinaryPath(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, 30*time.Second, 250*time.Millisecond)
+	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, nil, 30*time.Second, 250*time.Millisecond)
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -144,7 +144,7 @@ func TestSpawn_EnvExcludesSessionConfig(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, 5*time.Second, 50*time.Millisecond)
+	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, nil, 5*time.Second, 50*time.Millisecond)
 	if err == nil {
 		t.Fatal("Spawn() error = nil, want an error (the fake opencode script exits 1 before ever becoming healthy)")
 	}
@@ -196,7 +196,7 @@ func TestSpawn_ProviderCredentialEnvAppended(t *testing.T) {
 	defer cancel()
 
 	providerCredentialEnv := []string{"ANTHROPIC_API_KEY=sk-resolved-anthropic-key"}
-	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), providerCredentialEnv, 5*time.Second, 50*time.Millisecond)
+	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), providerCredentialEnv, nil, 5*time.Second, 50*time.Millisecond)
 	if err == nil {
 		t.Fatal("Spawn() error = nil, want an error (the fake opencode script exits 1 before ever becoming healthy)")
 	}
@@ -243,7 +243,7 @@ func TestSpawn_NilProviderCredentialEnv_UnchangedBehavior(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, 5*time.Second, 50*time.Millisecond)
+	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, nil, 5*time.Second, 50*time.Millisecond)
 	if err == nil {
 		t.Fatal("Spawn() error = nil, want an error (the fake opencode script exits 1 before ever becoming healthy)")
 	}
@@ -261,5 +261,92 @@ func TestSpawn_NilProviderCredentialEnv_UnchangedBehavior(t *testing.T) {
 	}
 	if lines[1] != "PATH_PRESENT" {
 		t.Errorf("PATH as seen by the spawned process = %q, want it present", lines[1])
+	}
+}
+
+// TestSpawn_SandboxSecretEnvAppended is the direct, real-spawn proof of
+// Step 72's own adversarial-review HIGH fix (threading, §27.1): the
+// sandboxSecretEnv parameter -- NOT sandbox-agent's own os.Setenv'd
+// process environment (the pre-fix mechanism) -- actually reaches the
+// spawned opencode process's own environment. Mirrors
+// TestSpawn_ProviderCredentialEnvAppended's own fake-script-probe
+// technique exactly.
+func TestSpawn_SandboxSecretEnvAppended(t *testing.T) {
+	// Not t.Parallel(): t.Setenv forbids combining the two.
+	binDir := t.TempDir()
+	probeFile := filepath.Join(t.TempDir(), "probe")
+
+	script := "#!/bin/sh\n" +
+		`printf '%s\n' "${MY_SANDBOX_SECRET:-ABSENT}" > "$PROBE_FILE"` + "\n" +
+		"exit 1\n"
+	if err := os.WriteFile(filepath.Join(binDir, "opencode"), []byte(script), 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	t.Setenv("PATH", binDir)
+	t.Setenv("PROBE_FILE", probeFile)
+	// Proves this parameter is genuinely threaded, not read from ambient
+	// process env: MY_SANDBOX_SECRET is deliberately left UNSET on the
+	// test process itself -- only sandboxSecretEnv (below) carries it.
+
+	sup := supervisor.New()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	sandboxSecretEnv := []string{"MY_SANDBOX_SECRET=resolved-secret-value"}
+	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, sandboxSecretEnv, 5*time.Second, 50*time.Millisecond)
+	if err == nil {
+		t.Fatal("Spawn() error = nil, want an error (the fake opencode script exits 1 before ever becoming healthy)")
+	}
+
+	got, readErr := os.ReadFile(probeFile)
+	if readErr != nil {
+		t.Fatalf("read probe file: %v", readErr)
+	}
+	if got := strings.TrimSpace(string(got)); got != "resolved-secret-value" {
+		t.Errorf("MY_SANDBOX_SECRET as seen by the spawned process = %q, want %q (threaded via sandboxSecretEnv, never os.Setenv on sandbox-agent's own process)", got, "resolved-secret-value")
+	}
+}
+
+// TestSpawn_ProviderCredentialEnvWinsOverSandboxSecretEnv proves §27.1's
+// own explicit ordering ("appended before providerCredentialEnv") is
+// honored: when the SAME name appears in both slices (never possible in
+// production -- internal/domain/sandboxsecret.ValidateName rejects every
+// name providercredential.AllEnvVarNames already owns -- but Env's own
+// documented "last duplicate key wins" semantics make this the correct,
+// pinned observable behavior regardless), providerCredentialEnv's own
+// entry is the one the spawned process actually sees.
+func TestSpawn_ProviderCredentialEnvWinsOverSandboxSecretEnv(t *testing.T) {
+	// Not t.Parallel(): t.Setenv forbids combining the two.
+	binDir := t.TempDir()
+	probeFile := filepath.Join(t.TempDir(), "probe")
+
+	script := "#!/bin/sh\n" +
+		`printf '%s\n' "${SHARED_NAME:-ABSENT}" > "$PROBE_FILE"` + "\n" +
+		"exit 1\n"
+	if err := os.WriteFile(filepath.Join(binDir, "opencode"), []byte(script), 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	t.Setenv("PATH", binDir)
+	t.Setenv("PROBE_FILE", probeFile)
+
+	sup := supervisor.New()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	providerCredentialEnv := []string{"SHARED_NAME=from-provider-credential"}
+	sandboxSecretEnv := []string{"SHARED_NAME=from-sandbox-secret"}
+	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), providerCredentialEnv, sandboxSecretEnv, 5*time.Second, 50*time.Millisecond)
+	if err == nil {
+		t.Fatal("Spawn() error = nil, want an error (the fake opencode script exits 1 before ever becoming healthy)")
+	}
+
+	got, readErr := os.ReadFile(probeFile)
+	if readErr != nil {
+		t.Fatalf("read probe file: %v", readErr)
+	}
+	if got := strings.TrimSpace(string(got)); got != "from-provider-credential" {
+		t.Errorf("SHARED_NAME as seen by the spawned process = %q, want %q (providerCredentialEnv appended last, per §27.1)", got, "from-provider-credential")
 	}
 }

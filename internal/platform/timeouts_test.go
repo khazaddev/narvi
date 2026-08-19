@@ -878,6 +878,55 @@ func TestDefaultTimeouts_IdentityEmailFetchWorstCaseTimingBudget(t *testing.T) {
 	}
 }
 
+// TestDefaultTimeouts_SandboxSecretAndOpenCodeConfigFetchWorstCaseTimingBudget
+// is Step 72's own adversarial-review MEDIUM fix's timing-budget proof,
+// mirroring TestDefaultTimeouts_IdentityEmailFetchWorstCaseTimingBudget's
+// own shape exactly (a standalone test, not a new Validate() invariant --
+// same reasoning: this compares a computed worst case, built by
+// multiplying/summing several Timeouts fields together, against an
+// EXTERNAL constant, not one field directly against another).
+//
+// cmd/sandbox-agent's run() calls fetchSandboxSecrets, THEN
+// (sequentially, never concurrently) fetchOpenCodeConfig, both before
+// `opencode serve` spawns and before the first hook runs -- so the real
+// worst case this codebase's own boot sequence can incur from BOTH
+// retried fetches together is their two worst cases SUMMED, not either
+// one in isolation. FirstConnectBudget (240s, §3.2 -- the control plane's
+// own liveness deadline for a sandbox's first WS connection) is the
+// external constant every boot-time activity, including both these
+// fetches, shares; this test proves the combined worst case leaves
+// meaningful headroom for every OTHER boot-time activity (git clone,
+// hooks, opencode serve's own readiness wait) that shares the same
+// ceiling.
+func TestDefaultTimeouts_SandboxSecretAndOpenCodeConfigFetchWorstCaseTimingBudget(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	// Meaningful, absolute headroom for every OTHER boot-time activity
+	// sharing FirstConnectBudget's own 240s ceiling (git clone, hooks,
+	// opencode serve's own readiness wait) -- an absolute floor, mirroring
+	// TestDefaultTimeouts_IdentityEmailFetchWorstCaseTimingBudget's own
+	// precedent, chosen generously since 240s is a much larger budget than
+	// Slack's ~3s one.
+	const minHeadroom = 120 * time.Second
+
+	sandboxSecretWorstCase := time.Duration(to.SandboxSecretFetchMaxAttempts)*to.SandboxSecretFetchTimeout +
+		time.Duration(to.SandboxSecretFetchMaxAttempts-1)*to.SandboxSecretFetchRetryMaxDelay
+	openCodeConfigWorstCase := time.Duration(to.OpenCodeConfigFetchMaxAttempts)*to.OpenCodeConfigFetchTimeout +
+		time.Duration(to.OpenCodeConfigFetchMaxAttempts-1)*to.OpenCodeConfigFetchRetryMaxDelay
+	combinedWorstCase := sandboxSecretWorstCase + openCodeConfigWorstCase
+
+	if combinedWorstCase >= to.FirstConnectBudget {
+		t.Fatalf("sandbox-secret + opencode-config combined fetch worst case = %v (sandbox-secret %v + opencode-config %v), want < FirstConnectBudget (%v)",
+			combinedWorstCase, sandboxSecretWorstCase, openCodeConfigWorstCase, to.FirstConnectBudget)
+	}
+	if headroom := to.FirstConnectBudget - combinedWorstCase; headroom < minHeadroom {
+		t.Errorf("sandbox-secret + opencode-config combined fetch worst case = %v, headroom under FirstConnectBudget (%v) = %v, want >= %v for every other boot-time activity",
+			combinedWorstCase, to.FirstConnectBudget, headroom, minHeadroom)
+	}
+}
+
 // TestDefaultTimeouts_GitHubPRPayloadCorrectnessStandaloneField proves the
 // audit-remediation (completeness-vs-plan lens, GitHub PR-payload-
 // correctness batch) standalone addition (GitHubGetPRTimeout) ships with a

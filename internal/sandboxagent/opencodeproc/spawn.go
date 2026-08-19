@@ -57,11 +57,47 @@ type Result struct {
 // for this session) and changes NOTHING about this function's own
 // pre-Step-53 behavior -- every existing call site keeps compiling and
 // behaving identically by simply passing nil.
+//
+// sandboxSecretEnv (Step 72, "sandbox secrets & opencode config", §27.1/
+// §27.2, adversarial-review HIGH fix) is zero or more already-built
+// "NAME=VALUE" entries covering EVERYTHING this Step injects: a session's
+// own resolved general sandbox_secrets rows, plus (when an environment
+// OpenCode config document exists) a single OPENCODE_CONFIG entry pointing
+// at the file cmd/sandbox-agent's own applyOpenCodeConfig already wrote to
+// disk. Appended BEFORE providerCredentialEnv (§27.1's own explicit
+// ordering: "appended before providerCredentialEnv, so the ordering
+// question is moot anyway given the disjoint-name rule" --
+// internal/domain/sandboxsecret.ValidateName rejects every name
+// providercredential.AllEnvVarNames or this package's own OPENCODE_*
+// reservation already owns, so the two slices can never actually collide;
+// the ordering is honored anyway, matching the spec exactly).
+//
+// This parameter is this Step's OWN fix for a HIGH-severity finding: the
+// original implementation instead os.Setenv'd every resolved secret onto
+// sandbox-agent's OWN process environment, ahead of every EnvWithout call
+// in this binary -- which meant a secret literally named e.g. "PATH" or
+// "HOME" corrupted the SUPERVISOR's own process (PATH poisons every
+// bare-name exec.Command LookPath -- including THIS function's own "opencode"
+// lookup below -- since Go's exec.LookPath resolves against the CALLING
+// process's os.Getenv("PATH") at exec.Command() call time, never from
+// Spec.Env; HOME poisons os.UserHomeDir(), silently redirecting where the
+// global OpenCode config document gets written), turning what §10-P2 and
+// this feature's own "warn and continue, never a boot failure" posture
+// require to be a harmless per-secret misconfiguration into a hard SPAWN
+// failure for `opencode serve` (and, via the ambient PATH `git clone` also
+// inherits, boot itself). Threading the resolved env explicitly here --
+// exactly like providerCredentialEnv already does -- makes that entire
+// class of failure structurally unrepresentable: sandbox-agent's own
+// process environment (and therefore its own PATH-based binary lookups,
+// its own os.UserHomeDir(), and every OTHER already-running piece of this
+// binary) is never touched by ANY resolved secret, no matter what name a
+// customer chose for it.
 func Spawn(
 	ctx context.Context,
 	sup *supervisor.Supervisor,
 	workDir string,
 	providerCredentialEnv []string,
+	sandboxSecretEnv []string,
 	readinessTimeout, readinessPollInterval time.Duration,
 ) (Result, error) {
 	port, err := freePort()
@@ -70,6 +106,7 @@ func Spawn(
 	}
 
 	env := supervisor.EnvWithout(boot.SessionConfigEnvVar)
+	env = append(env, sandboxSecretEnv...)
 	env = append(env, providerCredentialEnv...)
 
 	proc, err := sup.Spawn(supervisor.Spec{
