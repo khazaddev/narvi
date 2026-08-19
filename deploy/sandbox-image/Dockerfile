@@ -27,6 +27,22 @@
 # content change to this file simply produces a new digest). Every ARG
 # below is the ONE place its own version lives — bump here, rebuild,
 # done.
+#
+# Three named stages, not one: builder (compiles sandbox-agent) feeds only
+# the FINAL stage at the bottom, never runtime-base/toolchain below — so
+# `docker build --target=runtime-base` (what .github/workflows/ci.yml's
+# own sandbox-image job builds on every PR touching this directory, Step
+# 74's own adversarial review, Finding 2) never triggers a Go compile, and
+# never pulls in Node/Playwright/Chromium/the cloud SDKs either, because
+# those live in the LATER toolchain stage. It builds ONLY debian-slim +
+# the apt layer + the Docker CLI/engine binaries: the exact two layers
+# Finding 1's own dockerd-can't-start bug lived in (missing docker-proxy/
+# docker-init in the tarball install list; missing iptables in the apt
+# list), cheaply and on every relevant PR instead of only in a full,
+# ~1GB, Chromium-inclusive image build. The default `docker build .` (no
+# --target) still walks all three stages in the same order as before this
+# was split apart -- byte-for-byte the same layer stack, just grouped
+# under names.
 
 # Must track this repo's own go.mod "go" directive -- go.mod's own tool
 # directive (Go's own module-scoped tool-dependency mechanism, backing
@@ -42,7 +58,86 @@ COPY . .
 # documents for cmd/sandbox-agent.
 RUN CGO_ENABLED=0 go build -trimpath -o /out/sandbox-agent ./cmd/sandbox-agent
 
-FROM debian:bookworm-slim
+# runtime-base: debian-slim, the OS package layer, and the Docker CLI/
+# engine binaries -- nothing else. See this file's own top doc comment
+# for why this boundary exists where it does (right after the Docker
+# layer, ahead of everything in the toolchain stage below): it is the
+# CI-targetable stage that reproduces Finding 1 cheaply.
+FROM debian:bookworm-slim AS runtime-base
+
+# Docker CLI/engine (§27.7: "the Docker CLI/engine binaries... daemon
+# dormant unless §27.5's flag is set") — Docker's own official static
+# binary tarball, pinned; the daemon this ships is never started by this
+# image itself (internal/sandboxagent/boot.RunDocker, §27.5, is the ONLY
+# thing that ever execs dockerd, and only when SessionConfig.Docker is
+# true).
+ARG DOCKER_VERSION=27.3.1
+
+# git: not named in §27.7's own bullet list, but load-bearing and worth
+# recording explicitly here rather than leaving it an implicit apt
+# transitive dependency — internal/sandboxagent/gitclone shells out to a
+# real `git` binary for every clone/sync this codebase does (§3.4), and
+# has since Step 13, long before this Step's own toolchain additions.
+#
+# iptables (+ ip6tables, same bookworm package): dockerd's own bridge
+# network driver hard-requires the `iptables` binary on PATH to program
+# the NAT/filter chains a container network needs — debian:bookworm-slim
+# ships neither by default. Without this, `dockerd` gets past its own
+# config validation (see docker-proxy below) only to die immediately
+# after with "failed to register \"bridge\" driver: failed to create NAT
+# chain DOCKER: iptables not found" — reproduced empirically against this
+# exact image during Step 74's own adversarial review. Not a privileged-
+# mode workaround: this is the same unprivileged dockerd §27.5 already
+# runs, just with the OS package its own default bridge driver needs.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl unzip xz-utils git iptables \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- Docker CLI/engine binaries (dockerd itself never started here) ---
+#
+# All SEVEN binaries the docker-${DOCKER_VERSION}.tgz tarball ships are
+# installed, not just the five that look load-bearing at a glance:
+# docker-proxy and docker-init are both required, not optional add-ons.
+# docker-proxy's absence is fatal at dockerd's own CONFIG VALIDATION step
+# (before any socket is created), not merely at port-publish time as its
+# name might suggest — dockerd 27.3.1 refuses to start at all without it:
+# "invalid userland-proxy-path: userland-proxy is enabled, but userland-
+# proxy-path is not set". Disabling the userland proxy via a daemon flag
+# instead of shipping the binary is deliberately NOT done here (see
+# boot.RunDocker's own "no Args, deliberately" doc comment) — this
+# installs what dockerd's own documented defaults expect to find.
+# docker-init is dockerd's own default init process for
+# --init-shorthand containers; shipping it alongside costs one more
+# `install` line and avoids a second, narrower failure mode later.
+# Both were reproduced empirically missing (via `tar -tzf`) and fatal
+# (via a real `dockerd` run) during Step 74's own adversarial review.
+RUN ARCH="$(dpkg --print-architecture)" && \
+    case "$ARCH" in \
+        amd64) DOCKER_ARCH=x86_64 ;; \
+        arm64) DOCKER_ARCH=aarch64 ;; \
+        *) echo "unsupported architecture: $ARCH" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL "https://download.docker.com/linux/static/stable/${DOCKER_ARCH}/docker-${DOCKER_VERSION}.tgz" \
+        -o /tmp/docker.tgz && \
+    tar -xzf /tmp/docker.tgz -C /tmp && \
+    install -m 0755 /tmp/docker/docker /usr/local/bin/docker && \
+    install -m 0755 /tmp/docker/dockerd /usr/local/bin/dockerd && \
+    install -m 0755 /tmp/docker/containerd /usr/local/bin/containerd && \
+    install -m 0755 /tmp/docker/containerd-shim-runc-v2 /usr/local/bin/containerd-shim-runc-v2 && \
+    install -m 0755 /tmp/docker/runc /usr/local/bin/runc && \
+    install -m 0755 /tmp/docker/docker-proxy /usr/local/bin/docker-proxy && \
+    install -m 0755 /tmp/docker/docker-init /usr/local/bin/docker-init && \
+    rm -rf /tmp/docker /tmp/docker.tgz
+
+# toolchain: runtime-base plus every other §27.7 toolchain addition
+# (ripgrep, Node/typescript-language-server/typescript, Playwright+
+# Chromium, the three cloud exec-credential plugins). Split into its own
+# stage purely so runtime-base above stays CI-targetable without dragging
+# these in — no behavioral difference for the default `docker build .`:
+# the final stage below still layers FROM this one, so the shipped image
+# is the same set of layers, in the same order, as before this file was
+# split into named stages.
+FROM runtime-base AS toolchain
 
 # --- §27.7's own named additions, each pinned ---
 
@@ -63,13 +158,6 @@ ARG TYPESCRIPT_VERSION=5.6.3
 # the npm package version also pins the exact Chromium build `playwright
 # install` fetches; the two must move together, never independently.
 ARG PLAYWRIGHT_VERSION=1.48.2
-# Docker CLI/engine (§27.7: "the Docker CLI/engine binaries... daemon
-# dormant unless §27.5's flag is set") — Docker's own official static
-# binary tarball, pinned; the daemon this ships is never started by this
-# image itself (internal/sandboxagent/boot.RunDocker, §27.5, is the ONLY
-# thing that ever execs dockerd, and only when SessionConfig.Docker is
-# true).
-ARG DOCKER_VERSION=27.3.1
 # §27.4's three cloud exec-credential plugins (§27.7: "the three cloud
 # exec-credential plugins") — the exact three §27.4 names: the AWS CLI
 # itself (whose `aws eks get-token` subcommand IS the EKS exec plugin,
@@ -78,15 +166,6 @@ ARG DOCKER_VERSION=27.3.1
 ARG AWSCLI_VERSION=2.19.4
 ARG GCLOUD_VERSION=502.0.0
 ARG KUBELOGIN_VERSION=0.2.4
-
-# git: not named in §27.7's own bullet list, but load-bearing and worth
-# recording explicitly here rather than leaving it an implicit apt
-# transitive dependency — internal/sandboxagent/gitclone shells out to a
-# real `git` binary for every clone/sync this codebase does (§3.4), and
-# has since Step 13, long before this Step's own toolchain additions.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl unzip xz-utils git \
-    && rm -rf /var/lib/apt/lists/*
 
 # --- ripgrep ---
 RUN ARCH="$(dpkg --print-architecture)" && \
@@ -123,23 +202,6 @@ RUN npm install -g \
 RUN npm install -g "playwright@${PLAYWRIGHT_VERSION}" && \
     npx playwright install --with-deps chromium
 
-# --- Docker CLI/engine binaries (dockerd itself never started here) ---
-RUN ARCH="$(dpkg --print-architecture)" && \
-    case "$ARCH" in \
-        amd64) DOCKER_ARCH=x86_64 ;; \
-        arm64) DOCKER_ARCH=aarch64 ;; \
-        *) echo "unsupported architecture: $ARCH" >&2; exit 1 ;; \
-    esac && \
-    curl -fsSL "https://download.docker.com/linux/static/stable/${DOCKER_ARCH}/docker-${DOCKER_VERSION}.tgz" \
-        -o /tmp/docker.tgz && \
-    tar -xzf /tmp/docker.tgz -C /tmp && \
-    install -m 0755 /tmp/docker/docker /usr/local/bin/docker && \
-    install -m 0755 /tmp/docker/dockerd /usr/local/bin/dockerd && \
-    install -m 0755 /tmp/docker/containerd /usr/local/bin/containerd && \
-    install -m 0755 /tmp/docker/containerd-shim-runc-v2 /usr/local/bin/containerd-shim-runc-v2 && \
-    install -m 0755 /tmp/docker/runc /usr/local/bin/runc && \
-    rm -rf /tmp/docker /tmp/docker.tgz
-
 # --- §27.4's three cloud exec-credential plugins ---
 RUN ARCH="$(dpkg --print-architecture)" && \
     case "$ARCH" in \
@@ -168,6 +230,8 @@ RUN ARCH="$(dpkg --print-architecture)" && \
     unzip -q /tmp/kubelogin.zip -d /tmp && \
     install -m 0755 "/tmp/bin/linux_${ARCH}/kubelogin" /usr/local/bin/kubelogin && \
     rm -rf /tmp/kubelogin.zip /tmp/bin
+
+FROM toolchain
 
 # --- sandbox-agent itself ---
 COPY --from=builder /out/sandbox-agent /usr/local/bin/sandbox-agent
