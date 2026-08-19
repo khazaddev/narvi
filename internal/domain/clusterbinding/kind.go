@@ -8,8 +8,13 @@ type AuthKind string
 
 // The 3 recognized AuthKind values, in §27.4's OWN preference order
 // (cloud > oidc > static, "preferring federation over static material") --
-// see AllAuthKinds below for the same set as a ranged-over slice, and
-// PreferenceRank for that ordering expressed numerically.
+// see AllAuthKinds below for the same set as a ranged-over slice, in that
+// SAME declaration order. There is no separate PreferenceRank
+// function/field anywhere in this codebase: AllAuthKinds' own element
+// order IS how rung preference is expressed -- a caller that needs "is
+// rung A preferred over rung B" compares each rung's own index in that
+// slice (slices.Index or an equivalent scan), rather than looking up a
+// numeric rank.
 const (
 	AuthKindCloud  AuthKind = "cloud"
 	AuthKindOIDC   AuthKind = "oidc"
@@ -18,8 +23,9 @@ const (
 
 // AllAuthKinds is every recognized AuthKind, in this file's own
 // declaration order (== §27.4's own preference order) -- exported so a
-// caller (e.g. a test ranging exhaustively) never needs to hand-maintain
-// a second list.
+// caller (e.g. a test ranging exhaustively, or one that needs to compare
+// two rungs' own preference) never needs to hand-maintain a second list
+// or a separate numeric ranking.
 var AllAuthKinds = []AuthKind{AuthKindCloud, AuthKindOIDC, AuthKindStatic}
 
 // IsValidAuthKind reports whether k is one of the 3 recognized AuthKind

@@ -35,10 +35,15 @@
 //     own `cluster` stanza, plus a `cloud` field in Params naming WHICH
 //     of the three clouds (see this package's own params.go).
 //  2. AuthKindOIDC -- a self-managed cluster whose kube-apiserver trusts
-//     Narvi's own OIDC issuer directly; the kubeconfig's exec plugin is
-//     sandbox-agent's OWN `kube-credential` subcommand. Also requires
-//     ServerURL/CABundle, plus a `clientId` field in Params (the
-//     audience the kube-credential helper requests a token for).
+//     Narvi's own OIDC issuer directly; the kubeconfig authenticates via
+//     its own `tokenFile` field (client-go's documented, periodically-
+//     re-read mechanism), pointed at a token sandbox-agent mints and
+//     refreshes itself -- NOT an exec plugin (an earlier version of this
+//     rung used one, sandbox-agent's OWN `kube-credential` subcommand;
+//     see cmd/sandbox-agent/kubeconfig.go's own top doc comment, "Design
+//     correction", for why that shipped structurally non-functional and
+//     was replaced). Also requires ServerURL/CABundle, plus a `clientId`
+//     field in Params (the audience the token is minted for).
 //  3. AuthKindStatic -- an uploaded, ALREADY-COMPLETE kubeconfig document
 //     (its own server_url/ca_bundle baked in), stored as a §27.1
 //     sandbox_secrets value and referenced by name via a `secretName`

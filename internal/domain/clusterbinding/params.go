@@ -24,8 +24,10 @@ type CloudParams struct {
 
 // OIDCParams is AuthKindOIDC's own params shape -- the audience/client id
 // kube-apiserver's own --oidc-client-id trusts, and the exact value
-// cmd/sandbox-agent's kube-credential subcommand requests a §27.3 token
-// for.
+// cmd/sandbox-agent/kubeconfig.go's own applyClusterBinding requests a
+// §27.3-mechanism token for (mintCloudIdentityToken -- the SAME function
+// every cloud_identity_bindings token is minted through, not a separate
+// subcommand; see kubeconfig.go's own top doc comment).
 type OIDCParams struct {
 	ClientID string `json:"clientId"`
 }

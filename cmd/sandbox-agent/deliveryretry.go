@@ -106,11 +106,12 @@ func classifyDeliveryFetchError(err error) error {
 //     classifyDeliveryFetchError already retries.
 //
 // The caller (cmd/sandbox-agent/cloudidentity.go's mintCloudIdentityToken,
-// and the kube-credential subcommand) degrades warn-and-continue on
-// EITHER outcome (retries exhausted, or a first-attempt terminal
-// classification) -- see that file's own doc comment for the full
-// "what happens to the token file" resolution, consistent with the same
-// posture Step 72 established.
+// shared by every mint site including kubeconfig.go's own
+// applyClusterBinding for the §27.4 AuthKindOIDC cluster rung) degrades
+// warn-and-continue on EITHER outcome (retries exhausted, or a
+// first-attempt terminal classification) -- see that file's own doc
+// comment for the full "what happens to the token file" resolution,
+// consistent with the same posture Step 72 established.
 func classifyMintTokenError(err error) error {
 	if err == nil {
 		return nil

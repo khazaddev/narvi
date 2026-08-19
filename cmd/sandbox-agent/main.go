@@ -144,10 +144,8 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -179,22 +177,30 @@ import (
 
 func main() {
 	// A bare-bones dispatch, not a flag-parsing library, mirroring
-	// cmd/control-plane/main.go's own subcommand pattern: two alternate
-	// subcommands exist today -- "credential-helper" (the process git
+	// cmd/control-plane/main.go's own subcommand pattern: ONE alternate
+	// subcommand exists today -- "credential-helper" (the process git
 	// itself invokes per gitclone's own `-c credential.helper=...`
-	// configuration) and "kube-credential" (Step 73b, §27.4's own
-	// AuthKindOIDC cluster rung -- the process a kubeconfig's own `exec`
-	// stanza invokes, kubeconfig.go's own renderExecKubeconfig) --
-	// everything else falls through to the normal boot sequence.
+	// configuration) -- everything else falls through to the normal boot
+	// sequence.
+	//
+	// Step 73b (§27.4) originally shipped a SECOND subcommand here,
+	// "kube-credential", for the AuthKindOIDC cluster rung's own exec
+	// plugin. Adversarial-review HIGH fix: that subcommand needed
+	// NARVI_SESSION_CONFIG (via boot.Load()) to mint anything, but every
+	// process that can ever run `kubectl` (opencodeproc.Spawn, boot/
+	// hooks.go's runHook, boot/runboot.go's services.yml dispatch) strips
+	// that var from the child env on purpose -- it carries this sandbox's
+	// own live bearer token -- so the exec plugin's own re-invocation of
+	// this binary had no env to inherit it FROM and failed 100% of the
+	// time. Removed entirely, never replaced with an equivalent
+	// subcommand: kubeconfig.go's own applyClusterBinding now mints that
+	// rung's own token the SAME way §27.3's cloud_identity_bindings
+	// tokens are minted and points the rendered kubeconfig's own
+	// `tokenFile` field straight at the resulting file -- see
+	// kubeconfig.go's own top doc comment ("Design correction") for the
+	// full reasoning and the client-go source verification behind it.
 	if len(os.Args) >= 2 && os.Args[1] == "credential-helper" {
 		if err := runCredentialHelper(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
-	}
-	if len(os.Args) >= 2 && os.Args[1] == "kube-credential" {
-		if err := runKubeCredentialHelper(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -262,114 +268,6 @@ func runCredentialHelper(args []string) error {
 		context.Background(), os.Stdin, os.Stdout, cache, client,
 		cfg.SessionConfig.SessionId, cfg.SessionConfig.SandboxToken, cfg.SessionConfig.Gen, timeouts.CredentialExpiryBuffer,
 	)
-}
-
-// execCredential is the standard client-go/kubectl "ExecCredential"
-// output shape (client.authentication.k8s.io/v1beta1) -- the EXACT
-// protocol precedent this Step's own brief names: runCredentialHelper's
-// git-credential-helper protocol (above) for git, this one for
-// client-go's own exec-credential plugin mechanism. Status.Token is a
-// bearer token kube-apiserver's own --oidc-issuer-url authenticator
-// validates as an OIDC ID token -- no client certificate variant is ever
-// produced here (§27.4's own AuthKindOIDC rung is token-only, unlike
-// AuthKindCloud's own cloud-specific plugins, which this binary never
-// implements itself -- §27.3's "Narvi implements no per-cloud exchange
-// code" extended to §27.4).
-type execCredential struct {
-	APIVersion string               `json:"apiVersion"`
-	Kind       string               `json:"kind"`
-	Status     execCredentialStatus `json:"status"`
-}
-
-type execCredentialStatus struct {
-	Token               string `json:"token"`
-	ExpirationTimestamp string `json:"expirationTimestamp"`
-}
-
-// runKubeCredentialHelper implements the "kube-credential <clientID>"
-// subcommand a §27.4 AuthKindOIDC kubeconfig's own `exec` stanza invokes
-// (kubeconfig.go's own renderExecKubeconfig call, for that rung) -- the
-// EXACT git-credential-helper subcommand precedent (runCredentialHelper,
-// above) applied to client-go's own exec-credential protocol instead:
-// git's helper protocol there, ExecCredential JSON here. A SEPARATE
-// process client-go spawns on (with client-go's own caching, keyed off
-// the PREVIOUS invocation's own returned expirationTimestamp -- see this
-// function's own doc comment on why this makes NO disk-cache mechanism
-// of its own necessary, unlike credentials.Cache's git-credential-helper
-// sibling), inheriting sandbox-agent's own environment (again mirroring
-// runCredentialHelper exactly) -- re-reading NARVI_* via boot.Load() here
-// is correct and sufficient.
-//
-// clientID is this rung's own `aud` -- the audience kube-apiserver's own
-// --oidc-client-id config trusts (clusterbinding.OIDCParams.ClientID,
-// embedded directly into the rendered kubeconfig's own exec.args by
-// kubeconfig.go, since it is public, customer-configured metadata, never
-// secret). mintCloudIdentityToken (cloudidentity.go) is reused UNCHANGED
-// -- the SAME bounded-retry mint call this binary's own boot-time
-// population/refresh-loop callers already use, so a transient CP blip at
-// the exact moment a customer runs `kubectl` gets the SAME resilience a
-// background refresh does, not a bare single attempt.
-//
-// A fresh mint on EVERY invocation (never a "is the old one still valid"
-// check of its own) is correct, not wasteful: client-go's OWN exec-plugin
-// cache already avoids re-invoking this subcommand at all until the
-// PREVIOUS response's own expirationTimestamp approaches, so this
-// function is simply never called more often than client-go itself
-// decides a fresh token is actually needed.
-func runKubeCredentialHelper(args []string) error {
-	if len(args) != 1 {
-		return errors.New("sandbox-agent: kube-credential: usage: sandbox-agent kube-credential <clientID>")
-	}
-	audience := args[0]
-
-	cfg, err := boot.Load()
-	if err != nil {
-		return fmt.Errorf("sandbox-agent: kube-credential: load config: %w", err)
-	}
-	if cfg.SessionConfig == nil {
-		return errors.New("sandbox-agent: kube-credential: NARVI_SESSION_CONFIG is unset -- nothing to mint a token for")
-	}
-
-	timeouts := platform.DefaultTimeouts()
-	client, err := credentials.NewCPClient(cfg.SessionConfig.ControlPlaneWsUrl, timeouts.CloudIdentityTokenMintTimeout)
-	if err != nil {
-		return fmt.Errorf("sandbox-agent: kube-credential: build CP client: %w", err)
-	}
-
-	return runKubeCredential(context.Background(), os.Stdout, client, cfg.SessionConfig.SessionId, cfg.SessionConfig.SandboxToken, cfg.SessionConfig.Gen, audience, timeouts)
-}
-
-// runKubeCredential is runKubeCredentialHelper's own testable core --
-// factored out so a test can supply a fake credentials.CloudIdentityTokenMinter
-// and a captured stdout buffer without going through a real boot.Load()/
-// os.Stdout, mirroring credentials.RunGet's own identical
-// stdin/stdout-as-parameters shape (internal/sandboxagent/credentials/get.go).
-func runKubeCredential(ctx context.Context, stdout io.Writer, client credentials.CloudIdentityTokenMinter, sessionID, sandboxToken string, gen int, audience string, timeouts platform.Timeouts) error {
-	minted, ok := mintCloudIdentityToken(ctx, client, sessionID, sandboxToken, gen, audience, timeouts)
-	if !ok {
-		return fmt.Errorf("sandbox-agent: kube-credential: mint cloud identity token for audience %q failed", audience)
-	}
-
-	out, err := buildExecCredentialJSON(minted)
-	if err != nil {
-		return fmt.Errorf("sandbox-agent: kube-credential: encode ExecCredential: %w", err)
-	}
-	_, err = stdout.Write(append(out, '\n'))
-	return err
-}
-
-// buildExecCredentialJSON renders minted into the exact ExecCredential
-// JSON document client-go's own exec-credential plugin protocol expects
-// on stdout (execCredential's own doc comment, above).
-func buildExecCredentialJSON(minted credentials.MintedCloudIdentityToken) ([]byte, error) {
-	return json.Marshal(execCredential{
-		APIVersion: execAPIVersion,
-		Kind:       "ExecCredential",
-		Status: execCredentialStatus{
-			Token:               minted.Token,
-			ExpirationTimestamp: minted.ExpiresAt.UTC().Format(time.RFC3339),
-		},
-	})
 }
 
 // commandHandler is sandbox-agent's own wsbridge.CommandHandler
@@ -1155,7 +1053,14 @@ func run() error {
 	// cfg.SessionConfig is nil -- harmless, since cloudIdentityStates is
 	// then also nil/empty and the refresh loop's own registration is
 	// itself gated on cfg.SessionConfig != nil (see that call site's own
-	// comment, below).
+	// comment, below). Since this fix (adversarial-review HIGH), this
+	// slice also carries at most one §27.4 AuthKindOIDC cluster-binding
+	// entry (kubeconfig.go's own applyClusterBinding, appended at its own
+	// call site below) alongside every §27.3 cloud_identity_bindings
+	// entry -- ONE refresh loop, ONE slice, for both mechanisms; see
+	// applyClusterBinding's own doc comment for why that rung's own token
+	// needs the SAME half-life refresh every other entry here already
+	// gets.
 	var cloudIdentityStates []cloudIdentityBindingState
 	var cloudIdentityMintClient credentials.CPClient
 	if cfg.SessionConfig != nil {
@@ -1307,17 +1212,19 @@ func run() error {
 
 		// Step 73b ("cloud identity: sandbox-side consumption + kubeconfig
 		// injection", §27.3/§27.4): resolve this session's own cloud-
-		// identity bindings + cluster binding, mint one token per binding,
-		// and render a kubeconfig -- BEFORE spawning `opencode serve`
-		// (below) and BEFORE the boot sequence's own first hook run
-		// (runBootSequence), the SAME ordering §27.1 already requires of
-		// sandbox secrets/OpenCode config. resolvedSandboxSecrets (already
-		// fetched, above) is reused directly for the AuthKindStatic
-		// kubeconfig rung's own sandbox_secrets lookup -- no second CP
-		// round trip. Every failure along the way is warn-and-continue,
-		// folded into bootDegradeNotes exactly like every other boot-time
-		// fetch in this block (§27.1's own "recorded in the boot log and
-		// AGENTS.md" requirement, extended here).
+		// identity bindings + cluster binding, mint one token per binding
+		// (plus, for an AuthKindOIDC cluster binding, its own token --
+		// applyClusterBinding's own doc comment), and render a kubeconfig
+		// -- BEFORE spawning `opencode serve` (below) and BEFORE the boot
+		// sequence's own first hook run (runBootSequence), the SAME
+		// ordering §27.1 already requires of sandbox secrets/OpenCode
+		// config. resolvedSandboxSecrets (already fetched, above) is
+		// reused directly for the AuthKindStatic kubeconfig rung's own
+		// sandbox_secrets lookup -- no second CP round trip. Every failure
+		// along the way is warn-and-continue, folded into bootDegradeNotes
+		// exactly like every other boot-time fetch in this block (§27.1's
+		// own "recorded in the boot log and AGENTS.md" requirement,
+		// extended here).
 		cloudIdentityDelivery, cloudIdentityFetchOK := fetchCloudIdentityConfig(ctx, cfg, timeouts)
 		if !cloudIdentityFetchOK {
 			bootDegradeNotes = append(bootDegradeNotes, "cloud identity/kubeconfig: boot-time fetch failed after retrying; this session booted with NO cloud identity env vars or kubeconfig injected (warn-and-continue degrade policy, §27.3/§27.4)")
@@ -1330,7 +1237,17 @@ func run() error {
 				cloudIdentityMintClient = client
 				var cloudIdentityEnv []string
 				cloudIdentityEnv, cloudIdentityStates = populateCloudIdentityTokenFiles(ctx, cfg, timeouts, client, cloudIdentityDelivery.Bindings, cloudIdentityDir)
-				kubeconfigEnv := applyClusterBinding(cloudIdentityDelivery.ClusterBinding, resolvedSandboxSecrets, cloudIdentityDir)
+				// applyClusterBinding also mints (AuthKindOIDC only) via
+				// the SAME client/session identity -- clusterBindingState
+				// is non-nil exactly when that rung's own mint succeeded,
+				// and MUST be folded into cloudIdentityStates so
+				// runCloudIdentityRefreshLoop (below, this SAME function)
+				// keeps refreshing it at half-life like every other entry
+				// -- see applyClusterBinding's own doc comment.
+				kubeconfigEnv, clusterBindingState := applyClusterBinding(ctx, client, cfg.SessionConfig.SessionId, cfg.SessionConfig.SandboxToken, cfg.SessionConfig.Gen, cloudIdentityDelivery.ClusterBinding, resolvedSandboxSecrets, timeouts, cloudIdentityDir)
+				if clusterBindingState != nil {
+					cloudIdentityStates = append(cloudIdentityStates, *clusterBindingState)
+				}
 				sandboxSecretEnv = append(sandboxSecretEnv, cloudIdentityEnv...)
 				sandboxSecretEnv = append(sandboxSecretEnv, kubeconfigEnv...)
 			}

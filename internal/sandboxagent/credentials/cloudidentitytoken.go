@@ -11,11 +11,14 @@
 // cmd/sandbox-agent/cloudidentity.go's own doc comment):
 //   - cmd/sandbox-agent/cloudidentity.go's own token-file population/
 //     refresh loop, once per resolved binding.
-//   - cmd/sandbox-agent's own kube-credential subcommand (main.go,
-//     runKubeCredentialHelper), for the AuthKindOIDC cluster rung -- a
-//     fresh mint on EVERY invocation, since client-go's own exec-plugin
-//     cache already avoids over-invoking based on the returned
-//     expirationTimestamp (see that subcommand's own doc comment).
+//   - cmd/sandbox-agent/kubeconfig.go's own applyClusterBinding, for the
+//     §27.4 AuthKindOIDC cluster rung -- minted once at boot and again on
+//     every half-life refresh (the SAME runCloudIdentityRefreshLoop every
+//     OTHER cloud_identity_bindings token already goes through), never
+//     from a dedicated subcommand invocation -- see kubeconfig.go's own
+//     top doc comment ("Design correction") for why an earlier version of
+//     this rung used a separate `kube-credential` subcommand instead, and
+//     why that shipped structurally non-functional.
 
 package credentials
 
@@ -83,8 +86,9 @@ type mintCloudIdentityTokenResponse struct {
 // every OTHER delivery endpoint's own 503-as-retryable default), any
 // transport/decode failure as a plain wrapped error. Bounded retry is
 // this method's CALLER's own job (cmd/sandbox-agent/cloudidentity.go's
-// mintCloudIdentityToken, and the kube-credential subcommand), exactly
-// like every other Fetch*/Mint* method in this package.
+// mintCloudIdentityToken, called from both that file's own boot/refresh
+// callers and kubeconfig.go's applyClusterBinding), exactly like every
+// other Fetch*/Mint* method in this package.
 //
 // The raw response body is deliberately never embedded in the returned
 // error -- mirrors this package's own established rationale. The

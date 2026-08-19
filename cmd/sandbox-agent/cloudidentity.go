@@ -225,8 +225,11 @@ func fetchCloudIdentityConfig(ctx context.Context, cfg boot.Config, timeouts pla
 // happens on 503/403/a transient failure"). Shared by three callers: this
 // file's own populateCloudIdentityTokenFiles (initial, boot-time
 // population) and refreshOneBinding (the half-life background refresh),
-// AND runKubeCredentialHelper (main.go, the AuthKindOIDC kube-credential
-// subcommand) -- every mint in this binary goes through this ONE function.
+// AND kubeconfig.go's own applyClusterBinding (the §27.4 AuthKindOIDC
+// cluster-binding rung -- adversarial-review HIGH fix replaced that
+// rung's original standalone `kube-credential` subcommand with a call
+// straight into this SAME function, see applyClusterBinding's own doc
+// comment) -- every mint in this binary goes through this ONE function.
 //
 // ok=false means every attempt failed (or the very first one hit a
 // terminal classification) -- logged (Warn, naming the audience -- public,

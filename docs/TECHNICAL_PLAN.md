@@ -2080,14 +2080,30 @@ rungs, preferring federation over static material:
    of which consumes exactly the env vars §27.3 already set. Kubernetes' client-go
    exec-credential mechanism does the rest; the toolchain image (§27.7) carries the three plugins.
 2. **`oidc`** — a self-managed cluster whose kube-apiserver is configured to trust Narvi's own
-   issuer directly (`--oidc-issuer-url` + client-id + claim mappings): the kubeconfig's exec
-   plugin is **sandbox-agent's own subcommand** (`kube-credential`), which fetches a CP-minted
-   token (§27.3's endpoint, `aud` = the cluster's configured client id) and prints a standard
-   `ExecCredential` JSON — the exact same shape as the git-credential-helper subcommand precedent
-   (`runCredentialHelper`, `cmd/sandbox-agent/main.go`): git's helper protocol there, client-go's
-   here. Authorization inside the cluster is the customer's own RBAC binding on the token's
-   claims (recommend a namespace-scoped Role, never cluster-admin — documented, not enforced,
-   since the cluster is the customer's).
+   issuer directly (`--oidc-issuer-url` + client-id + claim mappings): the kubeconfig authenticates
+   via its own **`tokenFile`** field (client-go's documented mechanism — `tools/clientcmd/api.
+   AuthInfo.TokenFile`: "periodically read... the last successfully read content is used as the
+   bearer token"), pointed at a token sandbox-agent mints via the SAME CP endpoint §27.3's cloud
+   bindings already mint through (`aud` = the cluster's configured client id) and refreshes at
+   half-life through the SAME background loop — structurally identical to a §27.3
+   cloud_identity_bindings token, not a separate mechanism. Authorization inside the cluster is the
+   customer's own RBAC binding on the token's claims (recommend a namespace-scoped Role, never
+   cluster-admin — documented, not enforced, since the cluster is the customer's).
+   **This corrects an earlier version of this rung** (found structurally non-functional by
+   adversarial review, Step 73): the original design gave this rung its own exec-plugin
+   subcommand (`kube-credential`), justified as "the exact same shape as the git-credential-helper
+   subcommand precedent (`runCredentialHelper`)". That analogy does not hold: git's own credential
+   helper is spawned **by sandbox-agent itself** (`gitclone`'s clone/push calls inherit
+   sandbox-agent's own environment on purpose), so its re-exec of this binary inherits
+   `NARVI_SESSION_CONFIG` from sandbox-agent's own process. `kubectl`, by contrast, is only ever
+   run by the agent **inside** the already-stripped `opencode serve`/hook/services.yml process tree
+   — sandbox-agent never spawns `kubectl` itself — and every one of those three spawn call sites
+   deliberately strips `NARVI_SESSION_CONFIG` before handing the child its environment (§25/§27.1's
+   own "no legitimate need to see the sandbox's own plaintext bearer token" reasoning, applied
+   identically at each site). The `kube-credential` subcommand therefore had no environment to ever
+   read that variable from and failed on every invocation. The `tokenFile` mechanism above needs no
+   such re-exec and no new IPC surface at all — client-go reads the credential straight off disk,
+   the same way the three cloud SDKs already do for §27.3's own tokens.
 3. **`static`** — an uploaded kubeconfig for clusters with no OIDC path at all, stored as a §27.1
    secret (the value is the file content; delivered and written to disk by sandbox-agent, never
    env-var-expanded). Supported honestly as the lowest rung and named as such: long-lived

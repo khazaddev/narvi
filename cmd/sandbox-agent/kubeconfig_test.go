@@ -1,25 +1,34 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/khazaddev/narvi/internal/domain/sandboxboot"
+	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
 	"github.com/khazaddev/narvi/internal/sandboxagent/credentials"
+	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
 )
 
 func strPtrKC(s string) *string { return &s }
 
 func TestApplyClusterBinding_Nil(t *testing.T) {
 	dir := t.TempDir()
-	env := applyClusterBinding(nil, nil, dir)
+	env, state := applyClusterBinding(context.Background(), &fakeMinter{}, "sess-1", "tok", 1, nil, nil, fastMintTimeouts(), dir)
 	if env != nil {
-		t.Errorf("applyClusterBinding(nil, ...) = %v, want nil", env)
+		t.Errorf("applyClusterBinding(nil, ...) env = %v, want nil", env)
+	}
+	if state != nil {
+		t.Errorf("applyClusterBinding(nil, ...) state = %v, want nil", state)
 	}
 	if _, err := os.Stat(filepath.Join(dir, kubeconfigFileName)); err == nil {
 		t.Errorf("kubeconfig file must not be written when cluster is nil")
@@ -34,10 +43,13 @@ func TestApplyClusterBinding_Static(t *testing.T) {
 	}
 	secrets := map[string]string{"KUBE_STATIC_CONFIG": "apiVersion: v1\nkind: Config\n# a real uploaded kubeconfig, verbatim\n"}
 
-	env := applyClusterBinding(cluster, secrets, dir)
+	env, state := applyClusterBinding(context.Background(), &fakeMinter{}, "sess-1", "tok", 1, cluster, secrets, fastMintTimeouts(), dir)
 	wantPath := filepath.Join(dir, kubeconfigFileName)
 	if len(env) != 1 || env[0] != "KUBECONFIG="+wantPath {
 		t.Fatalf("env = %v, want [KUBECONFIG=%s]", env, wantPath)
+	}
+	if state != nil {
+		t.Errorf("state = %+v, want nil -- the static rung mints nothing, there is no token to refresh", state)
 	}
 
 	got, err := os.ReadFile(wantPath)
@@ -54,9 +66,9 @@ func TestApplyClusterBinding_StaticMissingSecret(t *testing.T) {
 	params, _ := json.Marshal(map[string]string{"secretName": "KUBE_STATIC_CONFIG"})
 	cluster := &credentials.CloudIdentityConfigCluster{Name: "prod", AuthKind: "static", Params: params}
 
-	env := applyClusterBinding(cluster, map[string]string{}, dir)
-	if env != nil {
-		t.Errorf("applyClusterBinding() = %v, want nil (referenced secret did not resolve)", env)
+	env, state := applyClusterBinding(context.Background(), &fakeMinter{}, "sess-1", "tok", 1, cluster, map[string]string{}, fastMintTimeouts(), dir)
+	if env != nil || state != nil {
+		t.Errorf("applyClusterBinding() = (%v, %v), want (nil, nil) (referenced secret did not resolve)", env, state)
 	}
 }
 
@@ -69,10 +81,13 @@ func TestApplyClusterBinding_Cloud(t *testing.T) {
 		CaBundle:  strPtrKC("-----BEGIN CERTIFICATE-----\nMIIB...\n-----END CERTIFICATE-----\n"),
 	}
 
-	env := applyClusterBinding(cluster, nil, dir)
+	env, state := applyClusterBinding(context.Background(), &fakeMinter{}, "sess-1", "tok", 1, cluster, nil, fastMintTimeouts(), dir)
 	wantPath := filepath.Join(dir, kubeconfigFileName)
 	if len(env) != 1 || env[0] != "KUBECONFIG="+wantPath {
 		t.Fatalf("env = %v, want [KUBECONFIG=%s]", env, wantPath)
+	}
+	if state != nil {
+		t.Errorf("state = %+v, want nil -- the cloud rung mints nothing of ITS OWN (it rides §27.3's already-minted cloud_identity_bindings tokens)", state)
 	}
 
 	doc := readKubeconfigDoc(t, wantPath)
@@ -87,12 +102,18 @@ func TestApplyClusterBinding_Cloud(t *testing.T) {
 		t.Fatalf("users = %+v, want exactly 1", doc.Users)
 	}
 	exec := doc.Users[0].User.Exec
+	if exec == nil {
+		t.Fatalf("exec = nil, want a populated exec stanza for the cloud rung")
+	}
 	if exec.Command != "aws" {
 		t.Errorf("exec.command = %q, want %q", exec.Command, "aws")
 	}
 	wantArgs := []string{"eks", "get-token", "--cluster-name", "prod-eks", "--region", "us-east-1"}
 	if strings.Join(exec.Args, ",") != strings.Join(wantArgs, ",") {
 		t.Errorf("exec.args = %v, want %v", exec.Args, wantArgs)
+	}
+	if doc.Users[0].User.TokenFile != "" {
+		t.Errorf("tokenFile = %q, want empty -- the cloud rung authenticates via exec, never tokenFile", doc.Users[0].User.TokenFile)
 	}
 }
 
@@ -104,12 +125,15 @@ func TestApplyClusterBinding_CloudGCPNoRegionArg(t *testing.T) {
 		ServerURL: strPtrKC("https://gke.example"),
 		CaBundle:  strPtrKC("ca-bundle"),
 	}
-	env := applyClusterBinding(cluster, nil, dir)
+	env, _ := applyClusterBinding(context.Background(), &fakeMinter{}, "sess-1", "tok", 1, cluster, nil, fastMintTimeouts(), dir)
 	if len(env) != 1 {
 		t.Fatalf("env = %v, want 1 entry", env)
 	}
 	doc := readKubeconfigDoc(t, filepath.Join(dir, kubeconfigFileName))
 	exec := doc.Users[0].User.Exec
+	if exec == nil {
+		t.Fatalf("exec = nil, want a populated exec stanza")
+	}
 	if exec.Command != "gke-gcloud-auth-plugin" {
 		t.Errorf("exec.command = %q, want %q", exec.Command, "gke-gcloud-auth-plugin")
 	}
@@ -122,11 +146,24 @@ func TestApplyClusterBinding_CloudMissingServerURL(t *testing.T) {
 	dir := t.TempDir()
 	params, _ := json.Marshal(map[string]string{"cloud": "aws"})
 	cluster := &credentials.CloudIdentityConfigCluster{Name: "prod", AuthKind: "cloud", Params: params, CaBundle: strPtrKC("ca")}
-	env := applyClusterBinding(cluster, nil, dir)
-	if env != nil {
-		t.Errorf("applyClusterBinding() = %v, want nil (missing serverUrl)", env)
+	env, state := applyClusterBinding(context.Background(), &fakeMinter{}, "sess-1", "tok", 1, cluster, nil, fastMintTimeouts(), dir)
+	if env != nil || state != nil {
+		t.Errorf("applyClusterBinding() = (%v, %v), want (nil, nil) (missing serverUrl)", env, state)
 	}
 }
+
+// --- AuthKindOIDC: the fixed rung (adversarial-review HIGH fix) ---
+//
+// This rung previously rendered an exec-plugin kubeconfig invoking this
+// SAME binary's own now-removed "kube-credential" subcommand -- see
+// kubeconfig.go's own top doc comment ("Design correction") for why that
+// design shipped structurally non-functional (every process that can
+// ever run `kubectl` has NARVI_SESSION_CONFIG deliberately stripped from
+// its own env, so the subcommand's re-exec of this binary had nothing to
+// read that variable from). These tests pin the REPLACEMENT design: a
+// minted token written to disk and referenced by the kubeconfig's own
+// `tokenFile` field -- no subcommand, no exec plugin, no env var at all
+// for the credential itself.
 
 func TestApplyClusterBinding_OIDC(t *testing.T) {
 	dir := t.TempDir()
@@ -136,35 +173,122 @@ func TestApplyClusterBinding_OIDC(t *testing.T) {
 		ServerURL: strPtrKC("https://k8s.example:6443"),
 		CaBundle:  strPtrKC("ca-bundle"),
 	}
+	m := &fakeMinter{tokens: map[string]credentials.MintedCloudIdentityToken{
+		"my-oidc-client": {Token: "minted-oidc-jwt", ExpiresAt: time.Now().Add(10 * time.Minute)},
+	}}
 
-	env := applyClusterBinding(cluster, nil, dir)
-	if len(env) != 1 {
-		t.Fatalf("env = %v, want 1 entry", env)
+	env, state := applyClusterBinding(context.Background(), m, "sess-1", "sandbox-token", 3, cluster, nil, fastMintTimeouts(), dir)
+	wantPath := filepath.Join(dir, kubeconfigFileName)
+	if len(env) != 1 || env[0] != "KUBECONFIG="+wantPath {
+		t.Fatalf("env = %v, want [KUBECONFIG=%s]", env, wantPath)
 	}
-	doc := readKubeconfigDoc(t, filepath.Join(dir, kubeconfigFileName))
-	exec := doc.Users[0].User.Exec
-	if exec.APIVersion != execAPIVersion {
-		t.Errorf("exec.apiVersion = %q, want %q", exec.APIVersion, execAPIVersion)
+	if state == nil {
+		t.Fatalf("state = nil, want a non-nil cloudIdentityBindingState -- the oidc rung's own minted token must be registered for half-life refresh")
 	}
-	selfPath, err := os.Executable()
+	if state.Audience != "my-oidc-client" {
+		t.Errorf("state.Audience = %q, want %q", state.Audience, "my-oidc-client")
+	}
+	wantTokenPath := filepath.Join(dir, oidcTokenFileName)
+	if state.TokenPath != wantTokenPath {
+		t.Errorf("state.TokenPath = %q, want %q", state.TokenPath, wantTokenPath)
+	}
+
+	doc := readKubeconfigDoc(t, wantPath)
+	if len(doc.Users) != 1 {
+		t.Fatalf("users = %+v, want exactly 1", doc.Users)
+	}
+	if doc.Users[0].User.Exec != nil {
+		t.Errorf("exec = %+v, want nil -- the oidc rung must never render an exec stanza (that design was removed)", doc.Users[0].User.Exec)
+	}
+	if doc.Users[0].User.TokenFile != wantTokenPath {
+		t.Errorf("tokenFile = %q, want %q", doc.Users[0].User.TokenFile, wantTokenPath)
+	}
+
+	gotToken, err := os.ReadFile(wantTokenPath)
 	if err != nil {
-		t.Fatalf("os.Executable: %v", err)
+		t.Fatalf("read oidc token file: %v", err)
 	}
-	if exec.Command != selfPath {
-		t.Errorf("exec.command = %q, want this binary's own path %q", exec.Command, selfPath)
+	if string(gotToken) != "minted-oidc-jwt" {
+		t.Errorf("token file content = %q, want %q", gotToken, "minted-oidc-jwt")
 	}
-	wantArgs := []string{"kube-credential", "my-oidc-client"}
-	if strings.Join(exec.Args, ",") != strings.Join(wantArgs, ",") {
-		t.Errorf("exec.args = %v, want %v", exec.Args, wantArgs)
+	fi, err := os.Stat(wantTokenPath)
+	if err != nil {
+		t.Fatalf("stat oidc token file: %v", err)
+	}
+	if perm := fi.Mode().Perm(); perm != 0o600 {
+		t.Errorf("oidc token file mode = %o, want 0600", perm)
+	}
+}
+
+// TestApplyClusterBinding_OIDC_TokenFilePathMatchesRefreshState is this
+// fix's own MUTATION-TEST target (report this name): the path the
+// rendered kubeconfig names in its own `tokenFile` field MUST be
+// byte-identical to state.TokenPath -- the path
+// runCloudIdentityRefreshLoop actually keeps refreshed (main.go folds
+// this returned state into the SAME cloudIdentityStates slice as every
+// §27.3 cloud_identity_bindings entry). If a future edit changes
+// oidcTokenFileName in one of the two call sites but not the other (or
+// wires the wrong path into either renderTokenFileKubeconfig or the
+// returned state), kubectl would silently authenticate against a file
+// nobody is refreshing -- exactly the "kubectl breaks partway into a
+// session" failure mode this Step's own brief warned against. This test
+// makes that divergence fail loudly instead.
+func TestApplyClusterBinding_OIDC_TokenFilePathMatchesRefreshState(t *testing.T) {
+	dir := t.TempDir()
+	params, _ := json.Marshal(map[string]string{"clientId": "client-x"})
+	cluster := &credentials.CloudIdentityConfigCluster{
+		Name: "self-managed", AuthKind: "oidc", Params: params,
+		ServerURL: strPtrKC("https://k8s.example:6443"),
+		CaBundle:  strPtrKC("ca-bundle"),
+	}
+	m := &fakeMinter{tokens: map[string]credentials.MintedCloudIdentityToken{"client-x": {Token: "tok"}}}
+
+	env, state := applyClusterBinding(context.Background(), m, "sess-1", "tok", 1, cluster, nil, fastMintTimeouts(), dir)
+	if len(env) != 1 || state == nil {
+		t.Fatalf("applyClusterBinding() = (%v, %v), want a populated env and non-nil state", env, state)
+	}
+
+	doc := readKubeconfigDoc(t, filepath.Join(dir, kubeconfigFileName))
+	if doc.Users[0].User.TokenFile != state.TokenPath {
+		t.Fatalf("rendered kubeconfig's own tokenFile = %q, want it to EXACTLY match the refreshed state's own TokenPath = %q -- these must never diverge, or kubectl authenticates against a file nothing refreshes", doc.Users[0].User.TokenFile, state.TokenPath)
+	}
+}
+
+func TestApplyClusterBinding_OIDC_MintFailure(t *testing.T) {
+	dir := t.TempDir()
+	params, _ := json.Marshal(map[string]string{"clientId": "my-oidc-client"})
+	cluster := &credentials.CloudIdentityConfigCluster{
+		Name: "self-managed", AuthKind: "oidc", Params: params,
+		ServerURL: strPtrKC("https://k8s.example:6443"),
+		CaBundle:  strPtrKC("ca-bundle"),
+	}
+	m := &fakeMinter{failFirstN: 100, statusCode: http.StatusForbidden}
+
+	env, state := applyClusterBinding(context.Background(), m, "sess-1", "tok", 1, cluster, nil, fastMintTimeouts(), dir)
+	if env != nil || state != nil {
+		t.Errorf("applyClusterBinding() = (%v, %v), want (nil, nil) -- a failed mint must skip kubeconfig injection entirely", env, state)
+	}
+	if _, err := os.Stat(filepath.Join(dir, kubeconfigFileName)); err == nil {
+		t.Errorf("kubeconfig file must not be written when the oidc rung's own token mint fails")
+	}
+}
+
+func TestApplyClusterBinding_OIDCMissingServerURL(t *testing.T) {
+	dir := t.TempDir()
+	params, _ := json.Marshal(map[string]string{"clientId": "c"})
+	cluster := &credentials.CloudIdentityConfigCluster{Name: "x", AuthKind: "oidc", Params: params, CaBundle: strPtrKC("ca")}
+	env, state := applyClusterBinding(context.Background(), &fakeMinter{}, "sess-1", "tok", 1, cluster, nil, fastMintTimeouts(), dir)
+	if env != nil || state != nil {
+		t.Errorf("applyClusterBinding() = (%v, %v), want (nil, nil) (missing serverUrl)", env, state)
 	}
 }
 
 func TestApplyClusterBinding_UnrecognizedAuthKind(t *testing.T) {
 	dir := t.TempDir()
 	cluster := &credentials.CloudIdentityConfigCluster{Name: "x", AuthKind: "manual", Params: json.RawMessage(`{}`)}
-	env := applyClusterBinding(cluster, nil, dir)
-	if env != nil {
-		t.Errorf("applyClusterBinding() = %v, want nil", env)
+	env, state := applyClusterBinding(context.Background(), &fakeMinter{}, "sess-1", "tok", 1, cluster, nil, fastMintTimeouts(), dir)
+	if env != nil || state != nil {
+		t.Errorf("applyClusterBinding() = (%v, %v), want (nil, nil)", env, state)
 	}
 }
 
@@ -174,9 +298,9 @@ func TestApplyClusterBinding_InvalidParams(t *testing.T) {
 		Name: "x", AuthKind: "cloud", Params: json.RawMessage(`{}`), // missing "cloud" field
 		ServerURL: strPtrKC("https://x"), CaBundle: strPtrKC("ca"),
 	}
-	env := applyClusterBinding(cluster, nil, dir)
-	if env != nil {
-		t.Errorf("applyClusterBinding() = %v, want nil", env)
+	env, state := applyClusterBinding(context.Background(), &fakeMinter{}, "sess-1", "tok", 1, cluster, nil, fastMintTimeouts(), dir)
+	if env != nil || state != nil {
+		t.Errorf("applyClusterBinding() = (%v, %v), want (nil, nil)", env, state)
 	}
 }
 
@@ -186,7 +310,7 @@ func TestApplyClusterBinding_KubeconfigPermissions(t *testing.T) {
 	dir := t.TempDir()
 	params, _ := json.Marshal(map[string]string{"secretName": "S"})
 	cluster := &credentials.CloudIdentityConfigCluster{Name: "x", AuthKind: "static", Params: params}
-	applyClusterBinding(cluster, map[string]string{"S": "kubeconfig content"}, dir)
+	applyClusterBinding(context.Background(), &fakeMinter{}, "sess-1", "tok", 1, cluster, map[string]string{"S": "kubeconfig content"}, fastMintTimeouts(), dir)
 
 	fi, err := os.Stat(filepath.Join(dir, kubeconfigFileName))
 	if err != nil {
@@ -194,6 +318,71 @@ func TestApplyClusterBinding_KubeconfigPermissions(t *testing.T) {
 	}
 	if perm := fi.Mode().Perm(); perm != 0o600 {
 		t.Errorf("kubeconfig file mode = %o, want 0600", perm)
+	}
+}
+
+// --- real-process proof: the oidc rung's own token reaches a REAL
+// spawned hook through the existing hook path, with NO NARVI_SESSION_CONFIG
+// anywhere in its environment ---
+
+// TestOIDCClusterBindingTokenReachesRealSpawnedHook is this fix's own
+// end-to-end proof, mirroring cloudidentity_test.go's own
+// TestCloudIdentityTokenReachesRealSpawnedHook precedent exactly (same
+// rationale: "a REAL process... via boot.RunHooks -- the SAME threaded-
+// env seam every OTHER Step 72/73b injected value already goes
+// through"). This is also a mutation-test target in its own right: a
+// spawned setup.sh -- with NARVI_SESSION_CONFIG deliberately absent from
+// its env, exactly like a real kubectl invocation inside opencode's own
+// stripped process tree -- reads ONLY $KUBECONFIG (the env entry
+// applyClusterBinding actually returns), parses out the rendered
+// kubeconfig's own `tokenFile:` line, and cats THAT file -- proving a
+// process in the exact environment a real `kubectl` runs in can retrieve
+// a valid credential at the exact path the rendered kubeconfig names,
+// with no subcommand, no exec plugin, and no re-exposure of the
+// sandbox's own bearer token anywhere in that process tree.
+func TestOIDCClusterBindingTokenReachesRealSpawnedHook(t *testing.T) {
+	dir := t.TempDir()
+	params, _ := json.Marshal(map[string]string{"clientId": "real-spawn-client"})
+	cluster := &credentials.CloudIdentityConfigCluster{
+		Name: "self-managed", AuthKind: "oidc", Params: params,
+		ServerURL: strPtrKC("https://k8s.example:6443"),
+		CaBundle:  strPtrKC("ca-bundle"),
+	}
+	m := &fakeMinter{tokens: map[string]credentials.MintedCloudIdentityToken{
+		"real-spawn-client": {Token: "real-spawned-process-kube-jwt"},
+	}}
+
+	env, state := applyClusterBinding(context.Background(), m, "sess-1", "tok", 1, cluster, nil, fastMintTimeouts(), dir)
+	if len(env) != 1 || state == nil {
+		t.Fatalf("applyClusterBinding() = (%v, %v), want a populated env and non-nil state", env, state)
+	}
+
+	workspaceDir := t.TempDir()
+	probeFile := filepath.Join(t.TempDir(), "probe")
+	// A real kubectl reads $KUBECONFIG, finds the `tokenFile:` line inside
+	// it, and reads THAT file directly -- this script does the exact same
+	// two-hop lookup using nothing but the one env var boot threads
+	// through, proving the credential is reachable without
+	// NARVI_SESSION_CONFIG (already absent -- boot.RunHooks strips it via
+	// supervisor.EnvWithout, the SAME call every OTHER hook/opencode spawn
+	// in this binary already makes).
+	writeCloudIdentityTestScript(t, filepath.Join(workspaceDir, "repo-a", "setup.sh"),
+		`token_file=$(grep 'tokenFile:' "$KUBECONFIG" | awk '{print $2}'); cat "$token_file" > `+probeFile)
+
+	sup := supervisor.New()
+	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
+
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil, nil, env, 5*time.Second, time.Second, time.Millisecond)
+	if err != nil {
+		t.Fatalf("RunHooks() error = %v, want nil", err)
+	}
+
+	got, readErr := os.ReadFile(probeFile)
+	if readErr != nil {
+		t.Fatalf("read probe file: %v", readErr)
+	}
+	if string(got) != "real-spawned-process-kube-jwt" {
+		t.Errorf("token content as read by the REAL spawned setup.sh (via $KUBECONFIG's own tokenFile) = %q, want %q", got, "real-spawned-process-kube-jwt")
 	}
 }
 
