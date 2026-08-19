@@ -17,16 +17,30 @@ failure or crash.
 
 - `turn_false_failure_total` (counter, no attributes — see the
   instrument's own doc comment, `internal/app/sessionactor/opsmetrics.go`,
-  for why one narrow gate needs no label) — increments when a real, late
-  `execution_complete{outcome:completed}` wire event arrives for a
-  session whose own currently-derived state is ALREADY `Failed` with
-  `failure_reason=timeout`.
+  for why one narrow gate needs no label) — increments when a real, late,
+  genuinely FIRST-seen `execution_complete{outcome:completed}` wire event
+  arrives for a session whose own currently-derived state is ALREADY
+  `Failed` with `failure_reason=timeout`.
 - Log: `"sessionactor: execution_complete arrived with no turn in
   processing; ignoring"` — this line fires for EVERY late
   `execution_complete` regardless of outcome (a duplicate redelivery of an
   already-completed turn's own event looks identical in the log); only
   the metric distinguishes the specific "this one was a real success we
   wrongly called a failure" case from an ordinary, harmless redelivery.
+- **A wire-level redelivery of the false-failure event itself does not
+  re-increment.** §6.1's ack protocol buffers and resends the 6 critical
+  event types (`execution_complete` included) until acked, and this is
+  exactly the class of scenario where the connection is unhealthy enough
+  for that to matter — so a false failure's own triggering event can
+  itself arrive more than once. `completeProcessingTurn`
+  (`internal/app/sessionactor/pushpr.go`) gates the counter on
+  `appendRawEvent`'s own `inserted` result (true only the first time a
+  given `execution_complete` messageID is ever seen), so a resend of the
+  SAME event is persisted and acked like any other redelivery, but counts
+  at most once. This is a distinct case from the ordinary-redelivery one in
+  the paragraph above — that one describes a redelivery of a turn that was
+  ALREADY reconciled normally (never a false failure at all); this one
+  covers redelivery of the event that IS the false failure.
 - The affected turn/session row itself: `turns.status = 'failed'`,
   `sessions.failure_reason = 'timeout'` — confirms which specific turn this
   was, but **the turn is never un-failed** by this event (see below).

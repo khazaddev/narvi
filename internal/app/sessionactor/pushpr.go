@@ -159,7 +159,19 @@ type pushSignal struct {
 // Returns a non-nil *pushSignal only when the completed trigger was
 // genuinely TriggerComplete (a failed/cancelled turn has nothing to
 // push) AND the session names at least one repo.
-func (a *Actor) completeProcessingTurn(ctx context.Context, tx pgx.Tx, sandboxRow sqlcgen.Sandbox, raw json.RawMessage) (*pushSignal, error) {
+//
+// inserted is handleSandboxEvent's own appendRawEvent result for THIS
+// event -- true only the FIRST time this exact (session_id, messageID)
+// pair is ever seen (events.sql's own upsert-on-(session_id, message_id)
+// doc comment), false on every wire-level redelivery of an already-
+// persisted execution_complete. Threaded through here for exactly one
+// reason: recordFalseFailureIfApplicable, below, must run at most ONCE
+// per genuinely-late completion, not once per redelivery of that SAME
+// late event -- see that function's own doc comment for why, and
+// sandboxevent.go's own cmd.Type == "tool_call" case for the identical
+// gating idiom this mirrors (maybeEnqueueLinearProgress's own inserted
+// parameter).
+func (a *Actor) completeProcessingTurn(ctx context.Context, tx pgx.Tx, sandboxRow sqlcgen.Sandbox, raw json.RawMessage, inserted bool) (*pushSignal, error) {
 	var evt sandboxws.ExecutionComplete
 	if err := json.Unmarshal(raw, &evt); err != nil {
 		// Defensive, not fatal -- mirrors peekAckID's own doc comment
@@ -194,7 +206,23 @@ func (a *Actor) completeProcessingTurn(ctx context.Context, tx pgx.Tx, sandboxRo
 	}
 	processing, ok := findProcessingTurn(turns)
 	if !ok {
-		if trig == turn.TriggerComplete {
+		// Confirmed audit finding (MEDIUM): gated on inserted, not just
+		// trig == TriggerComplete -- without this, EVERY wire-level
+		// redelivery of the SAME already-counted late execution_complete
+		// re-enters this branch (turn.TriggerComplete never changes turn/
+		// session state here, so nothing about redelivery #2+ differs from
+		// #1 from this function's own point of view) and would re-increment
+		// turn_false_failure_total again, unbounded, once per resend --
+		// §6.1's ack protocol buffers and resends exactly this class of
+		// critical event until acked, and this branch is BY CONSTRUCTION
+		// reached only when the connection was unhealthy enough to let
+		// turn_deadline fire first, so a redelivery here is the likely
+		// case, not the rare one. inserted (appendRawEvent's own upsert
+		// result, threaded in from handleSandboxEvent) is true only the
+		// FIRST time this exact messageID is ever seen -- exactly the
+		// discriminator recordFalseFailure's own "count the false failure
+		// once" contract needs.
+		if trig == turn.TriggerComplete && inserted {
 			if err := a.recordFalseFailureIfApplicable(ctx, tx); err != nil {
 				// Observability-only: never fail (or roll back) an
 				// otherwise-legitimate "nothing to do" outcome over a
@@ -305,10 +333,17 @@ func (a *Actor) completeProcessingTurn(ctx context.Context, tx pgx.Tx, sandboxRo
 //
 // Called ONLY from completeProcessingTurn's own no-turn-currently-
 // Processing branch, and ONLY when the just-arrived real wire event's own
-// outcome was genuinely "completed" (trig == turn.TriggerComplete) --
+// outcome was genuinely "completed" (trig == turn.TriggerComplete) AND
+// this is genuinely the first time this exact execution_complete messageID
+// has ever been seen (inserted == true, that branch's own doc comment) --
 // i.e. the sandbox is, right now, telling the control plane a turn
-// succeeded, but by the time this event arrived no turn was Processing
-// anymore for this session to attach that success to.
+// succeeded, for the first time, but by the time this event arrived no
+// turn was Processing anymore for this session to attach that success to.
+// A wire-level redelivery of the SAME late execution_complete must never
+// reach this function a second time: nothing about this function's own
+// gate (session status/failure_reason) changes between redeliveries, so
+// without the caller's own inserted gate this would re-count the identical
+// false failure once per resend.
 //
 // domain/turn.State's own transitions table (state.go) has NO Failed ->
 // Completed edge, by deliberate design (see that file's own top comment):

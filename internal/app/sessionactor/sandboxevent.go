@@ -439,8 +439,15 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 			// currently Processing (§3.3) -- see completeProcessingTurn's
 			// own doc comment (pushpr.go) for the full reasoning, including
 			// why no synthetic execution_complete is ever appended on this
-			// path.
-			sig, err := a.completeProcessingTurn(ctx, tx, row, cmd.Raw)
+			// path. inserted (this function's own appendRawEvent result,
+			// captured a few lines up) is threaded through so
+			// completeProcessingTurn's own no-turn-Processing branch can
+			// gate turn_false_failure_total on it -- a wire-level
+			// redelivery of an already-processed execution_complete
+			// (inserted == false) must never re-count the same false
+			// failure a second time (confirmed audit finding, MEDIUM; see
+			// that branch's own doc comment).
+			sig, err := a.completeProcessingTurn(ctx, tx, row, cmd.Raw, inserted)
 			if err != nil {
 				return err
 			}

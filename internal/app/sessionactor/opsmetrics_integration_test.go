@@ -391,3 +391,139 @@ func TestHandleTurnDeadlineTimer_ThenLateExecutionComplete_RecordsFalseFailure(t
 		t.Errorf("turn status = %s, want unchanged %s (the late completion must never resurrect a terminalized turn)", gotTurn.Status, sqlcgen.TurnStatusFailed)
 	}
 }
+
+// TestHandleSandboxEvent_RedeliveredLateExecutionComplete_RecordsFalseFailureOnce
+// is this Step's own mutation test for the confirmed audit finding (MEDIUM):
+// completeProcessingTurn's no-turn-currently-Processing branch (pushpr.go)
+// used to gate recordFalseFailureIfApplicable on trig == turn.TriggerComplete
+// ALONE, with no defense against a wire-level redelivery of the SAME
+// execution_complete event re-entering that branch and re-incrementing
+// turn_false_failure_total once per resend -- exactly the scenario §6.1's
+// ack protocol makes routine (the buffered-critical-event resend-until-acked
+// mechanism test/resilience/scenario7_ack_redelivery_test.go exercises),
+// and one this Step's own four pre-existing false-failure tests never
+// happened to cover because none of them ever delivered the SAME
+// execution_complete twice.
+//
+// Reproduces TestHandleTurnDeadlineTimer_ThenLateExecutionComplete_
+// RecordsFalseFailure's own exact setup (a turn genuinely terminalized
+// Failed/timeout by a real turn_deadline fire), then sends the identical
+// raw execution_complete wire bytes -- same messageID, so
+// appendRawEvent's own upsert-on-(session_id, message_id) sees the second
+// send as a genuine redelivery (Inserted == false), not a new event --
+// TWICE, and asserts turn_false_failure_total moved by exactly 1, not 2.
+// Removing the inserted gate this Step adds to completeProcessingTurn (the
+// fix for the confirmed finding) makes this test fail: it would instead
+// observe the counter incrementing by 2.
+func TestHandleSandboxEvent_RedeliveredLateExecutionComplete_RecordsFalseFailureOnce(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+
+	timeouts := platform.DefaultTimeouts()
+	timeouts.TurnDeadline = 50 * time.Millisecond // tiny, injected -- not the real 60m default
+
+	turnStore := narvipg.NewTurnStore(pool)
+	created, err := turnStore.Create(ctx, sqlcgen.CreateTurnParams{
+		SessionID: sessionID,
+		Status:    sqlcgen.TurnStatusPending,
+	})
+	if err != nil {
+		t.Fatalf("create turn: %v", err)
+	}
+	dispatchedAt := time.Now().Add(-1 * time.Hour) // comfortably past the tiny deadline
+	if _, err := turnStore.UpdateStatus(ctx, sqlcgen.UpdateTurnStatusParams{
+		ID:           created.ID,
+		Status:       sqlcgen.TurnStatusProcessing,
+		DispatchedAt: pgtype.Timestamptz{Time: dispatchedAt, Valid: true},
+	}); err != nil {
+		t.Fatalf("move turn to processing: %v", err)
+	}
+
+	falseFailureBefore := readCounterSum(ctx, t, otelReader, "turn_false_failure_total")
+
+	r, err := NewRegistry(ctx, pool, timeouts, nil, nil, nil, "", nil, nil, "", nil, false)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown() })
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	// Step 1: the real turn_deadline timer fires first, exactly like
+	// TestHandleTurnDeadlineTimer_ThenLateExecutionComplete_RecordsFalseFailure.
+	if err := a.Send(ctx, TimerFired{Name: TimerTurnDeadline}); err != nil {
+		t.Fatalf("Send TimerFired turn_deadline: %v", err)
+	}
+	waitUntil(t, 5*time.Second, func() bool {
+		got, err := turnStore.Get(ctx, created.ID)
+		return err == nil && got.Status == sqlcgen.TurnStatusFailed
+	})
+
+	sessionStore := narvipg.NewSessionStore(pool)
+	gotSession, err := sessionStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if gotSession.Status != sqlcgen.SessionStatusFailed || gotSession.FailureReason == nil || *gotSession.FailureReason != sqlcgen.SessionFailureReasonTimeout {
+		t.Fatalf("session status/failure_reason = %s/%v, want failed/timeout (precondition for this test's own scenario)", gotSession.Status, gotSession.FailureReason)
+	}
+
+	// Step 2: the sandbox, unaware the control plane already gave up,
+	// genuinely finishes and reports success -- late. The SAME raw bytes
+	// (same messageID) are sent TWICE, mirroring a real §6.1 ack-protocol
+	// resend of this exact critical event before its own ack lands --
+	// never a fresh executionCompleteRaw call per send, which would mint a
+	// DIFFERENT messageID and so a genuinely distinct event instead of a
+	// redelivery of this one.
+	raw := executionCompleteRaw(t, sessionID.String(), 1, sandboxws.ExecutionCompleteOutcomeCompleted)
+
+	firstOutcome := sendSandboxEventForTest(ctx, t, a, SandboxEvent{
+		Type: "execution_complete",
+		Gen:  1,
+		Raw:  raw,
+	})
+	if !firstOutcome.Persisted {
+		t.Error("first delivery: outcome.Persisted = false, want true")
+	}
+	waitUntil(t, 5*time.Second, func() bool {
+		return readCounterSum(ctx, t, otelReader, "turn_false_failure_total") > falseFailureBefore
+	})
+
+	secondOutcome := sendSandboxEventForTest(ctx, t, a, SandboxEvent{
+		Type: "execution_complete",
+		Gen:  1,
+		Raw:  raw, // identical messageID -- a genuine wire-level redelivery.
+	})
+	if !secondOutcome.Persisted {
+		t.Error("redelivery: outcome.Persisted = false, want true (still persisted -- appendRawEvent's own upsert always succeeds)")
+	}
+
+	// No extra wait needed here: sendSandboxEventForTest only returns once
+	// cmd.Reply has fired, and handleSandboxEvent sends that reply
+	// synchronously right after its own transact commits (sandboxevent.go's
+	// own doc comment) -- i.e. AFTER recordFalseFailure's own in-transact
+	// Add call would already have run for this second delivery, if the gate
+	// under test failed to prevent it. By the time secondOutcome is in
+	// hand, whatever this redelivery did (or correctly did not do) to the
+	// counter has already happened.
+	falseFailureAfter := readCounterSum(ctx, t, otelReader, "turn_false_failure_total")
+	if falseFailureAfter != falseFailureBefore+1 {
+		t.Errorf("turn_false_failure_total = %d, want exactly %d (delivered the same execution_complete twice; a redelivery of an already-counted false failure must never re-increment)", falseFailureAfter, falseFailureBefore+1)
+	}
+
+	gotTurn, err := turnStore.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get turn: %v", err)
+	}
+	if gotTurn.Status != sqlcgen.TurnStatusFailed {
+		t.Errorf("turn status = %s, want unchanged %s (redelivery must never resurrect a terminalized turn either)", gotTurn.Status, sqlcgen.TurnStatusFailed)
+	}
+}
