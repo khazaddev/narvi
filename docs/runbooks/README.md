@@ -1,5 +1,10 @@
 # Runbooks
 
+**On-call at 3am? Start at [`docs/ONCALL.md`](../ONCALL.md)** — the entry
+point that tells you which of the entries below to open, and what to do
+when none of them fit. This page is the index; that one is the triage
+flow.
+
 Operator runbooks for the failure modes Narvi's own dashboards/alerts
 (`deploy/observability/`) surface, drawn from the resilience catalog
 (`docs/TECHNICAL_PLAN.md` §9.3, indexed scenario-by-scenario in
