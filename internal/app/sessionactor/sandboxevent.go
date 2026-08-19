@@ -883,6 +883,45 @@ func (a *Actor) triggerSnapshotBestEffort(ctx context.Context) {
 			return nil
 		}
 
+		sessionRow, err := a.stores.session.WithTx(tx).Get(ctx, a.sessionID)
+		if err != nil {
+			return fmt.Errorf("sessionactor: get session for snapshot eligibility: %w", err)
+		}
+
+		// §27.8's own genuinely-unresolved point, resolved here (Step 74
+		// brief, point D): "Capabilities() is a flat, provider-level
+		// report; a provider whose snapshot support differs by runtime
+		// (Modal gVisor vs VM runtime) cannot express that today." There
+		// is no real Modal deployment this codebase can verify snapshot
+		// parity against (doc.go: every wire shape in the Modal adapter
+		// is this codebase's own invention, tested against a fake
+		// httptest.Server) — so rather than silently ASSUME a Docker-
+		// enabled (VM-runtime) sandbox snapshots identically to a gVisor
+		// one, this control plane simply never attempts one: a Docker-
+		// required Environment's sandbox degrades to resume-only recovery
+		// (§3.2) until a real §9.3-class restore-with-docker scenario
+		// (test/resilience) proves parity against a provider's actual
+		// behavior — exactly the escape hatch §27.8 itself names ("Step
+		// 74 implementation time... not guessed here"). Concretely: this
+		// sandbox's own snapshot_id column simply never gets populated,
+		// so dispatch.go's EvaluateSpawnDecision Restore branch (which
+		// requires SnapshotImageID != "") can never fire for it either —
+		// a lost Docker-required sandbox recovers via a fresh respawn
+		// only, never a snapshot restore. This is a REAL, NAMED cost
+		// (§27.5's own "the costs are real and named" convention,
+		// extended here): a Docker-enabled sandbox loses whatever
+		// in-progress state a snapshot would otherwise have preserved
+		// across a respawn.
+		_, dockerRequired, _, err := a.environmentSubstrate(ctx, tx, sessionRow.EnvironmentID)
+		if err != nil {
+			return fmt.Errorf("sessionactor: resolve docker_required for snapshot eligibility: %w", err)
+		}
+		if dockerRequired {
+			a.logger.Info("sessionactor: skipping snapshot trigger for a Docker-required session (§27.8 unresolved VM-runtime snapshot-parity point, Step 74; resume-only recovery until proven safe)",
+				"session_id", a.sessionID.String())
+			return nil
+		}
+
 		to, err := sandbox.Transition(sandbox.State(row.Status), int(row.Gen), sandbox.SnapshotStartTrigger())
 		if err != nil {
 			return fmt.Errorf("sessionactor: sandbox transition ready->snapshotting: %w", err)

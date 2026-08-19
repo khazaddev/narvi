@@ -724,8 +724,35 @@ func (a *Actor) tryPlanSpawn(
 	// httpapi.CreateSessionCore's own up-front one, not a re-use of its
 	// result.
 	if action.Kind == sandbox.SpawnActionSpawn || action.Kind == sandbox.SpawnActionRestore || action.Kind == sandbox.SpawnActionResume {
-		if err := a.refuseIfSubstrateUnsupported(ctx, tx, sessionRow, caps); err != nil {
+		dockerRequired, err := a.refuseIfSubstrateUnsupported(ctx, tx, sessionRow, caps)
+		if err != nil {
 			return nil, err
+		}
+
+		// §27.8's own genuinely-unresolved snapshot-parity point (Step 74
+		// brief, point D), the SAME resolution sandboxevent.go's own
+		// triggerSnapshotBestEffort already applies on the way IN to a
+		// snapshot -- applied here, symmetrically, on the way OUT: even
+		// if action.Kind resolved to Restore (SnapshotImageID != ""),
+		// never actually restore it for a Docker-required session. In
+		// today's design this branch should be unreachable in practice
+		// (triggerSnapshotBestEffort's own identical gate means a
+		// Docker-required sandbox's snapshot_id column is never
+		// populated to begin with, since environments are immutable
+		// once created -- no UPDATE path exists), but defense in depth
+		// against exactly the failure this codebase cannot verify is
+		// safe (a cross-runtime restore: a snapshot taken under one
+		// Modal runtime restored into the OTHER) is cheap here and the
+		// cost of being wrong is silently running something §27.8 names
+		// as unverified. Downgrading to a fresh Spawn, never refusing
+		// outright, keeps §10-P2's "never block a spawn" intact -- the
+		// session still gets a live sandbox, just without whatever
+		// state the (untrusted, in this one case) snapshot would have
+		// restored.
+		if action.Kind == sandbox.SpawnActionRestore && dockerRequired {
+			a.logger.Warn("sessionactor: refusing snapshot restore for a Docker-required session; forcing a fresh spawn instead of an unverified cross-runtime restore (§27.8)",
+				"session_id", a.sessionID.String(), "snapshot_id", action.SnapshotImageID)
+			action = sandbox.SpawnAction{Kind: sandbox.SpawnActionSpawn}
 		}
 	}
 
@@ -798,18 +825,22 @@ func (a *Actor) tryPlanSpawn(
 // the provider or the Environment's own requirement changes -- silently
 // retrying forever would look, from the outside, exactly like a session
 // that is merely waiting its turn.
-func (a *Actor) refuseIfSubstrateUnsupported(ctx context.Context, tx pgx.Tx, sessionRow sqlcgen.Session, caps ports.Capabilities) error {
+//
+// Returns the resolved dockerRequired alongside the error (even on a nil
+// error) so its one caller (tryPlanSpawn) can also apply §27.8's own
+// restore-downgrade decision without a second Environment lookup.
+func (a *Actor) refuseIfSubstrateUnsupported(ctx context.Context, tx pgx.Tx, sessionRow sqlcgen.Session, caps ports.Capabilities) (dockerRequired bool, err error) {
 	_, dockerRequired, egressPolicy, err := a.environmentSubstrate(ctx, tx, sessionRow.EnvironmentID)
 	if err != nil {
-		return fmt.Errorf("sessionactor: resolve substrate requirements for dispatch-time capability re-check: %w", err)
+		return false, fmt.Errorf("sessionactor: resolve substrate requirements for dispatch-time capability re-check: %w", err)
 	}
 
 	if err := environment.CheckSubstrateCapabilities(dockerRequired, egressPolicy.RequiresEnforcement(), caps.DockerInSandbox, caps.EgressPolicy); err != nil {
 		a.logger.Error("sessionactor: refusing to spawn: configured provider cannot honor this Environment's substrate requirements (§27.5/§27.6 dispatch-time fail-closed re-check)",
 			"session_id", a.sessionID.String(), "error", err)
-		return fmt.Errorf("sessionactor: dispatch-time substrate capability re-check failed: %w", err)
+		return dockerRequired, fmt.Errorf("sessionactor: dispatch-time substrate capability re-check failed: %w", err)
 	}
-	return nil
+	return dockerRequired, nil
 }
 
 // planFreshSpawn implements design decision 3a's own write (token mint,

@@ -466,6 +466,66 @@ the captured, bounded, ANSI-stripped hook-output tail (§19.5(a)) a real
 - `TestResilienceScenario_NonIdempotentSetupBoot_NonFatalFailure_VisibleInOutputTail`
   — `internal/sandboxagent/boot/resilience_repoimage_test.go`
 
+## Scenario #17 (Step 74, §27.5/§27.6/§27.8)
+
+Step 74 ("sandbox substrate: docker, egress policy, toolchain") adds one
+new scenario number (17, the next free slot after Step 42's 13-16) —
+named directly by §27.8's own closing bullet: "Snapshotting a running
+dockerd... is untested territory; Step 74 must add a §9.3-class scenario
+for restore-with-docker before claiming it works." Proven, like scenario
+#15 (refresh-in-flight spawn) before it, through
+`internal/app/sessionactor`'s own real dispatch path rather than a file
+physically inside this directory — the actual decision under test
+(dispatch.go's `tryPlanSpawn`) lives in that package, and this scenario
+needs the SAME `fakeSpawnProvider`/`newDispatchTestRegistry` harness that
+package's own `dispatch_integration_test.go` already establishes.
+
+### #17 — restore-with-docker
+
+> A Docker-required session's sandbox needs recovery — confirm it is
+> NEVER restored from a snapshot (§27.8's own genuinely unresolved
+> cross-runtime snapshot-parity point), even when a stale snapshot_id
+> already exists on its own row; it always takes a fresh spawn instead.
+
+**Status: covered — with an accepted, DELIBERATE gap, not a claim of
+snapshot-restore support.** This Step does not implement, and does not
+claim, cross-runtime (Modal gVisor vs VM-runtime) snapshot-restore
+support for Docker-enabled sandboxes at all — there is no real Modal
+deployment this codebase can verify that against (every Modal wire shape
+in this repo is this codebase's own invention, tested against a fake
+`httptest.Server`, `internal/adapters/outbound/modal/doc.go`). Instead,
+two independent, real, harness-driven guards are proven together: (1)
+`sandboxevent.go`'s own `triggerSnapshotBestEffort` never even attempts
+to CREATE a snapshot for a Docker-required session in the first place
+(so `snapshot_id` structurally can never become non-empty for one via
+this codebase's own normal flow), and (2) even in the edge case where a
+sandbox row's own `snapshot_id` is non-empty anyway (planted directly in
+the test, standing in for any other way a stale value could theoretically
+reach that column), `dispatch.go`'s `tryPlanSpawn` downgrades what
+`EvaluateSpawnDecision` would otherwise resolve as `SpawnActionRestore`
+into a plain fresh `SpawnActionSpawn` — proven through a REAL
+`EnsureDispatched` cycle against a real Postgres sandbox row in
+`Stopped` status: `RestoreFromSnapshot` is never called; `CreateSandbox`
+is, carrying `Docker: true`. A positive-control pair (Docker-false, the
+identical Stopped+snapshot_id fixture) proves the downgrade is a real,
+narrow discriminator — an ordinary session still restores from a real
+snapshot exactly as it always has.
+
+The `docker`/`kubectl`/§27.4 exec-credential-plugin toolchain content
+itself (§27.7) is a base-image build-artifact concern, external to this
+codebase's own Go test surface by the same "external, opaque-to-this-
+repo build service" boundary §19.1 already draws around image builds
+generally — nothing to replay here.
+
+- `TestResilienceScenario17_RestoreWithDocker_NeverRestoresStaleSnapshot`
+  — `internal/app/sessionactor/snapshot_docker_integration_test.go`
+- `TestResilienceScenario17_RestoreWithDocker_DockerFalseStillRestores`
+  (positive control) — `internal/app/sessionactor/snapshot_docker_integration_test.go`
+- `TestTriggerSnapshotBestEffort_DockerRequiredSession_NeverSnapshots` /
+  `TestTriggerSnapshotBestEffort_DockerFalseSession_StillSnapshots`
+  (the companion snapshot-creation-side guard and its own positive
+  control) — same file
+
 ## Summary
 
 | # | Scenario | Status |
@@ -486,3 +546,4 @@ the captured, bounded, ANSI-stripped hook-output tail (§19.5(a)) a real
 | 14 | Stale-image boot (`workspaceMoved` fires) | Covered — Step 42 |
 | 15 | Refresh-in-flight spawn | Covered — Step 42 |
 | 16 | Non-idempotent-setup boot | Covered — Step 42 |
+| 17 | Restore-with-docker | Covered — Step 74 |
