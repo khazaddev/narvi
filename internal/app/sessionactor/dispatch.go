@@ -123,6 +123,7 @@ import (
 
 	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
 	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/workflowengine"
@@ -275,11 +276,24 @@ type spawnPlan struct {
 // real SandboxCommander.SendCommand call itself happens OUTSIDE that
 // transact, in executeDispatch, using exactly this plan. By the time this
 // is returned, the turn has already been committed Pending->Dispatched->
-// Processing and turn_deadline is already armed -- see this file's own top
-// comment for why.
+// Processing (tryPlanDispatch) or was already Processing to begin with
+// (tryPlanReenqueue) and turn_deadline is already armed -- see this file's
+// own top comment for why.
 type dispatchPlan struct {
 	turnID  pgtype.UUID
 	payload json.RawMessage
+
+	// sessionRow is the SAME sqlcgen.Session row tryPlanDispatch/
+	// tryPlanReenqueue's own caller already loaded inside planDispatch's
+	// transact -- threaded through here, rather than re-queried a second
+	// time, mirroring spawnPlan's own createdBy/environmentID precedent
+	// (its own doc comment: "Threaded through here rather than re-fetching
+	// sessionRow a second time"). Step 76's own turn-dispatch-time rollout
+	// re-check (executeDispatch, below) is why this field exists: it needs
+	// sessionRow.Repos to resolve admission, and it runs OUTSIDE any
+	// transaction, after this plan's own transact has already committed
+	// and returned.
+	sessionRow sqlcgen.Session
 }
 
 // handleEnsureDispatched implements the EnsureDispatched command (Step
@@ -633,7 +647,7 @@ func (a *Actor) tryPlanReenqueue(
 	a.logger.Info("sessionactor: re-enqueuing in-flight turn to a respawned sandbox incarnation",
 		"turn_id", target.ID.String(), "gen", sandboxRow.Gen)
 
-	return &dispatchPlan{turnID: target.ID, payload: payload}, nil
+	return &dispatchPlan{turnID: target.ID, payload: payload, sessionRow: sessionRow}, nil
 }
 
 // tryPlanSpawn implements design decision 3a's own circuit-breaker-then-
@@ -863,6 +877,85 @@ func (a *Actor) refuseIfSubstrateUnsupported(ctx context.Context, tx pgx.Tx, ses
 	return dockerRequired, nil
 }
 
+// rolloutDecisionForSession resolves sessionRow's own repos (its JSON
+// `repos` column) into []rollout.RepoAdmission facts via repoSettings,
+// then returns rollout.Decide's own verdict for a.rolloutMode -- the ONE
+// resolution shared, byte-for-byte, by BOTH of this Step's own dispatch-
+// side rollout re-checks: refuseIfRolloutUnenrolled (tryPlanSpawn's own
+// spawn/restore/resume re-check, below) and rolloutRefusalForDispatch
+// (executeDispatch's own turn-dispatch re-check, this file's own "single
+// placement" fix for the gap an adversarial review found -- see that
+// function's own doc comment). Sharing this one resolution is what keeps
+// the two gates from ever drifting to a different definition of
+// "enrolled" from one another; only what surrounds it (which tx/pool the
+// repo_settings read runs on, and what happens on refusal) differs
+// between the two callers.
+//
+// repoSettings is a parameter, not always a.stores.repoSettings directly,
+// because the two callers need different connection scoping:
+// refuseIfRolloutUnenrolled runs INSIDE tryPlanSpawn's own transact (a
+// real spawn/restore/resume write follows, on the SAME tx, if this
+// admits), so it passes a.stores.repoSettings.WithTx(tx); executeDispatch
+// runs OUTSIDE any transaction entirely (this file's own top "#
+// Sequencing" comment: no real I/O call may run while a transact's own
+// FOR UPDATE lock is held, and by the time executeDispatch runs the
+// turn's own Pending->Dispatched->Processing transact has already
+// committed and returned -- there is no transaction left to join), so it
+// passes the actor's own pool-backed a.stores.repoSettings instead,
+// mirroring resolveAndSetImage's own identical no-tx store-read shape
+// (imageresolve.go).
+func (a *Actor) rolloutDecisionForSession(ctx context.Context, repoSettings *postgres.RepoSettingsStore, sessionRow sqlcgen.Session) (rollout.Decision, error) {
+	var repos []struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(sessionRow.Repos, &repos); err != nil {
+		return rollout.Decision{}, fmt.Errorf("sessionactor: rollout re-check: unmarshal session repos: %w", err)
+	}
+
+	admissions := make([]rollout.RepoAdmission, 0, len(repos))
+	for _, repo := range repos {
+		// Audit-hardening precedent (imageresolve.go's own
+		// repoAccessAllowedForSpawn, pushpr.go, contractdrift.go):
+		// CheckRepoHost FIRST, then ParseOwnerRepo -- reposource.
+		// ParseOwnerRepo is deliberately host-agnostic (its own doc
+		// comment), so without this pairing a spoofed cross-host URL
+		// sharing an enrolled repo's own owner/repo path would silently
+		// derive that SAME enrolled identity here too.
+		if err := reposource.CheckRepoHost(repo.URL, ports.SupportedSourceControlHosts()...); err != nil {
+			a.logger.Warn("sessionactor: rollout re-check: repo url does not name a supported source-control host; treating as not enrolled",
+				"session_id", a.sessionID.String(), "url", repo.URL, "error", err)
+			admissions = append(admissions, rollout.RepoAdmission{FullName: repo.URL, Enrolled: false})
+			continue
+		}
+
+		owner, name, err := reposource.ParseOwnerRepo(repo.URL)
+		if err != nil {
+			a.logger.Warn("sessionactor: rollout re-check: parse owner/repo from clone url failed; treating as not enrolled",
+				"session_id", a.sessionID.String(), "error", err)
+			admissions = append(admissions, rollout.RepoAdmission{FullName: repo.URL, Enrolled: false})
+			continue
+		}
+		fullName := owner + "/" + name
+
+		row, err := repoSettings.Get(ctx, fullName)
+		switch {
+		case err == nil:
+			admissions = append(admissions, rollout.RepoAdmission{FullName: fullName, Enrolled: row.SessionsEnabled})
+		case errors.Is(err, pgx.ErrNoRows):
+			admissions = append(admissions, rollout.RepoAdmission{FullName: fullName, Enrolled: false})
+		default:
+			// A genuine read error -- fail-closed (§32, mirroring
+			// checkRolloutGate's own identical C3 precedent), never
+			// treated as "no row, so unenrolled" without comment.
+			a.logger.Warn("sessionactor: rollout re-check: read repo_settings failed; failing closed (treating as not enrolled)",
+				"session_id", a.sessionID.String(), "repo", fullName, "error", err)
+			admissions = append(admissions, rollout.RepoAdmission{FullName: fullName, Enrolled: false})
+		}
+	}
+
+	return rollout.Decide(a.rolloutMode, admissions), nil
+}
+
 // refuseIfRolloutUnenrolled implements Step 76's own dispatch-time half
 // of the "fail-closed, twice" rule (§10 Phase 6, §32): re-checked HERE,
 // immediately before tryPlanSpawn is about to attempt a REAL
@@ -873,27 +966,24 @@ func (a *Actor) refuseIfSubstrateUnsupported(ctx context.Context, tx pgx.Tx, ses
 // refuseIfSubstrateUnsupported's own identical "one pure function, two
 // independent call sites" shape immediately above, one Step later.
 //
-// This is what makes §32's own documented rollback bound real, not
-// aspirational: a session created while its repo was enrolled can be
-// dispatched again -- and again -- for its entire lifetime, every time a
-// new @mention/label re-trigger enqueues a turn on it (the REUSE branch,
-// internal/adapters/inbound/github's own coalesce.go) or an idle sandbox
-// needs to respawn. None of those paths ever touch
-// httpapi.CreateSessionOnTx again -- they all reach this Actor's own
-// dispatch loop directly. Without this SECOND, independent re-check, an
-// operator flipping repo_settings.sessions_enabled back to false for a
-// repo would have zero effect on any session already in flight: every
-// future re-review turn on that PR would keep silently respawning
-// sandboxes forever, exactly the gap §32's own rollback section names
-// explicitly.
+// This is HALF of what makes §32's own documented rollback bound real --
+// see rolloutRefusalForDispatch's own doc comment (executeDispatch,
+// below) for the other half, closing the gap an adversarial review found
+// in this function's own original scope: this only ever runs on the
+// branch of planDispatch that is about to attempt a fresh
+// spawn/restore/resume (tryPlanSpawn), never on the branch that dispatches
+// a Pending turn to an ALREADY-live Ready/Suspect sandbox -- exactly the
+// path a re-review turn on an existing PR session takes (the REUSE
+// branch, internal/adapters/inbound/github's own coalesce.go), which
+// never touches tryPlanSpawn, or httpapi.CreateSessionOnTx, again.
 //
 // a.rolloutMode is re-read from this SAME in-memory Actor field every
 // call (not re-queried from Postgres -- platform.Config is process-wide,
 // boot-time config, not a runtime-mutable row) -- fresh relative to
-// sessionRow's own repo_settings lookup below, which IS re-read from
-// Postgres on tx every single call, so a repo de-enrolled between two
-// consecutive dispatch attempts for the SAME session is caught on the
-// very next one.
+// sessionRow's own repo_settings lookup (rolloutDecisionForSession,
+// above), which IS re-read from Postgres on tx every single call, so a
+// repo de-enrolled between two consecutive dispatch attempts for the SAME
+// session is caught on the very next one.
 //
 // On refusal, this returns a real, propagated error -- deliberately NOT
 // sandbox.SpawnActionSkip's own silent (nil, nil) shape, mirroring
@@ -909,56 +999,10 @@ func (a *Actor) refuseIfRolloutUnenrolled(ctx context.Context, tx pgx.Tx, sessio
 		return nil
 	}
 
-	var repos []struct {
-		URL string `json:"url"`
+	decision, err := a.rolloutDecisionForSession(ctx, a.stores.repoSettings.WithTx(tx), sessionRow)
+	if err != nil {
+		return fmt.Errorf("sessionactor: dispatch-time rollout re-check: %w", err)
 	}
-	if err := json.Unmarshal(sessionRow.Repos, &repos); err != nil {
-		return fmt.Errorf("sessionactor: dispatch-time rollout re-check: unmarshal session repos: %w", err)
-	}
-
-	admissions := make([]rollout.RepoAdmission, 0, len(repos))
-	for _, repo := range repos {
-		// Audit-hardening precedent (imageresolve.go's own
-		// repoAccessAllowedForSpawn, pushpr.go, contractdrift.go):
-		// CheckRepoHost FIRST, then ParseOwnerRepo -- reposource.
-		// ParseOwnerRepo is deliberately host-agnostic (its own doc
-		// comment), so without this pairing a spoofed cross-host URL
-		// sharing an enrolled repo's own owner/repo path would silently
-		// derive that SAME enrolled identity here too.
-		if err := reposource.CheckRepoHost(repo.URL, ports.SupportedSourceControlHosts()...); err != nil {
-			a.logger.Warn("sessionactor: dispatch-time rollout re-check: repo url does not name a supported source-control host; treating as not enrolled",
-				"session_id", a.sessionID.String(), "url", repo.URL, "error", err)
-			admissions = append(admissions, rollout.RepoAdmission{FullName: repo.URL, Enrolled: false})
-			continue
-		}
-
-		owner, name, err := reposource.ParseOwnerRepo(repo.URL)
-		if err != nil {
-			a.logger.Warn("sessionactor: dispatch-time rollout re-check: parse owner/repo from clone url failed; treating as not enrolled",
-				"session_id", a.sessionID.String(), "error", err)
-			admissions = append(admissions, rollout.RepoAdmission{FullName: repo.URL, Enrolled: false})
-			continue
-		}
-		fullName := owner + "/" + name
-
-		row, err := a.stores.repoSettings.WithTx(tx).Get(ctx, fullName)
-		switch {
-		case err == nil:
-			admissions = append(admissions, rollout.RepoAdmission{FullName: fullName, Enrolled: row.SessionsEnabled})
-		case errors.Is(err, pgx.ErrNoRows):
-			admissions = append(admissions, rollout.RepoAdmission{FullName: fullName, Enrolled: false})
-		default:
-			// A genuine read error, on the transaction about to attempt a
-			// real spawn -- fail-closed (§32, mirroring
-			// checkRolloutGate's own identical C3 precedent), never
-			// treated as "no row, so unenrolled" without comment.
-			a.logger.Warn("sessionactor: dispatch-time rollout re-check: read repo_settings failed; failing closed (treating as not enrolled)",
-				"session_id", a.sessionID.String(), "repo", fullName, "error", err)
-			admissions = append(admissions, rollout.RepoAdmission{FullName: fullName, Enrolled: false})
-		}
-	}
-
-	decision := rollout.Decide(a.rolloutMode, admissions)
 	if decision.Admitted {
 		return nil
 	}
@@ -1644,7 +1688,7 @@ func (a *Actor) tryPlanDispatch(
 		return nil, fmt.Errorf("sessionactor: build prompt payload: %w", err)
 	}
 
-	return &dispatchPlan{turnID: turnID, payload: payload}, nil
+	return &dispatchPlan{turnID: turnID, payload: payload, sessionRow: sessionRow}, nil
 }
 
 // executeDispatch performs the actual SandboxCommander.SendCommand call
@@ -1654,24 +1698,117 @@ func (a *Actor) tryPlanDispatch(
 // committed Processing by the time this runs (tryPlanDispatch's own
 // transact, already committed) -- on success there is nothing further to
 // do; on failure, failDispatchedTurn fails it forward.
+//
+// Step 76's own SECOND, independent placement of the "fail-closed, twice"
+// rollout re-check (§10 Phase 6, §32) -- closing the gap an adversarial
+// review found: refuseIfRolloutUnenrolled (tryPlanSpawn, above) already
+// re-checks before a fresh spawn/restore/resume, but that check runs ONLY
+// on the branch of planDispatch that is about to attempt one -- an
+// already-Ready/Suspect sandbox's own Pending-turn dispatch
+// (tryPlanDispatch) and in-flight-turn re-enqueue (tryPlanReenqueue) never
+// go through tryPlanSpawn at all (see planDispatch's own branch (b) and
+// planReenqueueOrRespawn's own branch (b') doc comments). Rather than
+// adding a SECOND remembered call site inside each of those two planning
+// functions individually (and a third, fourth, ... for any future one),
+// the check is placed here instead: executeDispatch is the ONE function
+// every *dispatchPlan -- regardless of which planning branch produced it,
+// today or in the future -- must pass through before
+// a.commander.SendCommand is ever called (handleEnsureDispatched's own
+// switch has exactly one consumer of a non-nil dispatch: this function).
+// Gating here, immediately before the real SendCommand call, makes the
+// bypass this Step's own review found structurally unrepresentable rather
+// than merely undocumented -- a bare miss in ONE of several remembered
+// call sites can no longer silently let a de-enrolled repo's session keep
+// being dispatched.
+//
+// This runs AFTER tryPlanDispatch/tryPlanReenqueue's own transact has
+// already committed the turn Processing (this file's own top "#
+// Sequencing" comment: a real network call -- and this rollout read is
+// exactly that -- must never run while a transact's own FOR UPDATE lock
+// is held), so a refusal here cannot roll that commit back. It fails the
+// turn FORWARD instead, via the EXACT SAME Processing->Failed machinery a
+// genuine SendCommand failure already uses below (failDispatchedTurn) --
+// this is deliberately not a new, parallel terminal path: a turn this
+// actor has decided it will never actually deliver to a sandbox, for
+// WHATEVER reason (a transport failure or a policy refusal), reaches the
+// SAME terminal state the SAME way, with only the reason text differing.
 func (a *Actor) executeDispatch(ctx context.Context, plan *dispatchPlan) error {
+	if repo, refused := a.rolloutRefusalForDispatch(ctx, plan.sessionRow); refused {
+		a.logger.Error("sessionactor: refusing to dispatch turn: configured repo is not enrolled in the cohort rollout (§10 Phase 6, §32 turn-dispatch-time fail-closed re-check)",
+			"session_id", a.sessionID.String(), "turn_id", plan.turnID.String(), "repo", repo)
+		return a.failDispatchedTurn(ctx, plan.turnID, fmt.Sprintf("repo %q not enrolled in cohort rollout", repo))
+	}
+
 	if err := a.commander.SendCommand(a.sessionID.String(), plan.payload); err != nil {
 		// Covers ports.ErrNoLiveSandboxConnection (the prompt genuinely
 		// never reached a live connection) and every other send failure
 		// identically.
-		return a.failDispatchedTurn(ctx, plan.turnID, err)
+		a.logger.Error("sessionactor: dispatch turn: send prompt command failed; failing turn",
+			"turn_id", plan.turnID.String(), "error", err)
+		return a.failDispatchedTurn(ctx, plan.turnID, fmt.Sprintf("failed to deliver prompt to sandbox: %v", err))
 	}
 	return nil
 }
 
+// rolloutRefusalForDispatch implements executeDispatch's own turn-
+// dispatch-time rollout re-check -- see that function's own doc comment
+// for the full "why here, why this is the one placement that makes the
+// bypass structurally unrepresentable" reasoning. Shares
+// rolloutDecisionForSession's own resolution logic with
+// refuseIfRolloutUnenrolled (tryPlanSpawn's own spawn-time re-check,
+// above) so the two gates can never drift to a different definition of
+// "enrolled" from one another; only the connection this runs on differs
+// -- the actor's own pool-backed a.stores.repoSettings, never a.WithTx,
+// since this runs OUTSIDE any transaction (plan's own transact has
+// already committed and returned by the time executeDispatch calls this).
+//
+// Returns ("", false) whenever dispatch is admitted (every non-cohort
+// rollout mode, or cohort mode with every one of sessionRow's own named
+// repos enrolled); (repoFullName, true) on a genuine policy refusal.
+func (a *Actor) rolloutRefusalForDispatch(ctx context.Context, sessionRow sqlcgen.Session) (string, bool) {
+	if a.rolloutMode != rollout.ModeCohort {
+		return "", false
+	}
+
+	decision, err := a.rolloutDecisionForSession(ctx, a.stores.repoSettings, sessionRow)
+	if err != nil {
+		// sessionRow.Repos failing to unmarshal here can only mean a
+		// structurally malformed row -- validateCreateSessionRequest
+		// already guarantees this can never happen for a row this control
+		// plane itself wrote -- fail-closed (refuse) rather than silently
+		// admitting a dispatch this actor cannot even evaluate, mirroring
+		// every other read-error branch in this Step's own rollout
+		// checks.
+		a.logger.Error("sessionactor: turn-dispatch rollout re-check: resolve admission decision failed; failing closed (refusing dispatch)",
+			"session_id", a.sessionID.String(), "error", err)
+		return "<unresolvable repos>", true
+	}
+	if decision.Admitted {
+		return "", false
+	}
+	return decision.RepoFullName, true
+}
+
 // failDispatchedTurn transitions turnID -- already committed Processing by
-// tryPlanDispatch's own transact -- to Failed, in its own small, fresh
-// transact (mirroring executeSpawn's own "network call already happened
-// outside any transaction; a separate, small transact now records its
-// outcome" shape exactly). domain/turn's transition table has no reverse
-// edge from Processing back to Pending, and none is added here
-// (internal/domain/turn/state.go is explicitly off-limits this Step), so
-// the only legal move is forward.
+// tryPlanDispatch/tryPlanReenqueue's own transact -- to Failed, in its own
+// small, fresh transact (mirroring executeSpawn's own "network call
+// already happened outside any transaction; a separate, small transact
+// now records its outcome" shape exactly). domain/turn's transition table
+// has no reverse edge from Processing back to Pending, and none is added
+// here (internal/domain/turn/state.go is explicitly off-limits this
+// Step), so the only legal move is forward.
+//
+// Two callers reach this, both from executeDispatch: a genuine
+// SandboxCommander.SendCommand failure (this function's ORIGINAL, Step 21
+// reason for existing), and Step 76's own turn-dispatch-time rollout
+// refusal (rolloutRefusalForDispatch, above) -- deliberately the SAME
+// terminal path for both, not two parallel ones: from the turn's own
+// perspective, "the actor decided this prompt will never reach a
+// sandbox" is one event, regardless of whether the proximate cause was a
+// transport failure or a policy refusal. reason is the caller's own
+// honest, human-readable account of WHICH -- carried verbatim into the
+// synthetic execution_complete event's own "reason" field (never
+// re-derived or classified further here).
 //
 // This reuses the EXACT SAME domain/turn call and "append a synthetic
 // execution_complete event" logic handleTurnDeadlineTimer (timerfired.go)
@@ -1679,27 +1816,27 @@ func (a *Actor) executeDispatch(ctx context.Context, plan *dispatchPlan) error {
 // turn.StateProcessing, turn.TriggerTimeout), gated by
 // turn.RequiresSyntheticExecutionComplete, then turn.DeriveFailureReason.
 // TriggerTimeout, specifically, is the only one of domain/turn's two
-// Processing->Failed forward edges that fits here: the OTHER one,
-// TriggerFail, is documented (synthetic.go) to mean "a REAL terminal event
-// reporting failure already arrived from the agent" and
+// Processing->Failed forward edges that fits either caller: the OTHER
+// one, TriggerFail, is documented (synthetic.go) to mean "a REAL terminal
+// event reporting failure already arrived from the agent" and
 // RequiresSyntheticExecutionComplete(TriggerFail) is false BECAUSE of that
 // -- using it here would silently skip the synthetic execution_complete
 // event entirely, since no real terminal event ever arrives for a prompt
 // that never reached the sandbox at all, breaking §3.3's "clients always
-// see one terminal event per turn" contract. TriggerTimeout is, like this
-// failure, a pure control-plane-internal decision with no real wire event
-// behind it, so it is the correct existing edge to reuse -- the resulting
-// session-level FailureReason reads "timeout" even though the proximate
-// cause here is a send failure, not a deadline expiry, which is an honest,
-// documented consequence of domain/turn's existing trigger vocabulary
-// (state.go off-limits this Step), not a new gap invented by this fix.
-// sendErr's own real message is preserved, honestly, in the synthetic
-// event's own "reason" field and the log line below.
-func (a *Actor) failDispatchedTurn(ctx context.Context, turnID pgtype.UUID, sendErr error) error {
-	reason := fmt.Sprintf("failed to deliver prompt to sandbox: %v", sendErr)
-	a.logger.Error("sessionactor: dispatch turn: send prompt command failed; failing turn",
-		"turn_id", turnID.String(), "error", sendErr)
-
+// see one terminal event per turn" contract. TriggerTimeout is, like
+// either failure, a pure control-plane-internal decision with no real
+// wire event behind it, so it is the correct existing edge to reuse for
+// both -- the resulting session-level FailureReason reads "timeout" even
+// though the proximate cause may be a send failure OR a rollout refusal,
+// neither a deadline expiry, which is an honest, documented consequence
+// of domain/turn's existing trigger vocabulary (state.go off-limits this
+// Step), not a new gap invented by either caller: reason's own real text
+// is what preserves the true cause, honestly, in the synthetic event's
+// own "reason" field -- FailureReason is a coarse, four-value
+// classification (§3.3), never meant to distinguish every possible cause
+// within "the control plane gave up on this turn before a real terminal
+// event could ever arrive".
+func (a *Actor) failDispatchedTurn(ctx context.Context, turnID pgtype.UUID, reason string) error {
 	return a.transact(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		turns, err := a.stores.turn.WithTx(tx).ListForSession(ctx, a.sessionID)
 		if err != nil {
