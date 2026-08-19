@@ -92,6 +92,7 @@ import (
 	"log/slog"
 	"sort"
 
+	"github.com/khazaddev/narvi/internal/domain/sandboxsecret"
 	"github.com/khazaddev/narvi/internal/platform"
 	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
 	"github.com/khazaddev/narvi/internal/sandboxagent/credentials"
@@ -141,6 +142,29 @@ func fetchSandboxSecrets(ctx context.Context, cfg boot.Config, timeouts platform
 	if retryErr != nil {
 		slog.Warn("sandbox-agent: fetch sandbox secrets exhausted every retry attempt, booting with no resolved sandbox secret", "error", retryErr)
 		return nil, false
+	}
+
+	// Defense in depth: re-validate every DELIVERED name against the same
+	// sandboxsecret.ValidateName the control plane's own write path
+	// (internal/adapters/inbound/httpapi/sandboxsecrets.go) already
+	// enforces. The reserved namespaces exist to stop a sandbox secret from
+	// ever shadowing a mechanism sandbox-agent itself depends on -- most
+	// sharply OPENCODE_*, whose inline-config slot OUTRANKS the capability
+	// restriction Step 48 writes into the project slot. Enforcing that at
+	// the write path alone would make it a rule every future writer has to
+	// remember, which §30 already ruled is not a guard; enforcing it again
+	// here, at the point of injection, makes the shadowing unrepresentable
+	// however a row reached the table -- a second write path added by a
+	// later Step, a hand-run INSERT, or a control plane rolled back to a
+	// build predating the reservation. Deleting during range is defined
+	// behaviour in Go: an entry deleted before it is reached is simply not
+	// produced. Drops the offending entry and continues, never fails the
+	// boot -- this feature's own degrade policy throughout.
+	for name := range resolved {
+		if err := sandboxsecret.ValidateName(name); err != nil {
+			slog.Warn("sandbox-agent: dropping delivered sandbox secret whose name is not injectable", "name", name, "error", err)
+			delete(resolved, name)
+		}
 	}
 
 	if len(resolved) > 0 {

@@ -234,3 +234,64 @@ func TestFetchSandboxSecrets_NilSessionConfigPanics(t *testing.T) {
 	}()
 	fetchSandboxSecrets(context.Background(), boot.Config{}, testTimeouts())
 }
+
+// TestFetchSandboxSecrets_DropsReservedNamesDeliveredByControlPlane is the
+// defense-in-depth half of the adversarial-review CRITICAL fix. The
+// reservation itself lives in sandboxsecret.ValidateName and the control
+// plane's own write path enforces it, so a name like
+// OPENCODE_CONFIG_CONTENT cannot normally be stored at all. This proves
+// the SECOND, independent enforcement: even if such a name is somehow
+// delivered anyway -- a later Step adding a second write path, a hand-run
+// INSERT, a control plane rolled back to a build predating the
+// reservation -- sandbox-agent drops it at the trust boundary rather than
+// injecting it. Without this, the whole OPENCODE_* hijack (its inline
+// config slot outranks the capability restriction Step 48 writes into the
+// project slot) would rest on every future writer remembering a rule.
+//
+// The legitimate sibling name in the same response must survive: this is
+// a targeted drop, never a wholesale rejection of the payload -- the
+// feature degrades per-entry and never fails the boot.
+func TestFetchSandboxSecrets_DropsReservedNamesDeliveredByControlPlane(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"secrets": map[string]string{
+			"OPENCODE_CONFIG_CONTENT": `{"permission":{"edit":"allow"}}`,
+			"OPENCODE_CONFIG":         "/tmp/attacker.json",
+			"NARVI_SOMETHING":         "reserved-too",
+			"MY_SECRET":               "legitimate",
+		}})
+	}))
+	defer server.Close()
+
+	cfg := boot.Config{
+		SessionConfig: &sessionconfig.SessionConfig{
+			ControlPlaneWsUrl: wsEquivalentForTest(server.URL),
+			SessionId:         "sess-1",
+			SandboxToken:      "tok",
+			Gen:               1,
+		},
+	}
+
+	got, ok := fetchSandboxSecrets(context.Background(), cfg, testTimeouts())
+	if !ok {
+		t.Fatal("fetchSandboxSecrets() ok = false, want true -- a reserved name is dropped, never a whole-payload failure")
+	}
+	for _, reserved := range []string{"OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG", "NARVI_SOMETHING"} {
+		if _, present := got[reserved]; present {
+			t.Errorf("fetchSandboxSecrets() kept reserved name %q, want it dropped before injection", reserved)
+		}
+	}
+	if got["MY_SECRET"] != "legitimate" {
+		t.Errorf("fetchSandboxSecrets()[MY_SECRET] = %q, want %q -- the legitimate sibling must survive the drop", got["MY_SECRET"], "legitimate")
+	}
+
+	// The dropped names must also be absent from what actually gets
+	// threaded into every spawned process, not merely from the map.
+	for _, entry := range sandboxSecretSpawnEnv(got) {
+		if strings.HasPrefix(entry, "OPENCODE_") || strings.HasPrefix(entry, "NARVI_") {
+			t.Errorf("sandboxSecretSpawnEnv() built reserved entry %q, want it never reach a spawned process", entry)
+		}
+	}
+}
