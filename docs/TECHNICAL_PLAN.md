@@ -3487,9 +3487,13 @@ embeddings, no index, no corpus artifact, no new external dependency of any kind
 
 **Mode B (high volume).** A per-repository documentary corpus, rendered as OKF concept documents
 (front-matter + typed body, §31.3), **embedded and queried by hybrid RAG retrieval** (a vector
-leg and a lexical leg, fused by RRF — §31.5). The prior-decisions block is fed by retrieval
-instead of the bounded SELECT, and a pull-mode `kb_search` tool becomes available to builder/plan
-sessions (§31.6 item 2).
+leg and a lexical leg, fused by RRF — §31.5). The prior-decisions block draws from the **same
+server-derived candidate gate as mode A** (§31.6's selector — gate-then-rank): retrieval
+re-ranks the gated candidates, it never re-selects them, because hybrid retrieval improves
+recall and does nothing for poisoning — the two concerns are orthogonal, and only a
+server-derived key addresses the second (§31.5, §31.7). A pull-mode `kb_search` tool
+additionally becomes available to builder/plan sessions (§31.6 item 2 — deliberately ungated,
+its own posture stated there).
 
 **The structural point: the flag is per repository, but internally the mode is a property of each
 knowledge SOURCE — and only sources with two genuine strategies route on it.** The sources do not
@@ -3498,7 +3502,7 @@ share a scaling regime, and the design reflects that rather than flattening it:
 | Source | Scaling regime | Mode A | Mode B |
 |---|---|---|---|
 | False-positive patterns (`review_false_positive_patterns`, migration 000073) | Bounded by human teaching throughput (`false positive:` commands behind maintainer+ RBAC, §22.2) — tens per repo, invariant to PR volume | inject-all | **inject-all (unchanged)** |
-| Architecture decisions (`review_verdicts.digest_arch_decisions`, migration 000077) | Linear in deep-path PRs — the one source that grows at machine speed; never read back today | bounded deterministic SELECT | **RAG retrieval** |
+| Architecture decisions (`review_verdicts.digest_arch_decisions`, migration 000077) | Linear in deep-path PRs — the one source that grows at machine speed; never read back today | the §31.6 gate, ordered by recency | **the same gate, re-ranked by hybrid RAG (§31.5)** |
 | Already-answered facts (`ListOpenAndRebuttedReviewFindings`) | Bounded per (repo, pr_number) — does not grow with the fleet | inject-all per PR | inject-all per PR (§22.1.2 reaffirmed) |
 | Approved plans | Bounded by plan sessions; prose currently perishable (§31.3) | — | durable via Step 99; corpus ingestion out of Phase 9's scope (§31.3) |
 | `kb_search` (pull, builder/plan sessions) | — | absent | **present** |
@@ -3530,7 +3534,9 @@ grounds to revisit §22.1.2.
 **manual, by an admin, never automatic**: every comparable unsupervised behavior in this codebase
 is an explicit admin config (000082, 000085, auto-approval 000069), and mode B changes what the
 reviewer sees for the one source that actually routes on it — the prior-arch-decisions block
-becomes a retrieved subset instead of a bounded recency window, while the false-positive patterns
+becomes the same gated candidate set re-ranked by retrieval instead of ordered by recency (a
+flip changes the ordering of eligible rows and the substrate that serves them, never which rows
+are eligible — §31.6's gate is mode-invariant), while the false-positive patterns
 a maintainer taught stay injected in full, unchanged, in either mode (§31.1's per-source doctrine
 — this sentence does not contradict it, an earlier draft's wording did) — which is exactly the
 class of change this codebase keeps behind deliberate configuration.
@@ -3540,8 +3546,9 @@ combined gauge cannot motivate a flip at all.** A token gauge on the rendered kn
 emitted at the existing render site, split into three numbers: the false-positive-pattern block,
 the arch-decisions block, and the total. The split is load-bearing, not cosmetic — it corrects a
 defect a single combined gauge cannot escape: per §31.1's own table, false-positive patterns are
-inject-all in **both** modes, and the arch-decisions block is bounded in **both** (`ORDER BY
-created_at DESC LIMIT k` in mode A, top-N in mode B) — so no component a flip actually touches can
+inject-all in **both** modes, and the arch-decisions block is bounded in **both** (the gate
+ordered by recency, `LIMIT k`, in mode A; the same gate re-ranked by RRF, top-N, in mode B) — so
+no component a flip actually touches can
 grow past any threshold, and the one component that CAN grow (false-positive patterns) is the one
 a flip never touches. A single total gauge, alerted-on and flipped-on, therefore does not move
 after the flip — the exact operator flapping this correction exists to prevent, now closed at its
@@ -3558,10 +3565,12 @@ could ever actually be counting.)
 **The real A→B indicator is relevance exhaustion, which no token gauge can observe — the §26.5
 instrument already measures it.** What degrades as a mode-A repository scales past the point
 retrieval exists to fix is not the arch-decisions block's *size* (bounded either way) but its
-*relevance*: the bounded recency window (§31.6's selector) covers a shrinking slice of real
-elapsed time as PR volume grows, so the injected decisions increasingly miss the one the current
-PR needs — exactly the "the motivating case is reached deterministically... at 300 PRs/week" vs.
-"2-3 days for raw recency" gap §31.6 itself names. The already-shipped §26.5 contestation KPI
+*relevance*: recency ordering within the gate (§31.6's selector) covers a shrinking slice of
+real elapsed time as PR volume grows, so the injected decisions increasingly miss the one the
+current PR needs — exactly the "the motivating case is reached deterministically... at 300
+PRs/week" vs. "2-3 days for raw recency" gap §31.6 itself names, now playing out within the
+gated set. And since a flip changes exactly and only that ordering (the gate is mode-invariant,
+above), an ordering-relevance signal is the right indicator for it. The already-shipped §26.5 contestation KPI
 (migration 000086), joined on the verdict knowledge-mode stamp (item 2 below), is the instrument
 that actually observes this: a rising contestation rate on knowledge-influenced verdicts is the
 real trigger, corroborated by a rising `counter_review='skipped'` / `fact_check='skipped'` rate
@@ -3592,14 +3601,22 @@ mandatory**, cheap, and idiomatic (precedent 000081):
    live** — otherwise a B→A flip mid-turn breaks a tool the prompt has already announced. The
    precedent is the verdict tool itself: `cmd/sandbox-agent/reviewverdicttoolprompt.go` bakes
    URL/bearer/gen into the prompt at hand-off and serves it minutes later.
-4. **The cold-corpus fallback, mandatory at every A→B flip.** The existing injection idiom
+4. **The cold-corpus fallback, mandatory at every A→B flip — simpler to reason about under
+   gate-then-rank, and still necessary.** The composition makes the flip smaller than it once
+   was: a flip no longer changes which rows are *eligible* (the §31.6 gate is mode-invariant),
+   only how the gated candidates are ordered and which substrate serves them — and that
+   substrate change is exactly why the rule survives restated rather than deleted: mode B reads
+   the corpus *index* (ingestion watermark, G4 promotion), which is empty on flip day no matter
+   how many gate-eligible verdict rows exist. The existing injection idiom
    (`FetchFalsePositivePatterns`) proudly degrades to an empty string indistinguishable from "no
-   history" — correct for its source, catastrophic if copied here: the index is empty on flip
-   day, the block renders "", and the review is silently strictly worse than the day before.
-   Rule: **if retrieval returns fewer than k rows, fall back to mode A's SELECT** — a one-line
-   guard that fully neutralizes the regression — and stamp the degradation on the turn (it lands
-   in the same JSONB decision record as the injected ids, §31.6 item 1, so degraded turns are
-   excluded from the B arm of the KPI rather than contaminating it).
+   history" — correct for its source, catastrophic if copied here: the block renders "", and the
+   review is silently strictly worse than the day before. Rule: **if retrieval returns fewer
+   than k rows, fall back to mode A's SELECT — the same gate, ordered by recency** — a one-line
+   guard that fully neutralizes the regression, and a smaller behavioral delta than before
+   because the fallback now changes only ordering and substrate, never the eligibility rule —
+   and stamp the degradation on the turn (it lands in the same JSONB decision record as the
+   injected ids, §31.6 item 1, so degraded turns are excluded from the B arm of the KPI rather
+   than contaminating it).
 5. **A per-repository ingestion watermark**, so a B→A→B cycle leaves no un-embedded hole for the
    verdicts written in the interval.
 
@@ -3641,7 +3658,9 @@ implied a Phase 9 Step ingests them, when none does:
 `arch-decision` — the typed triplet
 `ArchDecision{Decision, RejectedAlternative, ConventionConformance}`
 (`internal/domain/reviewpost/digest.go`). One OKF concept per decision: front-matter (content
-id, repo, source {pr_number, head_sha, review_path, counter_review}, provenance class, epoch,
+id, repo, source {pr_number, head_sha, review_path, counter_review}, the §31.6 gate's
+server-derived tags/directory-roots copied from the source verdict's INSERT-time stamp — the
+filter columns mode B's gate matches on, never re-derived at ingestion, provenance class, epoch,
 eligibility state, date), body = the three fields verbatim in three sections.
 `RejectedAlternative` is the irreplaceable payload: the road not taken leaves no trace in any
 checkout — no deterministic selector, and no amount of re-reading the repository, can
@@ -3897,17 +3916,27 @@ satisfiable on the port's existing shape the day it lands.
   numbered migration, working unchanged in all 28 test containers. `'simple'` config: corpus
   text is prose dense with code identifiers, and English stemming mutilates them. `pg_trgm`
   (contrib, present in the image) is deferred until a recall deficit on identifiers is actually
-  demonstrated.
+  demonstrated. **One property named so no future Step mis-credits this leg: lexical retrieval
+  is a recall instrument, never a poisoning mitigation.** `tsvector` ranks on the stored text,
+  and the stored text is authored by the model after reading PR content an attacker controls end
+  to end (§31.7's write path) — an attacker who stuffs a fabricated `ArchDecision` with the
+  right identifiers is ranked up by the very identifiers he chose, the same "determines its own
+  retrieval" property §31.6 names for embeddings. The two legs differ in recall behavior, not in
+  trust class — which is why **both legs run only inside the §31.6 gate**: membership in the
+  candidate set is decided by the server-derived key before either leg scores a row.
 - **RRF fusion in the DOMAIN** (`internal/domain/knowledge/fuse.go`): pure arithmetic over two
   ranked lists (score = Σ 1/(k+rank), k=60), zero I/O, table-testable with no database — exactly
-  what §11 wants in a domain package. The retrieval service (app layer) orchestrates: lexical
-  leg via the store, vector leg via `Embeddings` + cosine, `FuseRRF`, top-N fetch with
-  provenance, then the sanitizing render boundary (§31.7 G2).
+  what §11 wants in a domain package. The retrieval service (app layer) orchestrates: **the
+  §31.6 gate first** — the server-derived candidate set, the same membership rule mode A orders
+  by recency — then the lexical leg via the store and the vector leg via `Embeddings` + cosine,
+  both scored over that gated set only, `FuseRRF`, top-N fetch with provenance, then the
+  sanitizing render boundary (§31.7 G2). The fusion decides order, never membership: hybrid
+  retrieval improves recall within the candidate set, and that is the whole of its job.
 - **Provider-unavailable degradation**: mode B imports an availability dependency mode A does
   not have — embedding the *query* at review time. Copying the degrade-to-empty idiom would
   produce LESS context than mode A would have gotten from purely local data — a silent loss.
   Rule: degrade to **the lexical leg alone** (provider-independent; RRF over one empty leg is
-  well defined) or to the mode A SELECT — **never to empty** — and stamp the degradation on the
+  well defined; still inside the gate) or to the mode A SELECT — **never to empty** — and stamp the degradation on the
   turn (§31.2 item 4's record), without which degraded reviews contaminate the B arm of the KPI.
 - **§26.7 accounting**: control-plane embedding spend is invisible to the sandbox-side
   accumulator (`turnState.spentUSD` — §26.7's own mechanism) and immaterial in dollars
@@ -3928,14 +3957,17 @@ pure-render idiom (`internal/adapters/inbound/github/handler.go`;
 `internal/adapters/inbound/httpapi/reviewretrigger.go`;
 `internal/app/sessionactor/reviewretrigger.go`'s `composeAutoRetriggerPrompt`). A
 `reviewcontext.FetchPriorArchDecisions`, exact sibling of `FetchFalsePositivePatterns`, slots
-into all three seams with near-zero integration risk. Mode B swaps the SELECT for hybrid
-retrieval; everything else — render, sanitization, fixed delimiter, measurement — is shared. Why
+into all three seams with near-zero integration risk. Mode B swaps the *ranker*, never the gate:
+both modes draw their candidates from the same server-derived selector below — mode A orders
+them by recency, mode B re-ranks the same candidates by hybrid retrieval (gate-then-rank,
+§31.5); everything else — candidate eligibility, render, sanitization, fixed delimiter,
+measurement — is shared. Why
 the low-volume intuition inverts at scale: at a few PRs/week, a 30-decision window covers months
 and recency approximates relevance; at hundreds of PRs/week the same window covers **days** of
 churn — the decision a payments-lane PR needs is four months and thousands of decisions back.
 
-**Mode A's SELECT is the deterministic path-scoped selector — the fork is resolved: build the
-selector first. Its key must be server-derived, and `blast_radius` is not — corrected here
+**The deterministic path-scoped selector — mode A's whole SELECT, and the candidate GATE both
+modes share (the fork is resolved: build the selector first). Its key must be server-derived, and `blast_radius` is not — corrected here
 because an earlier draft got this backwards and the error falsified the poisoning argument below.**
 `review_verdicts.blast_radius` (JSONB, migration 000067) is not server-derived metadata: it is the
 reviewing model's own self-report, forwarded verbatim. `internal/domain/review/verdict.go`'s
@@ -3954,8 +3986,8 @@ written after Step 62's first implementation made exactly this mistake for the a
 eligibility engine. Keying the selector on `blast_radius` would repeat it one section later: an
 attacker who induces a false `ArchDecision` can, in the same verdict call, induce whatever
 `blast_radius` tags they like, including the ones that later decide where the false decision
-surfaces — precisely the "determines its own retrieval" property this paragraph itself claims,
-below, only similarity retrieval has.
+surfaces — precisely the "determines its own retrieval" property this paragraph itself
+attributes, below, to ungated similarity retrieval, the composition this section rejects.
 
 **The selector is not dead — its key is wrong, and the fix already exists in the tree.**
 `autoapproval.ClassifyChangedPaths` (`internal/domain/autoapproval/blastradius.go`, package
@@ -3973,32 +4005,77 @@ decisions from verdicts whose **tags/directory-roots — stamped at INSERT time 
 `ClassifyChangedPaths(prCtx.ChangedPaths)`, never from the posted `blast_radius` column** —
 overlap the current PR's own freshly computed tags/roots (the 000083 write-time precedent;
 `turns.review_depth_decision`'s own already-stored "distinct roots" is the shape to follow) —
-`ORDER BY created_at DESC LIMIT k`, recency fallback when overlap is empty. At 300 PRs/week,
+`ORDER BY created_at DESC LIMIT k`, recency fallback when overlap is empty. **That overlap
+predicate — including its recency fallback — is the GATE, and it is mode-invariant.** In mode A
+it is the whole selector: gate, then recency ordering, take k. In mode B the identical
+membership rule runs against the corpus rows' own copied INSERT-time tags/roots (§31.3's filter
+columns — never re-derived at ingestion), and lexical+dense RRF then orders the gated candidates
+(§31.5): gate, then rank, take N. When the fallback fires in mode B it serves the recency window
+recency-ordered — a pure-recency set gives a ranker nothing legitimate to exploit, and one
+shared fallback path is one fewer divergence between the arms — and the injected-ids record's
+selector field (below) records which membership rule actually ran, in both modes. At 300 PRs/week,
 path-scoped windows reach back **weeks to months** for typical roots, against 2–3 days for raw
 recency: the motivating case is reached deterministically. Its honestly-reported strengths,
 corrected: zero new ports, zero new vendors, zero new egress channel for customer-derived content;
 and, now that the key is genuinely server-derived, a real poisoning-profile advantage — under
-similarity retrieval an attacker's prose **determines its own retrieval** (write a "decision" that
+ungated similarity retrieval an attacker's prose **determines its own retrieval** (write a "decision" that
 embeds near auth-shaped queries and it surfaces indefinitely), while under
 `ClassifyChangedPaths`-keyed deterministic selection the key is a fixed function of the paths the
 PR actually had to touch to make its change at all — real, reviewer-visible diff content, checked
 server-side, never a free-form self-report an attacker can set to anything — and recency decay
-quarantines automatically. Plus a real quality doubt in the other direction: the corpus is
-micro-records of 50–150 identifier-dense tokens — terrain where dense retrieval is notoriously
-weakest and path overlap is ground truth, not a proxy.
+quarantines automatically. **The gate-then-rank composition extends exactly that property to
+mode B**: because the gate decides membership in both modes, an attacker's prose no longer
+decides *whether* his content is a candidate anywhere in this section — only its rank among
+candidates a key he does not control already admitted (§31.7 states precisely what that
+narrowing buys and what it does not; the ungated-similarity failure just described is now a
+description of the rejected composition, not of mode B). Plus a real quality doubt in the other
+direction: the corpus is micro-records of 50–150 identifier-dense tokens — terrain where dense
+retrieval is notoriously weakest and path overlap is ground truth, not a proxy.
+
+**The cost of the gate, stated plainly rather than buried: gating trades recall for poisoning
+resistance.** If the gate excludes a genuinely relevant decision — the cross-cutting
+architectural call recorded by a PR that shares no paths, and hence no tags or roots, with the
+current one — no ranker recovers it: in this composition the rankers order candidates, they
+cannot admit them. And that excluded case is a first cousin of the case this section's own
+volume argument invokes to justify retrieval existing at all — the decision from months back
+that a recency window misses. A path gate can miss the same decision for a different reason: not
+because it is old, but because it is orthogonal. The resolution is a stated position, not a
+hedge: **the gate is strict, in both modes, and the recall loss is accepted and measured.**
+Three candidate resolutions were weighed, so a reader who disagrees can see where to push:
+
+- *Gate mode B only, mode A unchanged* — rejected as a non-position: mode A's selector already
+  IS the gate (above), so this is not a smaller change but the same change plus an eligibility
+  disagreement between the modes, which is precisely the two-variables-at-once contamination the
+  composition exists to remove from the A/B readout (the measurement note below).
+- *A bounded escape hatch* — admit the top-N globally-ranked candidates from outside the gate
+  under a distinct, visibly-lower G6 provenance tier, prompt-framed as weaker — rejected **for
+  now**, because it re-opens, for those N slots, exactly the attacker-steered membership channel
+  the gate closes: §31.7 is explicit that prompt framing bounds an attack rather than killing
+  it, so the hatch would spend real poisoning surface on a recall deficit nobody has yet
+  demonstrated. It is the named escalation, not a component.
+- *The strict gate, chosen*: the recall loss is real, and the instrument to see it is already
+  ordered — Step 101's baseline readout records the recency-fallback rate on empty overlap and
+  whether contestations cluster where path overlap was thin, which is the signature of a gate
+  miss. Stated honestly about its own resolution: the §26.5 instrument observes a miss only
+  through its downstream damage (a recap contested where the gate had little to offer) — a
+  proxy, not a direct recall measure, recorded as such. If that readout demonstrates a deficit
+  the gate cannot close, the bounded lower-tier escape hatch above is the named follow-up, on
+  the same evidence-first terms as `pg_trgm` and pgvector (§31.5) — armed by measurement, never
+  presumed.
 
 **What this resolution does and does not defer — stated so the sequencing cannot be misread as
-re-litigating the owner's decision.** Every line of the selector is plumbing mode B needs anyway:
-same seam, same render, same sanitization, same injected-id recording, same KPI. Building it as
-mode A's SELECT defers the **commitment** to the embeddings leg, not its construction — and it
+re-litigating the owner's decision.** Every line of the selector is structure mode B keeps, not
+scaffolding it discards: same seam, same render, same sanitization, same injected-id recording,
+same KPI — and, under gate-then-rank, the same candidate gate, which mode B re-ranks rather than
+replaces. Building it as mode A's SELECT defers the **commitment** to the embeddings leg, not its construction — and it
 arms the engagement decision with data instead of hypothesis. Precisely, because the two halves
 of the comparison do not exist at the same time: Step 101's window establishes the deterministic
 arm's own baseline on the §26.5 instrument — its contestation rate, the recency-fallback rate on
 empty overlap, and whether contestations cluster where path overlap was thin (the injected-ids
 record makes that attribution possible). The leg is engaged if that readout shows relevance
 misses path scoping cannot close, and killed if the deterministic arm already sits at the
-contestation floor; only once engaged does the full deterministic-vs-similarity A/B run, on
-mode-stamped verdicts from the first flip (Step 102's own measurement). The engagement gate
+contestation floor; only once engaged does the full recency-vs-RRF A/B run — two rankers, one
+gate — on mode-stamped verdicts from the first flip (Step 102's own measurement). The engagement gate
 is written into Step 102's own row. And the design's own honest counterpoint, kept: "build
 nothing" was already dead before this fork existed — `RejectedAlternative` is genuinely
 irreplaceable, the checkout does not record the road not taken — so the fork was only ever about
@@ -4006,7 +4083,17 @@ irreplaceable, the checkout does not record the road not taken — so the fork w
 
 *Measurement (same-Step rule)*: per-repository A/B on the already-shipped §26.5 contestation KPI
 (migration 000086, the `arch recap wrong:` command), **joined on the verdict knowledge-mode
-stamp** (§31.2 item 2); plus a **durable record of the injected knowledge** — ids and content
+stamp** (§31.2 item 2). The gate-then-rank composition is what makes this A/B mean something:
+the two arms share one candidate-eligibility rule and differ in exactly one variable — the
+ranker — where the earlier alternatives framing compared arms differing in both candidate
+selection *and* ranking, an unattributable readout. Two residual deltas are named rather than
+wished away, both conservative (each only ever shrinks the B arm's candidate set relative to
+A's) and both visible in the injected-ids record, so the readout can quantify them instead of
+guessing: **G4 promotion** (a mode B candidate must additionally be merged + quarantine-aged +
+uncontested — mode A's verdict-table SELECT cannot apply the merge half to rows predating
+Step 101's capture) and **the ingestion watermark** (a corpus row lags its source verdict).
+Ranker-only up to those two named deltas, not beyond — the claim is a materially cleaner
+readout, never a laboratory-pure one. Plus a **durable record of the injected knowledge** — ids and content
 hashes of the injected decisions, in a JSONB column on the turn, the exact shape of
 `review_depth_decision` (migration 000083), carrying the selector actually used and any
 degradation. Not logs: logs are not durable joinable state, and without this record, when a
@@ -4020,7 +4107,13 @@ URL/bearer/gen are substituted into the prompt at hand-off,
 `cmd/sandbox-agent/reviewverdicttoolprompt.go`) — not the loopback precedent: the corpus lives in
 the control plane's Postgres, unreachable from the sandbox any other way. Pull beats push at high
 volume: builder turns are the most voluminous class and need nothing most of the time; pull costs
-only when the agent decides, with a query formed mid-task after exploring the checkout. Scope is
+only when the agent decides, with a query formed mid-task after exploring the checkout.
+**`kb_search` is ungated by construction — stated so the item 1 gate is never mis-credited as
+covering this surface.** A pull query has no PR behind it: there are no server-derived
+`ChangedPaths` to gate on, and the query text is agent-authored. Its poisoning posture rests on
+G2's sanitizing render, G4's eligibility, and G5/G6's capped, weighted provenance alone (§31.7)
+— which is a reason the entry barrier and provenance weighting are corpus properties rather than
+review-path properties, and one more reason this tool stays blocked behind Step 100. Scope is
 derived server-side from the session row **and verified against the entitlement predicate**
 (§31.4 — derivation alone is laundering); authorization is against the turn's stamped mode
 (§31.2 item 3). *Measurement*: query/hit-rate/injected-ids journal, zero-result rate.
@@ -4134,16 +4227,33 @@ retracting a legitimate decision). The §26.5 contestation mechanism is good rec
 this section's KPI instrument; it is not a retraction mechanism for the corpus, and G4's
 per-decision eligibility state exists precisely because it cannot be.
 
+**What the §31.6 gate buys here, precisely — and what it does not.** In both modes the attacker
+no longer decides *whether* his content is a candidate by anything he writes: membership is the
+overlap of two server-derived keys — the tags/roots stamped from the paths his poisoning PR
+verifiably touched, and the victim PR's own freshly computed tags/roots — and neither is
+free-form text. What he retains, named so nobody rounds this up to a kill: he can still *aim*,
+because his own PR's paths are his to choose — but the aim is purchased with real,
+reviewer-visible diff content in a PR that must merge and survive G4's quarantine uncontested,
+and it reaches only future PRs that genuinely work in the same terrain, never every PR whose
+query his prose can embed near; and within any candidate set he is legitimately a member of, his
+prose still steers both retrieval legs' scores (§31.5 names the lexical leg's share of this
+explicitly — `tsvector` is not the safe half of the hybrid). So the gate narrows the surface —
+from attacker-steered membership to attacker-influenced rank among server-selected candidates —
+and shortens it (recency decay in mode A's ordering, G4's quarantine in both). It does not close
+it: the semantic false precedent below survives inside the gate wholly intact, which is why G4,
+G5, and G6 remain necessary, not superseded.
+
 **The attack with no clean structural kill, said honestly: the semantic false precedent.** A PR
 whose narrative induces the model to record an `ArchDecision` asserting a false convention — in
 well-formed English, no tokens, no delimiters — survives every strip pass by construction.
-**G4, G5, and G6 ARE the defense**: the gate keeps unmerged and contested content out, the
+**G4, G5, and G6 ARE the defense**: G4's eligibility gate keeps unmerged and contested content out, the
 influence stamp prevents the false precedent from laundering itself into authentic authorship,
 and weighted provenance keeps a single low-confidence assertion from outranking maintainer-taught
 truth. They are structural and they ship with the mechanism in the same Step — but they bound
 and decay the attack rather than killing it, and this section says so rather than implying
-otherwise. (Mode A's deterministic selector narrows the attacker further — §31.6's poisoning
-comparison — which is itself one of the reasons the fork resolved as it did.)
+otherwise. (The §31.6 gate narrows the attacker further in BOTH modes — the paragraph above —
+which is one of the reasons the fork resolved as it did, and why the gate precedes both rankers
+rather than belonging to mode A alone.)
 
 ### 31.8 Interaction with platform shadow mode (§30)
 
@@ -4186,17 +4296,23 @@ comparison — which is itself one of the reasons the fork resolved as it did.)
 2. **The semantic false precedent has no structural kill** (§31.7) — bounded and decayed by
    G4/G5/G6, not eliminated. Anyone extending the corpus to new content types re-inherits this
    limit and must re-argue it.
-3. **`repo_full_name` as the scope key**: a repository rename/transfer silently splits a corpus
+3. **The gate's recall loss is a real, accepted trade** (§31.6): a cross-cutting decision
+   sharing no server-derived tags/roots with the current PR is invisible to both modes — the
+   rankers order candidates, they cannot admit them. Accepted strict, measured through the
+   gate-miss signature on the §26.5 instrument (a proxy through downstream damage, recorded as
+   such — §31.6), with the bounded lower-tier escape hatch the named-and-deferred escalation if
+   the deficit is ever demonstrated.
+4. **`repo_full_name` as the scope key**: a repository rename/transfer silently splits a corpus
    that outlives any PR session. Consistency with `repo_settings` and `github_pr_sessions`
    argues for keeping it and inheriting any future rename fix those tables get — accepted, and
    noted rather than hidden.
-4. **A new egress channel exists in mode B** — the embeddings provider receives customer-derived
+5. **A new egress channel exists in mode B** — the embeddings provider receives customer-derived
    text. Surfaced (§31.8), key policy decided for shadow; the wire-compatible adapter (§31.5)
    is the named path to closing it entirely for self-hosters, and it is deferred, not dropped.
-5. **No browsable corpus tree, no git history of knowledge evolution, no edit-review workflow**
+6. **No browsable corpus tree, no git history of knowledge evolution, no edit-review workflow**
    — the deliberate price of Postgres-as-truth (§31.3); the read-only export is the answer to
    the navigation half, and the other halves are out of scope until someone actually asks.
-6. **Pre-durability plan loss is permanent** (§31.3) — recorded so nobody later files it as a
+7. **Pre-durability plan loss is permanent** (§31.3) — recorded so nobody later files it as a
    backfill bug.
 
 **Open verification items** (must be resolved before the relevant layer is credited):
@@ -4211,7 +4327,9 @@ comparison — which is itself one of the reasons the fork resolved as it did.)
 
 - **The embeddings-leg engagement readout** (§31.6 item 1): Step 102 does not start until
   Step 101's deterministic-arm baseline window has been read; the criterion is written on
-  Step 102's row. **What is NOT deferred: the kill branch's own deliverable, stated explicitly so
+  Step 102's row. Under gate-then-rank the eventual A/B is a ranker-only comparison over a
+  shared candidate rule — up to §31.6's two named residual deltas — which is what makes the
+  readout able to attribute a difference to the embeddings leg at all. **What is NOT deferred: the kill branch's own deliverable, stated explicitly so
   it is never confused with the engaged branch's.** If the readout kills engagement, Step 102 is
   never executed — its entire deliverable becomes a recorded kill decision citing Step 101's
   baseline readout (contestation rate, recency-fallback rate, whether contestations cluster where
@@ -4237,7 +4355,8 @@ comparison — which is itself one of the reasons the fork resolved as it did.)
 Phase 9, Steps 99–104 (implementation plan). The minimal subset delivering the owner's decision
 is Steps 99 + 101 (durability, and the mode A pipeline with its buffer and measurement); Step 101
 alone is already production-useful — mode A gains its cross-PR memory. **Step 102 is conditional,
-not minimal**: it ships — the mode B index/retrieval that swaps into Step 101's proven pipeline —
+not minimal**: it ships — the mode B index/retrieval whose *ranker* swaps into Step 101's proven
+pipeline, behind the candidate gate Step 101 built and both modes keep (§31.6) —
 only if Step 101's own baseline readout (§31.6, §31.9) engages the embeddings leg; if that readout
 kills engagement, Step 102's entire deliverable is a recorded kill decision, and Phase 9 closes on
 mode A alone. Step 100 (entitlement) runs in parallel and gates Steps 103 (`kb_search`) and 104
