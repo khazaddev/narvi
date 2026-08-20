@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -140,7 +141,14 @@ func serve() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	shutdownOTel, err := platform.SetupOTel(ctx, "narvi-control-plane")
+	// cfg.OTLPEndpoint is §33's control-plane-only OTLP opt-in
+	// (platform.Config.OTLPEndpoint's own doc comment has the full gating
+	// rule) -- empty keeps building the stdouttrace/stdoutmetric exporters
+	// this call has always used, non-empty swaps in a real OTLP/HTTP
+	// exporter pointed at it instead. cmd/sandbox-agent/main.go's own
+	// identical-looking call hardcodes "" here instead of threading any
+	// config through -- see that call site's own doc comment for why.
+	shutdownOTel, err := platform.SetupOTel(ctx, "narvi-control-plane", cfg.OTLPEndpoint)
 	if err != nil {
 		return err
 	}
@@ -149,7 +157,16 @@ func serve() error {
 		// this deferred call runs, ctx may already be canceled (that's
 		// exactly what triggers shutdown below), and a canceled context
 		// would make the flush itself fail immediately.
-		if err := shutdownOTel(context.Background()); err != nil {
+		//
+		// Bounded by cfg.Timeouts.OTelShutdownTimeout and warn-and-continue
+		// on error, never fatal -- see shutdownControlPlaneOTel's own doc
+		// comment for why this call is no longer the unbounded one it used
+		// to be: with cfg.OTLPEndpoint set, this flush is a real network
+		// call to an operator's collector, with a real hang mode a bare
+		// stdout write never had, and a down/unreachable collector must
+		// not be allowed to block this process's own graceful exit past
+		// its configured budget.
+		if err := shutdownControlPlaneOTel(shutdownOTel, cfg.Timeouts.OTelShutdownTimeout); err != nil {
 			slog.Error("otel shutdown failed", "error", err)
 		}
 	}()
@@ -1998,6 +2015,34 @@ func serve() error {
 	})
 
 	return group.Wait()
+}
+
+// shutdownControlPlaneOTel bounds one call to shutdown (platform.SetupOTel's
+// own returned func) by timeout, against a fresh background context --
+// mirrors cmd/sandbox-agent/main.go's own shutdownSandboxAgentOTel exactly,
+// now that §33 gives this binary's own OTel shutdown the SAME real failure
+// mode sandbox-agent's always had: an OTLP exporter's flush is a network
+// call to an operator's collector, and a down/unreachable collector must
+// not be allowed to hang serve()'s own graceful exit indefinitely.
+//
+// Previously this call (serve()'s own deferred shutdownOTel) was left
+// deliberately unbounded -- see shutdownSandboxAgentOTel's own doc comment
+// for the reasoning at the time: a bare stdout write essentially never
+// hangs, and this is a long-running daemon that gets another periodic
+// export anyway even if one flush were somehow missed. That reasoning held
+// only as long as stdout was the only exporter this binary could ever have.
+// §33 ends that by giving serve() a real OTLP endpoint option
+// (cfg.OTLPEndpoint) -- platform.Timeouts.OTelShutdownTimeout now bounds
+// BOTH binaries' shutdown calls identically; see that field's own doc
+// comment.
+//
+// Factored out of serve() specifically so it is unit-testable in isolation
+// (see main_test.go's own TestShutdownControlPlaneOTel_BoundsAHungShutdown),
+// exactly like shutdownSandboxAgentOTel's own precedent.
+func shutdownControlPlaneOTel(shutdown func(context.Context) error, timeout time.Duration) error {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return shutdown(shutdownCtx)
 }
 
 // applyMigrations runs the embedded migrations (migrations.FS) up against
