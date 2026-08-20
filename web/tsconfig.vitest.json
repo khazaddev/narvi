@@ -1,0 +1,35 @@
+{
+  // Standalone typecheck project for src/**/__tests__/** (tsconfig.app.json
+  // deliberately excludes that tree -- see its own comment). Not referenced
+  // from tsconfig.json's own "references" array (that would pull Node
+  // globals into `tsc -b`'s main app build via project-reference file
+  // sharing); instead "npm run typecheck:tests" invokes this file directly
+  // with `tsc -p ... --noEmit`, wired into "npm test" (package.json) so CI's
+  // one "Test" step catches a test file that no longer typechecks, not just
+  // one that no longer passes at runtime.
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.vitest.tsbuildinfo",
+    "target": "es2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "esnext",
+    "types": ["node", "vite/client"],
+    "skipLibCheck": true,
+
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true,
+
+    "paths": {
+      "@narvi/contracts/*": ["../contracts/gen/ts/*"]
+    }
+  },
+  "include": ["src/**/__tests__/**/*.ts", "vitest.config.ts"]
+}

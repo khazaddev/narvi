@@ -416,6 +416,16 @@ jobs:
         run: npm run check-dto-types
         working-directory: web
 
+      # §12.1's own data layer (Step 80: "WS transport -> event log ->
+      # reducer -> query invalidation") -- typechecks web/src/**/__tests__
+      # then runs the real pipeline tests (vitest), which drive the real
+      # transport/reducer against a real local fake WS server. See web/
+      # README.md's own "Testing" section.
+      - name: Test
+        if: steps.changes.outputs.relevant == 'true'
+        run: npm test
+        working-directory: web
+
       - name: Build
         if: steps.changes.outputs.relevant == 'true'
         run: npm run build
