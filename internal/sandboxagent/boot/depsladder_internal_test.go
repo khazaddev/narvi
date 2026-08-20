@@ -532,6 +532,14 @@ func writeScriptInternal(t *testing.T, path, body string) {
 	}
 }
 
+// noopHookRerunTimingInternal is this file's own package-boot copy of
+// runboot_test.go's own noopReporter precedent (a DIFFERENT Go package,
+// boot_test, invisible here -- see this file's own top comment) -- a §33.3
+// OnHookRerunTiming this file's one white-box runSetupRerunLadder call
+// below does not care to observe.
+func noopHookRerunTimingInternal(_, _, _ string, _, _ bool, _ float64) {
+}
+
 // TestRunSetupRerunLadder_ConsultsHookDeltaPolicy proves the B4
 // adversarial-review fix directly, white-box: runSetupRerunLadder's own
 // delta-tier gate consults sandboxboot.EvaluateHook's HookDelta policy row,
@@ -563,7 +571,7 @@ func TestRunSetupRerunLadder_ConsultsHookDeltaPolicy(t *testing.T) {
 	sup := supervisor.New()
 	repo := RepoInfo{Name: "repo1", Primary: true}
 
-	runSetupRerunLadder(context.Background(), sup, workspaceDir, repo, ladder, false, nil, 5*time.Second, time.Second, time.Millisecond)
+	runSetupRerunLadder(context.Background(), sup, workspaceDir, repo, ladder, false, nil, noopHookRerunTimingInternal, 5*time.Second, time.Second, time.Millisecond)
 
 	if _, err := os.Stat(syncMarker); err == nil {
 		t.Error("sync.sh ran despite EvaluateHook(BootModeRepoImage, HookDelta, primary, moved=false).ShouldRun = false -- HookDelta policy row not actually consulted (B4 regression)")

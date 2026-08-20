@@ -1561,18 +1561,95 @@ func run() error {
 		}
 	}
 
+	// sendBootTiming (§33.3) forwards ONE already-measured
+	// sandbox_agent_*_duration_seconds data point as a best-effort
+	// boot_timing sandbox-ws event -- mirroring onGitSync's own "forward
+	// over the bridge when one exists, always log locally too" shape
+	// exactly. This REPLACES what used to be four local OTel histogram
+	// recordings (boot.RecordBootDuration/recordHookRerunDuration,
+	// gitclone's own recordGitFetchDuration/recordGitCheckoutDuration, all
+	// deleted by this Step): §33.1/§33.2 record why recording inside the
+	// ephemeral sandbox process, and deriving these durations control-plane
+	// -side from other wire signals, both fail -- the fact itself must
+	// cross the wire, already measured, and the control plane records the
+	// histogram (internal/app/sessionactor/opsmetrics.go). evt.Type/
+	// MessageId/SessionId/Gen are filled in here, once, so every call site
+	// below only needs to set Metric/Seconds and whichever tags its own
+	// metric carries.
+	sendBootTiming := func(evt sandboxws.BootTiming) {
+		if bridge == nil || cfg.SessionConfig == nil {
+			return
+		}
+		evt.Type = "boot_timing"
+		evt.MessageId = uuid.NewString()
+		evt.SessionId = cfg.SessionConfig.SessionId
+		evt.Gen = cfg.SessionConfig.Gen
+		if sendErr := bridge.SendBestEffort(ctx, evt); sendErr != nil {
+			slog.Warn("sandbox-agent: send boot_timing over WS bridge failed",
+				"metric", string(evt.Metric), "error", sendErr)
+		}
+	}
+
+	// onHookRerunTiming (§33.3) relays boot.RunHooks/RunBoot's own
+	// per-hook timing (formerly boot.recordHookRerunDuration) -- repo rides
+	// the event for per-session debugging only (events.schema.json's own
+	// BootTiming def), never as a metric attribute (§33.3 point 3).
+	onHookRerunTiming := func(repo, hook, bootMode string, workspaceMoved, failed bool, seconds float64) {
+		sendBootTiming(sandboxws.BootTiming{
+			Metric:         sandboxws.BootTimingMetricHookRerunDuration,
+			Seconds:        seconds,
+			Repo:           &repo,
+			Hook:           &hook,
+			BootMode:       &bootMode,
+			WorkspaceMoved: &workspaceMoved,
+			Failed:         &failed,
+		})
+	}
+
+	// onGitFetchTiming/onGitCheckoutTiming (§33.3) relay gitclone.SyncAll's
+	// own §19.3 fetch-step and checkout timing (formerly gitclone's own
+	// recordGitFetchDuration/recordGitCheckoutDuration) -- same repo-rides-
+	// the-event-only discipline as onHookRerunTiming above.
+	onGitFetchTiming := func(repo string, seconds float64, degraded bool) {
+		sendBootTiming(sandboxws.BootTiming{
+			Metric:   sandboxws.BootTimingMetricGitFetchDuration,
+			Seconds:  seconds,
+			Repo:     &repo,
+			Degraded: &degraded,
+		})
+	}
+	onGitCheckoutTiming := func(repo string, seconds float64, failed bool) {
+		sendBootTiming(sandboxws.BootTiming{
+			Metric:  sandboxws.BootTimingMetricGitCheckoutDuration,
+			Seconds: seconds,
+			Repo:    &repo,
+			Failed:  &failed,
+		})
+	}
+
 	// Audit-remediation batch B7 (Finding 3, HIGH): bracket the WHOLE repo
-	// prepare + RunBoot span with a wall-clock timer and record it as
-	// sandbox_agent_boot_duration_seconds (boot.RecordBootDuration) --
-	// previously nothing in this binary measured total boot-to-ready
-	// latency at all, so §19.6's "is a hook rerun materially eroding the
-	// warm-boot latency win" gating question had no denominator to compare
-	// hookRerunDurationHistogram's own per-hook number against. Recorded
-	// regardless of bootErr (tagged failed=bootErr!=nil): even a failed
-	// boot's own elapsed time is a real data point, not one to discard.
+	// prepare + RunBoot span with a wall-clock timer and relay it as
+	// sandbox_agent_boot_duration_seconds's own §33.3 boot_timing event --
+	// previously (and still, control-plane-side after this Step) nothing
+	// else measures total boot-to-ready latency at all, so §19.6's "is a
+	// hook rerun materially eroding the warm-boot latency win" gating
+	// question has no denominator to compare sandbox_agent_hook_rerun_
+	// duration_seconds against without it. Relayed regardless of bootErr
+	// (tagged failed=bootErr!=nil): even a failed boot's own elapsed time
+	// is a real data point, not one to discard. No callback threading
+	// needed here (unlike the hook/fetch/checkout timings above): this
+	// span is measured directly around runBootSequence, in this SAME
+	// function, which already has sendBootTiming in scope.
 	bootStart := time.Now()
-	bootErr := runBootSequence(ctx, sup, cfg, timeouts, sandboxSecretEnv, bootDegradeNotes, reportBootProgress, onGitSync)
-	boot.RecordBootDuration(ctx, string(cfg.BootMode), time.Since(bootStart).Seconds(), bootErr != nil)
+	bootErr := runBootSequence(ctx, sup, cfg, timeouts, sandboxSecretEnv, bootDegradeNotes, reportBootProgress, onGitSync, onGitFetchTiming, onGitCheckoutTiming, onHookRerunTiming)
+	bootMode := string(cfg.BootMode)
+	bootFailed := bootErr != nil
+	sendBootTiming(sandboxws.BootTiming{
+		Metric:   sandboxws.BootTimingMetricBootDuration,
+		Seconds:  time.Since(bootStart).Seconds(),
+		BootMode: &bootMode,
+		Failed:   &bootFailed,
+	})
 	if bootErr != nil {
 		// A boot failure needs the same graceful convergence a fatal WS
 		// status or an OS signal gets -- cancel ctx (stop is a genuine
@@ -1807,6 +1884,12 @@ func logRepoMissingFromManifest(manifest boot.ImageManifest, currentSHAs map[str
 // requirement. nil/empty (the overwhelming common case: every boot-time
 // fetch succeeded, or a session has none of this Step's own fetches to
 // begin with) omits the manifest's own degrade-notice section entirely.
+//
+// onGitFetchTiming/onGitCheckoutTiming/onHookRerunTiming (§33.3)
+// are threaded straight through to gitclone.SyncAll and boot.RunBoot
+// respectively, exactly like reportBootProgress/onGitSync above -- see
+// run()'s own sendBootTiming closure (this function's caller) for what
+// they relay and why.
 func runBootSequence(
 	ctx context.Context,
 	sup *supervisor.Supervisor,
@@ -1816,6 +1899,9 @@ func runBootSequence(
 	degradeNotes []string,
 	reportBootProgress services.ProgressReporter,
 	onGitSync gitclone.OnGitSync,
+	onGitFetchTiming gitclone.OnGitFetchTiming,
+	onGitCheckoutTiming gitclone.OnGitCheckoutTiming,
+	onHookRerunTiming boot.OnHookRerunTiming,
 ) error {
 	var repos []boot.RepoInfo
 	// workspaceMoved (§19.4) stays nil for a nil-SessionConfig boot
@@ -1863,7 +1949,8 @@ func runBootSequence(
 		switch cfg.BootMode {
 		case sandboxboot.BootModeRepoImage, sandboxboot.BootModeSnapshotRestore:
 			results, syncErr := gitclone.SyncAll(ctx, sup, cfg.WorkspaceDir, cfg.SessionConfig.Repos, pathScope,
-				cfg.SessionConfig.SessionId, timeouts.GitFetchStepTimeout, timeouts.GitSyncStepTimeout, timeouts.ProcessStopGracePeriod, onGitSync)
+				cfg.SessionConfig.SessionId, timeouts.GitFetchStepTimeout, timeouts.GitSyncStepTimeout, timeouts.ProcessStopGracePeriod, onGitSync,
+				onGitFetchTiming, onGitCheckoutTiming)
 			if syncErr != nil {
 				return fmt.Errorf("sync repos: %w", syncErr)
 			}
@@ -1990,7 +2077,7 @@ func runBootSequence(
 	// package-registry reinstall inside the boot sequence, which has its
 	// own separate budget and a slower, network-bound failure profile.
 	// Equal values today are a coincidence of tuning, not one concept.
-	if err := boot.RunBoot(ctx, sup, cfg.WorkspaceDir, repos, cfg.BootMode, workspaceMoved, setupRerunLadder, secretEnv, reportBootProgress,
+	if err := boot.RunBoot(ctx, sup, cfg.WorkspaceDir, repos, cfg.BootMode, workspaceMoved, setupRerunLadder, secretEnv, reportBootProgress, onHookRerunTiming,
 		timeouts.HookTimeout, timeouts.ProcessStopGracePeriod,
 		timeouts.ServiceReadinessTimeout, timeouts.ServiceReadinessPollInterval,
 		timeouts.SetupRerunRetryBackoff); err != nil {

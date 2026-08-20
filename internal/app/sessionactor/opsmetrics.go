@@ -120,6 +120,29 @@ type opsMetrics struct {
 	// not informative.
 	falseFailure metric.Int64Counter
 
+	// bootDuration/hookRerunDuration/gitFetchDuration/gitCheckoutDuration
+	// (§33.3) are the four sandbox_agent_*_duration_seconds
+	// histograms that used to be recorded INSIDE the ephemeral sandbox
+	// process (internal/sandboxagent/boot/telemetry.go, internal/
+	// sandboxagent/gitclone/telemetry.go, both deleted by this Step) and
+	// are now recorded HERE instead, from the relayed best-effort
+	// boot_timing sandbox-ws event (recordBootTiming, boottiming.go) --
+	// see that file's own top comment for the full "ship the fact, record
+	// centrally" reasoning (§33.3). Same instrument names and same
+	// hand-tuned bucket slices as the deleted sandbox-side histograms.
+	// Two DIFFERENT guards, because one check does not cover both: a
+	// RENAME is caught by internal/ops's TestNoMetricDrift, which compares
+	// these names against deploy/observability/{dashboards,alerts}; a
+	// BUCKET-SHAPE change is not, since that check reads only the
+	// registration call's name argument and has no notion of boundaries.
+	// The slices are pinned by opsmetrics_buckets_test.go instead -- the
+	// replacement for the bucket-shape test that was deleted along with
+	// the sandbox-side files.
+	bootDuration        metric.Float64Histogram
+	hookRerunDuration   metric.Float64Histogram
+	gitFetchDuration    metric.Float64Histogram
+	gitCheckoutDuration metric.Float64Histogram
+
 	// rolloutRefused is the Phase 6 audit's own fix for Finding 4:
 	// session_rollout_refused_total (§32) was, before this fix,
 	// incremented ONLY by httpapi.checkRolloutGate -- the session-creation-
@@ -196,6 +219,46 @@ func newOpsMetrics(meter metric.Meter) (opsMetrics, error) {
 		return opsMetrics{}, fmt.Errorf("sessionactor: construct turn_false_failure_total counter: %w", err)
 	}
 
+	bootDuration, err := meter.Float64Histogram(
+		"sandbox_agent_boot_duration_seconds",
+		metric.WithDescription("Wall-clock duration of one sandbox-agent boot-to-ready sequence (repo clone/sync through RunBoot's own hook/service startup) -- the total warm-boot latency §19.6's gating question needs as its own denominator when judging whether a hook rerun is materially eroding it. Recorded here from a relayed best-effort boot_timing event (§33.3); the wall-clock bracket itself is still measured sandbox-side, on the sandbox's own clock."),
+		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(bootDurationBuckets...),
+	)
+	if err != nil {
+		return opsMetrics{}, fmt.Errorf("sessionactor: construct sandbox_agent_boot_duration_seconds histogram: %w", err)
+	}
+
+	hookRerunDuration, err := meter.Float64Histogram(
+		"sandbox_agent_hook_rerun_duration_seconds",
+		metric.WithDescription("Wall-clock duration of one sandbox-agent boot hook run (setup.sh/start.sh), including a workspaceMoved-triggered non-fatal setup.sh rerun under repo_image (§19.4/§19.5). Recorded here from a relayed best-effort boot_timing event (§33.3); the wall-clock bracket itself is still measured sandbox-side, on the sandbox's own clock."),
+		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(hookRerunDurationBuckets...),
+	)
+	if err != nil {
+		return opsMetrics{}, fmt.Errorf("sessionactor: construct sandbox_agent_hook_rerun_duration_seconds histogram: %w", err)
+	}
+
+	gitFetchDuration, err := meter.Float64Histogram(
+		"sandbox_agent_git_fetch_duration_seconds",
+		metric.WithDescription("Wall-clock duration of SyncAll's own §19.3 boot-time fetch step (the default-branch and target-branch git fetch calls together) for one repo. Recorded here from a relayed best-effort boot_timing event (§33.3); the wall-clock bracket itself is still measured sandbox-side, on the sandbox's own clock."),
+		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(gitFetchDurationBuckets...),
+	)
+	if err != nil {
+		return opsMetrics{}, fmt.Errorf("sessionactor: construct sandbox_agent_git_fetch_duration_seconds histogram: %w", err)
+	}
+
+	gitCheckoutDuration, err := meter.Float64Histogram(
+		"sandbox_agent_git_checkout_duration_seconds",
+		metric.WithDescription("Wall-clock duration of SyncAll's own checkoutBranch call (checkout onto the session branch, creating it from a resolved base if absent) for one repo -- excludes the fetch step and any stash push/pop, each its own separately-timed phase. Recorded here from a relayed best-effort boot_timing event (§33.3); the wall-clock bracket itself is still measured sandbox-side, on the sandbox's own clock."),
+		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(gitCheckoutDurationBuckets...),
+	)
+	if err != nil {
+		return opsMetrics{}, fmt.Errorf("sessionactor: construct sandbox_agent_git_checkout_duration_seconds histogram: %w", err)
+	}
+
 	rolloutRefused, err := meter.Int64Counter(
 		"session_rollout_refused_total",
 		metric.WithDescription("Count of every session-creation attempt, spawn/restore/resume attempt, or turn dispatch refused by §10's cohort-rollout gate (§32) because a named repo was not enrolled (repo_settings.sessions_enabled) -- the SAME instrument httpapi.checkRolloutGate registers (internal/adapters/inbound/httpapi/rolloutgate.go), incremented here too for this package's own two dispatch-time re-checks (refuseIfRolloutUnenrolled, rolloutRefusalForDispatch). Tagged by spawn_source. Only a genuine, DEMONSTRATED policy refusal increments this -- a refusal caused by a transient repo_settings read error never does, mirroring checkRolloutGate's own identical fail-closed-vs-terminal discipline (§32.5)."),
@@ -206,12 +269,16 @@ func newOpsMetrics(meter metric.Meter) (opsMetrics, error) {
 	}
 
 	return opsMetrics{
-		spawnDuration:      spawnDuration,
-		livenessGap:        livenessGap,
-		watchdogActivation: watchdogActivation,
-		watchdogFalseAlarm: watchdogFalseAlarm,
-		falseFailure:       falseFailure,
-		rolloutRefused:     rolloutRefused,
+		spawnDuration:       spawnDuration,
+		livenessGap:         livenessGap,
+		watchdogActivation:  watchdogActivation,
+		watchdogFalseAlarm:  watchdogFalseAlarm,
+		falseFailure:        falseFailure,
+		bootDuration:        bootDuration,
+		hookRerunDuration:   hookRerunDuration,
+		gitFetchDuration:    gitFetchDuration,
+		gitCheckoutDuration: gitCheckoutDuration,
+		rolloutRefused:      rolloutRefused,
 	}, nil
 }
 
@@ -232,6 +299,48 @@ var spawnDurationBuckets = []float64{
 // headroom for a config override or a genuinely pathological gap.
 var livenessGapBuckets = []float64{
 	10, 20, 30, 45, 60, 90, 120, 180, 240, 300, 450, 600, 900,
+}
+
+// bootDurationBuckets is byte-for-byte the deleted internal/sandboxagent/
+// boot/telemetry.go's own bootDurationBuckets (§33.3: "same names, same
+// hand-tuned bucket slices"): a total boot sequence -- even a warm one --
+// includes network-bound git operations (fetch/checkout) and service
+// readiness polling on top of the hook itself, so it is never sub-second
+// the way a single warm hook rerun can be; the low end starts at 1s, and
+// the upper end reaches 900s (15min) to still usefully bucket a genuinely
+// cold BootModeBuild image-build boot.
+var bootDurationBuckets = []float64{
+	1, 2, 3, 5, 7.5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 300, 600, 900,
+}
+
+// hookRerunDurationBuckets is byte-for-byte the deleted internal/
+// sandboxagent/boot/telemetry.go's own hookRerunDurationBuckets: this
+// instrument's own unit is seconds, not the OTel SDK's usual implicit
+// milliseconds, so the SDK's own default boundaries would lump every
+// reasonably-healthy (sub-5-second) rerun into a single [0, 5) bucket --
+// these concentrate resolution in the sub-5s/sub-30s range a warm rerun is
+// expected to live in, while still keeping coarse upper buckets for a
+// genuinely cold BootModeBuild/BootModeFresh setup.sh run.
+var hookRerunDurationBuckets = []float64{
+	0.1, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 5, 7.5, 10, 15, 20, 30, 60, 120, 300, 600,
+}
+
+// gitFetchDurationBuckets is byte-for-byte the deleted internal/
+// sandboxagent/gitclone/telemetry.go's own gitFetchDurationBuckets:
+// concentrates resolution in the expected sub-single-digit-second range for
+// a warm repo_image fetch, while still reaching GitFetchStepTimeout's own
+// 90s ceiling.
+var gitFetchDurationBuckets = []float64{
+	0.1, 0.25, 0.5, 1, 2, 3, 5, 7.5, 10, 15, 20, 30, 45, 60, 90, 120,
+}
+
+// gitCheckoutDurationBuckets is byte-for-byte the deleted internal/
+// sandboxagent/gitclone/telemetry.go's own gitCheckoutDurationBuckets:
+// shifted slightly lower than gitFetchDurationBuckets -- checkoutBranch is
+// a local-only git operation (no network round trip), so it is typically
+// faster still.
+var gitCheckoutDurationBuckets = []float64{
+	0.05, 0.1, 0.25, 0.5, 1, 2, 3, 5, 7.5, 10, 15, 20, 30, 60,
 }
 
 // recordSpawnDuration records one real provider spawn/restore/resume

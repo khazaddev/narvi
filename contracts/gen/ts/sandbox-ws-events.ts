@@ -19,6 +19,7 @@ export type SandboxEvent =
   | StepStart
   | StepFinish
   | GitSync
+  | BootTiming
   | Artifact
   | ExecutionComplete
   | PushComplete
@@ -172,6 +173,47 @@ export interface GitSync {
   repo: string;
   status: 'stash' | 'checkout' | 'pop';
   branch: string;
+}
+/**
+ * §33.3: best-effort relay of ONE sandbox_agent_*_duration_seconds data point sandbox-agent has ALREADY measured (its own time.Since bracket) -- the control plane records it into the matching histogram (internal/app/sessionactor/opsmetrics.go) instead of sandbox-agent recording it locally and risking losing it to the ephemeral sandbox's own bounded-shutdown-flush/SIGKILL exposure (§33.1). NOT critical (no ackId): telemetry never earns a place among §6.1's critical acked types, and its loss must never fail a boot or a turn (§33.3 point 1). 'metric' selects which of the four sandbox-emitted histograms (§33.1) this data point belongs to; 'seconds' is the exact already-measured value, never re-derived control-plane-side (§33.2 records why control-plane derivation was tried and rejected for all four). Every property below 'seconds' is that instrument's own low-cardinality tag set -- only the subset naming this event's own 'metric' applies, per each property's own description -- EXCEPT 'repo', which rides this event for per-session debugging (the events log) only and is deliberately NEVER treated as a metric attribute: an unbounded-cardinality value (§33.3 point 3), the identical repo-is-log-only split GitSync's own 'repo' property note above already documents for a sibling event.
+ */
+export interface BootTiming {
+  type: 'boot_timing';
+  messageId: string;
+  sessionId: string;
+  gen: number;
+  /**
+   * Which of §33.1's four sandbox-emitted histograms (sandbox_agent_boot_duration_seconds, sandbox_agent_hook_rerun_duration_seconds, sandbox_agent_git_fetch_duration_seconds, sandbox_agent_git_checkout_duration_seconds) this data point belongs to.
+   */
+  metric: 'boot_duration' | 'hook_rerun_duration' | 'git_fetch_duration' | 'git_checkout_duration';
+  /**
+   * The already-measured wall-clock duration, in seconds -- the SAME time.Since bracket the deleted sandbox-side histogram used to record locally. Never recomputed control-plane-side.
+   */
+  seconds: number;
+  /**
+   * hook_rerun_duration/git_fetch_duration/git_checkout_duration only: which repo (SessionConfig.repos[].name) this data point is about. Null/absent for boot_duration, a whole-boot measurement with no single repo. See this definition's own top-level description for why this rides the event log only and is never a metric attribute.
+   */
+  repo?: string | null;
+  /**
+   * hook_rerun_duration only: the hook script name (sandboxboot.Hook -- setup.sh/start.sh). Null/absent for every other metric.
+   */
+  hook?: string | null;
+  /**
+   * boot_duration and hook_rerun_duration only: the sandboxboot.BootMode this data point ran under. Null/absent for git_fetch_duration/git_checkout_duration.
+   */
+  bootMode?: string | null;
+  /**
+   * hook_rerun_duration only (§19.4). Null/absent for every other metric.
+   */
+  workspaceMoved?: boolean | null;
+  /**
+   * boot_duration/hook_rerun_duration/git_checkout_duration only: whether the measured operation itself failed. Null/absent for git_fetch_duration, which uses 'degraded' instead -- a boot-time fetch failure the §19.3 degrade policy allowed to proceed is a distinct fact from a hard failure.
+   */
+  failed?: boolean | null;
+  /**
+   * git_fetch_duration only (§19.3's own degrade policy). Null/absent for every other metric.
+   */
+  degraded?: boolean | null;
 }
 /**
  * artifactType MUST match the Postgres artifact_type enum (migrations/000012_artifacts.up.sql) exactly. status/failureReason (§28.6) are additive and OPTIONAL: absent status means "ready" (the same zero-producers-today additive reasoning SnapshotReady.commandMessageId used) -- every pr/preview artifact event emitted before this Step, and every future one that never sets them, stays a valid, unchanged shape. Both fields are CP-SYNTHESIZED ONLY (mirrors GitSync's own "repo" field note above and the general subTaskId-population convention this file's own top-level description states): the sandbox never emits an artifact event for an upload at all -- the control plane already owns the row before any bytes exist, so a sandbox-reported completion would be a second writer over a fact Postgres already owns (§5.1). failureReason MUST match the Postgres artifact_failure_reason enum (migrations/000060_artifacts_upload_lifecycle.up.sql) exactly, and is only ever non-null when status is "failed".

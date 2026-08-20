@@ -35,11 +35,18 @@ before writing the paragraph below.
 
 **Metric.** `sandbox_agent_boot_duration_seconds` (histogram, p95) — the
 sandbox-agent's own wall-clock measurement of one boot-to-ready sequence,
-recorded from `RunBoot`'s own repo-prepare start through its hook/service
-startup finish (`internal/sandboxagent/boot/telemetry.go`'s own
-`RecordBootDuration` doc comment) — i.e. AFTER the sandbox has already
-connected, never including provider spawn time or the connect handshake
-itself.
+timed from `RunBoot`'s own repo-prepare start through its hook/service
+startup finish (`cmd/sandbox-agent/main.go`'s own `bootStart` bracket
+around `runBootSequence`) — i.e. AFTER the sandbox has already connected,
+never including provider spawn time or the connect handshake itself. The
+value is still measured on the sandbox's own clock, exactly as always, but
+is now RECORDED control-plane-side: sandbox-agent relays it as a
+best-effort `boot_timing` sandbox-ws event and the control plane records
+the histogram (`internal/app/sessionactor/boottiming.go`) rather than
+sandbox-agent recording it locally, because the sandbox's own process is
+ephemeral and can vanish before an export interval elapses (§33.1/§33.3).
+The instrument's own name, unit, and bucket boundaries are unchanged by
+that move.
 
 ```json narvi-metrics
 {"metrics": ["sandbox_agent_boot_duration_seconds"]}
@@ -61,14 +68,18 @@ just imprecise:
   and the much shorter `SteadyHeartbeatBudget` (90s) for every gap after
   that — §3.2, explicit: "Boot-progress reports during long boots re-arm
   the connecting deadline." `last_seen_at` is bumped by ANY recognized
-  sandbox event (heartbeat, boot-progress report, tool_call, token,
-  step — §3.2's own "Liveness = max of all signals"), and boot-progress
-  reports are emitted throughout the docker/gitclone/services phases
-  (`cmd/sandbox-agent/main.go`) that make up the SAME span this metric
-  measures — so for an ordinary, legitimately-progressing boot, the
-  watchdog ceiling governing nearly this entire span is the 90s per-gap
-  budget, not 240s, and even that bounds only the GAP between successive
-  signals, never this metric's own cumulative total.
+  sandbox event (heartbeat, boot-progress report, git_sync, tool_call,
+  token, step — §3.2's own "Liveness = max of all signals"). Corrected
+  (this claim was previously loose about which event each phase emits):
+  boot-progress reports are emitted throughout the docker/services phases,
+  never the gitclone phase — gitclone instead emits its own `git_sync`
+  events (§3.4) as it stashes/checks-out/pops. Both are equally
+  "recognized sandbox events" for `last_seen_at` purposes, so together
+  they still span the SAME cumulative interval this metric measures — so
+  for an ordinary, legitimately-progressing boot, the watchdog ceiling
+  governing nearly this entire span is the 90s per-gap budget, not 240s,
+  and even that bounds only the GAP between successive signals, never this
+  metric's own cumulative total.
 - This is not a theoretical distinction: `TestResilienceScenario3_
   SlowBoot_SurvivesRepeatedBootProgressPings_NeverFalselyKilled`
   (`test/resilience/scenario3_slow_boot_test.go`) exists specifically to

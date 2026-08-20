@@ -476,6 +476,17 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 			// case needed, just an outside-transact reply" shape a few
 			// lines below in this same function.
 			gitSyncReceived = true
+		case "boot_timing":
+			// §33.3: relay of one already-measured sandbox_agent_*_
+			// duration_seconds data point -- recorded here (never a DB
+			// write, so no in-transact case beyond this call is needed,
+			// mirroring "git_sync" immediately above) into the matching
+			// opsMetrics histogram (opsmetrics.go), gated on inserted for
+			// the exact same reconnect-resend-double-count reason the
+			// "tool_call" case below gates maybeEnqueueLinearProgress on
+			// it. See recordBootTiming's own doc comment (boottiming.go)
+			// for the full best-effort/decode-failure contract.
+			a.recordBootTiming(ctx, cmd.Raw, inserted)
 		case "tool_call":
 			// Audit finding M16 ("completeness", internal/adapters/outbound/
 			// linearapi/doc.go): the FIRST tool_call event of a turn is

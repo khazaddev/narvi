@@ -122,9 +122,12 @@ func TestRunBootSequence_DockerRequired_SpawnsDockerdBeforeRunBoot(t *testing.T)
 
 	noopProgress := func(services.BootProgressEvent) {}
 	noopGitSync := func(string, string, string) {}
+	noopFetchTiming := func(string, float64, bool) {}
+	noopCheckoutTiming := func(string, float64, bool) {}
+	noopHookTiming := func(string, string, string, bool, bool, float64) {}
 	secretEnv := []string{dockerMarkerEnvVar + "=" + markerPath}
 
-	bootErr := runBootSequence(ctx, sup, cfg, timeouts, secretEnv, nil, noopProgress, noopGitSync)
+	bootErr := runBootSequence(ctx, sup, cfg, timeouts, secretEnv, nil, noopProgress, noopGitSync, noopFetchTiming, noopCheckoutTiming, noopHookTiming)
 	t.Logf("runBootSequence() returned: %v (outcome depends on this machine's own real docker socket state; not asserted on)", bootErr)
 
 	// 10s, not a tighter budget: this test proved flaky under a full,
@@ -168,9 +171,12 @@ func TestRunBootSequence_DockerFalse_NeverSpawnsDockerd(t *testing.T) {
 
 	noopProgress := func(services.BootProgressEvent) {}
 	noopGitSync := func(string, string, string) {}
+	noopFetchTiming := func(string, float64, bool) {}
+	noopCheckoutTiming := func(string, float64, bool) {}
+	noopHookTiming := func(string, string, string, bool, bool, float64) {}
 	secretEnv := []string{dockerMarkerEnvVar + "=" + markerPath}
 
-	if err := runBootSequence(ctx, sup, cfg, platform.DefaultTimeouts(), secretEnv, nil, noopProgress, noopGitSync); err != nil {
+	if err := runBootSequence(ctx, sup, cfg, platform.DefaultTimeouts(), secretEnv, nil, noopProgress, noopGitSync, noopFetchTiming, noopCheckoutTiming, noopHookTiming); err != nil {
 		t.Fatalf("runBootSequence() error = %v, want nil (Docker=false must never even attempt to spawn dockerd)", err)
 	}
 

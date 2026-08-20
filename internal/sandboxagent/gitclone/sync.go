@@ -28,6 +28,24 @@ import (
 // already-normalized target branch for this repo.
 type OnGitSync func(repoName, status, branch string)
 
+// OnGitFetchTiming is called once per repo, immediately after syncOne's own
+// §19.3 boot-time fetch step returns, so the caller (cmd/sandbox-agent/
+// main.go) can relay it as a best-effort §33.3 boot_timing sandbox-ws
+// event -- mirroring OnGitSync's own identical "decouple this package from
+// wire-type knowledge" precedent exactly. Formerly recorded locally into
+// this package's own sandbox_agent_git_fetch_duration_seconds histogram
+// (telemetry.go, deleted by this Step): the control plane now records
+// that histogram instead (internal/app/sessionactor/opsmetrics.go), from
+// the relayed event. degraded is fetchResult's own genuine-fetch-failure
+// signal (!fetchSucceeded), exactly what recordGitFetchDuration's own
+// call site always passed.
+type OnGitFetchTiming func(repo string, seconds float64, degraded bool)
+
+// OnGitCheckoutTiming is OnGitFetchTiming's own checkout-step counterpart,
+// called once per repo immediately after checkoutBranch returns -- formerly
+// recordGitCheckoutDuration (telemetry.go, deleted by this Step).
+type OnGitCheckoutTiming func(repo string, seconds float64, failed bool)
+
 // SyncResult is one repo's outcome from SyncAll.
 type SyncResult struct {
 	Repo sessionconfig.SessionConfigReposElem
@@ -138,6 +156,8 @@ func SyncAll(
 	sessionID string,
 	fetchStepTimeout, stepTimeout, stopGrace time.Duration,
 	onGitSync OnGitSync,
+	onGitFetchTiming OnGitFetchTiming,
+	onGitCheckoutTiming OnGitCheckoutTiming,
 ) ([]SyncResult, error) {
 	if len(repos) == 0 {
 		return nil, nil
@@ -163,7 +183,7 @@ func SyncAll(
 		primary := i == 0
 
 		result := syncOne(ctx, sup, workspaceDir, repo, primary, pathScope, sessionID, credHelperArg,
-			fetchStepTimeout, stepTimeout, stopGrace, onGitSync)
+			fetchStepTimeout, stepTimeout, stopGrace, onGitSync, onGitFetchTiming, onGitCheckoutTiming)
 		results = append(results, result)
 
 		if result.Err == nil {
@@ -196,6 +216,8 @@ func syncOne(
 	credHelperArg string,
 	fetchStepTimeout, stepTimeout, stopGrace time.Duration,
 	onGitSync OnGitSync,
+	onGitFetchTiming OnGitFetchTiming,
+	onGitCheckoutTiming OnGitCheckoutTiming,
 ) (result SyncResult) {
 	// Validate BEFORE any filepath.Join or sup.Spawn happens for this repo
 	// -- same reasoning, same helper (validateRepoSpec, clone.go), as
@@ -314,7 +336,7 @@ func syncOne(
 	defaultBranch := fetchResult.defaultBranch
 	fetchErr := fetchResult.targetFetchErr
 	fetchSucceeded := fetchErr == nil
-	recordGitFetchDuration(ctx, repo.Name, time.Since(fetchStart).Seconds(), !fetchSucceeded)
+	onGitFetchTiming(repo.Name, time.Since(fetchStart).Seconds(), !fetchSucceeded)
 
 	// Legal from StateFetching by construction: TriggerForFetch only ever
 	// returns one of the three fetch triggers, all of which StateFetching's
@@ -415,7 +437,7 @@ func syncOne(
 	// own checkout latency) and the fetch step already timed above.
 	checkoutStart := time.Now()
 	checkoutErr := checkoutBranch(ctx, sup, repo.Name, dir, branch, defaultBranch, fetchErr, stepTimeout, stopGrace)
-	recordGitCheckoutDuration(ctx, repo.Name, time.Since(checkoutStart).Seconds(), checkoutErr != nil)
+	onGitCheckoutTiming(repo.Name, time.Since(checkoutStart).Seconds(), checkoutErr != nil)
 	// Checked directly against checkoutErr, not gitstate.IsTerminal(state):
 	// a SUCCESSFUL checkout also lands in a state IsTerminal reports true
 	// for whenever the tree was clean (StateReady itself is one of the
