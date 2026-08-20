@@ -1,0 +1,196 @@
+/*
+ * Sign-in view (Step 81, §12.2 item 7). `.signin`/`.authcard`/`.logo`/
+ * `.ghbtn`/`.ordiv`/`.ssobtn`/`.linknote`/`.lt`/`.idrow`/`.allow` are
+ * copied from docs/design/mockups.html's own `.signin`/`.authcard`/...
+ * block verbatim, routed through tokens.css's own named tokens wherever a
+ * matching one exists (mirroring tokens.css's own "verbatim, byte-for-
+ * byte" discipline). `.authcard`'s 34px/36px padding and 12px
+ * border-radius are the sign-in view's own two genuinely NEW distinct
+ * values (tokens.css's own scale, extracted before any real view existed,
+ * does not happen to include either) -- written as the mockup's own
+ * literal px values rather than forcing a mismatched existing token or
+ * renumbering the shared scale (a wider, riskier change with its own
+ * consumers, base.css and ThemeToggle.tsx, this Step has no reason to
+ * touch). `.idchip`/`.idchip.ok` are already ported (members' own future
+ * screen, Step 86) -- NOT duplicated here; components/auth/
+ * IdentityStatusPanel.tsx uses those exact class names.
+ *
+ * `.signin-notice*` (loading/error/denied/already-signed-in) have no
+ * mockup counterpart -- §12's own "derive any screen the mockups don't
+ * draw from the SAME design system" rule -- built from tokens.css's own
+ * existing scale/palette only, never a new literal color.
+ */
+
+.signin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 660px;
+  background: var(--ground);
+  padding: var(--space-10);
+}
+
+.authcard {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 34px 36px;
+  width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-7);
+  text-align: center;
+}
+
+.authcard .logo {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  justify-content: center;
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.authcard > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-base);
+}
+
+.ghbtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-5);
+  background: var(--ink);
+  color: var(--ground);
+  border: none;
+  border-radius: var(--radius-xl);
+  padding: var(--space-6);
+  font-size: var(--text-md);
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  font-family: var(--sans);
+}
+
+.ghbtn:hover {
+  filter: brightness(1.12);
+}
+
+.ghbtn:focus-visible,
+.ssobtn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.ordiv {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.ordiv::before,
+.ordiv::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+.ssobtn {
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  border-radius: var(--radius-xl);
+  padding: var(--space-5);
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+  font-family: var(--sans);
+}
+
+.ssobtn:disabled {
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
+.linknote {
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-xl);
+  padding: var(--space-6) var(--space-7);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  text-align: left;
+}
+
+.linknote .lt {
+  font-weight: 600;
+  font-size: var(--text-sm-alt);
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.idrow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.allow {
+  font-size: var(--text-xs);
+  color: var(--faint);
+  margin: 0;
+}
+
+/* --- states the mockup does not draw (§12's own "same design system" rule) --- */
+
+.signin-notice {
+  border-radius: var(--radius-xl);
+  padding: var(--space-6) var(--space-7);
+  font-size: var(--text-base);
+  text-align: left;
+}
+
+.signin-notice p {
+  margin: 0;
+}
+
+.signin-notice-sub {
+  color: var(--faint);
+  font-size: var(--text-xs);
+  margin: 0;
+}
+
+.signin-notice-error {
+  background: var(--crit-soft);
+  color: var(--crit);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  align-items: flex-start;
+}
+
+.signin-notice-denied {
+  background: var(--crit-soft);
+  color: var(--crit);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.signin-notice-ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}

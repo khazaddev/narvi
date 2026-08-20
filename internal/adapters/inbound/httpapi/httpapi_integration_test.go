@@ -474,6 +474,12 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
 		r.Get("/", httpapi.ListAuditLog(rig.auditLog))
 	})
+	// /api/me ("web UI: sign-in", §12.2 item 7/§13.1) -- mounted
+	// exactly like cmd/control-plane/main.go's own wiring.
+	router.Route("/api/me", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Get("/", httpapi.GetMe(rig.users, rig.identities))
+	})
 	// /api/me/chatgpt-link ("models: Codex via ChatGPT-account
 	// OAuth", §29.3/§29.9) -- mounted exactly like cmd/control-plane/
 	// main.go's own wiring.

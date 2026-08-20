@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider, createRouter } from '@tanstack/react-router'
 
 import { initTheme } from './lib/theme'
+import { installUnauthorizedHandler } from './auth/session'
 import { routeTree } from './routeTree.gen'
 import './styles/tokens.css'
 import './styles/base.css'
@@ -19,7 +20,13 @@ initTheme()
 // bootstrap -- no queries are defined yet.
 const queryClient = new QueryClient()
 
-const router = createRouter({ routeTree })
+// Step 81 (§13.1): wires http.ts's generic 401 hook to THIS app's real
+// consequence (invalidate the cached "who am I" query) -- see
+// installUnauthorizedHandler's own doc comment for why this belongs here,
+// once, rather than per-component.
+installUnauthorizedHandler(queryClient)
+
+const router = createRouter({ routeTree, context: { queryClient } })
 
 // Registers `router`'s own route/param types with TanStack Router's global
 // type registry, exactly as its own setup docs require -- without this,

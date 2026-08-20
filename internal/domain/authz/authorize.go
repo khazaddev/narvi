@@ -102,6 +102,11 @@ var matrix = map[Action]actionRule{
 	// these to withhold from a viewer).
 	ActionViewSessions:  {allow: roles(RoleAdmin, RoleMaintainer, RoleMember, RoleViewer)},
 	ActionViewAnalytics: {allow: roles(RoleAdmin, RoleMaintainer, RoleMember, RoleViewer)},
+	// ActionViewOwnProfile (§12.2 item 7, GET /api/me) -- same row,
+	// same reasoning: see action.go's own doc comment on why this is NOT
+	// ActionLinkChatGPTAccount's own (admin/maintainer + owned-member,
+	// viewer excluded) row.
+	ActionViewOwnProfile: {allow: roles(RoleAdmin, RoleMaintainer, RoleMember, RoleViewer)},
 
 	// Row 2: create/prompt/approve-plan on own/joined -- viewer excluded
 	// entirely; member gated by ownership on the two actions that name an

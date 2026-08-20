@@ -58,6 +58,15 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"maintainer views analytics", authz.RoleMaintainer, authz.ActionViewAnalytics, false, true},
 		{"member views analytics", authz.RoleMember, authz.ActionViewAnalytics, false, true},
 		{"viewer views analytics", authz.RoleViewer, authz.ActionViewAnalytics, false, true},
+		// Row 1 (cont'd, §12.2 item 7's "identity auto-link status
+		// panel" / GET /api/me): viewing your OWN profile is the same
+		// everyone-including-viewer row as the two above -- deliberately
+		// NOT ActionLinkChatGPTAccount's own admin/maintainer+owned-member
+		// row (that action excludes viewer; this one must not).
+		{"admin views own profile", authz.RoleAdmin, authz.ActionViewOwnProfile, false, true},
+		{"maintainer views own profile", authz.RoleMaintainer, authz.ActionViewOwnProfile, false, true},
+		{"member views own profile", authz.RoleMember, authz.ActionViewOwnProfile, false, true},
+		{"viewer views own profile", authz.RoleViewer, authz.ActionViewOwnProfile, false, true},
 
 		// Row 2a: create session -- admin/maintainer/member, viewer
 		// never. No ownership concept (new resource) -- OwnedOrJoined is

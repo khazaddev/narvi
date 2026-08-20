@@ -1,0 +1,35 @@
+/*
+ * Identity-chip primitive (docs/design/mockups.html's own "members"
+ * comment block -- `.idchip`/`.idchip.ok`/`.idchip.pend`), copied verbatim here
+ * because Step 81's own IdentityStatusPanel (components/auth/
+ * IdentityStatusPanel.tsx) is this codebase's FIRST real consumer, ahead
+ * of Step 86's own admin members table (§13.4) that will reuse this exact
+ * same primitive rather than re-deriving it. `.idchip.pend` is included
+ * for that future consumer's sake even though nothing in Step 81 renders
+ * it -- see IdentityStatusPanel.tsx's own doc comment for why a SELF view
+ * can never honestly show a "pending" state (that is Step 86's admin-only
+ * view's own job, not this one's).
+ */
+
+.idchip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  padding: var(--space-1) var(--space-4);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line-strong);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.idchip.ok {
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--line-strong));
+  color: var(--ok);
+}
+
+.idchip.pend {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line-strong));
+  color: var(--warn);
+}

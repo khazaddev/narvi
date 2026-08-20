@@ -31,5 +31,5 @@
       "@narvi/contracts/*": ["../contracts/gen/ts/*"]
     }
   },
-  "include": ["src/**/__tests__/**/*.ts", "vitest.config.ts"]
+  "include": ["src/**/__tests__/**/*.ts", "src/**/__tests__/**/*.tsx", "vitest.config.ts"]
 }

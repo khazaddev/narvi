@@ -1133,6 +1133,19 @@ func serve() error {
 		r.Delete("/{userID}/identities/{identityID}", httpapi.UnlinkMemberIdentity(pool, identityStore, auditLogStore))
 	})
 
+	// /api/me ("web UI: sign-in", §12.2 item 7/§13.1): the
+	// "who am I" endpoint the sign-in view's identity auto-link panel and
+	// already-signed-in state read -- gated behind auth.Middleware only,
+	// like every other route in this file, with the handler itself
+	// rendering the real authz.ActionViewOwnProfile verdict (everyone
+	// including viewer, §13.3 row 1 -- see that action's own doc comment
+	// for why, and httpapi/me.go's own doc comment for why this is
+	// deliberately NOT /api/members with a self filter).
+	router.Route("/api/me", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Get("/", httpapi.GetMe(userStore, identityStore))
+	})
+
 	// /api/me/chatgpt-link ("models: Codex via ChatGPT-account
 	// OAuth", §29.3/§29.9): self-service link/status/unlink -- gated
 	// behind auth.Middleware exactly like /api/members above; each
