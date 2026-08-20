@@ -367,7 +367,7 @@ func serve() error {
 	planSlackNotifier := outboxworker.NewPlanSlackNotifier(slackNotifier, planStore)
 
 	// webhookDeliveryStore is §5.1's own provider-agnostic dedupe claim,
-	// shared across Steps 32/33/34's own GitHub/Slack/Linear ingress (see
+	// shared across §8.2/§8.10's own GitHub/Slack/Linear ingress (see
 	// the Linear ingress block below, which reuses this SAME store rather
 	// than constructing its own). slackThreadSessionStore ("Slack
 	// ingress", §8.10) is the thread<->session mapping (see
@@ -1581,7 +1581,7 @@ func serve() error {
 	// internal/adapters/inbound/linear's own doc.go for the full design.
 	// Kept as one self-contained block, separate from the auth/REST
 	// sections above, to keep this Step's own diff to this shared file
-	// minimal (Steps 32/33's own GitHub/Slack ingress land their own
+	// minimal (§8.2/§8.10's own GitHub/Slack ingress land their own
 	// analogous blocks here independently, in separate worktrees).
 	linearOAuthConfig := linear.NewOAuthConfig(*cfg)
 	linearClient := linearapi.New(nil, linearAPIBaseURL)

@@ -18,7 +18,7 @@ const EffortHigh = "high"
 // rather than inventing a second one. "Dedicated review-model selection"
 // ITSELF is a separate claim -- §26.3 is explicit that no such mechanism
 // predates this Step at all (§8 item 2 names it only as a feature-set
-// line, never a built one, before now) -- Step 68 is what introduces it,
+// line, never a built one, before now) -- §26.3 is what introduces it,
 // as an optional operator override layered on top of §8.8's own
 // pre-existing threading. Both return values
 // are nil for anything other than DepthDeep -- the light path leaves

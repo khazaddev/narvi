@@ -45,7 +45,7 @@ type credAuthValue struct {
 // apiKey returns v's own Key value for an "api"-typed entry, or "" for
 // anything else (including a genuinely absent map entry, Go's own zero
 // value) -- lets every one of this file's existing assertions (written
-// before Step 59 against a bare map[string]string) keep comparing a plain
+// before this typed value existed, against a bare map[string]string) keep comparing a plain
 // string, unchanged in spirit, against an api-kind credential's own
 // resolved value.
 func apiKey(v credAuthValue) string {

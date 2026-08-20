@@ -6,7 +6,7 @@ import (
 )
 
 // TestCatalog_HasExpectedProviders proves the embedded snapshot parses and
-// carries the 3 providers Step 53 already wires credential injection for,
+// carries the 3 providers §25.1 already wires credential injection for,
 // each with a real, non-empty model list.
 func TestCatalog_HasExpectedProviders(t *testing.T) {
 	t.Parallel()

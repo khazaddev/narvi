@@ -223,7 +223,7 @@ func (e *CreateTurnError) Error() string { return e.Message }
 func (e *CreateTurnError) Unwrap() error { return e.sentinel }
 
 // ErrPlanAwaitingApproval is createTurnLocked's own sentinel (this batch's
-// own follow-up fix to Steps 37/38, §8.1, closing the "reply matching no
+// own follow-up fix to §8.1, closing the "reply matching no
 // verdict keyword dispatches an ordinary build turn anyway" hole found
 // during design review) for the one new reason a turn creation can be
 // declined that every other CreateTurnError construction never carries:

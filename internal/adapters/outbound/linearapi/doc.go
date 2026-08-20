@@ -5,7 +5,7 @@
 // ("Linear ingress", §8.10) own investigation.
 //
 // Scope note (§8.10): this package deliberately does NOT implement the
-// general Notifier port / outbox-consumer abstraction Step 35 owns
+// general Notifier port / outbox-consumer abstraction §5.1 owns
 // (§5.1's "Outbox pattern for every outbound side effect... a retry
 // worker delivers with exponential backoff + dead-letter") -- there is no
 // ports.Notifier interface yet (internal/app/ports has none), and the
@@ -23,8 +23,8 @@
 // §8.10) on top of this same Client without this Step's own minimal call
 // needing to change.
 //
-// Audit finding M16 ("completeness"): that future Step is this one. Step
-// 35 shipped the real Notifier/outbox consumer, but nothing ever enqueued
+// Audit finding M16 ("completeness"): that future Step is this one.
+// §5.1 shipped the real Notifier/outbox consumer, but nothing ever enqueued
 // a mid-turn update through it -- a Linear-origin session's own agent
 // session got exactly one outbox notification ever (the terminal one, at
 // turn completion), no matter how long the turn ran. An audit-fix batch

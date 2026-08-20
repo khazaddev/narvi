@@ -9,7 +9,7 @@ import (
 // HashSandboxToken hex-encodes the SHA-256 digest of token. Exported
 // specifically so a future sandbox-token-MINTING Step (§5.2: "Sandbox
 // tokens: hashed at rest, one per gen, rotated on identity rotation with a
-// previous-gen grace window during overlapping spawns"; Step 21+, once a
+// previous-gen grace window during overlapping spawns"; §9.3+, once a
 // real SandboxProvider.Spawn call exists to mint one against) can call this
 // exact function when it starts writing sandboxes.token_hash at spawn time,
 // rather than reinventing its own hashing convention. Nothing calls this in

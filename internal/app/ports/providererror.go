@@ -7,7 +7,7 @@ import (
 
 // Op names the SandboxProvider method that produced a ProviderError — one
 // constant per interface method (sandboxprovider.go) — so every
-// implementation (Modal, the RWX provider added at Step 57, ...)
+// implementation (Modal, the RWX provider added at §4.1, ...)
 // logs/reports failures against the SAME fixed vocabulary instead of each
 // adapter inventing its own strings.
 type Op string
@@ -33,8 +33,8 @@ const (
 // OUTCOME (Transient) and the provider's own code for debugging, but the
 // CLASSIFICATION LOGIC — which codes map to which outcome — is entirely
 // an adapter's own responsibility (e.g.
-// internal/adapters/outbound/modal's HTTP-status-class table; RWX, Step
-// 57, has its own — HTTP status class on its Dispatches API path, process
+// internal/adapters/outbound/modal's HTTP-status-class table; RWX has
+// its own — HTTP status class on its Dispatches API path, process
 // exit code + `--format json` error envelope on its CLI path). Nothing
 // provider-specific belongs in this package.
 type ProviderError struct {

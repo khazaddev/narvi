@@ -50,8 +50,8 @@
 // distinct top-level path roots -> deep; otherwise light"), worded with
 // a seemingly-exhaustive "otherwise". But the SAME section's own,
 // fuller "Signals" paragraph, one paragraph earlier, states a fourth
-// rule explicitly and unambiguously: "the PR's own verdict history (Step
-// 62 -- a prior high verdict routes deep)". This package treats that
+// rule explicitly and unambiguously: "the PR's own verdict history (a
+// prior high verdict routes deep)". This package treats that
 // clause as binding (ignoring an explicit "routes deep" statement would
 // be a worse plan-fidelity failure than the recap sentence's own
 // "otherwise" wording tension) and additionally treats the PR's existing

@@ -677,8 +677,8 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		httpapi.ProviderCredentialsDelivery(rig.sessions, rig.sandboxes, rig.providerCredentials, rig.tokenEncryptionKey))
 	// /api/repos/{owner}/{repo}/sandbox-secrets,
 	// /api/environments/{environmentID}/sandbox-secrets,
-	// /api/sandbox-secrets, and their sandbox-facing delivery route (Step
-	// 72, §27.1) -- mounted exactly like cmd/control-plane/main.go's own
+	// /api/sandbox-secrets, and their sandbox-facing delivery route
+	// (§27.1) -- mounted exactly like cmd/control-plane/main.go's own
 	// wiring (see sandboxsecrets.go's own doc comment).
 	router.Route("/api/repos/{owner}/{repo}/sandbox-secrets", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))

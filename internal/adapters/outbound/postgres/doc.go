@@ -7,8 +7,8 @@
 // retries, no business rules.
 //
 // UserStore, IdentityStore, EventStore, and ArtifactStore have since
-// landed too, exactly as predicted below (auth/identity's Step 20 for
-// users/identities, §3.2/§6.2 for events, Step 19 for artifacts) —
+// landed too, exactly as predicted below (auth/identity's §13.1 for
+// users/identities, §3.2/§6.2 for events, §6.2 for artifacts) —
 // alongside UserSessionStore (§13.1's user_sessions table) and
 // WSTokenStore (§6.2's ws_tokens table), on top of this package's
 // original 12-table scope.

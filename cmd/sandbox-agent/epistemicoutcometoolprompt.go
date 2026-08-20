@@ -1,5 +1,5 @@
-// This file (epistemicoutcometoolprompt.go) closes the other half of Step
-// 61's ("domain/turn: builder epistemic pre-action check", §20.2) own
+// This file (epistemicoutcometoolprompt.go) closes the other half of
+// §20.2's ("domain/turn: builder epistemic pre-action check") own
 // structured-signal-reporting tool: internal/domain/turn.
 // RenderEpistemicPreamble renders a build turn's own devil's-advocate
 // preamble with a FIXED, deterministic block instructing the agent how to

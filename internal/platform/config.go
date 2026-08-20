@@ -526,8 +526,8 @@ const openCodeRuntimeVersionEnvVarName = "NARVI_OPENCODE_RUNTIME_VERSION"
 const defaultOpenCodeRuntimeVersion = "1.17.15"
 
 // linearWebhookSecretEnvVarName, linearOAuthClientIDEnvVarName, and
-// linearOAuthClientSecretEnvVarName are the env vars Load reads for Step
-// 34's ("Linear ingress", §8.10) Linear wiring. All three are required in
+// linearOAuthClientSecretEnvVarName are the env vars Load reads for
+// §8.10's ("Linear ingress") Linear wiring. All three are required in
 // every stage — never defaulted, matching every other "never a baked-in
 // default" secret this file already reads.
 //
@@ -576,8 +576,8 @@ const (
 	linearDefaultRepoURLEnvVarName  = "NARVI_LINEAR_DEFAULT_REPO_URL"
 )
 
-// slackSigningSecretEnvVarName and slackBotTokenEnvVarName configure Step
-// 33's ("Slack ingress", §8.10) real Slack Events API adapter
+// slackSigningSecretEnvVarName and slackBotTokenEnvVarName configure
+// §8.10's ("Slack ingress") real Slack Events API adapter
 // (internal/adapters/inbound/slack). Deliberately NOT HMACWebhookSecret --
 // see internal/platform/webhooksig.go's own doc comment for why a real
 // provider's own signature scheme never matches that internal bearer
@@ -998,7 +998,7 @@ type Config struct {
 	// HMACWebhookSecret note (§5.1, "webhook toolkit"): this secret
 	// pairs with platform.Sign/Verify's own internal "{timestamp}.
 	// {signature}" bearer format (hmacauth.go) -- it is NOT the secret
-	// GitHub/Slack/Linear ingress adapters (Steps 32-34) use to verify
+	// GitHub/Slack/Linear ingress adapters (§8.2/§8.10) use to verify
 	// their OWN provider's webhook signature (a real provider signature
 	// never matches this bearer format at all; see
 	// internal/platform/webhooksig.go's own doc comment for the full

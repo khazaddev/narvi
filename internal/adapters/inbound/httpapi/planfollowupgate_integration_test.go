@@ -65,8 +65,8 @@ func planFollowupResponse(target, confidence string) json.RawMessage {
 // intentclassifier.New(llm, "anthropic", "claude-haiku-4-5",
 // narvipg.NewPromptTemplateStore(rig.pool), nil, nil) -- a REAL,
 // pool-scoped postgres.PromptTemplateStore so GetTemplate reads the ACTUAL
-// seeded row migrations/000074_plan_followup.up.sql inserts, proving Step
-// 64's own template wiring end to end, not just the fake LLM response
+// seeded row migrations/000074_plan_followup.up.sql inserts, proving
+// §23's own template wiring end to end, not just the fake LLM response
 // mapping; only the LLM call itself is faked. provider/model strings are
 // never actually sent anywhere (llm is a fake), so any non-empty values
 // do; sessions (DecisionStore) is nil-safe and unused by

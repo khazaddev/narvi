@@ -130,7 +130,7 @@ const envVarPreamblePrefix = "Environment variables for this automation run:"
 // available today: the agent genuinely sees and can act on these values
 // (a feature-flag name, a target-environment label -- the non-sensitive
 // config this field exists for), with no change to the sandbox spawn path
-// at all. Once Step 53 lands a generic cmd.Env injection mechanism, a
+// at all. Once §25.1 lands a generic cmd.Env injection mechanism, a
 // small follow-up can thread automations.env_vars through THAT mechanism
 // too, alongside the prompt preamble kept here (the two are not mutually
 // exclusive).

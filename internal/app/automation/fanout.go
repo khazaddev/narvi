@@ -121,7 +121,7 @@ func (e *Engine) fanOut(ctx context.Context, inv sqlcgen.AutomationInvocation) {
 // createRunAndSession creates ONE automation_runs row for target, and --
 // unless session/turn creation itself fails -- the session+turn it
 // dispatches against, together on ONE freshly opened transaction, via the
-// SAME httpapi.CreateSessionOnTx core Step 31 established (see this
+// SAME httpapi.CreateSessionOnTx core §5.1 established (see this
 // package's own doc.go for the full "why together, on one tx" reasoning).
 //
 // spawnSource is deliberately restdtos.CreateSessionRequestSpawnSourceWeb,

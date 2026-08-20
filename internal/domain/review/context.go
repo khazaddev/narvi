@@ -317,8 +317,8 @@ const ReviewCostBudgetToolURLPlaceholder = "{{REVIEW_COST_BUDGET_TOOL_URL}}"
 
 // ArchitectureScribeAgentName, CounterReviewerAgentName, and
 // FactCheckAgentName (§26.4/§26.6) are the literal OpenCode
-// custom-agent names (opencode.json's own "agent" object, mirroring Step
-// 48's "sentinel-fix" custom agent, internal/adapters/outbound/opencode/
+// custom-agent names (opencode.json's own "agent" object, mirroring
+// §8.2's "sentinel-fix" custom agent, internal/adapters/outbound/opencode/
 // sentinelfixagent.go) the primary reviewer's own orchestration is
 // instructed, below, to pass as the "task" tool's own "subagent_type"
 // input field (translate.go's own VERIFIED-LIVE "task" tool input shape:
@@ -338,8 +338,8 @@ const (
 )
 
 // verdictToolInstructions is RenderTurnPrompt's own fixed, deterministic
-// block instructing the review agent how to post its verdict (§8.2/Step
-// 47, reviewverdict.go's own doc comment: "the review turn's own prompt
+// block instructing the review agent how to post its verdict (§8.2,
+// reviewverdict.go's own doc comment: "the review turn's own prompt
 // ... is the natural place to instruct the agent HOW to call this
 // endpoint (URL, bearer token, gen header, JSON shape)"). Trusted,
 // first-party instructional text (unlike the diff/stack blocks above), so
@@ -769,8 +769,8 @@ func twoDigits(n int) string {
 // own verdict-posting tool -- unconditional because all THREE of this
 // function's own real callers (internal/adapters/inbound/github's own
 // handler.go, internal/adapters/inbound/httpapi's own reviewretrigger.go,
-// and internal/app/sessionactor's own reviewretrigger.go, added by Step
-// 65's automatic re-review lane) build a review turn's prompt ONLY by
+// and internal/app/sessionactor's own reviewretrigger.go, added by
+// §24's automatic re-review lane) build a review turn's prompt ONLY by
 // calling this function; there is no OTHER kind of turn this function is
 // ever asked to render text for. The URL/bearer/gen this block names are
 // placeholder tokens (VerdictToolURLPlaceholder et al.), never live

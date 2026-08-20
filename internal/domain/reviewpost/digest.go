@@ -128,8 +128,8 @@ type Digest struct {
 	// ErrEmptyDigestUnverifiedLimits) -- rendered only when non-blank.
 	UnverifiedLimits string
 
-	// DescriptionAdequacy/AdequacyExplanation/ProposedBody (§26.2, Step
-	// 67: "review digest: description adequacy + graduated remediation")
+	// DescriptionAdequacy/AdequacyExplanation/ProposedBody (§26.2:
+	// "review digest: description adequacy + graduated remediation")
 	// are this Step's own addition, placed here rather than as new fields
 	// on review.Verdict for the SAME reason ArchDecisions/StackRisks/
 	// UnverifiedLimits already are (this type's own top doc comment):

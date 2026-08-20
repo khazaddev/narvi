@@ -16,7 +16,7 @@ import (
 // a state transition is app/sessionactor's job (§2), always inside
 // that transition's own transaction (§2: "state transition + appended
 // event + outbox entries commit in ONE Postgres transaction"). Reading
-// back a page of that log (ListForSession, Step 19) has no such
+// back a page of that log (ListForSession, §6.2) has no such
 // transactional requirement — it always runs against the pool, never
 // WithTx.
 type EventStore struct {
@@ -61,7 +61,7 @@ func (s *EventStore) ListForSession(ctx context.Context, sessionID pgtype.UUID, 
 // events, newest id first -- the mirror-image pagination direction of
 // ListForSession's own oldest-first cursor page. Used when a caller needs
 // only the TAIL of a possibly-long event log (e.g. sessionactor's own
-// best-effort plan-content extraction, Step 38) rather than a paginated
+// best-effort plan-content extraction, §8.1) rather than a paginated
 // walk from the very beginning of a session's entire history.
 func (s *EventStore) ListRecentForSession(ctx context.Context, sessionID pgtype.UUID, limit int32) ([]sqlcgen.Event, error) {
 	return s.q.ListRecentEventsForSession(ctx, sqlcgen.ListRecentEventsForSessionParams{

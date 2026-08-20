@@ -22,7 +22,7 @@
 //     already bounds this at invocation-creation time, CreateInvocation
 //     below). Each target's own run+session pair is created together, on
 //     ONE freshly opened transaction, via the SAME httpapi.CreateSessionOnTx
-//     core Step 31 established and Steps 32/33/34 already reuse three
+//     core §5.1 established and the GitHub/Slack/Linear ingress adapters already reuse three
 //     times -- exactly mirroring internal/adapters/inbound/github's own
 //     SessionCoalescer.CreateOrJoin, which calls CreateSessionOnTx inline on
 //     its own already-open tx rather than the pool-based CreateSessionCore

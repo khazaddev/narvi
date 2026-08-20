@@ -12,7 +12,7 @@
 // auth.Middleware, alongside every other browser-facing REST route in
 // this package (this is an admin/maintainer reviewing or retiring a
 // pattern, not the sandbox agent calling a tool). §22.5 names the actual
-// Settings UI consuming these two endpoints as Step 84 (Phase 7) -- the
+// Settings UI consuming these two endpoints as §14.4 (Phase 7) -- the
 // underlying capability ships here, now, exactly like review_findings'
 // own rebut/apply-suggestion endpoints predated any "finding cards" UI
 // (§12.2 item 2, also Phase 7).

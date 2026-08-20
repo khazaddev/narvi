@@ -55,7 +55,7 @@ type CreateSessionParams struct {
 // session-actor persistence (PR-11+).
 // repos defaults to '[]'::jsonb via COALESCE (not the column's own DEFAULT
 // clause) specifically so every EXISTING call site that never set Repos
-// (every session created before Step 21 "e2e happy path") keeps compiling
+// (every session row created before this column existed) keeps compiling
 // and behaving identically: a nil/absent []byte param binds SQL NULL, and
 // COALESCE(NULL, '[]'::jsonb) resolves to the same empty-list default a
 // bare column-default insert would have produced.

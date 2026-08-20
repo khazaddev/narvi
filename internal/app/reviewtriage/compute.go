@@ -42,8 +42,8 @@ import (
 // read of its own for exactly this purpose -- can apply §24's re-review
 // floor (reviewtriage.Floor(decision.Depth, priorReviewDepth)) without a
 // second, redundant Postgres query. Empty ("") when no verdict has ever
-// been posted for this PR, or when the latest one predates Step 68 (its
-// own turn never resolved a depth) -- both degrade identically to
+// been posted for this PR, or when the latest one has no recorded depth at
+// all (its own turn never resolved one) -- both degrade identically to
 // "nothing to floor against" (reviewtriage.Floor's own doc comment: an
 // empty/unrecognized prior ranks with DepthLight, the least conservative
 // reading), exactly like a brand-new review session with no prior turn at

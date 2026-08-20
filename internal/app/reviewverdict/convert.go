@@ -110,8 +110,8 @@ func factCheckFromRow(row sqlcgen.ReviewVerdict) reviewpost.FactCheckStatus {
 	return reviewpost.FactCheckStatus(*row.FactCheck)
 }
 
-// factCheckKilledFromRow reads row's own fact_check_killed column (Step
-// 69, §26.6) -- row.FactCheckKilled == nil (a pre-existing row) degrades
+// factCheckKilledFromRow reads row's own fact_check_killed column
+// (§26.6) -- row.FactCheckKilled == nil (a pre-existing row) degrades
 // to 0, indistinguishable from a real fact-check pass that killed
 // nothing (the SAME "0 either way" ambiguity §26.6's own FactCheckKilled
 // doc comment already accepts for a skipped pass -- neither case is a
@@ -141,7 +141,7 @@ func reviewPathFromRow(row sqlcgen.ReviewVerdict) reviewtriage.ReviewDepth {
 // 000078_review_verdicts_description_adequacy.up.sql,
 // 000084_review_verdicts_counter_review.up.sql's own
 // digest_contested_points) -- row.DigestSummary
-// == nil means either "posted before Step 66 existed" or (in principle,
+// == nil means either "posted before digest tracking existed" or (in principle,
 // never in practice once ValidateVerdictInput's own ErrEmptyDigestSummary
 // check is live) "no digest recorded" -- either way this returns the
 // zero-value reviewpost.Digest{}, exactly like unmarshalTags' own

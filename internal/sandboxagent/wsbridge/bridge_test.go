@@ -622,8 +622,8 @@ func TestSendBootProgress_Translation(t *testing.T) {
 
 // TestSendBootProgress_ServiceNameWithColonIsEscaped proves a service name
 // containing a colon can never be confused with the "<serviceName>:<phase>"
-// separator itself -- servicemanifest's own Service.Name validation (Step
-// 14) only requires non-empty/unique, no charset restriction, so this is a
+// separator itself -- servicemanifest's own Service.Name validation
+// (§14.2) only requires non-empty/unique, no charset restriction, so this is a
 // real input the wire encoding must handle unambiguously rather than
 // assume away.
 func TestSendBootProgress_ServiceNameWithColonIsEscaped(t *testing.T) {
@@ -869,8 +869,8 @@ func TestHeartbeat_TracksConversationID(t *testing.T) {
 	}
 }
 
-// TestHeartbeat_SetConversationIDTriggersImmediateHeartbeat proves Step
-// 28's ("turn recovery") own §3.3 "at turn start... never lazily" fix: a
+// TestHeartbeat_SetConversationIDTriggersImmediateHeartbeat proves
+// §3.3's ("turn recovery") own "at turn start... never lazily" fix: a
 // heartbeat carrying a genuinely NEW, non-nil conversation id arrives well
 // under the configured heartbeat interval, not only once that interval's
 // own next regular tick happens to come due. Uses a deliberately LONG

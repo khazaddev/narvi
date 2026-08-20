@@ -377,8 +377,8 @@ func dataPointAttrString(attrs attribute.Set, key string) (string, bool) {
 }
 
 // readImageBuildAttemptTotal sums every image_build_attempt_total data
-// point whose phase/outcome attributes match the given values -- Step
-// 43(c)'s own build-duration/failure-rate instrumentation (telemetry.go,
+// point whose phase/outcome attributes match the given values --
+// §19.9's own build-duration/failure-rate instrumentation (telemetry.go,
 // §19.9's closing paragraph). CUMULATIVE across every test in this binary
 // (readFailureStreak's own identical caveat, immediately above): callers
 // must diff a "before" and "after" reading around their own

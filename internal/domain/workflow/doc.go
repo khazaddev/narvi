@@ -59,7 +59,7 @@
 // per-definition DATA (Steps + Edges) instead of a package-level map,
 // since every definition is its own machine.
 //
-// # The is_built_in immutability invariant (§25.4) -- recorded here, enforced by Steps 55-56
+// # The is_built_in immutability invariant (§25.4) -- recorded here, enforced by §25.6/§25.9
 //
 // The three built-in workflows are ROWS, seeded is_built_in = true
 // directly in migration 000057 (§25.4: the "duplicate and customize"
@@ -69,7 +69,7 @@
 // admin. This is a STRUCTURAL invariant, not an RBAC rule (§25.11), and
 // deliberately NOT a per-role matrix row in internal/domain/authz. No
 // REST surface for workflow definitions ships in this Step (dark), so
-// the refusal's enforcement point is the store/handler layer Steps 55-56
+// the refusal's enforcement point is the store/handler layer §25.6/§25.9
 // add -- recorded here and in migration 000057's own header comment so
 // those Steps implement it rather than rediscover it. See the migration
 // header for why a DB-level trigger was considered and deliberately NOT

@@ -18,7 +18,7 @@
 // result itself:
 //
 //   - Not authenticated: 302 to /auth/github/login?next=<this same URL>
-//     (auth.NewLoginHandler's own ?next= addition, Step 39) -- once the
+//     (auth.NewLoginHandler's own ?next= addition, §13.2) -- once the
 //     visitor completes that REAL GitHub OAuth round trip,
 //     NewCallbackHandler lands them right back on this exact URL,
 //     narvi_auth_session cookie now set, and this handler runs again,

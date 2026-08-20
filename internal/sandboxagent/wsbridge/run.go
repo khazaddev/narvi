@@ -194,7 +194,7 @@ func (b *Bridge) sendHeartbeatNow(ctx context.Context, conn *websocket.Conn) err
 		Gen:       b.sessionGen,
 		// ConversationId reflects whatever SetConversationID last
 		// recorded -- nil until the first turn's own StartTurn call
-		// (internal/adapters/outbound/opencode.Adapter, Step 17)
+		// (internal/adapters/outbound/opencode.Adapter, §7)
 		// resolves a real OpenCode conversation id.
 		ConversationId: b.getConversationID(),
 		LastBootPhase:  b.getLastBootPhase(),

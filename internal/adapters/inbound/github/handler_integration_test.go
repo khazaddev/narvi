@@ -289,8 +289,8 @@ func postWebhookEventType(t *testing.T, rig testRig, body []byte, deliveryID, ev
 }
 
 // pullRequestLabeledBody builds a synthetic, real-shaped "pull_request"
-// webhook payload with action="labeled" and the given label name -- Step
-// 46's ("review sessions", §8.2) own manual re-trigger-via-label lane.
+// webhook payload with action="labeled" and the given label name --
+// §8.2's ("review sessions") own manual re-trigger-via-label lane.
 func pullRequestLabeledBody(repoFullName, cloneRepoName, cloneURL string, prNumber int, labelName string, senderID int64, senderLogin string) []byte {
 	body, err := json.Marshal(map[string]any{
 		"action": "labeled",

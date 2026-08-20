@@ -243,16 +243,16 @@ const defaultContractsPath = "contracts/api"
 // _test.go files, is unchanged). The only two things that stay HERE,
 // specific to the browser/REST path, are decoding the body off an actual
 // *http.Request and requiring a real authenticated human caller via
-// authenticatedUserID -- a webhook ingress handler (Steps 32-34) calls
+// authenticatedUserID -- a webhook ingress handler (§8.2/§8.10) calls
 // CreateSessionCore directly with its own already-decoded request and a
 // NULL createdBy (no cookie, no human), never this func.
 //
 // §8.10 ("Slack ingress") update: CreateSessionCore (and
-// CreateSessionError, alongside it) is now EXPORTED -- doc.go's own Step
-// 31 writeup left the unexported-vs-exported question deliberately open
-// for Steps 32-34 to decide ("Whether that turns out to be ... or Steps
-// 32-34 decide createSessionCore should be exported instead, is left to
-// those Steps"). internal/adapters/inbound/slack lives in its own
+// CreateSessionError, alongside it) is now EXPORTED -- doc.go's own §5.1
+// writeup left the unexported-vs-exported question deliberately open
+// for §8.2/§8.10 to decide ("Whether that turns out to be ... or
+// §8.2/§8.10 decide createSessionCore should be exported instead, is left
+// to that work"). internal/adapters/inbound/slack lives in its own
 // package (mirroring httpapi/linear/github's own one-package-per-ingress-
 // surface shape, not folded into this one), so it needs the exported
 // form to reach this function at all -- an unexported identifier is not
@@ -275,7 +275,7 @@ const defaultContractsPath = "contracts/api"
 // this split: same params, same (sqlcgen.Session, *CreateSessionError)
 // return, same validate -> insert -> commit -> dispatch sequencing.
 // intentSvc is nil-safe (see recordExplicitIntentDecision's own doc
-// comment) so every existing call site that doesn't care about Step 36
+// comment) so every existing call site that doesn't care about §8.3
 // can keep passing nil unchanged.
 func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, intentSvc *intentclassifier.Service, epistemicCheckDefault bool, rolloutMode platform.RolloutMode, repoSettings *postgres.RepoSettingsStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -669,7 +669,7 @@ func checkSubstrateCapabilitiesUpFront(registry *sessionactor.Registry, req rest
 // direct human user"). CreateSession (the HTTP handler above, via
 // CreateSessionCore) always passes a Valid one today, since it still
 // hard-requires authenticatedUserID -- but this function itself never
-// assumes that: a webhook ingress caller (Steps 32-34) with no
+// assumes that: a webhook ingress caller (§8.2/§8.10) with no
 // cookie-authenticated human passes an explicitly invalid pgtype.UUID{}
 // here instead.
 //
@@ -677,7 +677,7 @@ func checkSubstrateCapabilitiesUpFront(registry *sessionactor.Registry, req rest
 // transaction as the change"): an audit_log row is inserted on this SAME
 // tx, right after the session row itself, for EVERY caller of this
 // function -- the browser REST path (CreateSession, a real authenticated
-// createdBy) and every webhook-ingress path (Steps 32-34's own GitHub/
+// createdBy) and every webhook-ingress path (§8.2/§8.10's own GitHub/
 // Slack/Linear session creation, createdBy left invalid) alike, mirroring
 // sessions.created_by's own existing NULL-for-bot convention: actor_user_id
 // is NULL on a bot-attributed row, never a fabricated "system user".

@@ -41,5 +41,5 @@
 // by the sibling internal/sandboxagent/wsbridge package as the sandbox WS
 // connection's X-Sandbox-ID header value. Nothing else in this package
 // changes: RunBoot, hook policy, and the fingerprint remain exactly as
-// Steps 13/14/15 left them.
+// §6.4/§14.2 left them.
 package boot

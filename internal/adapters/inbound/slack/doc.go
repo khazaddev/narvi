@@ -1,5 +1,5 @@
 // Package slack is the Slack Events API ingress adapter ("Slack
-// ingress", §8.10 "Slack/Linear fidelity" -- the Slack half only; Step 34
+// ingress", §8.10 "Slack/Linear fidelity" -- the Slack half only; §8.10
 // covers Linear, in a separate package/worktree in parallel). One route,
 // wired in cmd/control-plane/main.go: POST /webhooks/slack.
 //

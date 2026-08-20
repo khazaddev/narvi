@@ -1,8 +1,8 @@
 // This file (opencodeconfig_capabilityrestriction_test.go) is the direct
 // regression test PR review requested for the CRITICAL finding: that a
-// capability-restricted session's Step 48 sentinel-fix restriction cannot
+// capability-restricted session's §8.2 sentinel-fix restriction cannot
 // be overridden through the sandbox_secrets/opencode-config injection
-// path this Step (72) adds.
+// path §27.1 adds.
 //
 // Two independent, complementary properties are proven, mirroring
 // TestSandboxSecretValidateName_RejectsOpenCodeConfigEnvVar's own
@@ -12,7 +12,7 @@
 //     sandboxsecret's own name_test.go) already proves the PRIMARY
 //     defense: a sandbox_secrets row literally named
 //     "OPENCODE_CONFIG_CONTENT" (OpenCode's own "inline config" slot,
-//     ABOVE the project slot Step 48 targets) can never be SAVED at all
+//     ABOVE the project slot §8.2 targets) can never be SAVED at all
 //     -- it is rejected at CRUD write time, server-side, before it could
 //     ever reach a delivery response.
 //  2. THIS file's own TestCapabilityRestrictedProjectConfig_

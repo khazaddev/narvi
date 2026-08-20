@@ -554,7 +554,7 @@ func TestReconcileOnce_OneStopSandboxFailureDoesNotAbortBatch(t *testing.T) {
 }
 
 // TestReconcileOnce_DebouncesOrphanConfirmationBeforeReaping proves the
-// two-tick debounce ReconcileOnce's own doc comment describes (the Step 25
+// two-tick debounce ReconcileOnce's own doc comment describes (the §5.3
 // fix closing the real spawn-mid-flight race platform.Timeouts.
 // ReconcilerOrphanConfirmationPeriod's own doc comment details in full):
 //

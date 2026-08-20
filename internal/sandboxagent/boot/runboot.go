@@ -15,7 +15,7 @@ import (
 // in order, if <workspaceDir>/<repo.Name>/.narvi/services.yml is present,
 // its declared services are supervised (internal/sandboxagent/services);
 // otherwise this package's own per-repo hook logic (runRepoHooks, §6.4,
-// Step 13) runs unchanged -- backward compatible, no forced migration
+// §6.4) runs unchanged -- backward compatible, no forced migration
 // (§14.2: "if services.yml is absent, sandbox-agent falls back to the
 // current setup.sh/start.sh contract unchanged").
 //

@@ -49,7 +49,7 @@ func (s *IdentityStore) GetByProviderAndExternalID(ctx context.Context, provider
 	})
 }
 
-// GetByUserAndProvider fetches a user's identity for one provider (Step 21
+// GetByUserAndProvider fetches a user's identity for one provider (§9.3
 // "e2e happy path"'s own scm-credentials endpoint uses this to find a
 // session's created_by user's GitHub identity).
 func (s *IdentityStore) GetByUserAndProvider(ctx context.Context, userID pgtype.UUID, provider sqlcgen.IdentityProvider) (sqlcgen.Identity, error) {

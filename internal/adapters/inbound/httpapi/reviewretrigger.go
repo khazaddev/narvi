@@ -84,7 +84,7 @@ const manualRetriggerPromptText = "Manual re-review requested via the web review
 // Action doesn't consult), avoiding a wasted Postgres participants read on
 // every call.
 //
-// No intentSvc parameter (F1, Step 64 follow-up fix, review Finding 1):
+// No intentSvc parameter (F1, §23 follow-up fix, review Finding 1):
 // this endpoint used to thread the platform's real *intentclassifier.
 // Service straight through to CreateTurnCore below, which meant a plan
 // sitting in StatusAwaitingApproval on this session made createTurnLocked's
@@ -142,8 +142,8 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		}
 
 		// This action is meaningful ONLY for a session that IS a GitHub PR
-		// review session -- the reverse (session_id -> repo/PR) lookup Step
-		// 35 ("outbox delivery") already added GitHubPRSessionStore for.
+		// review session -- the reverse (session_id -> repo/PR) lookup
+		// §5.1 ("outbox delivery") already added GitHubPRSessionStore for.
 		// pgx.ErrNoRows here means sessionID was never created via a GitHub
 		// PR mention/label -- a plain web/Slack/Linear session has no PR to
 		// re-review, so this is a genuine 400, not a transient failure.

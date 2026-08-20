@@ -133,8 +133,8 @@ func (n *linearNotifier) deliverOutcome(ctx context.Context, raw json.RawMessage
 // deliverProgress implements the new ports.NotificationKindLinearProgress
 // path (audit finding M16, "completeness"): decodes n.Payload as
 // linearapi.ProgressPayload and posts a "thought"-shaped AgentActivity
-// (linearapi.Client.CreateThoughtActivity) -- the already-built call Step
-// 34's ingress handler uses synchronously at session creation, now also
+// (linearapi.Client.CreateThoughtActivity) -- the already-built call §8.10's
+// ingress handler uses synchronously at session creation, now also
 // reachable asynchronously, mid-turn, through this same retried outbox
 // path, closing the gap that package's own doc.go named as future work.
 func (n *linearNotifier) deliverProgress(ctx context.Context, raw json.RawMessage) error {

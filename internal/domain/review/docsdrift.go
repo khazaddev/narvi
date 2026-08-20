@@ -3,8 +3,8 @@ package review
 // DocsDriftState is the doc-drift sentinel's own assessed state for a PR
 // (§8.2) — whether documentation appears to have fallen out of sync with
 // the change. Carried on Verdict as data; NOT wired into ComputeShippable
-// in this Step (only the coverage and premise floors exist per §8.2/Step
-// 45 — see doc.go's design call #2 and #5). A future doc-drift floor, if
+// in this Step (only the coverage and premise floors exist per §8.2
+// — see doc.go's design call #2 and #5). A future doc-drift floor, if
 // one is ever added, should treat an unrecognized DocsDriftState the same
 // way this package treats every other enum's unrecognized value: exactly
 // as conservatively as the worst known legitimate state

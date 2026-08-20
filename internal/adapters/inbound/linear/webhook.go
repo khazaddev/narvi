@@ -66,8 +66,8 @@ const busyReplyText = "Still working on the previous message in this thread — 
 // only tells the user the truth instead of nothing at all.
 const stopNotSupportedText = "Stopping an in-progress turn isn't supported yet — this request wasn't cancelled."
 
-// planAwaitingApprovalReplyText is this batch's own honest reply (Step
-// 37/38 follow-up fix, §8.1), posted back to the thread when
+// planAwaitingApprovalReplyText is this batch's own honest reply
+// (§8.1 follow-up fix), posted back to the thread when
 // handlePrompted's own ordinary-reply path declines to create a build turn
 // because sessionID currently has a plan in StatusAwaitingApproval --
 // CLOSING the hole where a reply matching neither plandomain.MatchVerdict
@@ -220,8 +220,8 @@ type Deps struct {
 // failure (a DB error resolving/creating the session or turn) --
 // H2 audit fix ("webhook claim/release parity"), correcting this
 // comment's own previous, factually stale claim that no such release
-// mechanism exists: WebhookDeliveryStore.Release has existed since Step
-// 31 (postgres/webhookdelivery_store.go) and github's own handler.go
+// mechanism exists: WebhookDeliveryStore.Release already exists
+// (postgres/webhookdelivery_store.go) and github's own handler.go
 // already uses it identically. Releasing lets a redelivery of this same
 // Linear-Delivery id actually retry, rather than the event being silently
 // and permanently dropped now that it's claimed.

@@ -47,7 +47,7 @@ import (
 // text's presence, never by whether the check actually ran on this turn.
 // placeholderdrift_internal_test.go's own general, self-updating source
 // scan is exactly what caught reviewCostBudgetToolURLPlaceholderLiteral's
-// own omission when Step 70 first added it here -- proving that mechanism
+// own omission when §26.5 first added it here -- proving that mechanism
 // now does its job automatically, without a human needing to remember this
 // file exists.
 //

@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for IdentityLinkPromptStore and the Step 39
+// Integration tests for IdentityLinkPromptStore and the §13.2
 // ("identities + full RBAC", §13.2) additions to UserStore/IdentityStore/
 // AuditLogStore -- mirrors slackthreadsession_store_integration_test.go's
 // own "focused file per query" convention.

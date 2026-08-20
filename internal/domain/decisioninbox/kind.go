@@ -10,8 +10,8 @@
 // which calls these functions but never duplicates their logic.
 //
 // This package originally also held an interim, label-driven auto-
-// approval-eligibility heuristic (eligibility.go) — deleted whole by Step
-// 62 (§21.2), which replaced it with a real, deterministic engine living
+// approval-eligibility heuristic (eligibility.go) — deleted whole
+// (§21.2), which replaced it with a real, deterministic engine living
 // in its own sibling package, internal/domain/autoapproval, since that
 // engine's own criteria (verdict-driven, not label-driven) no longer have
 // anything to do with THIS package's own item-taxonomy/ranking/staleness
@@ -42,8 +42,8 @@ type Kind string
 
 const (
 	// KindReadyToMerge is an open PR authored by a platform session,
-	// auto-approved (internal/domain/autoapproval.ComputeEligible, Step
-	// 62/§21.2), CI green at head, and assigned to the user.
+	// auto-approved (internal/domain/autoapproval.ComputeEligible,
+	// §21.2), CI green at head, and assigned to the user.
 	KindReadyToMerge Kind = "ready_to_merge"
 	// KindNeedsReview is a PR where the user is requested reviewer/code
 	// owner and the verdict is >= medium risk or a formal review is

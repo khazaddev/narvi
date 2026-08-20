@@ -11,8 +11,8 @@ import (
 	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
 )
 
-// TestStartTurn_OnConversationIDReporter_FiresBeforeTurnCompletes is Step
-// 28's ("turn recovery") own proof of §3.3's "the turn records the
+// TestStartTurn_OnConversationIDReporter_FiresBeforeTurnCompletes is
+// proof of §3.3's ("turn recovery") own "the turn records the
 // OpenCode conversation id at turn start... never lazily" requirement:
 // onConversationID must fire the MOMENT resolveSession resolves a real
 // id, not merely "eventually, once the whole (possibly minutes-long)

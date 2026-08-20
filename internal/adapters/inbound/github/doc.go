@@ -137,9 +137,9 @@
 // joins the existing review session" IS the REUSE branch this file's own
 // coalescing design section already describes, and "atomic claim on
 // concurrent mentions" IS the two-step EnsureRow+LockForUpdate sequence
-// that same section documents. Step 46 does not rebuild either: it
+// that same section documents. §8.2 does not rebuild either: it
 // EXTENDS them to a new trigger surface and adds the one genuinely new
-// capability neither Step 32 nor Step 45 (domain/review, the Verdict type)
+// capability neither §8.2 nor §8.2 (domain/review, the Verdict type)
 // touches.
 //
 //  1. Manual re-trigger via LABEL, alongside the existing @mention (comment)

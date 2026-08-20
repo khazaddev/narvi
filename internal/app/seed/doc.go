@@ -96,7 +96,7 @@
 //     reports "success" while doing something structurally inert is
 //     worse than one that names the gap. The live equivalent of
 //     "environment-shaped" config TODAY is the sandbox_path_scope/
-//     sandbox_mock_configured/sandbox_contracts_path columns Step 52 put
+//     sandbox_mock_configured/sandbox_contracts_path columns §8.4 put
 //     directly on automations (§8.4) -- this package's own Automations
 //     section seeds exactly those. If a later Step gives Environment a
 //     real reuse-by-id surface, this package gains an Environments

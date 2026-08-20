@@ -169,7 +169,7 @@ func (a *Actor) runHandoffSentinelBestEffort(
 // -- never a second endpoint scanner (internal/domain/handoff/doc.go's
 // own design call #2 names why no finer-grained signal exists to reuse).
 // Only ever produces true for a MockConfigured Environment (the only kind
-// Step 27 ever persists a baseline snapshot for) -- a scoped-but-not-
+// §14.3 ever persists a baseline snapshot for) -- a scoped-but-not-
 // mock-configured Environment's PR simply never has anything to compare
 // against, and this returns false, exactly like a "first sighting" does
 // in checkContractDriftForRepo.

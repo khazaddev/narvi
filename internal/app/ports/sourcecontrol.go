@@ -633,8 +633,8 @@ type Owner struct {
 	Pattern string
 }
 
-// ListOpenPRsForUserSpec is what SourceControl.ListOpenPRsForUser (Step
-// 60, §16.2) needs: GitHubExternalID is the SAME stable, provider-native
+// ListOpenPRsForUserSpec is what SourceControl.ListOpenPRsForUser (§16.2)
+// needs: GitHubExternalID is the SAME stable, provider-native
 // account id PRPerson.ExternalID and identities.external_id already use
 // (this method's own implementation resolves it to a live login itself --
 // see githubapi.ListOpenPRsForUser's own doc comment for why the caller
@@ -879,8 +879,8 @@ type SourceControl interface {
 	// plain, exactly like UpdateFileContent above.
 	UpdatePRBody(ctx context.Context, spec UpdatePRBodySpec) error
 
-	// RegisterPRStack groups spec.PRNumbers into a real GitHub stack (Step
-	// 48, §17.2/§17.6) -- a SECOND call, made only after every named PR
+	// RegisterPRStack groups spec.PRNumbers into a real GitHub stack
+	// (§17.2/§17.6) -- a SECOND call, made only after every named PR
 	// already exists (this port never creates a PR itself here). Per
 	// §17.2's own explicit design: a 404 or any other failure from this
 	// call is meant to be logged and otherwise IGNORED by the caller --
@@ -974,8 +974,8 @@ type SourceControl interface {
 	GetOpenPR(ctx context.Context, owner, repo string, number int, token string) (pr OpenPR, found bool, err error)
 
 	// ResolveCodeOwners resolves CODEOWNERS ownership for every path in
-	// spec.Paths against the repo's own CODEOWNERS file at spec.Ref (Step
-	// 60, §16.2) -- see githubapi.ResolveCodeOwners' own doc comment for
+	// spec.Paths against the repo's own CODEOWNERS file at spec.Ref
+	// (§16.2) -- see githubapi.ResolveCodeOwners' own doc comment for
 	// which of the file's several documented candidate locations is
 	// actually read, and internal/domain/codeowners for the pure
 	// pattern-matching this method's implementation delegates to. A path

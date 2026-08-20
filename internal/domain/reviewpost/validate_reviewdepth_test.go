@@ -10,7 +10,7 @@ import (
 )
 
 // deepValidInput mirrors validInput() but additionally fills in the three
-// Step 68 deep-path-only digest fields, marks ReviewDepth deep, and
+// §26.3 deep-path-only digest fields, marks ReviewDepth deep, and
 // (§26.4) sets CounterReview -- a caller on the deep path must
 // pass ALL of these to validate.
 func deepValidInput() reviewpost.VerdictInput {
@@ -169,8 +169,8 @@ func TestValidateVerdictInput_DeepDigestChecksRunLast(t *testing.T) {
 	}
 }
 
-// TestValidateVerdictInput_CounterReviewCheckedLastOfAll proves §26.4/Step
-// 69's own CounterReview check is appended at the very END of the
+// TestValidateVerdictInput_CounterReviewCheckedLastOfAll proves §26.4's
+// own CounterReview check is appended at the very END of the
 // deep-path-only block (this function's own "each added at the end of the
 // existing fixed order" discipline) -- a deep-path payload with BOTH an
 // empty UnverifiedLimits AND a garbled CounterReview must still report

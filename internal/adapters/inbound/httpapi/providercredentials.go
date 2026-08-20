@@ -20,7 +20,7 @@
 // No single-row GET by id: List already returns every row at one (scope,
 // scopeTarget) pair, at most 3 (one per Provider) -- a dedicated GET
 // endpoint would be duplicate surface for no real gain, so it is
-// deliberately left out (mirrors the automations engine's own Step 51
+// deliberately left out (mirrors the automations engine's own §3.5
 // "don't over-build" precedent for a comparably narrow surface).
 //
 // # Write-only credential value (never returned)

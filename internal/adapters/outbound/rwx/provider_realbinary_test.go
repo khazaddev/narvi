@@ -63,7 +63,7 @@ import "testing"
 //     account.
 func TestRWXAdapter_RealBinaryContractTest(t *testing.T) {
 	t.Skip("no real rwx CLI binary or RWX_ACCESS_TOKEN is available in this environment/CI yet " +
-		"(deliberate, user-approved Step 57 scope decision — see this file's own top comment for exactly " +
+		"(deliberate, user-approved §4.1 scope decision — see this file's own top comment for exactly " +
 		"what this test would verify: real start/stop/list JSON+exit-code shapes, the real CLI error " +
 		"taxonomy, empirical stop→start state-preservation for the Resume capability flag, List's real " +
 		"org-wide scope, and whether the CLI subprocess actually honors HTTPS_PROXY). Provision a pinned " +

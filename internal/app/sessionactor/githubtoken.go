@@ -62,7 +62,7 @@ import (
 // a request awaiting a status code. This is the honest "no bot/service-
 // account fallback exists" gap named in §9.3's own brief (§8.11's
 // fallback half), not a bug to work around by inventing one -- and, as of
-// Step 26, ALSO the documented reason a session whose creator has no
+// §8.5, ALSO the documented reason a session whose creator has no
 // usable GitHub token still spawns successfully on the base image, never
 // blocked or failed by image resolution (§10 Phase 2: "never block a
 // session").

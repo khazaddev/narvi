@@ -380,7 +380,7 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 		string(restdtos.PostReviewVerdictRequestBlastRadiusElemInfra), string(restdtos.PostReviewVerdictRequestBlastRadiusElemPublicApi),
 		string(restdtos.PostReviewVerdictRequestBlastRadiusElemDataLayer), string(restdtos.PostReviewVerdictRequestBlastRadiusElemDependencies),
 		`"summary"`,
-		// Confirmed-finding fix (Step 48 own re-review): "findings" (and its
+		// Confirmed-finding fix (§8.2 own re-review): "findings" (and its
 		// own per-object fields/enum) was completely absent from this
 		// template before this fix -- see verdictToolInstructions' own doc
 		// comment for why that silently made review_findings/sentinel-auto-

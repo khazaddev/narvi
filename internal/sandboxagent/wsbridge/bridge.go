@@ -162,7 +162,7 @@ func (b *Bridge) MarkBootComplete() {
 
 // SetConversationID updates what the NEXT heartbeat reports as
 // Heartbeat.ConversationId (§6.1: "heartbeat (30s, carries conversation id
-// + last_boot_phase)"). Step 16 hardcoded ConversationId: nil with an
+// + last_boot_phase)"). §6.1 hardcoded ConversationId: nil with an
 // explicit "no OpenCode adapter exists yet" comment (see run.go's
 // heartbeatLoop) -- this Step's OpenCode adapter
 // (internal/adapters/outbound/opencode) is that adapter, and

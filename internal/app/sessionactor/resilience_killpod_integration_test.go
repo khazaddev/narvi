@@ -5,7 +5,7 @@
 // resumes or fails-with-reason; no stuck processing." This Step's own
 // resilience test targets the "fails-with-reason" branch ONLY -- real
 // turn RESUME (continuing a Processing turn on a fresh actor without
-// failing it) is explicitly Steps 23 ("resume") and 28 ("turn recovery")'s
+// failing it) is explicitly §3.2's ("resume") and §3.3's ("turn recovery")
 // own job; no turn-resume machinery of any kind exists anywhere in this
 // codebase today (confirmed: domain/turn's own transition table has no
 // edge out of Processing except Completed/Failed/Cancelled), and §9.3

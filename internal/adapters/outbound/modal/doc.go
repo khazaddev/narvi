@@ -4,8 +4,8 @@
 //
 // Modal is Narvi's snapshot-based provider (§3.2: "stopped|stale +
 // snapshot -> restore (new gen)") — it does NOT support persistent resume
-// of the same underlying instance (a future provider, e.g. RWX at Step
-// 48, is expected to). Capabilities() reports that split explicitly:
+// of the same underlying instance (a future provider, e.g. RWX, is
+// expected to). Capabilities() reports that split explicitly:
 // Snapshots/ImageBuilds/ExplicitStop true, Resume false; ResumeSandbox
 // itself returns a permanent ports.ProviderError rather than attempting
 // an operation Modal does not support.

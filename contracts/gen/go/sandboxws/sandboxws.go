@@ -101,7 +101,7 @@ type Artifact struct {
 	// Type corresponds to the JSON schema field "type".
 	Type string `json:"type" yaml:"type" mapstructure:"type"`
 
-	// format is deliberately "uri-reference", not the stricter "uri" (Step 58
+	// format is deliberately "uri-reference", not the stricter "uri" (§8.6
 	// relaxation -- backward compatible: every absolute URL a plain "uri" ever
 	// accepted still validates, so no pr/preview producer's existing behavior
 	// changes). pr/preview artifacts always carry an ABSOLUTE external link (a GitHub

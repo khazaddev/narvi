@@ -6,8 +6,8 @@ import "errors"
 // shape as restdtos.CreateSessionRequestReposElem (Name/Url/Branch), since
 // a run's own job is ultimately "create a session for this one target"
 // (app/automation's own fanout.go, reusing internal/adapters/inbound/
-// httpapi.CreateSessionOnTx -- the shared session-creation core Step 31
-// established and Steps 32/33/34 already reuse three times). Kept as this
+// httpapi.CreateSessionOnTx -- the shared session-creation core §5.1
+// established and the GitHub/Slack/Linear ingress adapters already reuse three times). Kept as this
 // package's own plain struct (never restdtos.CreateSessionRequestReposElem
 // itself) so this package stays adapter/contracts-independent (§11) --
 // app/automation converts at the boundary, exactly like every other

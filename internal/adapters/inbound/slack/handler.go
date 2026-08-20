@@ -775,7 +775,7 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 			// createdTurn.PlanMode (not the local planMode variable computed
 			// above addTurn's own call) -- F2 audit fix: planMode is captured
 			// BEFORE addTurn/createTurnLocked ever runs, so it never reflects
-			// createTurnLocked's own Step 64 promotion of planMode=true when
+			// createTurnLocked's own §23 promotion of planMode=true when
 			// the plan_followup classifier returns a confident "amend" (see
 			// that function's own doc comment, turn.go). Logging the stale
 			// local variable here would silently misreport a promoted turn

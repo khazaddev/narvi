@@ -505,7 +505,7 @@ func TestRetriggerReview_AlreadyAnsweredFacts_RetiresFindingWhoseFileLeftTheDiff
 }
 
 // TestRetriggerReview_AwaitingPlanAlwaysDeclines_NeverClassifies is F1's
-// own regression test (Step 64 follow-up fix, review Finding 1) for this
+// own regression test (§23 follow-up fix, review Finding 1) for this
 // endpoint: a manual re-review click carries no human reply for the
 // plan_followup classifier (ClassifyPlanFollowup) to legitimately read --
 // reviewretrigger.go no longer even accepts an *intentclassifier.Service

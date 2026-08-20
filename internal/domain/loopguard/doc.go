@@ -22,6 +22,6 @@
 // Consulted by the engine (§25.9) only when a needs_fix edge is
 // about to RE-fire -- never inside workflow.NextStep itself, and never
 // for human-revision loops, which are exempt (§25.9, mirroring §24.6's
-// own manual-retrigger exemption). Dark as of Step 54: no caller exists
+// own manual-retrigger exemption). Dark: no caller exists
 // yet.
 package loopguard

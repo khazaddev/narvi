@@ -7,8 +7,8 @@
 // internal/adapters/inbound/httpapi originally owned the ONE
 // provenance_tag value this package started with (scopedEnvironmentProvenanceTag,
 // create.go, "scoped_environment") as an unexported constant, since it was
-// the only package that ever needed to read or write it -- until Step 48
-// below. §8.2's own sentinel-auto-fix flow needed a SECOND, distinct
+// the only package that ever needed to read or write it -- until
+// §8.2's own sentinel-auto-fix flow needed a SECOND, distinct
 // provenance_tag value ("sentinel_auto_fix") checked from THREE places
 // that cannot import each other:
 // internal/app/sessionactor (dispatch.go, to select the OpenCode

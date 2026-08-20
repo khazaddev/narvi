@@ -2,7 +2,7 @@ package boot_test
 
 // (§19.6): end-to-end tests of the graduated setup-rerun ladder,
 // exercised through the SAME real orchestration points as
-// resilience_repoimage_test.go's own Step 42 precedent (boot.RunBoot,
+// resilience_repoimage_test.go's own §19.2 precedent (boot.RunBoot,
 // boot.ComputeSetupRerunLadder) -- a real git repo, a real /narvi/image-
 // manifest.json-shaped boot.ImageManifest, and real spawned shell scripts,
 // never a bare EvaluateHook table-test case for the ladder's own

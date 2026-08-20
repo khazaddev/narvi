@@ -26,7 +26,7 @@
 // endpoint pattern gives "the agent calls it with typed fields, validated
 // server-side" (this Step's own central requirement) without touching the
 // sandbox WS protocol or the OpenCode adapter at all -- the review turn's
-// own prompt (review.RenderTurnPrompt, Step 46) is the natural place to
+// own prompt (review.RenderTurnPrompt, §8.2) is the natural place to
 // instruct the agent HOW to call this endpoint (URL, bearer token, gen
 // header, JSON shape), exactly like it already instructs the agent about
 // pre-fetched diff/stack context. A genuine native tool-call integration

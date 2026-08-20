@@ -2,7 +2,7 @@
 // ("completeness", internal/adapters/outbound/linearapi/doc.go): the
 // "progressive" half of §8.10 that package's own top comment explicitly
 // deferred to "a future Step that builds the real Notifier/outbox
-// consumer" -- Step 35 shipped that consumer, but nobody ever came back
+// consumer" -- §5.1 shipped that consumer, but nobody ever came back
 // to layer a richer, asynchronous, retried mid-turn AgentActivity update
 // on top of it. Before this batch, the ONLY outbox notification any
 // Linear-origin session's own agent session ever got was a SINGLE

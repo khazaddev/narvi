@@ -100,7 +100,7 @@ func (n *VerdictNotifier) Deliver(ctx context.Context, notification ports.Notifi
 		return fmt.Errorf("githubapi: deliver verdict (create review): %w", err)
 	}
 
-	// Rereview fix (Step 65 finding 6): payload.RiskLevel == "" means no
+	// Rereview fix (§24 finding 6): payload.RiskLevel == "" means no
 	// real verdict was ever posted for this PR at all -- a real, reachable
 	// state for a ports.NotificationKindGitHubVerdict notification that
 	// isn't a real review.Verdict (e.g. sessionactor's own §24.6

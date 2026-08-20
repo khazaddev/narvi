@@ -1,7 +1,7 @@
 // This file (reviewcostbudgetserver.go) gives internal/domain/reviewtriage.
 // ShouldSkipOptionalPass (§26.7, costbudget.go) its first production call
 // site (§26.5) -- that function's own doc comment states plainly it was
-// shipped in Step 69 as a tested, exported pure function with ZERO
+// shipped in §26.4 as a tested, exported pure function with ZERO
 // production callers: "the actual mechanism putting §26.7's policy into
 // effect is the review agent's OWN judgment" today, guided only by a
 // dollar figure baked as prose into its own prompt (internal/domain/

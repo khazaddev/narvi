@@ -1,7 +1,7 @@
 // This file (cloudidentitycapability.go) implements the ONE, group-level
 // fail-closed gate every browser-facing cloud-identity management route
 // group shares: "the whole capability is off (and binding CRUD refuses,
-// fail-closed) when unset" (§27.3, verbatim; repeated at the Step 73 row:
+// fail-closed) when unset" (§27.3, verbatim; repeated at the §27.3 row:
 // "capability off and binding CRUD refusing, fail-closed, when unset").
 //
 // The 4 sandbox/public-facing cloud-identity surfaces (oidcdiscovery.go's

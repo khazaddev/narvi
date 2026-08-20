@@ -2,7 +2,7 @@ package reviewverdict
 
 import "github.com/khazaddev/narvi/internal/domain/review"
 
-// This file implements §26.4's own named residual, closed by Step 71:
+// This file implements §26.4's own named residual, closed by §26.4:
 // "Corroborating the claim against the persisted sub_task_finish trace is
 // what would make the heading 'structural'... until it ships this field is
 // trusted, not verified." A schema-required `CounterReview: done`

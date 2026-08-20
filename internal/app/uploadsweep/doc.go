@@ -10,7 +10,7 @@
 //
 // §28.4 names this as running "by the same app/scheduler recovery-sweep
 // machinery §3.5 already runs" -- but by the time that machinery actually
-// shipped (Steps 51/52, "automations: engine"), it landed directly inside
+// shipped (§3.5/§8.4, "automations: engine"), it landed directly inside
 // internal/app/automation's own sweep.go, never in a real, generic
 // internal/app/scheduler package (which remains, to this day, an
 // unimplemented doc.go-only stub -- confirmed by direct reading before

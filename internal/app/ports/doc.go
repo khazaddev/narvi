@@ -22,7 +22,7 @@
 // value types.
 //
 // AgentRuntime (§4.2, the OpenCode anti-corruption layer) is the SECOND
-// port, added this Step (17), against internal/adapters/outbound/opencode
+// port, added at §7, against internal/adapters/outbound/opencode
 // (this Step, real) — CLAUDE.md's "the agent runtime... is expected to
 // gain a second adapter" line applies to this interface exactly as it
 // already did to SandboxProvider: nothing OpenCode-specific may leak into
@@ -54,7 +54,7 @@
 // kind->Notifier routing.
 //
 // LLM (llm.go) and IntentClassifier (intentclassifier.go) are the SIXTH
-// and SEVENTH ports, both added this Step (36, §8.3/§18): LLM is a
+// and SEVENTH ports, both added at §8.3/§18: LLM is a
 // genuinely reusable, provider-agnostic structured-output text-completion
 // port (internal/adapters/outbound/llm's Anthropic adapter is the first
 // real implementation this Step; a future internal/adapters/outbound/

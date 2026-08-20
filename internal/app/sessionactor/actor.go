@@ -271,7 +271,7 @@ func (a *Actor) run(ctx context.Context) error {
 			// §2: "evicts after idle TTL (default 30 min without
 			// commands or connected clients)". This Step has no
 			// mechanism to observe "connected clients" (that's the
-			// client WS hub, Steps 18+) -- only "no commands" is
+			// client WS hub) -- only "no commands" is
 			// checked here; see doc.go for the same documented gap.
 			a.logger.Info("sessionactor: evicting self: idle TTL elapsed with no commands")
 			return nil

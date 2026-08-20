@@ -74,7 +74,7 @@ type restoreSandboxRequest struct {
 }
 
 // imageBuildRequest is the body POSTed to /v1/images. §19.1 ("warm boot:
-// shared fingerprint", Step 41): repos now carries BOTH the clone url and
+// shared fingerprint", §19.1): repos now carries BOTH the clone url and
 // the concrete sha per repo (imageBuildRequestRepo below), not a bare
 // name->sha map — this is what lets the (external, opaque-to-this-repo)
 // build service do a real, full clone from the real origin (§19.1: "build
@@ -109,7 +109,7 @@ type imageBuildRequestRepo struct {
 // Paths} field-for-field — same "invented, tested against a fake
 // httptest.Server, not real Modal API docs" posture as every other shape
 // in this file (see this file's own top doc comment). MountVersion/
-// PublishVersion are Step 43(c)'s third iteration (immutable versioned
+// PublishVersion are §19.1(c)'s third iteration (immutable versioned
 // cache snapshots, ports.CacheMount's own doc comment): MountVersion names
 // the one already-published, immutable version to mount read-only (empty =
 // nothing to mount yet, this cache key's first build); PublishVersion

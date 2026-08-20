@@ -13,8 +13,8 @@ import (
 // setRequiredEnv sets NARVI_STAGE, NARVI_DATABASE_URL, the three
 // per-direction HMAC secret env vars (PR-06), §13.1's ("auth v1") own
 // required vars (GitHub OAuth credentials, PublicBaseURL, a valid 32-byte
-// base64 token encryption key, and one allowlist mechanism), Step
-// 32's ("GitHub ingress") own required vars (the real GitHub webhook
+// base64 token encryption key, and one allowlist mechanism),
+// §8.2's ("GitHub ingress") own required vars (the real GitHub webhook
 // secret and the bot mention handle), and §5.1's ("outbox delivery")
 // own GitHub bot token to valid dummy values for the
 // duration of the calling (sub)test, via
@@ -981,8 +981,8 @@ func TestLoadGitHubImageBuildToken(t *testing.T) {
 	})
 }
 
-// NARVI_CACHE_VOLUME_EPOCH no longer exists as a config surface (Step
-// 43(c)'s third iteration removes the rotation escape hatch attempt 2
+// NARVI_CACHE_VOLUME_EPOCH no longer exists as a config surface
+// (§19.1's third iteration removes the rotation escape hatch attempt 2
 // added -- domain/imagebuild.CacheVolumeKey's own doc comment has the
 // full "why"). TestLoadCacheVolumeEpoch used to live here; deleted along
 // with the field and env var it tested, not left behind pointing at

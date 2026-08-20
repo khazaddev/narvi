@@ -58,8 +58,8 @@ type Record struct {
 	// FactCheck/FactCheckKilled are §26.4's own diff-only fact-check
 	// pass outcome (§26.6), persisted verbatim -- unlike CounterReview,
 	// schema-required UNCONDITIONALLY at the posting endpoint (both
-	// paths), so the zero value here means only "posted before Step 69
-	// existed", never "this path never runs fact-check".
+	// paths), so the zero value here means only "posted before fact-check
+	// tracking existed", never "this path never runs fact-check".
 	FactCheck       reviewpost.FactCheckStatus
 	FactCheckKilled int
 }

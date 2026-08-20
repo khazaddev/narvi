@@ -18,7 +18,7 @@ const agentsManifestFilename = "AGENTS.md"
 // primary/secondary.
 //
 // This exact markdown shape is this Step's own invented, documented
-// convention: no contracts/ schema governs it, exactly like Step 14
+// convention: no contracts/ schema governs it, exactly like §14.2
 // documented its own invented Readiness.Health shape. A later Step is free
 // to change the rendering without needing to touch any wire contract.
 //

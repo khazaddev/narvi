@@ -120,7 +120,7 @@ func TestOnTurnCompleted_SingleStepLane_FailTrigger_EscalatesRun(t *testing.T) {
 // audit-found design incoherence -- see that migration's own header comment
 // and docs/TECHNICAL_PLAN.md §25.8) made the built-in plan workflow a
 // genuine single-step passthrough carrying no HITL, so classic plan mode
-// (§8.1, Steps 37/38) stays the SOLE plan-approval authority; this test's
+// (§8.1) stays the SOLE plan-approval authority; this test's
 // own subject -- the HITLAfter branch in OnTurnCompleted itself -- is
 // otherwise completely unchanged and now proven against the shape any
 // future custom workflow (e.g. a Phase 7 canvas-authored one) would use.
@@ -195,7 +195,7 @@ func TestOnTurnCompleted_PostedOutcomeTakesPrecedenceOverImplicitDerivation(t *t
 
 	// Simulate the posting tool having already recorded an outcome mid-turn
 	// (a hypothetical non-built-in step's own agent call -- no built-in
-	// does this in Step 55, but the persisted-precedence contract must
+	// does this in §25.6, but the persisted-precedence contract must
 	// hold regardless of who posted it).
 	rowsAffected, err := workflows.SetStepRunOutcome(ctx, row.stepRunID, "needs_fix", "found a fixable issue", nil)
 	if err != nil {

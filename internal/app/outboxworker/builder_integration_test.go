@@ -310,7 +310,7 @@ func TestPumpOnce_DeadLettersAfterMaxAttempts(t *testing.T) {
 	// Backoff/claim windows are intentionally short (this test wants MANY
 	// attempts to run fast, not a real-scale schedule) but NOT
 	// single-digit-millisecond: a real, reproduced flake (second
-	// re-verification pass, Step 39) traced back to exactly this test
+	// re-verification pass, §13.2) traced back to exactly this test
 	// pairing a 1ms/2ms backoff window with a per-iteration sleep of only
 	// 5ms and zero margin beyond it. NextRetryAt is computed from THIS
 	// process's own time.Now() (recordFailure, builder.go) but

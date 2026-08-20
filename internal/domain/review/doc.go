@@ -152,7 +152,7 @@
 //     of comparably broad blast radius (secrets, infra, public API, data
 //     layer, dependencies) — see tag.go. Nothing elsewhere in the plan or
 //     mockups enumerates this vocabulary; extending it is expected as
-//     later Steps (47, 58) find real gaps, but any addition belongs here,
+//     later work (§8.2/§8.6) finds real gaps, but any addition belongs here,
 //     as a deliberate, reviewed change to this one fixed list — never
 //     inferred ad hoc by a consumer.
 //

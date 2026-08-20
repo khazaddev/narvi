@@ -51,8 +51,8 @@ func (s *SandboxStore) UpdateStatus(ctx context.Context, arg sqlcgen.UpdateSandb
 }
 
 // UpdateStatusToSuspect moves a sandbox into Suspect and persists the live
-// status being left as pre_suspect_status, in the same statement -- Step
-// 24 ("two-phase terminalization"), see UpdateSandboxStatusToSuspect's own
+// status being left as pre_suspect_status, in the same statement --
+// §3.2 ("two-phase terminalization"), see UpdateSandboxStatusToSuspect's own
 // generated doc comment.
 func (s *SandboxStore) UpdateStatusToSuspect(ctx context.Context, arg sqlcgen.UpdateSandboxStatusToSuspectParams) (sqlcgen.Sandbox, error) {
 	return s.q.UpdateSandboxStatusToSuspect(ctx, arg)
@@ -68,7 +68,7 @@ func (s *SandboxStore) RecoverFromSuspect(ctx context.Context, arg sqlcgen.Recov
 
 // UpsertForSpawn creates the sandbox row (if none exists) or bumps its gen
 // and resets it to spawning (if one already does) -- see
-// UpsertSandboxForSpawnParams' generated doc comment (Step 21, design
+// UpsertSandboxForSpawnParams' generated doc comment (§9.3, design
 // decision 3a).
 func (s *SandboxStore) UpsertForSpawn(ctx context.Context, arg sqlcgen.UpsertSandboxForSpawnParams) (sqlcgen.Sandbox, error) {
 	return s.q.UpsertSandboxForSpawn(ctx, arg)
@@ -131,7 +131,7 @@ func (s *SandboxStore) ListLiveProviderIDs(ctx context.Context) ([]string, error
 
 // UpdatePendingSnapshotMessageID sets (or clears, via nil) the MessageId
 // of whichever Snapshot command this sandbox is currently waiting on a
-// snapshot_ready for -- Step 22 fix (message-id correlation), closing a
+// snapshot_ready for -- §3.2 fix (message-id correlation), closing a
 // real ambiguous-write race an independent review confirmed against a
 // real Postgres instance.
 func (s *SandboxStore) UpdatePendingSnapshotMessageID(ctx context.Context, arg sqlcgen.UpdateSandboxPendingSnapshotMessageIDParams) (sqlcgen.Sandbox, error) {

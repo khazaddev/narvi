@@ -30,8 +30,8 @@ import (
 // committed as a 101 upgrade and no further status-code rejection is
 // possible):
 //
-//  1. `type` query param != "sandbox" -> 400 (the client-hub type is Step
-//     19's own job).
+//  1. `type` query param != "sandbox" -> 400 (the client-hub type is
+//     §6.2's own job).
 //  2. `sessionID` path param does not parse as a UUID -> 404 (a malformed
 //     id and a nonexistent one both mean "no such session" from the
 //     caller's own perspective; wsbridge's own isFatalStatus only

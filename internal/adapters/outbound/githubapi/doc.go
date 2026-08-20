@@ -1,5 +1,5 @@
 // Package githubapi holds the GitHub SourceControl port implementation
-// (createPR, credential minting, push specs) — implemented at Step 21
+// (createPR, credential minting, push specs) — implemented at §9.3
 // ("e2e happy path", §4.3). Credential minting and push specs are handled
 // elsewhere (internal/adapters/inbound/httpapi's own scm-credentials
 // endpoint mints the git-over-https credential; cmd/sandbox-agent's own

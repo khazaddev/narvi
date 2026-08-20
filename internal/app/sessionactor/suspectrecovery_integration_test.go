@@ -57,7 +57,7 @@ func heartbeatRaw(messageID string) json.RawMessage {
 }
 
 // TestHandleSandboxEvent_SuspectRecovery_ReturnsToPreSuspectStatus proves
-// the core Step 24 mechanism in isolation: a Suspect sandbox seeded with a
+// the core §3.2 mechanism in isolation: a Suspect sandbox seeded with a
 // real pre_suspect_status (Ready) receiving ANY recognized inbound event
 // (a plain heartbeat) recovers to that exact pre-suspect status,
 // pre_suspect_status is cleared back to NULL, TimerTerminalGrace is

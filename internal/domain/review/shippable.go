@@ -155,7 +155,7 @@ func baselineFromRisk(r RiskLevel) Shippable {
 //	             rank(CounterReviewFloor(counterReview)))
 //
 // adequacy (§26.2) is this function's own THIRD floor input,
-// added alongside the original two (coverage, premise) Step 45 already
+// added alongside the original two (coverage, premise) §8.2 already
 // established — see AdequacyFloor's own doc comment (adequacy.go) for its
 // full policy. counterReview (§26.4) is the FOURTH, most recent
 // addition — see CounterReviewFloor's own doc comment (counterreview.go)

@@ -919,8 +919,8 @@ func (a *Actor) triggerSnapshotBestEffort(ctx context.Context) {
 		// required Environment's sandbox degrades to resume-only recovery
 		// (§3.2) until a real §9.3-class restore-with-docker scenario
 		// (test/resilience) proves parity against a provider's actual
-		// behavior — exactly the escape hatch §27.8 itself names ("Step
-		// 74 implementation time... not guessed here"). Concretely: this
+		// behavior — exactly the escape hatch §27.8 itself names ("decided at
+		// implementation time... not guessed here"). Concretely: this
 		// sandbox's own snapshot_id column simply never gets populated,
 		// so dispatch.go's EvaluateSpawnDecision Restore branch (which
 		// requires SnapshotImageID != "") can never fire for it either —

@@ -44,7 +44,7 @@ const (
 // FindingStatus is a review_findings row's own mutable lifecycle state
 // (migrations/000046_review_findings.up.sql) -- persists ACROSS re-posted
 // verdicts (the whole reason review_findings is its own table rather than
-// a column on the append-only review_verdicts history, §21.1, that Step 58
+// a column on the append-only review_verdicts history, §21.1, that §8.6
 // will add later: see that migration's own doc comment).
 type FindingStatus string
 
@@ -80,8 +80,8 @@ const (
 // FindingInput is a review-verdict-posting-tool call's own typed
 // per-finding fields (§8.2's VerdictInput, extended -- restdtos.
 // PostReviewVerdictRequest.findings, additive and optional, so an old
-// caller posting no findings at all keeps posting exactly as before Step
-// 48) -- everything BuildFinding needs BEFORE IdentityHash is
+// caller posting no findings at all keeps posting exactly as before)
+// -- everything BuildFinding needs BEFORE IdentityHash is
 // server-computed (never accepted from a caller, matching review.Verdict.
 // Shippable's own "never client-supplied" CONTRACT for the identical
 // reason: an agent-supplied identity would let a model launder a stale

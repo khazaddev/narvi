@@ -7,7 +7,7 @@
 // action=="labeled" manual re-trigger lane (§8.2) before this Step;
 // this file adds the SAME event type's action=="closed" case, exactly
 // the "one generic pull_request handler, switching on action" shape this
-// Step's own design recommends so a later Step (61, action=="synchronize")
+// Step's own design recommends so §20 (action=="synchronize")
 // extends the same lane rather than reinventing the parsing/claim/dedupe
 // plumbing independently.
 //

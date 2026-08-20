@@ -26,7 +26,7 @@
 //     partial unique index).
 //   - EvaluateTurnDeadline (deadline.go): the turn_deadline named
 //     persistent timer (§2, §5.4 Chain A), using
-//     platform.Timeouts.TurnDeadline (already defined at Step 02).
+//     platform.Timeouts.TurnDeadline (already defined at §5.4).
 //   - Summary (summary.go): the minimal per-turn view internal/domain/
 //     session's status derivation needs.
 //   - EpistemicOutcome (epistemicoutcome.go) and the devil's-advocate

@@ -122,7 +122,7 @@ func TestTriggerSnapshotBestEffort_DockerFalseSession_StillSnapshots(t *testing.
 // --- §9.3-class resilience scenario #17: restore-with-docker (§27.8) ---
 //
 // §27.8's own closing bullet: "Snapshotting a running dockerd: daemon/
-// image-store state inside snapshots is untested territory; Step 74
+// image-store state inside snapshots is untested territory; §27.5
 // must add a §9.3-class scenario for restore-with-docker before
 // claiming it works." This codebase does not, and does not claim to,
 // support restoring a Docker-enabled sandbox from a snapshot at all

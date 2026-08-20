@@ -12,8 +12,8 @@ const (
 	HookSetup Hook = "setup.sh"
 	// HookStart is the per-boot service-start script.
 	HookStart Hook = "start.sh"
-	// HookDelta is the OPTIONAL, repo-authored delta script (§19.6, Step
-	// 43): "sync.sh", added to the closed hook vocabulary specifically to
+	// HookDelta is the OPTIONAL, repo-authored delta script (§19.6):
+	// "sync.sh", added to the closed hook vocabulary specifically to
 	// run INSTEAD OF a full HookSetup rerun under BootModeRepoImage when
 	// workspaceMoved is true but setup.sh itself is provably unchanged
 	// since the built SHA (`git diff --quiet <built_sha> HEAD --
@@ -89,7 +89,7 @@ type HookOutcome struct {
 // than defining a third named error type for a case that can only arise
 // from a bug in this codebase, never from external input.
 //
-// # Step 43 addition: HookDelta (§19.6)
+// # §19.1 addition: HookDelta (§19.6)
 //
 // HookDelta's own policy row is deliberately the SAME eligibility envelope
 // as HookSetup's own repo_image branch (mode == BootModeRepoImage &&

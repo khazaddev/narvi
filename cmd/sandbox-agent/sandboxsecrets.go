@@ -52,7 +52,7 @@
 // path and the injection path can drift apart -- a control plane rolled
 // back to a build predating a later reservation, or a row written by some
 // other path entirely, would otherwise still inject a name the CURRENT
-// binary's own ValidateName would refuse. Step 73b later widened
+// binary's own ValidateName would refuse. §27.4 later widened
 // ValidateName itself with cloudidentity.ReservedEnvVarNames/
 // clusterbinding.ReservedEnvVarNames (internal/domain/sandboxsecret/
 // name.go) -- this file's re-validation call picks up that widened rule
@@ -163,7 +163,7 @@ func fetchSandboxSecrets(ctx context.Context, cfg boot.Config, timeouts platform
 	// enforces. The reserved namespaces exist to stop a sandbox secret from
 	// ever shadowing a mechanism sandbox-agent itself depends on -- most
 	// sharply OPENCODE_*, whose inline-config slot OUTRANKS the capability
-	// restriction Step 48 writes into the project slot. Enforcing that at
+	// restriction §8.2 writes into the project slot. Enforcing that at
 	// the write path alone would make it a rule every future writer has to
 	// remember, which §30 already ruled is not a guard; enforcing it again
 	// here, at the point of injection, makes the shadowing unrepresentable

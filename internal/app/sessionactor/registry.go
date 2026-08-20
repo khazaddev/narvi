@@ -66,8 +66,8 @@ type storeBundle struct {
 	imageBuild *postgres.ImageBuildStore
 
 	// environment and contractDrift are §14.3's ("mocking + contract
-	// drift") own additions, mirroring imageBuild's own addition for Step
-	// 26 exactly: environment is used by dispatch.go/contractdrift.go's
+	// drift") own additions, mirroring imageBuild's own addition for §8.5
+	// exactly: environment is used by dispatch.go/contractdrift.go's
 	// checkContractDrift to read a spawn/restore plan's own Environment
 	// row (MockConfigured, ContractsPath) back by id; contractDrift reads/
 	// best-effort-upserts the per-repo contract_drift_snapshots row that

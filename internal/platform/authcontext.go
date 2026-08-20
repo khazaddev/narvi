@@ -1,5 +1,5 @@
-// This file (authcontext.go) implements the request-scoped identity Step
-// 20 ("auth v1") introduces: the AuthenticatedUser value internal/adapters/
+// This file (authcontext.go) implements the request-scoped identity
+// §13.1 ("auth v1") introduces: the AuthenticatedUser value internal/adapters/
 // inbound/auth's own Middleware attaches to a request's context once a
 // user-session cookie has been verified (§13.1, §13.4 "route middleware").
 //

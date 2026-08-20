@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for the 3 new stores this Step (19) adds:
+// Integration tests for the 3 new stores §6.2 adds:
 // EventStore.ListForSession, ArtifactStore (new), and WSTokenStore (new)
 // -- gated behind the "integration" build tag, matching this package's
 // own postgres_integration_test.go conventions (testcontainers Postgres,

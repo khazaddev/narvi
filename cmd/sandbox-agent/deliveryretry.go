@@ -111,7 +111,7 @@ func classifyDeliveryFetchError(err error) error {
 // warn-and-continue on EITHER outcome (retries exhausted, or a
 // first-attempt terminal classification) -- see that file's own doc
 // comment for the full "what happens to the token file" resolution,
-// consistent with the same posture Step 72 established.
+// consistent with the same posture §27.1 established.
 func classifyMintTokenError(err error) error {
 	if err == nil {
 		return nil

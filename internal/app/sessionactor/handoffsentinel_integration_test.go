@@ -28,8 +28,8 @@ import (
 // own contractdrift_integration_test.go already defines TestMain for this
 // whole test binary -- nothing here defines a second one.
 
-// GetPullRequestDiff implements PRDiffFetcher for fakeSourceControl (Step
-// 49's own extension of this pre-existing fake, pushpr_integration_test.go).
+// GetPullRequestDiff implements PRDiffFetcher for fakeSourceControl (§14.4's
+// own extension of this pre-existing fake, pushpr_integration_test.go).
 func (f *fakeSourceControl) GetPullRequestDiff(_ context.Context, owner, repo string, number int32, _ string) (string, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

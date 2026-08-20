@@ -108,7 +108,7 @@
 //     live OAuth credential on success, a materially higher-stakes
 //     endpoint than gating a WS connection).
 //   - Suspect-state recovery-during-grace ("any liveness signal during
-//     grace returns to previous state", §3.2) is now real (Step 24,
+//     grace returns to previous state", §3.2) is now real (§3.2,
 //     "two-phase terminalization") -- a Suspect sandbox reconnecting
 //     through this package IS allowed (IsDeadSandboxStatus(Suspect) is
 //     false), and internal/app/sessionactor's own handleSandboxEvent now

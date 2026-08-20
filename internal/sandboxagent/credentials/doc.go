@@ -44,7 +44,7 @@
 // API this codebase can't reach in CI), this file invents a plausible,
 // documented request/response shape here and tests CPClient's CP-calling
 // logic against a fake httptest.Server standing in for it -- whoever
-// implements Step 21 reconciles the two sides then, an accepted, explicit
+// implements §9.3 reconciles the two sides then, an accepted, explicit
 // future reconciliation point. NewCPClient derives its REST base URL from
 // SessionConfig.ControlPlaneWsUrl (swap wss/ws for https/http, keep only
 // the host) since SESSION_CONFIG has no separate REST base URL field and

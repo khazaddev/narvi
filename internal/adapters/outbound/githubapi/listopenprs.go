@@ -136,7 +136,7 @@ type openPRDetailResponse struct {
 	// ChangedFiles (Phase 5 audit finding 2, fixed) is GitHub's own
 	// top-level "changed_files" scalar on this SAME "Get a pull request"
 	// response -- mirrors pullRequestResponse.ChangedFiles' own identical
-	// field (adapter.go, Step 68), simply unparsed on THIS response shape
+	// field (adapter.go, §26.3), simply unparsed on THIS response shape
 	// until this fix: ports.OpenPR.ChangedFilesCount below is populated
 	// from this scalar, never from len() of the SEPARATE, page-capped
 	// Pull Request Files listing fetchChangedFilePaths (below) fetches.

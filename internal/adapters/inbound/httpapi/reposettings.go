@@ -382,8 +382,8 @@ func reviewDepthFieldsFromRow(settings sqlcgen.RepoSetting) (mode restdtos.RepoS
 }
 
 // reviewCostBudgetFieldsFromRow renders settings' own
-// review_cost_budget_light_usd/review_cost_budget_deep_usd columns (Step
-// 69, §26.7) into RepoSettings' own two wire fields -- mirrors
+// review_cost_budget_light_usd/review_cost_budget_deep_usd columns
+// (§26.7) into RepoSettings' own two wire fields -- mirrors
 // reviewDepthFieldsFromRow's own identical "one shared conversion, many
 // call sites" precedent immediately above, sharing internal/app/
 // reviewtriage's own numericToFloat64 conversion rather than
@@ -537,8 +537,8 @@ func PutAutoApprovalSettings(repoSettings *postgres.RepoSettingsStore, reviewVer
 	}
 }
 
-// PutAutoMergeToggle backs PUT /api/repos/{owner}/{repo}/auto-merge (Step
-// 62, §21.2 stage 2) -- arms/disarms the per-repo unattended-merge
+// PutAutoMergeToggle backs PUT /api/repos/{owner}/{repo}/auto-merge
+// (§21.2 stage 2) -- arms/disarms the per-repo unattended-merge
 // toggle. Gated SOLELY by authz.ActionToggleAutoMerge (admin only, §13.3
 // row 6) -- see UpdateAutoMergeToggleRequest's own doc comment for why
 // this is a separate endpoint from PutAutoApprovalSettings above.

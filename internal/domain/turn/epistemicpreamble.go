@@ -136,7 +136,7 @@ const epistemicPreamble = "" +
 	"Use \"none\" when nothing rose to either tier. Do not skip this call regardless of outcome -- your reply's own wording is advisory only and is never re-read as the outcome of record; this call is.\n\n"
 
 // MaybeInjectEpistemicPreamble is F6's own shared gate (adversarial
-// review, Step 61): composes ResolveEpistemicCheckEnabled,
+// review, §20): composes ResolveEpistemicCheckEnabled,
 // ShouldInjectEpistemicPreamble, and RenderEpistemicPreamble into the ONE
 // three-line sequence every raw turn-insert call site now routes through,
 // rather than each duplicating it inline -- "duplication is exactly how

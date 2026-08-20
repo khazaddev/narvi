@@ -175,7 +175,7 @@ var matrix = map[Action]actionRule{
 	ActionContestArchRecap: {allow: roles(RoleAdmin, RoleMaintainer)},
 
 	// Row 6: integrations/global secrets/template activation/members &
-	// roles/sentinel toggle/blockOnHighRisk -- admin only. Step 54
+	// roles/sentinel toggle/blockOnHighRisk -- admin only. §25.4
 	// (§25.11) adds workflow-binding activation to this SAME row, per
 	// that section's explicit "same row as ActionActivatePromptTemplate"
 	// instruction (see action.go for why activation is a system-posture

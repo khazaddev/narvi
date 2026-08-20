@@ -7,7 +7,7 @@
 // internal/sandboxagent/boot, which import this package, never the other
 // way around. §14.2 ("sandbox-agent: services.yml") reuses this package
 // directly for its own, unrelated long-running services -- "supervised by
-// the SAME process-group/reap/drain machinery as Step 13 (no new
+// the SAME process-group/reap/drain machinery as §6.4 (no new
 // supervision code)".
 //
 // Mechanics:

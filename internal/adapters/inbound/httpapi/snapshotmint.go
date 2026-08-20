@@ -12,7 +12,7 @@
 // scmcredentials.go's own precedent exactly (see that file's own doc
 // comment): this is a SANDBOX-bearer-token-authenticated route, not a
 // browser-facing one, matching internal/adapters/inbound/wshub/sandbox.go's
-// own header-bearer-token handshake precedent from Step 18. See
+// own header-bearer-token handshake precedent from §3.2. See
 // cmd/control-plane/main.go's own mounting.
 //
 // Audit remediation (security-crosscutting lens): this endpoint originally

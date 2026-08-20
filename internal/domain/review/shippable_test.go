@@ -135,8 +135,8 @@ func TestComputeShippable_RiskBaseline(t *testing.T) {
 
 // TestComputeShippable_FourFloorCompositionMatrix is the exhaustive
 // coverage-floor-state × premise-floor-state × description-adequacy-
-// floor-state × counter-review-floor-state matrix (extended by §26.4/Step
-// 69 from its own prior three-floor version, itself extended once already
+// floor-state × counter-review-floor-state matrix (extended by §26.4
+// from its own prior three-floor version, itself extended once already
 // by §26.2 from an original two-floor version): every one of the
 // five TestsCoverageState values under test
 // (adequate/insufficient/skipped/zero/unrecognized) crossed with every one

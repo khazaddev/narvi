@@ -21,7 +21,7 @@
 // resolved booleans a caller decided from them.
 package rollout
 
-// Mode is platform.Config's own master switch for Step 76 (NARVI_ROLLOUT_MODE,
+// Mode is platform.Config's own master switch for §10 (NARVI_ROLLOUT_MODE,
 // §32) -- exactly two values. platform.Config.RolloutMode is typed as
 // THIS package's own Mode (not a parallel, independently-defined enum in
 // internal/platform) specifically so there is exactly one place in this

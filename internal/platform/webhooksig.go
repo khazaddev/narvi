@@ -29,9 +29,9 @@
 // body, no timestamp), Slack ("X-Slack-Signature: v0=<hex>", HMAC-SHA256
 // over "v0:{timestamp}:{raw body}", timestamp in a SEPARATE header), and
 // Linear (its own header, likewise expected to be a raw-body
-// HMAC-SHA256 -- Step 34 confirms the exact header/format at
-// implementation time) do NOT match that bearer format, so Steps 32/33/
-// 34 must NOT authenticate their real provider's webhook using
+// HMAC-SHA256 -- §8.10 confirms the exact header/format at
+// implementation time) do NOT match that bearer format, so §8.2/§8.10's
+// own adapters must NOT authenticate their real provider's webhook using
 // Config.HMACWebhookSecret/platform.Verify. Each provider adapter
 // instead verifies its OWN provider signature with its OWN
 // provider-specific secret (a new config field that Step introduces,

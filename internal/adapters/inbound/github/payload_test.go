@@ -269,8 +269,8 @@ func TestParsePullRequestReviewComment(t *testing.T) {
 // pull_request_review_comment, pull_request -- payload.go's own parseMention
 // doc comment) is acknowledged and ignored, never an error. "star" is used
 // here rather than "pull_request" (this test's own pre-existing event type
-// choice): pull_request is NOW a recognized-and-dispatched event type (Step
-// 46, "review sessions", §8.2's own label-retrigger lane) -- see
+// choice): pull_request is NOW a recognized-and-dispatched event type
+// ("review sessions", §8.2's own label-retrigger lane) -- see
 // TestParsePullRequestLabeled below for that lane's own dedicated coverage,
 // including its own "labeled action, but no configured label matches" case,
 // which is a DIFFERENT reason for ok=false than "this event type is not

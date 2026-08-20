@@ -234,7 +234,7 @@ func verifySandboxBearerToken(presented string, storedHash *string) bool {
 //  7. This session has a github_pr_sessions row (prSessions.
 //     GetBySessionID succeeds) -> 200 with botToken, never the creator's
 //     own identity -- see this file's own top comment ("Audit remediation")
-//     for the full rationale. Steps 8-10 below (the
+//     for the full rationale. steps 8-10 below (the
 //     creator-guard/identity/decrypt path) are skipped entirely for a
 //     review session: they exist to find and gate a PER-USER OAuth
 //     credential, which a review session has no legitimate use for at

@@ -38,8 +38,8 @@ const (
 	// member only on one they created or joined.
 	ActionApprovePlan Action = "approve_plan"
 	// ActionDecideWorkflowStep is rendering an approve/reject/revise
-	// verdict on a workflow run's HITL-gated step (§25.9/§25.11 — Step
-	// 54) — own/joined-aware, the SAME row shape as ActionApprovePlan
+	// verdict on a workflow run's HITL-gated step (§25.9/§25.11)
+	// — own/joined-aware, the SAME row shape as ActionApprovePlan
 	// above by §25.11's explicit instruction ("same row as
 	// ActionApprovePlan"): admin/maintainer on any run, member only on a
 	// session they created or joined. No caller exists yet — the decide
@@ -148,7 +148,7 @@ const (
 	// gate on built-in definitions at all: PUT/DELETE on an is_built_in
 	// row is refused unconditionally, even for an admin, as a
 	// STRUCTURAL invariant (§25.4), never an RBAC verdict this matrix
-	// could express. No caller exists yet — Steps 55-56 own the first
+	// could express. No caller exists yet — §25.6/§25.9 own the first
 	// handlers.
 	ActionManageWorkflowDefinitions Action = "manage_workflow_definitions"
 	// ActionManageCloudIdentityBindings covers creating/editing/deleting a

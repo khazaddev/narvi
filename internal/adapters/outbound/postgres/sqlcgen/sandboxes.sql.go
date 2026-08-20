@@ -226,7 +226,7 @@ type UpdateSandboxPendingSnapshotMessageIDParams struct {
 	PendingSnapshotMessageID *string     `json:"pending_snapshot_message_id"`
 }
 
-// Step 22 fix (message-id correlation): sets or clears (pass NULL)
+// §3.2 fix (message-id correlation): sets or clears (pass NULL)
 // pending_snapshot_message_id -- the MessageId of whichever Snapshot
 // command this sandbox is currently waiting on a snapshot_ready for.
 // triggerSnapshotBestEffort sets it, in the SAME transact that commits

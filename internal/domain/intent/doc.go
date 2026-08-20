@@ -37,7 +37,7 @@
 //
 // AssembleTemplate/ValidateTemplate implement the simple, non-Turing-
 // complete "{{variable_name}}" placeholder syntax this Step's own prompt-
-// template design chose (§18.6: "designed from scratch when Step 36 is
+// template design chose (§18.6: "designed from scratch when §8.3 is
 // implemented") -- pure string substitution only; the DB-backed template
 // storage itself (the Postgres table + store) is necessarily impure and
 // lives in internal/adapters/outbound/postgres +

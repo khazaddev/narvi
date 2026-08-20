@@ -11,8 +11,8 @@ import (
 )
 
 // ImageBuildStore is a thin, pass-through wrapper around the sqlc-generated
-// image_builds queries ("image builds", §8.5-note/§10-P2; Step
-// 41, "warm boot: shared fingerprint", §19.1). No caching, no retries, no
+// image_builds queries ("image builds", §8.5-note/§10-P2;
+// "warm boot: shared fingerprint", §19.1). No caching, no retries, no
 // business rules -- fingerprinting lives in domain/imagebuild, the
 // spawn-time lookup/best-effort-upsert lives in
 // app/sessionactor/imageresolve.go, and the claim/attempt/record loop
@@ -93,8 +93,8 @@ func (s *ImageBuildStore) RecordPermanentFailure(ctx context.Context, fingerprin
 	return s.q.RecordImageBuildPermanentFailure(ctx, fingerprint)
 }
 
-// ListReady returns up to limit SHARED (repo-bearing) 'ready' rows -- Step
-// 42's own freshness-pump poll query (§19.2), bounded by a real LIMIT
+// ListReady returns up to limit SHARED (repo-bearing) 'ready' rows --
+// §19.2's own freshness-pump poll query, bounded by a real LIMIT
 // (mirroring ListDue's own limit parameter shape exactly) so one tick's own
 // strictly-sequential per-row refresh attempts can never stack up an
 // unbounded number of slow, network-bound BuildImage calls. A base-only

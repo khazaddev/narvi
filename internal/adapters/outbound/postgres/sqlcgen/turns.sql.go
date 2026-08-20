@@ -34,8 +34,8 @@ type CreateTurnParams struct {
 // Queries backing TurnStore (§4.3). Just enough to prove the pipeline end
 // to end (create + get), including exercising the
 // turns_one_processing_per_session partial unique index (§3.3).
-// prompt/model_id/plan_mode (migrations/000018_session_repos.up.sql, Step
-// 21) are the turn's own dispatch-time inputs -- prompt/model_id are
+// prompt/model_id/plan_mode (migrations/000018_session_repos.up.sql,
+// §9.3) are the turn's own dispatch-time inputs -- prompt/model_id are
 // nullable and plan_mode defaults false, so every EXISTING call site
 // (every prior Step's `CreateTurnParams{SessionID, Status}`) keeps
 // compiling and behaving identically: the zero-value nil/nil/false it
@@ -49,7 +49,7 @@ type CreateTurnParams struct {
 // CreateTurnParams{...} literal omitting Effort -- keeps compiling and
 // behaving identically: the zero value, nil, "use the default").
 //
-// review_head_sha (migrations/000072_turns_review_head_sha.up.sql, Step 62
+// review_head_sha (migrations/000072_turns_review_head_sha.up.sql, §21
 // review finding C2) mirrors effort's own identical shape one column
 // further -- nil/absent for every non-review turn (every existing call
 // site), set exactly once, at creation, by the two review-turn-creation
@@ -323,8 +323,8 @@ type UpdateTurnStatusParams struct {
 // each is set at most once, at the (from, trigger) transition that
 // reaches Dispatched or a terminal state respectively).
 //
-// dispatched_sandbox_gen (migration 000026_turn_dispatch_gen.up.sql, Step
-// 28 "turn recovery") is stamped by TWO distinct call sites sharing this
+// dispatched_sandbox_gen (migration 000026_turn_dispatch_gen.up.sql,
+// §3.3 "turn recovery") is stamped by TWO distinct call sites sharing this
 // SAME query, both at the moment a Prompt payload is built and about to be
 // sent: tryPlanDispatch (internal/app/sessionactor/dispatch.go), alongside
 // the SAME status=dispatched write that already sets dispatched_at, for
@@ -338,7 +338,7 @@ type UpdateTurnStatusParams struct {
 // dispatched_event_id (migrations/000089_turns_dispatched_event_id.up.sql)
 // is stamped by those SAME two call sites, in the SAME write, from
 // MaxEventIDForSession (queries/events.sql): the events-log high-water
-// mark at the instant of dispatch, which the Step 71 corroboration
+// mark at the instant of dispatch, which the §26.4 corroboration
 // queries use as their lower bound instead of a timestamp. It follows the
 // identical sqlc.narg + COALESCE "absent argument leaves the column
 // untouched" convention as the three columns above it.

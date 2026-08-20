@@ -1001,8 +1001,8 @@ type Timeouts struct {
 	// prior Step's standalone additions), so -- per those additions' own
 	// precedent -- plain fields with sensible defaults, not wired into a
 	// fake invariant link. OutboxClaimDuration is the one exception: see
-	// the audit-fix note directly above that field below, matching Step
-	// 25's own ReconcilerOrphanConfirmationPeriod precedent of a Step's
+	// the audit-fix note directly above that field below, matching
+	// §5.3's own ReconcilerOrphanConfirmationPeriod precedent of a Step's
 	// later fix adding its own single, independent pairwise check without
 	// retroactively promoting the whole family into either named chain.
 

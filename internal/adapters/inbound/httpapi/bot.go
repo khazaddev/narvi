@@ -16,15 +16,15 @@ import (
 )
 
 // CreateSessionForBot and CreateTurnForBot (below) are the two small,
-// EXPORTED entry points create.go's own Step 31 doc comment anticipated:
-// "a future webhook ingress handler (Steps 32-34) calls createSessionCore
+// EXPORTED entry points create.go's own §5.1 doc comment anticipated:
+// "a future webhook ingress handler (§8.2/§8.10) calls createSessionCore
 // directly with its own already-decoded request and a NULL createdBy --
 // never [CreateSession]." That anticipated caller living in the SAME
 // package (since createSessionCore stays unexported). §8.2 ("GitHub
 // ingress") instead places its handler in its own package,
 // internal/adapters/inbound/github, mirroring
 // internal/adapters/inbound/httpapi/doc.go's own alternative it left
-// open ("or Steps 32-34 decide createSessionCore should be exported
+// open ("or §8.2/§8.10 decide createSessionCore should be exported
 // instead") -- a full export of createSessionCore was judged the wrong
 // shape (it would hand a webhook adapter direct access to every REST-only
 // concern: repo/pathScope/mockConfig validation error *shapes*, HTTP
@@ -53,7 +53,7 @@ func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *post
 }
 
 // CreateTurnForBot enqueues a new Pending turn on an EXISTING session for
-// a non-browser ingress caller (Steps 32/33/34) living in its own
+// a non-browser ingress caller (§8.2/§8.10) living in its own
 // package. Reuses createTurnLocked (turn.go) -- the SAME shared core
 // CreateTurnCore itself calls -- with its own fixed AlwaysQueue policy,
 // so the lock-then-insert-then-dispatch sequencing (a session-row FOR
@@ -126,7 +126,7 @@ func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *post
 // "every other caller safely ignores this" population the way those two
 // REST-only fields have.
 //
-// classifyText (F1, Step 64 follow-up fix, review Finding 1) mirrors
+// classifyText (F1, §23 follow-up fix, review Finding 1) mirrors
 // reviewHeadSHA's own "this function's one real caller always has a real
 // value to supply" shape -- github/coalesce.go's REUSE-path caller always
 // has its own already-captured, raw, un-enriched mention text in scope

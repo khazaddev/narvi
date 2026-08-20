@@ -44,7 +44,7 @@ func TestGetShadowComparison_MemberForbidden(t *testing.T) {
 
 	status := rig.doJSON(t, http.MethodGet, "/api/admin/shadow-compare?turnA="+uuid.NewString()+"&turnB="+uuid.NewString(), nil, nil, memberToken)
 	if status != http.StatusForbidden {
-		t.Errorf("status = %d, want %d (Step 59: admin/maintainer only, same row as stop/resume session)", status, http.StatusForbidden)
+		t.Errorf("status = %d, want %d (§8.8: admin/maintainer only, same row as stop/resume session)", status, http.StatusForbidden)
 	}
 }
 

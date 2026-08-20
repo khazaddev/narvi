@@ -526,8 +526,8 @@ func TestRenderVerdictComment_EmptyProposedBodyOmitsSuggestionSection(t *testing
 	}
 }
 
-// TestRenderVerdictComment_ContestedPointsRendersSection proves §26.4/Step
-// 69's own "Contested points" digest section renders, visibly, when
+// TestRenderVerdictComment_ContestedPointsRendersSection proves §26.4's
+// own "Contested points" digest section renders, visibly, when
 // digest.ContestedPoints is non-blank -- the deep path's inter-agent
 // disagreement narrative reaching the human it exists for, rather than
 // being captured and silently dropped at render time.

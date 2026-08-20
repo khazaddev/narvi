@@ -46,7 +46,7 @@ func TestGetRepoSettings_MaintainerAllowed_ButPutStillAdminOnly(t *testing.T) {
 
 	status := rig.doJSON(t, http.MethodGet, "/api/repos/acme/widgets/settings", nil, nil, token)
 	if status != http.StatusOK {
-		t.Errorf("GET status = %d, want %d (a maintainer holds authz.ActionConfigureAutoApprove, §13.3 row 5, sufficient to READ this endpoint since Step 62)", status, http.StatusOK)
+		t.Errorf("GET status = %d, want %d (a maintainer holds authz.ActionConfigureAutoApprove, §13.3 row 5, sufficient to READ this endpoint)", status, http.StatusOK)
 	}
 
 	status = rig.doJSON(t, http.MethodPut, "/api/repos/acme/widgets/settings", []byte(`{"blockOnHighRisk":true}`), nil, token)
@@ -147,8 +147,8 @@ func TestPutRepoSettings_MemberDenied_NeverWrites(t *testing.T) {
 	}
 }
 
-// TestGetRepoSettings_SentinelAutofixEnabled_NoRowYet_DefaultsOff is Step
-// 48's own explicitly required test: the sentinel-auto-fix admin toggle
+// TestGetRepoSettings_SentinelAutofixEnabled_NoRowYet_DefaultsOff is
+// §17.1's own explicitly required test: the sentinel-auto-fix admin toggle
 // (§17.1) defaults to OFF for a repo with no settings row at all --
 // migrations/000048_repo_settings_sentinel_autofix.up.sql's own documented
 // safe default.

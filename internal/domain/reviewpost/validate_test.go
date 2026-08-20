@@ -129,7 +129,7 @@ func TestValidateVerdictInput(t *testing.T) {
 			wantErr: reviewpost.ErrEmptyDigestSummary,
 		},
 		{
-			name: "empty ArchDecisions/StackRisks/UnverifiedLimits is legal (Step 66: requested, not required, until §26.3 defines the deep path)",
+			name: "empty ArchDecisions/StackRisks/UnverifiedLimits is legal (§26.1: requested, not required, until §26.3 defines the deep path)",
 			mutate: func(in *reviewpost.VerdictInput) {
 				in.Digest.ArchDecisions = nil
 				in.Digest.StackRisks = ""

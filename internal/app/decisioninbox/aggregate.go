@@ -112,8 +112,8 @@ type Deps struct {
 	// ReviewVerdict bundles the (§21.1/§21.2) stores the REAL
 	// auto-approval eligibility engine needs -- review_verdicts history
 	// (the latest verdict per PR), repo_settings' own auto-approval
-	// config, and the contradiction-rate outcome table. Replaces Step
-	// 60's own interim internal/domain/decisioninbox.
+	// config, and the contradiction-rate outcome table. Replaces §16's
+	// own interim internal/domain/decisioninbox.
 	// ComputeAutoApprovalEligible, deleted by this Step -- see
 	// buildPROpenItem/revalidateCore below for the two call sites.
 	ReviewVerdict appreviewverdict.Deps

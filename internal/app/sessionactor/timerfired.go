@@ -13,8 +13,8 @@
 // unlike the 5 timers this file's rest describes.
 //
 // All 5 named timers' RE-ARM/handling logic is fully wired here -- none
-// needed a SandboxProvider or AgentRuntime (neither exists until Step
-// 12+). The initial arm (the very first time each timer is ever set) is
+// needed a SandboxProvider or AgentRuntime (neither port exists yet). The
+// initial arm (the very first time each timer is ever set) is
 // each timer's OWN concern, not this file's: connecting_deadline and
 // turn_deadline are armed for the first time at spawn/dispatch time
 // (dispatch.go), and liveness_check/inactivity are armed for the first
@@ -338,7 +338,7 @@ func (a *Actor) handleTerminalGraceTimer(ctx context.Context) error {
 		// §3.2: "Any liveness signal during grace returns to previous
 		// state." This Step has no mechanism for a genuine external
 		// liveness signal to arrive DURING grace and reach this actor as
-		// a command (that requires the sandbox WS hub, Steps 16-18, to
+		// a command (that requires the sandbox WS hub to
 		// exist and deliver one -- e.g. a future LivenessSignal command
 		// driving TriggerRecover). Absent that, terminal_grace firing
 		// here is UNCONDITIONALLY treated as a genuine timeout:

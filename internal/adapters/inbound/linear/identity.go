@@ -28,7 +28,7 @@ import (
 // authzSurface is this package's own "surface" label passed to every
 // actorauthz.AuthorizeResolvedActor call below -- see that function's own
 // doc comment for why (keeps this package's log lines prefixed "linear: "
-// exactly as they were before the Step 39 shared-helper extraction into
+// exactly as they were before the §13.2 shared-helper extraction into
 // internal/app/actorauthz, batch fix/audit-github-actor-rbac).
 const authzSurface = "linear"
 

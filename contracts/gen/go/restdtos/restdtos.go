@@ -81,8 +81,8 @@ type ArchDecisionDecision *string
 type ArchDecisionRejectedAlternative *string
 
 // GET /api/sessions/:id/artifacts (§6.3). Unbounded (no pagination) -- this list
-// is expected to stay small. Each element's own status/failureReason fields (Step
-// 58, §28.6) are additive here too, loosely typed like every element in this array
+// is expected to stay small. Each element's own status/failureReason fields
+// (§28.6) are additive here too, loosely typed like every element in this array
 // already was -- see MintUploadResponse/ConfirmUploadResponse below for the
 // strictly-typed upload-specific shapes this schema DOES pin.
 type ArtifactsResponse struct {
@@ -2981,8 +2981,8 @@ func (j *ListDecisionInboxResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// GET /api/repos/{owner}/{repo}/false-positive-patterns's own response body (Step
-// 63, §22.4's own audit view) -- EVERY pattern for this repo, active or retired,
+// GET /api/repos/{owner}/{repo}/false-positive-patterns's own response body
+// (§22.4's own audit view) -- EVERY pattern for this repo, active or retired,
 // newest-first.
 type ListFalsePositivePatternsResponse struct {
 	// Patterns corresponds to the JSON schema field "patterns".
@@ -4712,8 +4712,8 @@ func (j *PostWorkflowStepOutcomeResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// One finding's own typed fields, as posted by the verdict-posting tool call (Step
-// 48) -- NEVER carries an identity hash (server-computed,
+// One finding's own typed fields, as posted by the verdict-posting tool call
+// (§8.2) -- NEVER carries an identity hash (server-computed,
 // internal/domain/reviewpost.ComputeFindingIdentity, never client-supplied -- the
 // same 'don't trust the model with anything authoritative' discipline as
 // PostReviewVerdictRequest.proposedShippable).
@@ -6332,8 +6332,8 @@ func (j *Session) UnmarshalJSON(value []byte) error {
 }
 
 // Response body for GET /api/admin/shadow-compare (§8.8's own
-// 'shadow-comparison tooling for review' deliverable, IMPLEMENTATION_PLAN.md Step
-// 59 row, reusing §9.4/§18.5's shadow-mode discipline: 'the same mechanism is used
+// 'shadow-comparison tooling for review' deliverable, reusing
+// §9.4/§18.5's shadow-mode discipline: 'the same mechanism is used
 // again for every future model swap'). §29 has no dedicated design subsection for
 // this piece -- this is a deliberately minimal, from-scratch interpretation, named
 // as such: a READ-ONLY, side-effect-free comparison of two ALREADY-COMPLETED turns
@@ -7107,7 +7107,7 @@ func (j *WorkflowBinding) UnmarshalJSON(value []byte) error {
 // but NO handler consumes it yet (§25.4 is dark). isBuiltIn marks one of the
 // three seeded system templates; a PUT/DELETE against an isBuiltIn=true definition
 // is refused unconditionally, even for an admin -- a structural invariant (§25.4),
-// not an RBAC row, enforced by the store/handler layer Steps 55-56 add. version is
+// not an RBAC row, enforced by the store/handler layer §25.6/§25.9 add. version is
 // a 1-based edit counter (provenance a binding/run pins), not a versioned-content
 // archive.
 type WorkflowDefinition struct {

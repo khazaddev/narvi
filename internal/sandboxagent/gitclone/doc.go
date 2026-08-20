@@ -30,7 +30,7 @@
 //
 // WriteAgentsManifest's exact markdown shape is this Step's own invented,
 // documented convention -- no contracts/ schema governs it, exactly like
-// Step 14 documented its own invented Readiness.Health shape.
+// §14.2 documented its own invented Readiness.Health shape.
 //
 // §3.4 ("gitstate in-sandbox", §3.4) adds SyncAll (sync.go) -- the
 // counterpart to CloneAll for a boot whose workspace ALREADY has a real

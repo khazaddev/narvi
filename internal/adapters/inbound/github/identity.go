@@ -14,7 +14,7 @@
 // identities, decide, maybe mint a magic-link prompt) because a Slack or
 // Linear user id has no OTHER way to already be known to this codebase.
 // A GitHub user id is different: every real Narvi user already has a
-// "github" identities row from signing in via GitHub OAuth (Step 20,
+// "github" identities row from signing in via GitHub OAuth (§13.1,
 // internal/adapters/inbound/auth/callback.go's own
 // externalID := strconv.FormatInt(ghUser.ID, 10) /
 // identities.GetByProviderAndExternalID(..., IdentityProviderGithub, ...)

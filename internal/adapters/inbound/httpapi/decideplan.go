@@ -400,8 +400,8 @@ func DecidePlanOnTx(
 // self is a harmless, no-op-shaped confirmation; update-to-a-different-
 // channel is the real "notify" case -- this function does not need to know
 // which). Likewise, if sessionRow is Linear-origin, ALWAYS enqueue a plain
-// ports.NotificationKindLinear row (reusing the EXISTING kind/payload Step
-// 35 already built -- no new Linear-specific kind needed, see this Step's
+// ports.NotificationKindLinear row (reusing the EXISTING kind/payload
+// §5.1 already built -- no new Linear-specific kind needed, see this Step's
 // own design note) describing the same outcome as a follow-up
 // AgentActivity. A session can only ever be Slack-origin XOR Linear-origin
 // (or web/GitHub) -- sessions.spawn_source is a single value -- so in

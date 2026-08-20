@@ -29,14 +29,14 @@ type CreateAuditLogEntryParams struct {
 
 // Queries backing AuditLogStore (§13.3: "audit_log(actor_user_id, action,
 // resource_type, resource_id, detail_json, correlation_id, created_at)
-// written in the same transaction as the change"). This Step (39,
-// "identities + full RBAC") is the first to actually WRITE to this table
+// written in the same transaction as the change"). §13.2
+// ("identities + full RBAC") is the first to actually WRITE to this table
 // (migrations/000013_audit_log.up.sql created it, unused, back in PR-04)
 // -- CreateAuditLogEntry is therefore this file's only query: every
 // caller runs it via AuditLogStore.WithTx(tx), inside the SAME
 // transaction as the state change it is recording, never as a
-// freestanding pool-scoped write. No Get/List query exists yet -- Step
-// 39's own "members API" half (a later Step's job, per this Step's own
+// freestanding pool-scoped write. No Get/List query exists yet --
+// §13.2's own "members API" half (a later Step's job, per this Step's own
 // hand-off notes) is what actually surfaces "Settings -> Members ->
 // Audit log" (§13.4 Phase 7); this Step only makes the writes real.
 //

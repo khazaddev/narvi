@@ -57,8 +57,8 @@ var counterReviewerProviderPreference = []string{"anthropic", "openai", "google"
 // credentialedProviders is nil -- a Go nil-map read is always false, no
 // special-casing needed) is skipped exactly like an excluded authoring-
 // family match above, falling through to the next preference-order
-// candidate, or to "" if none remain. This function never GUESSES: Step
-// 53's own credential injection is best-effort and per-(repo/environment/
+// candidate, or to "" if none remain. This function never GUESSES:
+// §25.1's own credential injection is best-effort and per-(repo/environment/
 // global) configured, so counterReviewerProviderPreference's fixed 3-
 // provider list is only a statement of which providers the MECHANISM
 // supports, never a promise that all 3 (or even one) are actually usable

@@ -296,8 +296,8 @@ type dispatchPlan struct {
 	sessionRow sqlcgen.Session
 }
 
-// handleEnsureDispatched implements the EnsureDispatched command (Step
-// 21, design decision 3): read fresh state, decide whether to spawn,
+// handleEnsureDispatched implements the EnsureDispatched command
+// (§9.3): read fresh state, decide whether to spawn,
 // resume, or restore a sandbox, or dispatch a pending turn (or do nothing
 // this round), and act. Resume (§3.2) added alongside spawn/restore;
 // spawn.resume is checked before spawn.restore since both are carried on
@@ -429,8 +429,8 @@ func (a *Actor) planDispatch(ctx context.Context) (*spawnPlan, *dispatchPlan, er
 		// Branch (b): a live sandbox already exists and is Ready or Suspect
 		// -- the turn can be dispatched to it right now. Suspect is
 		// deliberately included here, not just Ready: a Suspect sandbox is
-		// still within its terminal_grace window and may yet recover (Step
-		// 24, "two-phase terminalization", sandboxevent.go's own
+		// still within its terminal_grace window and may yet recover (§3.2,
+		// "two-phase terminalization", sandboxevent.go's own
 		// handleSandboxEvent), so a real dispatch attempt to it is allowed
 		// to proceed rather than waiting idle -- if the underlying
 		// SandboxCommander.SendCommand genuinely fails because the
@@ -1309,8 +1309,8 @@ func (a *Actor) planRestore(
 // not verbatim -- applying to a resume's own gen bump exactly as it does
 // to a spawn/restore's), even though there is today no channel to deliver
 // the plaintext token to the already-running provider instance (the
-// honest, deliberately-deferred gap this file's own top comment and Step
-// 23's PR description both already document -- unrelated to, and not
+// honest, deliberately-deferred gap this file's own top comment already
+// documents -- unrelated to, and not
 // solved by, this concurrency fix).
 func (a *Actor) planResume(
 	ctx context.Context, tx pgx.Tx,

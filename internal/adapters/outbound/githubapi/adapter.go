@@ -721,8 +721,8 @@ type PullRequest struct {
 	// own "Get a pull request" response (pullRequestResponse.Additions/
 	// Deletions/ChangedFiles above) -- internal/app/reviewcontext.Fetch's
 	// own one real consumer, carrying these onto review.
-	// PreFetchedContext.Additions/Deletions/ChangedFilesCount for Step
-	// 68's own light/deep triage decision (internal/domain/reviewtriage).
+	// PreFetchedContext.Additions/Deletions/ChangedFilesCount for §26.3's
+	// own light/deep triage decision (internal/domain/reviewtriage).
 	Additions    int
 	Deletions    int
 	ChangedFiles int
@@ -1271,7 +1271,7 @@ type createRefRequest struct {
 // exact substring, case-insensitively, as their own already-exists signal.
 const alreadyExistsMarker = "already exists"
 
-// CreateBranch implements ports.SourceControl (Step 48 confirmed-finding
+// CreateBranch implements ports.SourceControl (§8.2 confirmed-finding
 // fix, §17.2): a real POST /repos/{owner}/{repo}/git/refs call. Idempotent
 // per ports.SourceControl.CreateBranch's own doc comment: a 422 whose
 // message names the ref as already existing is treated as success, never

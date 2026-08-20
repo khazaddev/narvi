@@ -15,13 +15,13 @@
 // NOTE (§5.1, "webhook toolkit"): "webhook ingress" in that §5.2
 // sentence means Narvi's OWN webhook-shaped internal use (e.g. a future
 // generic user-configured automation trigger, IMPLEMENTATION_PLAN.md's
-// Step 47), NOT real third-party provider webhooks (GitHub/Slack/Linear).
+// §8.2), NOT real third-party provider webhooks (GitHub/Slack/Linear).
 // Those providers sign their payloads in their own provider-defined
 // formats, structurally incompatible with this file's "{ts}.{sig}" bearer
 // wire format -- see internal/platform/webhooksig.go's own doc comment
 // for the full reasoning and for the separate, provider-agnostic
-// VerifyWebhookSignature/VerifyWebhookTimestamp helpers Steps 32-34
-// actually use instead of Sign/Verify+HMACWebhookSecret.
+// VerifyWebhookSignature/VerifyWebhookTimestamp helpers §8.2/§8.10's own
+// adapters actually use instead of Sign/Verify+HMACWebhookSecret.
 
 package platform
 

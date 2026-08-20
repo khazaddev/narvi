@@ -1,7 +1,7 @@
 //go:build integration
 
-// Integration test for the Linear workspace-install OAuth callback (Step
-// 34, "Linear ingress", §8.10's own "OAuth" scope) -- mirrors
+// Integration test for the Linear workspace-install OAuth callback
+// ("Linear ingress", §8.10's own "OAuth" scope) -- mirrors
 // internal/adapters/inbound/auth's own auth_integration_test.go style
 // (design decision 12: fake the provider's own token endpoint via a local
 // httptest.Server, exactly like that package's own fakeTokenServer),

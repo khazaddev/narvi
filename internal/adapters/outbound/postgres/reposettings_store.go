@@ -193,7 +193,7 @@ func (s *RepoSettingsStore) UpsertReviewCostBudget(ctx context.Context, repoFull
 }
 
 // UpsertSessionsEnabled idempotently creates-or-updates repoFullName's
-// Step 76 cohort-rollout enrollment gate (§10 Phase 6, §32) --
+// §10 cohort-rollout enrollment gate (§10 Phase 6, §32) --
 // COLUMN-SCOPED (mirrors UpsertAutoMergeToggle/
 // UpsertAutoRetriggerReviewToggle/UpsertDescriptionAutofixToggle's own
 // identical shape): touches ONLY sessions_enabled, leaving every other

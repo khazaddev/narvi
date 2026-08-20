@@ -109,7 +109,7 @@
 // No new route is added by this Step -- it adds no concrete provider
 // wiring at all. CreateSession's own doc comment above (create.go) is
 // split in two: everything after decoding the request body is now
-// createSessionCore (unexported as of this Step -- Step 33 exports it,
+// createSessionCore (unexported as of this Step -- §8.10 exports it,
 // see below), taking an already-decoded restdtos.CreateSessionRequest
 // plus a NULLABLE creator (pgtype.UUID, Valid == false for "no human
 // caller"). CreateSession itself is now a thin wrapper: decode body ->
@@ -117,14 +117,14 @@
 // REST route) -> createSessionCore -> write the JSON response. This is a
 // pure refactor for this route -- every existing test in this package's
 // own _test.go files passes unchanged. The point of the split is reuse:
-// Steps 32/33/34's own GitHub/Slack/Linear webhook ingress handlers call
+// §8.2/§8.10's own GitHub/Slack/Linear webhook ingress handlers call
 // createSessionCore directly, with their own already-verified,
 // already-decoded request and a NULL creator (no cookie, no human) --
 // never this package's own CreateSession, which stays browser-only.
 // Whether those ingress handlers end up living in THIS package (as new
 // files alongside create.go/get.go/events.go/artifacts.go/wstoken.go) or
 // export createSessionCore to reach it from their own separate packages
-// is left open by this Step -- see the Step 33 update immediately below
+// is left open by this Step -- see the §8.10 update immediately below
 // for how that question was actually resolved.
 //
 // # §8.10 ("Slack ingress") update

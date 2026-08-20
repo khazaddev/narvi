@@ -51,7 +51,7 @@ type SyncResult struct {
 	// State (the empty string, never actually assigned) if this repo never
 	// even entered the machine (a validation failure, a real `git status`
 	// failure that made it impossible to tell whether the tree was even
-	// dirty, or -- Step 40 -- a real `git rev-parse --verify` failure while
+	// dirty, or -- §19.3 -- a real `git rev-parse --verify` failure while
 	// determining whether the target branch already exists locally, needed
 	// BEFORE the fetch step itself to decide whether the degrade policy
 	// applies).

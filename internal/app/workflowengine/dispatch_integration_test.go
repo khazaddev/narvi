@@ -140,7 +140,7 @@ func startRunAndAttachRealTurn(t *testing.T, ctx context.Context, sessions *post
 // audit-found design incoherence -- see that migration's own header comment
 // and docs/TECHNICAL_PLAN.md §25.8) made the built-in plan workflow a
 // genuine single-step passthrough, identical to review/request, so classic
-// plan mode (§8.1, Steps 37/38) stays the SOLE plan-approval authority and
+// plan mode (§8.1) stays the SOLE plan-approval authority and
 // no built-in carries hitl_after any longer. The HITLAfter mechanism itself
 // (OnTurnCompleted's own HITLAfter branch, completion.go) is completely
 // unchanged by that migration and remains available to any future custom

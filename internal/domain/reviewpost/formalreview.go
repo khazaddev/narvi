@@ -12,7 +12,7 @@ import "github.com/khazaddev/narvi/internal/domain/review"
 // future, dedicated machinery for approving a PR; this Step never
 // approves anything itself (§8.2:
 // "auto-approval is criteria-driven, never label-triggered... the
-// eligibility engine itself ships in Step 58").
+// eligibility engine itself ships in §8.6").
 type FormalReviewEvent string
 
 const (

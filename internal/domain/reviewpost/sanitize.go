@@ -2,8 +2,8 @@ package reviewpost
 
 import "github.com/khazaddev/narvi/internal/domain/review"
 
-// This file implements the review digest's own WRITE-PATH hardening (Step
-// 62 hardening, adversarial review, hardening the class PR #188 closed on
+// This file implements the review digest's own WRITE-PATH hardening
+// (an adversarial-review fix, hardening the class PR #188 closed on
 // the READ path). §5.2/review/sanitize.go's own doc comment establish the
 // read-path half of this story: a review turn's prompt embeds entirely
 // attacker-controlled PR content (diff/title/body) verbatim, and

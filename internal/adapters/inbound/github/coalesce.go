@@ -318,7 +318,7 @@ type SessionCoalescer struct {
 // matching IntentClassifierInput.Text's own documented contract ("a
 // session's initial prompt, a Slack message, a GitHub comment body").
 //
-// F1 (Step 64 follow-up fix, review Finding 1): this SAME raw text is now
+// F1 (§23 follow-up fix, review Finding 1): this SAME raw text is now
 // ALSO threaded through to the REUSE branch's own httpapi.CreateTurnForBot
 // call below (its classifyText parameter), for the identical reason --
 // that call's own `prompt` local is built from req.Prompt too, so without
@@ -502,7 +502,7 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 		// prepend the builder-only devil's-advocate preamble in front of
 		// review.RenderTurnPrompt's own verdict-tool block.
 		//
-		// classifyText (F1, Step 64 follow-up fix): &classifyText, the SAME
+		// classifyText (F1, §23 follow-up fix): &classifyText, the SAME
 		// raw, un-enriched mention text the WINNER path's own
 		// ClassifyAndRecord call below uses -- see this function's own doc
 		// comment on the classifyText parameter for the full "why" this

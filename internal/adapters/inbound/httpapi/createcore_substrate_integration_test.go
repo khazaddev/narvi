@@ -91,7 +91,7 @@ func dockerRequestFixture() restdtos.CreateSessionRequest {
 }
 
 // TestCreateSessionCore_RefusesDockerRequiredSessionWhenProviderUnsupported
-// is a MUTATION-TESTABLE guard (Step 74 brief: "remove the up-front
+// is a MUTATION-TESTABLE guard (§27.5 brief: "remove the up-front
 // session-creation refusal → a named test must fail"): a request with
 // docker=true against a provider reporting DockerInSandbox=false is
 // refused with 422, and -- critically -- NO environments row and NO

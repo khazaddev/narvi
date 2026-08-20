@@ -39,7 +39,7 @@ import (
 // while writing this test) -- the SAME tag docker-compose.dev.yml's own
 // minio service uses, for the same consistency reason
 // docker-compose.dev.yml's own postgres service comment already gives
-// ("same image the Step 04 testcontainers integration test uses").
+// ("same image the §2 testcontainers integration test uses").
 const minioImage = "minio/minio:RELEASE.2025-09-07T16-13-09Z"
 
 // minioTestBucket is created fresh inside TestStore_MinIORoundTrip via a

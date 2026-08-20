@@ -13,7 +13,7 @@ import (
 // sqlc-generated webhook_deliveries queries (§5.1's dedupe/coalescing
 // claim, §4.3). No caching, no retries, no business rules -- the
 // concrete GitHub/Slack/Linear webhook endpoints that actually call
-// Claim land in Steps 32/33/34.
+// Claim are §8.2/§8.10's own adapters.
 type WebhookDeliveryStore struct {
 	q *sqlcgen.Queries
 }

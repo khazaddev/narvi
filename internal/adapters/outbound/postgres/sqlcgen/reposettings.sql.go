@@ -161,8 +161,8 @@ type UpsertAutoMergeToggleParams struct {
 	AutoMergeEnabled bool   `json:"auto_merge_enabled"`
 }
 
-// UpsertAutoApprovalSettings (§21.2) is REMOVED as of Step 62
-// review finding C5 (MEDIUM but a privilege boundary, fixed) -- it wrote
+// UpsertAutoApprovalSettings (§21.2) is REMOVED (an adversarial-review
+// fix, MEDIUM but a privilege boundary) -- it wrote
 // all three auto-approval/auto-merge columns together, even though the
 // TWO REST endpoints that ever called it (PutAutoApprovalSettings,
 // gated by ActionConfigureAutoApprove; PutAutoMergeToggle, admin-only

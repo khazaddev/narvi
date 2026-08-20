@@ -47,7 +47,7 @@
 //     created in ONE Postgres transaction (createUserAndIdentity in
 //     callback.go) -- role = admin iff the verified email is in
 //     InitialAdminEmails, else member; linked_via = "admin", a deliberate,
-//     documented overload (see that function's own comment, a Step 39
+//     documented overload (see that function's own comment, a §13.2
 //     hand-off note) -- then a session is minted -- 302 to "/".
 //
 // Either of the last two branches then mints a fresh user_sessions row

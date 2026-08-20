@@ -24,7 +24,7 @@
 // precedent. The ONE genuinely secret-shaped thing this feature ever
 // touches -- an uploaded static kubeconfig's own file content -- is never
 // stored here at all: authKind='static' only ever stores a REFERENCE
-// (params.secretName) to a Step 72 sandbox_secrets row, written/read
+// (params.secretName) to a §27.1 sandbox_secrets row, written/read
 // through THAT table's own encrypted-at-rest write path, not this one.
 //
 // # Validation at save: internal/domain/clusterbinding.Validate + ValidateParams

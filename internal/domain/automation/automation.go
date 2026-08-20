@@ -12,7 +12,7 @@ type Status string
 
 const (
 	// StatusActive is an automation eligible to fire (subject to whatever
-	// trigger condition Step 52 evaluates -- out of this package's own
+	// trigger condition §8.4 evaluates -- out of this package's own
 	// scope). The initial state every automation is created in.
 	StatusActive Status = "active"
 	// StatusPaused is an automation that will not fire again until a

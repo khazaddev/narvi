@@ -95,7 +95,7 @@ type CreateAutomationInvocationParams struct {
 // Fast, cheap, durable hand-off (mirrors internal/app/releasereview.
 // Enqueue's own identical "one INSERT, the real work happens later on a
 // background loop's own schedule" shape) -- the caller (this Step: tests
-// only; Step 52: a real trigger-condition evaluation) has already run
+// only; §8.4: a real trigger-condition evaluation) has already run
 // automation.ValidateTargets against targets before calling this.
 func (q *Queries) CreateAutomationInvocation(ctx context.Context, arg CreateAutomationInvocationParams) (AutomationInvocation, error) {
 	row := q.db.QueryRow(ctx, createAutomationInvocation, arg.AutomationID, arg.Targets, arg.TotalRuns)
