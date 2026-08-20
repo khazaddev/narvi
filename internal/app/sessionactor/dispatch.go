@@ -1,6 +1,6 @@
-// This file (dispatch.go) implements handleEnsureDispatched (Step 21,
+// This file (dispatch.go) implements handleEnsureDispatched (§9.3,
 // "e2e happy path", design decision 3) -- the spawn/dispatch orchestration
-// this whole Step is built around. Every actual DECISION is made by an
+// this whole file is built around. Every actual DECISION is made by an
 // already-built, already-tested pure domain function
 // (internal/domain/sandbox.EvaluateCircuitBreaker/EvaluateSpawnDecision,
 // internal/domain/turn.NextToDispatch/Transition) -- this file's own job
@@ -140,9 +140,9 @@ import (
 // own fingerprint (§10 Phase 2: "always fall back to base image on any
 // miss -- never block a session") -- renamed from §9.3's own
 // placeholderBaseImage (its doc comment: "the CreateSpec.Image value used
-// until Step 26 ... makes real per-session image construction a thing")
+// until §8.5 ... makes real per-session image construction a thing")
 // now that §8.5 ("image builds") is genuinely that thing: this is no
-// longer merely a placeholder pending a later Step, it is the REQUIRED,
+// longer merely a placeholder pending later work, it is the REQUIRED,
 // permanent fallback value dispatch.go/imageresolve.go's resolveAndSetImage
 // leaves untouched on any miss. Also doubles as ports.ImageSpec.Base for
 // every fingerprint this control plane computes (domain/imagebuild.
@@ -763,7 +763,7 @@ func (a *Actor) tryPlanSpawn(
 			return nil, err
 		}
 
-		// §27.8's own genuinely-unresolved snapshot-parity point (Step 74
+		// §27.8's own genuinely-unresolved snapshot-parity point (§27.5
 		// brief, point D), the SAME resolution sandboxevent.go's own
 		// triggerSnapshotBestEffort already applies on the way IN to a
 		// snapshot -- applied here, symmetrically, on the way OUT: even
@@ -810,7 +810,7 @@ func (a *Actor) tryPlanSpawn(
 	default:
 		// Skip/Wait are genuine, expected outcomes (cooldown, already in
 		// progress, circuit breaker, ...). Spawn, Restore, and Resume are
-		// all handled above (Step 21, Step 22, and Step 23 respectively) --
+		// all handled above --
 		// this default case exists so a future SpawnActionKind addition
 		// fails safely into a no-op (logged) rather than being silently
 		// mishandled by one of the cases above.
@@ -1438,7 +1438,7 @@ func (a *Actor) executeRestore(ctx context.Context, plan *spawnPlan) error {
 }
 
 // recordProviderOutcome is executeSpawn/executeRestore's own shared
-// second-transact outcome-recording step (Step 22, design decision 6:
+// second-transact outcome-recording step (§3.2, design decision 6:
 // "sharing whatever helper logic is genuinely common between the two...
 // rather than duplicating it blindly") -- the exact same transact body
 // §9.3's own executeSpawn used to run inline, unchanged in behavior:
@@ -1879,7 +1879,7 @@ func (a *Actor) rolloutRefusalForDispatch(ctx context.Context, sessionRow sqlcge
 // Step), so the only legal move is forward.
 //
 // Two callers reach this, both from executeDispatch: a genuine
-// SandboxCommander.SendCommand failure (this function's ORIGINAL, Step 21
+// SandboxCommander.SendCommand failure (this function's ORIGINAL, §9.3
 // reason for existing), and §10's own turn-dispatch-time rollout
 // refusal (rolloutRefusalForDispatch, above) -- deliberately the SAME
 // terminal path for both, not two parallel ones: from the turn's own

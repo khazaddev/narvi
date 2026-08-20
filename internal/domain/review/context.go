@@ -252,7 +252,7 @@ const (
 // VerdictToolGenPlaceholder are the fixed tokens RenderTurnPrompt's own
 // verdict-tool-calling instructions (below) carry in place of this turn's
 // REAL POST /sessions/{sessionID}/review/verdict URL, sandbox bearer
-// token, and X-Sandbox-Gen value (reviewverdict.go, Step 47) -- this
+// token, and X-Sandbox-Gen value (reviewverdict.go, §8.2) -- this
 // package (§11: no I/O, no time.Now(), no randomness, zero external
 // imports) runs at TURN-CREATION time, in the control plane, before any
 // sandbox even exists for a brand-new review session, and before ANY
@@ -358,7 +358,7 @@ const (
 // hand-written copy fails a test instead of silently misinforming every
 // future review agent.
 //
-// Confirmed-finding fix (Step 48 own re-review): the "findings" array
+// A confirmed-finding fix: the "findings" array
 // (restdtos.PostReviewVerdictRequest.Findings/PostedFinding, added by this
 // SAME Step for sentinel/apply-suggestion/rebuttal reconciliation) was
 // never mentioned anywhere in this hand-written template -- this is the
@@ -392,7 +392,7 @@ const (
 // archDecisions' own conventionConformance field points the agent at the
 // target repo's own conventions file (CLAUDE.md/AGENTS.md) -- already
 // present in its own sandbox's checked-out working directory (the SAME
-// session/sandbox machinery any other turn uses, Step 46), so this
+// session/sandbox machinery any other turn uses), so this
 // package fetches or injects nothing new for it either.
 //
 // (§26.2) adds "descriptionAdequacy"/"adequacyExplanation"
@@ -562,7 +562,7 @@ func verdictToolInstructions(deep bool, costBudgetUSD float64, costBudgetSafetyM
 
 // subAgentOrchestrationInstructions is §26.4's own addition (§26.4/
 // §26.6/§26.7): the primary reviewer's own orchestration guidance for the
-// engine-native sub-task fan-out (§7.1, already shipped Step 17) --
+// engine-native sub-task fan-out (§7.1) --
 // spawned via OpenCode's own "task" tool (VERIFIED LIVE input shape:
 // {"description","prompt","subagent_type"}, translate.go), naming
 // ArchitectureScribeAgentName/CounterReviewerAgentName/FactCheckAgentName
@@ -600,7 +600,7 @@ func verdictToolInstructions(deep bool, costBudgetUSD float64, costBudgetSafetyM
 // injects further instructions mid-turn) -- so the actual mechanism
 // putting §26.7's policy into effect is still, necessarily, the review
 // agent's OWN cooperation: nothing outside the turn can force it to check
-// or to obey what it learns. What Step 70 changes is WHAT that cooperation
+// or to obey what it learns. What §26.5 changes is WHAT that cooperation
 // consists of. Before this Step, the text below asked the agent to "use
 // your own best judgment of how much of that ceiling this review has
 // likely already consumed" -- a self-ESTIMATION, with no real spend figure
@@ -651,7 +651,7 @@ func subAgentOrchestrationInstructions(deep bool, costBudgetUSD float64, costBud
 			"3. Counter-review (subagent_type \"" + CounterReviewerAgentName + "\", deep path only, AFTER fact-check has already pruned your findings): spawn this sub-task with your own SURVIVING findings (post-fact-check) and your digest, and ask it to try to REFUTE each one and to surface anything you missed. It has read/tool access to the repo (it may need to verify a claim against real files) but must not edit anything. It may itself surface genuinely NEW findings -- these are NOT re-run through fact-check (a tool-equipped, full-context adversarial pass is by construction at least as rigorous as a diff-only check). Publish only the findings that SURVIVE this adjudication -- drop anything it convincingly refutes. Where it disagreed with you and you did not simply defer to it, name that disagreement in \"digest.contestedPoints\" -- agent disagreement is precisely the signal a human should weigh in on. Report \"counterReview\": \"done\". If this sub-task errors, times out, or returns something you cannot parse, publish your findings exactly as they stood after fact-check, and report \"counterReview\": \"skipped\" -- this alone raises your verdict's own shippable classification to needs_human, so do not treat a skip as routine.\n"
 	}
 	if costBudgetUSD > 0 {
-		// B5 fix (kept by Step 70): costBudgetSafetyMarginPercent
+		// B5 fix (kept by §26.5): costBudgetSafetyMarginPercent
 		// (PreFetchedContext's own doc comment) is reviewtriage.
 		// CostBudgetSafetyMargin threaded in as a whole percentage by this
 		// function's own caller -- rendered here rather than a hand-typed
@@ -687,7 +687,7 @@ func subAgentOrchestrationInstructions(deep bool, costBudgetUSD float64, costBud
 			out += "/\"counterReview\""
 		}
 		out += ") as \"skipped\" with the reason noted in your own free-text summary. If the request itself fails for ANY reason -- your own tool use erroring, a timeout, a non-2xx response, a malformed or unparseable body -- treat that IDENTICALLY to \"shouldSkip\": true: skip the sub-task rather than proceeding as though under budget, matching this system's own consistent fail-safe-toward-caution posture on cost.\n"
-		// B6 fix (kept by Step 70): the fact-check-vs-counter-review
+		// B6 fix (kept by §26.5): the fact-check-vs-counter-review
 		// tradeoff sentence below only makes sense when BOTH exist to
 		// choose between -- light has no counter-review sub-task at all
 		// (§26.9), so it would be nonsense there (there is nothing to

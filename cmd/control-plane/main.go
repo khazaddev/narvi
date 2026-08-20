@@ -189,7 +189,7 @@ func serve() error {
 	commander := wshub.NewSandboxRegistry(cfg.Timeouts)
 
 	// sandboxProvider is the real internal/adapters/outbound/modal.
-	// Provider (Step 21 is its first real production caller anywhere in
+	// Provider (§9.3 is its first real production caller anywhere in
 	// this codebase -- see that package's own doc.go for the "no real
 	// Modal account reachable from this codebase's own tests/CI" caveat;
 	// a real deploy of this binary must point NARVI_MODAL_BASE_URL/
@@ -263,7 +263,7 @@ func serve() error {
 	wsTokenStore := postgres.NewWSTokenStore(pool)
 	environmentStore := postgres.NewEnvironmentStore(pool)
 	imageBuildStore := postgres.NewImageBuildStore(pool)
-	// imageCacheVersionStore is Step 43(c)'s own build-time dependency
+	// imageCacheVersionStore is §19.1's own build-time dependency
 	// cache bookkeeping, third iteration: immutable versioned cache
 	// snapshots (§19.1's closing paragraph). Backs app/imagebuild.
 	// Builder's own cacheMount/recordCachePublish (mint a version before
@@ -277,7 +277,7 @@ func serve() error {
 	// §3.5's ("automations: engine", §3.5) own three tables -- see
 	// internal/app/automation's own doc.go for the full engine writeup.
 	// Constructed here, alongside every other core store, so the engine
-	// below (and any future Step 52 trigger-evaluation caller) can share
+	// below (and any future §8.4 trigger-evaluation caller) can share
 	// them rather than each constructing its own copy.
 	automationStore := postgres.NewAutomationStore(pool)
 	automationInvocationStore := postgres.NewAutomationInvocationStore(pool)
@@ -570,7 +570,7 @@ func serve() error {
 	// doc comment), both consulted only by the freshness pump's own
 	// per-repo tip-SHA resolution and by claim-time SHA resolution for a
 	// repo-bearing build (attempt) -- never by anything on the spawn path
-	// itself. Step 43(c) adds the final imageCacheVersionStore argument:
+	// itself. §19.1 adds the final imageCacheVersionStore argument:
 	// the build-time dependency cache's own version-history bookkeeping,
 	// third iteration (immutable versioned cache snapshots, §19.1's
 	// closing paragraph) -- no rotation-epoch config exists anymore (see
@@ -684,7 +684,7 @@ func serve() error {
 	// Middleware entirely -- a sandbox-bearer-token-authenticated
 	// endpoint, not a browser-facing one (see that handler's own doc
 	// comment in internal/adapters/inbound/httpapi/scmcredentials.go).
-	// githubPRSessionStore/cfg.GitHubBotToken (Step 47 audit remediation)
+	// githubPRSessionStore/cfg.GitHubBotToken (an audit remediation)
 	// are the SAME instances review/verdict below already uses, so a
 	// review session mints the SAME bot credential either way, never the
 	// creator's own personal OAuth token.
@@ -1213,7 +1213,7 @@ func serve() error {
 
 	// REST routes the UI needs (§6.3, §6.2's own plan row: "create/get/
 	// events/artifacts", + ws-token named separately by §6.2), all gated
-	// behind auth.Middleware as of Step 20 — see
+	// behind auth.Middleware — see
 	// internal/adapters/inbound/httpapi/doc.go's own updated writeup. This
 	// is a "must be logged in" gate only: it does not apply to /health or
 	// to GET /sessions/{sessionID}/ws above, which already has its OWN,

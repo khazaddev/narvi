@@ -31,8 +31,8 @@ import (
 // this file starts from, mutating only the ONE field a given test cares
 // about -- RiskLevel low, Premise ok, empty BlastRadius (legal), adequate
 // coverage, no docs drift, the model proposing "auto" (irrelevant to what
-// the server actually computes), a real, non-blank Summary, and (§26.2,
-// Step 67) an "ok" descriptionAdequacy with its own required explanation.
+// the server actually computes), a real, non-blank Summary, and (§26.2)
+// an "ok" descriptionAdequacy with its own required explanation.
 func validVerdictRequestJSON() string {
 	return `{
 		"riskLevel": "low",
@@ -229,15 +229,15 @@ func TestPostReviewVerdict_MalformedPartialPayload(t *testing.T) {
 		{name: "malformed JSON", body: `{not json`},
 		// (§26.1): "digest" is REQUIRED, and "digest.summary" is
 		// the one field within it this Step actually validates.
-		{name: "missing digest entirely (Step 66, partial payload)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x"}`},
-		{name: "digest present but missing digest.summary entirely (Step 66, partial payload)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{}}`},
+		{name: "missing digest entirely (§26.1, partial payload)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x"}`},
+		{name: "digest present but missing digest.summary entirely (§26.1, partial payload)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{}}`},
 		{name: "whitespace-only digest.summary (caught by ValidateVerdictInput, not schema decode)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{"summary":"   ","descriptionAdequacy":"ok","adequacyExplanation":"x"}}`},
 		// §26.2: "descriptionAdequacy"/"adequacyExplanation" are
 		// REQUIRED on every review from this Step on, the SAME treatment
 		// as digest.summary above.
-		{name: "digest present but missing digest.descriptionAdequacy entirely (Step 67, partial payload)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{"summary":"x","adequacyExplanation":"x"}}`},
+		{name: "digest present but missing digest.descriptionAdequacy entirely (§26.2, partial payload)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{"summary":"x","adequacyExplanation":"x"}}`},
 		{name: "garbled digest.descriptionAdequacy enum value", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{"summary":"x","descriptionAdequacy":"somewhat","adequacyExplanation":"x"}}`},
-		{name: "digest present but missing digest.adequacyExplanation entirely (Step 67, partial payload)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{"summary":"x","descriptionAdequacy":"ok"}}`},
+		{name: "digest present but missing digest.adequacyExplanation entirely (§26.2, partial payload)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{"summary":"x","descriptionAdequacy":"ok"}}`},
 		{name: "whitespace-only digest.adequacyExplanation (caught by ValidateVerdictInput, not schema decode)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{"summary":"x","descriptionAdequacy":"ok","adequacyExplanation":"   "}}`},
 	}
 
@@ -384,7 +384,7 @@ func TestPostReviewVerdict_PersistsReviewVerdictRow_WhenReviewHeadSHAKnown(t *te
 // persistence proof: digest_summary/digest_arch_decisions/
 // digest_stack_risks/digest_unverified_limits (migrations/
 // 000077_review_verdicts_digest.up.sql) are all populated from the
-// posted digest, verbatim, on the SAME review_verdicts row Step 62
+// posted digest, verbatim, on the SAME review_verdicts row §21
 // already writes -- "digest quality measurable from day one". It ALSO
 // closes the one end-to-end gap on this Step's actual deliverable -- the
 // rendered merge readout -- by asserting the SAME posted digest reaches
@@ -469,8 +469,8 @@ func TestPostReviewVerdict_PersistsDigestColumns(t *testing.T) {
 	// rendered comment body -- the text that actually gets posted to the
 	// PR. Queried the same way TestPostReviewVerdict_
 	// Success_EnqueuesGitHubVerdictOutboxRow already does -- scoped to
-	// kind = github_verdict specifically (Step 67 own no
-	// descriptionAutofix candidate this request has no proposedBody, so
+	// kind = github_verdict specifically (§26.2's own no
+	// descriptionAutofix candidate: this request has no proposedBody, so
 	// only this ONE outbox row is ever enqueued for this session; the
 	// explicit kind filter keeps this query correct regardless).
 	var row sqlcgen.Outbox

@@ -26,7 +26,7 @@
 //
 // # Resolution order: verified against the actual spec text, not assumed
 //
-// §25.3's own Step 53 brief describes this as "repo -> environment ->
+// §25.3's own brief describes this as "repo -> environment ->
 // global, most specific wins" -- but two independent places in this
 // codebase's own already-written documentation say otherwise, and this
 // package follows THEM, not that paraphrase (this repo's own CLAUDE.md:
@@ -43,9 +43,9 @@
 //
 // Both independently give the SAME order, automation first (most
 // specific) down to global (least specific) -- automation was out of
-// scope for Step 53 itself (§8.4's own "per-automation secrets"
+// scope for §25.1 itself (§8.4's own "per-automation secrets"
 // deferral was for a LATER, focused follow-up, not provider_credentials),
-// so for the 3 scopes THAT Step actually built, the real, doubly-confirmed
+// so for the 3 scopes it actually built, the real, doubly-confirmed
 // precedence was:
 //
 //	environment  (most specific)
@@ -74,7 +74,7 @@
 // and automation/doc.go both independently give "automation ->
 // environment -> repo -> global", automation first) for the ADDITIONAL
 // automation level neither source needed to justify back when this file
-// was written for Step 53 alone.
+// was written for §25.1 alone.
 //
 // Two consequences worth stating plainly, since they are easy to miss
 // reading this package in isolation:
@@ -83,7 +83,7 @@
 //     its own charter -- Scope/Resolve are genuinely provider-agnostic
 //     generic vocabulary, reused by a table that has nothing to do with
 //     LLM provider credentials at all. This was a deliberate choice (the
-//     Step 72 brief's own instruction, not a drift this package's own
+//     §27.1 brief's own instruction, not a drift this package's own
 //     author introduced unprompted): a new, differently-named package for
 //     4 lines of generic scope-priority logic would fork the ONE piece
 //     already built specifically to be reused (Candidate[T]/Resolve's own
@@ -91,8 +91,8 @@
 //     know or care whether the caller has already decrypted..."). Renaming
 //     this package is left as a possible future cleanup, not done here,
 //     to keep §27.1's diff to the addition it actually is.
-//  2. ScopeUser (Step 59, provider_credentials only) and ScopeAutomation
-//     (Step 72, sandbox_secrets only) are two DIFFERENT tables' own most-
+//  2. ScopeUser (§8.8, provider_credentials only) and ScopeAutomation
+//     (§27.1, sandbox_secrets only) are two DIFFERENT tables' own most-
 //     specific level, sharing this one priority map purely for
 //     convenience -- see Scope's own doc comment for why the two never
 //     actually compete inside a single Resolve call.
