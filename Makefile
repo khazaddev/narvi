@@ -1,7 +1,7 @@
 .PHONY: build vet fmt tidy lint test test-integration \
 	test-integration-group-1 test-integration-group-2 test-integration-group-3 test-integration-group-4 \
 	contracts-generate contracts-check dev \
-	web-typecheck web-lint web-check-dto-types web-build web-check
+	web-typecheck web-lint web-check-dto-types web-test web-build web-check
 
 build:
 	go build ./...
@@ -259,6 +259,16 @@ web-lint:
 web-check-dto-types:
 	cd web && npm run check-dto-types
 
+# web-test (§12.1's own data layer, Step 80: "WS transport -> event log ->
+# reducer -> query invalidation"): typechecks web/src/**/__tests__ (its own
+# standalone tsconfig.vitest.json -- see web/README.md's own "Testing"
+# section for why that tree is not part of web-typecheck's own tsc -b
+# project) and runs the real pipeline tests (vitest) -- transport.test.ts/
+# sessionStream.test.ts drive the real transport/reducer against a real
+# local fake WS server, not hand-made objects.
+web-test:
+	cd web && npm test
+
 # web-build produces the web UI's static bundle, written DIRECTLY into
 # internal/adapters/inbound/webui/dist/ (web/vite.config.ts's own outDir --
 # see that file's own comment for why go:embed's own directive syntax rules
@@ -271,8 +281,8 @@ web-build:
 	cd web && npm run build
 
 # web-check is a LOCAL convenience only (typecheck + lint + the DTO-name
-# guard + build, in the order most likely to fail fast) -- CI
-# (.github/workflows/ci.yml's own `web` job) runs the same four npm scripts
-# as separate steps instead, for per-concern failure attribution in the
+# guard + test + build, in the order most likely to fail fast) -- CI
+# (.github/workflows/ci.yml's own `web` job) runs the same npm scripts as
+# separate steps instead, for per-concern failure attribution in the
 # Actions UI rather than one opaque `make` invocation.
-web-check: web-typecheck web-lint web-check-dto-types web-build
+web-check: web-typecheck web-lint web-check-dto-types web-test web-build

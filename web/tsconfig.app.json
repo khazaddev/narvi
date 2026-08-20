@@ -20,7 +20,23 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "erasableSyntaxOnly": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+
+    /* Generated contracts (§12.1) -- mirrors vite.config.ts's own
+       resolve.alias so tsc -b agrees with the bundler about where
+       "@narvi/contracts/*" resolves; see that file's own comment.
+       No "baseUrl" -- TypeScript 7 removed it (TS5102); "paths" alone
+       resolves relative to this file's own directory. */
+    "paths": {
+      "@narvi/contracts/*": ["../contracts/gen/ts/*"]
+    }
   },
-  "include": ["src"]
+  "include": ["src"],
+  // __tests__/ trees are their own standalone project (tsconfig.vitest.json,
+  // "npm run typecheck:tests") -- they need Node's global types (Buffer,
+  // process -- pulled in transitively by the `ws` package's own .d.ts,
+  // used only there to run a fake WS server) that this DOM-only, shipped-
+  // bundle project deliberately does not carry, so as not to leak Node
+  // globals into application code that will only ever run in a browser.
+  "exclude": ["src/**/__tests__/**"]
 }
