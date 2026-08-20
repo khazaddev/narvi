@@ -60,6 +60,21 @@ type RepoInfo struct {
 	Primary bool
 }
 
+// OnHookRerunTiming is called once per actually-run hook (setup.sh/
+// start.sh, or the §19.6 ladder's own sync.sh delta attempt), immediately
+// after that hook returns, so the caller (cmd/sandbox-agent/main.go) can
+// relay it as a best-effort §33.3 boot_timing sandbox-ws event without
+// this package needing to know anything about wsbridge/wire types --
+// mirroring gitclone.OnGitSync's own identical decoupling precedent
+// exactly. Formerly recorded locally into this package's own
+// sandbox_agent_hook_rerun_duration_seconds histogram (telemetry.go,
+// deleted by this Step): the control plane now records that histogram
+// instead (internal/app/sessionactor/opsmetrics.go), from the relayed
+// event. repo/hook/bootMode/workspaceMoved/seconds/failed carry exactly
+// the same information recordHookRerunDuration's own call sites always
+// have in scope.
+type OnHookRerunTiming func(repo, hook, bootMode string, workspaceMoved, failed bool, seconds float64)
+
 // RunHooks runs, for each repo IN ORDER, HookSetup then HookStart (in that
 // order), per §6.4's hook policy (sandboxboot.EvaluateHook):
 //
@@ -128,10 +143,11 @@ func RunHooks(
 	workspaceMoved map[string]bool,
 	ladder map[string]SetupRerunLadder,
 	secretEnv []string,
+	onHookRerunTiming OnHookRerunTiming,
 	hookTimeout, stopGrace, setupRetryDelay time.Duration,
 ) error {
 	for _, repo := range repos {
-		if err := runRepoHooks(ctx, sup, workspaceDir, repo, mode, workspaceMoved, ladder, secretEnv, hookTimeout, stopGrace, setupRetryDelay); err != nil {
+		if err := runRepoHooks(ctx, sup, workspaceDir, repo, mode, workspaceMoved, ladder, secretEnv, onHookRerunTiming, hookTimeout, stopGrace, setupRetryDelay); err != nil {
 			return err
 		}
 	}
@@ -165,6 +181,7 @@ func runRepoHooks(
 	workspaceMoved map[string]bool,
 	ladder map[string]SetupRerunLadder,
 	secretEnv []string,
+	onHookRerunTiming OnHookRerunTiming,
 	hookTimeout, stopGrace, setupRetryDelay time.Duration,
 ) error {
 	moved := workspaceMovedFor(workspaceMoved, repo.Name)
@@ -198,7 +215,7 @@ func runRepoHooks(
 		// through to the plain runHook call below, completely unchanged
 		// from before this Step.
 		if hook == sandboxboot.HookSetup && mode == sandboxboot.BootModeRepoImage && moved {
-			runSetupRerunLadder(ctx, sup, workspaceDir, repo, ladderFor(ladder, repo.Name), moved, secretEnv, hookTimeout, stopGrace, setupRetryDelay)
+			runSetupRerunLadder(ctx, sup, workspaceDir, repo, ladderFor(ladder, repo.Name), moved, secretEnv, onHookRerunTiming, hookTimeout, stopGrace, setupRetryDelay)
 			continue
 		}
 
@@ -220,7 +237,7 @@ func runRepoHooks(
 
 		start := time.Now()
 		tail, runErr := runHook(ctx, sup, scriptPath, repoDir, secretEnv, hookTimeout, stopGrace)
-		recordHookRerunDuration(ctx, repo.Name, string(hook), string(mode), moved, time.Since(start).Seconds(), runErr != nil)
+		onHookRerunTiming(repo.Name, string(hook), string(mode), moved, runErr != nil, time.Since(start).Seconds())
 
 		if runErr != nil {
 			if outcome.FatalOnFailure {
@@ -316,7 +333,7 @@ func runRepoHooks(
 // every other path through this function (the digest skip, the delta
 // tier, and a full-setup.sh attempt that succeeds on its first try never
 // consult it at all).
-func runSetupRerunLadder(ctx context.Context, sup *supervisor.Supervisor, workspaceDir string, repo RepoInfo, ladder SetupRerunLadder, moved bool, secretEnv []string, hookTimeout, stopGrace, setupRetryDelay time.Duration) {
+func runSetupRerunLadder(ctx context.Context, sup *supervisor.Supervisor, workspaceDir string, repo RepoInfo, ladder SetupRerunLadder, moved bool, secretEnv []string, onHookRerunTiming OnHookRerunTiming, hookTimeout, stopGrace, setupRetryDelay time.Duration) {
 	logger := platform.Logger(ctx)
 	repoDir := filepath.Join(workspaceDir, repo.Name)
 
@@ -350,7 +367,7 @@ func runSetupRerunLadder(ctx context.Context, sup *supervisor.Supervisor, worksp
 	// HookStart, so a future edit to the row is no longer silently ignored.
 	deltaPolicy := sandboxboot.EvaluateHook(sandboxboot.BootModeRepoImage, sandboxboot.HookDelta, repo.Primary, moved)
 	if deltaPolicy.ShouldRun && ladder.DeltaEligible {
-		ran, ok := runNamedHookNonFatal(ctx, sup, repoDir, repo.Name, string(sandboxboot.HookDelta), sandboxboot.BootModeRepoImage, moved, secretEnv, hookTimeout, stopGrace)
+		ran, ok := runNamedHookNonFatal(ctx, sup, repoDir, repo.Name, string(sandboxboot.HookDelta), sandboxboot.BootModeRepoImage, moved, secretEnv, onHookRerunTiming, hookTimeout, stopGrace)
 		if ran {
 			logger.Info("boot: setup-rerun ladder decision",
 				"repo", repo.Name, "tier", "delta", "outcome", string(RerunReasonDelta), "succeeded", ok)
@@ -373,7 +390,7 @@ func runSetupRerunLadder(ctx context.Context, sup *supervisor.Supervisor, worksp
 
 	logger.Info("boot: setup-rerun ladder decision",
 		"repo", repo.Name, "tier", "full", "outcome", string(RerunReasonFull))
-	ran, ok := runNamedHookNonFatal(ctx, sup, repoDir, repo.Name, string(sandboxboot.HookSetup), sandboxboot.BootModeRepoImage, moved, secretEnv, hookTimeout, stopGrace)
+	ran, ok := runNamedHookNonFatal(ctx, sup, repoDir, repo.Name, string(sandboxboot.HookSetup), sandboxboot.BootModeRepoImage, moved, secretEnv, onHookRerunTiming, hookTimeout, stopGrace)
 	if !ran || ok {
 		// ran == false: no setup.sh on disk at all (routine, silent,
 		// nothing to retry). ok == true: the first attempt already
@@ -412,7 +429,7 @@ func runSetupRerunLadder(ctx context.Context, sup *supervisor.Supervisor, worksp
 	// a second failure therefore still warns and continues, identical in
 	// severity to today's single-attempt behavior, never escalated to
 	// fatal.
-	runNamedHookNonFatal(ctx, sup, repoDir, repo.Name, string(sandboxboot.HookSetup), sandboxboot.BootModeRepoImage, moved, secretEnv, hookTimeout, stopGrace)
+	runNamedHookNonFatal(ctx, sup, repoDir, repo.Name, string(sandboxboot.HookSetup), sandboxboot.BootModeRepoImage, moved, secretEnv, onHookRerunTiming, hookTimeout, stopGrace)
 }
 
 // waitSetupRetryDelay waits d, honoring ctx cancellation -- mirrors
@@ -451,7 +468,7 @@ func waitSetupRetryDelay(ctx context.Context, d time.Duration) bool {
 // succeeded. recordHookRerunDuration is only ever called when ran is true,
 // exactly mirroring runRepoHooks' own existing "absent hook records
 // nothing" behavior.
-func runNamedHookNonFatal(ctx context.Context, sup *supervisor.Supervisor, repoDir, repoName, scriptName string, mode sandboxboot.BootMode, moved bool, secretEnv []string, hookTimeout, stopGrace time.Duration) (ran, ok bool) {
+func runNamedHookNonFatal(ctx context.Context, sup *supervisor.Supervisor, repoDir, repoName, scriptName string, mode sandboxboot.BootMode, moved bool, secretEnv []string, onHookRerunTiming OnHookRerunTiming, hookTimeout, stopGrace time.Duration) (ran, ok bool) {
 	scriptPath := filepath.Join(repoDir, scriptName)
 
 	present, statErr := hookScriptPresent(scriptPath)
@@ -466,7 +483,7 @@ func runNamedHookNonFatal(ctx context.Context, sup *supervisor.Supervisor, repoD
 
 	start := time.Now()
 	tail, runErr := runHook(ctx, sup, scriptPath, repoDir, secretEnv, hookTimeout, stopGrace)
-	recordHookRerunDuration(ctx, repoName, scriptName, string(mode), moved, time.Since(start).Seconds(), runErr != nil)
+	onHookRerunTiming(repoName, scriptName, string(mode), moved, runErr != nil, time.Since(start).Seconds())
 
 	if runErr != nil {
 		platform.Logger(ctx).Warn("boot: hook failed, continuing",

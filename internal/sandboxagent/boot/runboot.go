@@ -61,6 +61,13 @@ import (
 // opencode-serve call of its own). See runHook's/RunHooks' own doc
 // comments for why this is threaded rather than os.Setenv onto
 // sandbox-agent's own process.
+//
+// onHookRerunTiming (§33.3) is passed straight through to runRepoHooks for
+// the services.yml-absent (hook-contract) branch, exactly like
+// workspaceMoved/ladder/setupRetryDelay above -- a repo supervised via
+// services.yml never runs a hook through runHook at all, so it has
+// nothing for this callback to report. See OnHookRerunTiming's own doc
+// comment (hooks.go) for what it replaces.
 func RunBoot(
 	ctx context.Context,
 	sup *supervisor.Supervisor,
@@ -71,6 +78,7 @@ func RunBoot(
 	ladder map[string]SetupRerunLadder,
 	secretEnv []string,
 	reporter services.ProgressReporter,
+	onHookRerunTiming OnHookRerunTiming,
 	hookTimeout, stopGrace, readinessTimeout, readinessPollInterval, setupRetryDelay time.Duration,
 ) error {
 	for _, repo := range repos {
@@ -82,7 +90,7 @@ func RunBoot(
 		}
 
 		if !found {
-			if err := runRepoHooks(ctx, sup, workspaceDir, repo, mode, workspaceMoved, ladder, secretEnv, hookTimeout, stopGrace, setupRetryDelay); err != nil {
+			if err := runRepoHooks(ctx, sup, workspaceDir, repo, mode, workspaceMoved, ladder, secretEnv, onHookRerunTiming, hookTimeout, stopGrace, setupRetryDelay); err != nil {
 				return err
 			}
 			continue

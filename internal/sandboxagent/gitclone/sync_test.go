@@ -48,6 +48,40 @@ func recordingOnGitSync(events *[]gitSyncEvent) gitclone.OnGitSync {
 	}
 }
 
+// noopGitFetchTiming/noopGitCheckoutTiming are §33.3's OnGitFetchTiming/
+// OnGitCheckoutTiming callbacks for every test below that does not care to
+// observe them -- mirroring internal/sandboxagent/boot/runboot_test.go's
+// own noopReporter precedent exactly.
+func noopGitFetchTiming(_ string, _ float64, _ bool)    {}
+func noopGitCheckoutTiming(_ string, _ float64, _ bool) {}
+
+// gitFetchTimingEvent/gitCheckoutTimingEvent record one OnGitFetchTiming/
+// OnGitCheckoutTiming callback invocation for assertions -- mirroring
+// gitSyncEvent/recordingOnGitSync above exactly.
+type gitFetchTimingEvent struct {
+	repo     string
+	seconds  float64
+	degraded bool
+}
+
+func recordingOnGitFetchTiming(events *[]gitFetchTimingEvent) gitclone.OnGitFetchTiming {
+	return func(repo string, seconds float64, degraded bool) {
+		*events = append(*events, gitFetchTimingEvent{repo, seconds, degraded})
+	}
+}
+
+type gitCheckoutTimingEvent struct {
+	repo    string
+	seconds float64
+	failed  bool
+}
+
+func recordingOnGitCheckoutTiming(events *[]gitCheckoutTimingEvent) gitclone.OnGitCheckoutTiming {
+	return func(repo string, seconds float64, failed bool) {
+		*events = append(*events, gitCheckoutTimingEvent{repo, seconds, failed})
+	}
+}
+
 // TestSyncAll_CleanTree_CreatesSessionBranchFromHead covers §3.4's "checkout
 // session branch (create from base if absent)" for a repo with NO explicit
 // branch (repos[].branch == nil): the generated "narvi/<sessionID>" branch
@@ -68,7 +102,7 @@ func TestSyncAll_CleanTree_CreatesSessionBranchFromHead(t *testing.T) {
 	var events []gitSyncEvent
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, sessionID,
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events), noopGitFetchTiming, noopGitCheckoutTiming)
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil", err)
 	}
@@ -125,7 +159,7 @@ func TestSyncAll_DirtyTree_StashCheckoutPop_PreservesEditsByteForByte(t *testing
 	var events []gitSyncEvent
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, sessionID,
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events), noopGitFetchTiming, noopGitCheckoutTiming)
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil", err)
 	}
@@ -202,7 +236,7 @@ func TestResilienceScenario11_DirtyWorkingTree_RelaunchWithDifferentBranch_ZeroL
 	var events []gitSyncEvent
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "resilience-session-11",
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events), noopGitFetchTiming, noopGitCheckoutTiming)
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil", err)
 	}
@@ -281,7 +315,7 @@ func TestSyncAll_UntrackedFileOnly_StashCheckoutPop_PreservesEditsByteForByte(t 
 	var events []gitSyncEvent
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-untracked-only",
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events), noopGitFetchTiming, noopGitCheckoutTiming)
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil (an untracked-only tree must not be a fatal failure)", err)
 	}
@@ -342,7 +376,7 @@ func TestSyncAll_StagedChange_StashCheckoutPop_PreservesStagedStatus(t *testing.
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-staged",
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {}, noopGitFetchTiming, noopGitCheckoutTiming)
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil", err)
 	}
@@ -393,7 +427,7 @@ func TestSyncAll_BranchAlreadyExists_PlainCheckout(t *testing.T) {
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-x",
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {}, noopGitFetchTiming, noopGitCheckoutTiming)
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil", err)
 	}
@@ -443,7 +477,7 @@ func TestSyncAll_PopFailureDetectedNotFatal(t *testing.T) {
 	var events []gitSyncEvent
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-y",
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events), noopGitFetchTiming, noopGitCheckoutTiming)
 	if err == nil {
 		t.Fatal("SyncAll() error = nil, want a fatal error (primary repo's pop failed)")
 	}
@@ -496,7 +530,7 @@ func TestSyncAll_PrimaryFailureStopsImmediately(t *testing.T) {
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-z",
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {}, noopGitFetchTiming, noopGitCheckoutTiming)
 	if err == nil {
 		t.Fatal("SyncAll() error = nil, want a fatal error for the failed primary repo")
 	}
@@ -523,7 +557,7 @@ func TestSyncAll_SecondaryFailureContinues(t *testing.T) {
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-w",
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {}, noopGitFetchTiming, noopGitCheckoutTiming)
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil (a secondary failure is a warning, not fatal)", err)
 	}
@@ -557,7 +591,7 @@ func TestSyncAll_MaliciousRepoNameRejectedBeforeAnySpawn(t *testing.T) {
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-v",
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {}, noopGitFetchTiming, noopGitCheckoutTiming)
 	if err == nil {
 		t.Fatal("SyncAll() error = nil, want a fatal validation error for the malicious repo name")
 	}
@@ -596,7 +630,7 @@ func TestSyncAll_MaliciousBranchRejectedBeforeAnySpawn(t *testing.T) {
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-u",
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {}, noopGitFetchTiming, noopGitCheckoutTiming)
 	if err == nil {
 		t.Fatal("SyncAll() error = nil, want a fatal validation error for the malicious branch")
 	}
@@ -808,7 +842,7 @@ func TestSyncAll_FullUnscopedCheckoutOnDisk_ReAppliesSparseCheckout(t *testing.T
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, pathScope, "session-scoped-image",
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {}, noopGitFetchTiming, noopGitCheckoutTiming)
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil", err)
 	}
@@ -844,7 +878,7 @@ func TestSyncAll_InvalidPathScopeRejectedBeforeAnySync(t *testing.T) {
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, pathScope, "session-invalid-scope",
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {}, noopGitFetchTiming, noopGitCheckoutTiming)
 	if err == nil {
 		t.Fatal("SyncAll() error = nil, want a fatal validation error for the invalid path scope")
 	}
@@ -923,7 +957,7 @@ func TestSyncAll_DirtyOutOfScopeFile_SparseCheckoutDetectsAndFailsLoudly(t *test
 	var events []gitSyncEvent
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, pathScope, "session-dirty-out-of-scope",
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events), noopGitFetchTiming, noopGitCheckoutTiming)
 	if err == nil {
 		t.Fatal("SyncAll() error = nil, want a fatal error -- a dirty out-of-scope file must be detected, never silently accepted")
 	}
@@ -984,7 +1018,7 @@ func TestSyncAll_SparseCheckoutFailure_PrimaryStopsImmediately(t *testing.T) {
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, pathScope, "session-sparse-primary",
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {}, noopGitFetchTiming, noopGitCheckoutTiming)
 	if err == nil {
 		t.Fatal("SyncAll() error = nil, want a fatal error for the primary repo's sparse-checkout failure")
 	}
@@ -1013,7 +1047,7 @@ func TestSyncAll_SparseCheckoutFailure_SecondaryContinues(t *testing.T) {
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, pathScope, "session-sparse-secondary",
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {}, noopGitFetchTiming, noopGitCheckoutTiming)
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil (a secondary sparse-checkout failure is a warning, not fatal)", err)
 	}
@@ -1098,7 +1132,7 @@ func TestSyncAll_StashPopFailure_StillReAppliesSparseCheckout(t *testing.T) {
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, pathScope, "session-pop-fail-scope",
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {}, noopGitFetchTiming, noopGitCheckoutTiming)
 	if err == nil {
 		t.Fatal("SyncAll() error = nil, want a fatal error (primary repo's pop failed)")
 	}
@@ -1239,7 +1273,7 @@ func TestSyncAll_FetchSucceeds_BranchExistsOnOrigin_PrefersOriginTrackingBranch(
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-fetch-branch-on-origin",
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {}, noopGitFetchTiming, noopGitCheckoutTiming)
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil", err)
 	}
@@ -1291,7 +1325,7 @@ func TestSyncAll_FetchSucceeds_InventedBranchNotOnOrigin_FallsBackToOriginDefaul
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, sessionID,
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {}, noopGitFetchTiming, noopGitCheckoutTiming)
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil", err)
 	}
@@ -1354,7 +1388,7 @@ func TestSyncAll_FetchFails_InventedBranchNil_DegradesAndFallsBackToHead(t *test
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, sessionID,
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {}, noopGitFetchTiming, noopGitCheckoutTiming)
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil (degrade-and-proceed, not fatal)", err)
 	}
@@ -1424,7 +1458,7 @@ func TestSyncAll_FetchSucceeds_InventedBranchNotOnOrigin_NoDegradeWarningLogged(
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, sessionID,
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {}, noopGitFetchTiming, noopGitCheckoutTiming)
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil", err)
 	}
@@ -1537,7 +1571,7 @@ func TestSyncAll_DefaultBranchFetchFailsIndependently_LogsWarningEvenWhenTargetF
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-default-branch-fetch-fails",
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {}, noopGitFetchTiming, noopGitCheckoutTiming)
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil (the EXPLICIT target branch's own fetch succeeded)", err)
 	}
@@ -1608,7 +1642,7 @@ func TestSyncAll_FetchFails_BranchResolvableLocally_DegradesAndLogsWarning(t *te
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-fetch-degrade-warn",
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {}, noopGitFetchTiming, noopGitCheckoutTiming)
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil (degrade-and-proceed, not fatal)", err)
 	}
@@ -1670,7 +1704,7 @@ func TestSyncAll_FetchFails_ExplicitBranchNotLocalNotFetchable_PrimaryFatal(t *t
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-fetch-hard-fail-primary",
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {}, noopGitFetchTiming, noopGitCheckoutTiming)
 	if err == nil {
 		t.Fatal("SyncAll() error = nil, want a fatal error (primary repo's fetch failed with no degrade allowed)")
 	}
@@ -1727,7 +1761,7 @@ func TestSyncAll_FetchFails_ExplicitBranchNotLocalNotFetchable_SecondaryWarnCont
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-fetch-hard-fail-secondary",
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {}, noopGitFetchTiming, noopGitCheckoutTiming)
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil (a secondary repo's fatal fetch failure is a warning, not fatal for the whole loop)", err)
 	}
@@ -1814,7 +1848,7 @@ func TestSyncAll_ScopedBakedThenUnscopedSession_DisablesSparseCheckout(t *testin
 	sup := supervisor.New()
 	// pathScope is nil: THIS session is unscoped.
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-unscoped-after-scoped-bake",
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {}, noopGitFetchTiming, noopGitCheckoutTiming)
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil", err)
 	}
@@ -1853,7 +1887,7 @@ func TestSyncAll_NeverSparse_UnscopedSession_NoDisableAttempted(t *testing.T) {
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-never-sparse",
-		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {}, noopGitFetchTiming, noopGitCheckoutTiming)
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil", err)
 	}
@@ -1887,4 +1921,69 @@ func gitOutputAllowFailure(t *testing.T, dir string, args ...string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// TestSyncAll_RelaysGitFetchAndCheckoutTiming proves §33.3's sandbox-side
+// relay: this Step deleted telemetry.go's own local sandbox_agent_git_
+// fetch_duration_seconds/sandbox_agent_git_checkout_duration_seconds
+// histogram recording (recordGitFetchDuration/recordGitCheckoutDuration)
+// and replaced it with the OnGitFetchTiming/OnGitCheckoutTiming callbacks
+// syncOne now calls instead -- this test drives a REAL SyncAll call (same
+// scenario the deleted telemetry_test.go's own
+// TestSyncAll_RecordsGitFetchAndCheckoutDurationMetrics used: no "origin"
+// remote configured, so the fetch step is expected to degrade rather than
+// fail this repo outright, and the subsequent checkout onto HEAD is
+// expected to succeed) and asserts each callback receives exactly the
+// tags its own deleted call site used to record locally.
+func TestSyncAll_RelaysGitFetchAndCheckoutTiming(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	repoName := "repo-fetch-checkout-timing-relay"
+	repoDir := filepath.Join(workspaceDir, repoName)
+	initRepo(t, repoDir) // branch "main", one commit, no "origin" configured
+
+	sessionID := "session-fetch-checkout-timing-relay"
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: repoName, Url: "https://example.invalid/repo1.git"},
+	}
+
+	var fetchCalls []gitFetchTimingEvent
+	var checkoutCalls []gitCheckoutTimingEvent
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, sessionID,
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {},
+		recordingOnGitFetchTiming(&fetchCalls), recordingOnGitCheckoutTiming(&checkoutCalls))
+	if err != nil {
+		t.Fatalf("SyncAll() error = %v, want nil", err)
+	}
+	if len(results) != 1 || results[0].Err != nil || results[0].State != gitstate.StateReady {
+		t.Fatalf("results = %+v, want one ready result", results)
+	}
+
+	if len(fetchCalls) != 1 {
+		t.Fatalf("len(fetchCalls) = %d, want exactly 1", len(fetchCalls))
+	}
+	if fetchCalls[0].repo != repoName {
+		t.Errorf("fetchCalls[0].repo = %q, want %q", fetchCalls[0].repo, repoName)
+	}
+	if !fetchCalls[0].degraded {
+		t.Errorf("fetchCalls[0].degraded = false, want true -- no real 'origin' remote is configured, so this repo's own fetch is expected to degrade")
+	}
+	if fetchCalls[0].seconds < 0 {
+		t.Errorf("fetchCalls[0].seconds = %v, want >= 0", fetchCalls[0].seconds)
+	}
+
+	if len(checkoutCalls) != 1 {
+		t.Fatalf("len(checkoutCalls) = %d, want exactly 1", len(checkoutCalls))
+	}
+	if checkoutCalls[0].repo != repoName {
+		t.Errorf("checkoutCalls[0].repo = %q, want %q", checkoutCalls[0].repo, repoName)
+	}
+	if checkoutCalls[0].failed {
+		t.Errorf("checkoutCalls[0].failed = true, want false -- this repo's own checkout succeeded")
+	}
+	if checkoutCalls[0].seconds < 0 {
+		t.Errorf("checkoutCalls[0].seconds = %v, want >= 0", checkoutCalls[0].seconds)
+	}
 }

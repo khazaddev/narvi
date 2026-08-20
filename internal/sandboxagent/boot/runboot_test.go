@@ -76,6 +76,12 @@ services:
 
 func noopReporter(services.BootProgressEvent) {}
 
+// noopHookRerunTiming is boot.OnHookRerunTiming's (§33.3) own noopReporter-
+// style no-op, for every test in this package that does not care to
+// observe it -- see hooks_test.go's own TestRunHooks_RelaysHookRerunTiming
+// for the test that DOES.
+func noopHookRerunTiming(_, _, _ string, _, _ bool, _ float64) {}
+
 // collectingReporter is a ProgressReporter that records every event
 // received, safe for concurrent use.
 type collectingReporter struct {
@@ -140,7 +146,7 @@ func TestRunBoot_MixedManifestAndHookFallback(t *testing.T) {
 	}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
-		nil, nil, reporter.report, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond)
+		nil, nil, reporter.report, noopHookRerunTiming, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond)
 	if err != nil {
 		t.Fatalf("RunBoot() error = %v, want nil", err)
 	}
@@ -166,7 +172,7 @@ func TestRunBoot_AbsentManifestFallsBackToHooks(t *testing.T) {
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
-		nil, nil, noopReporter, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond)
+		nil, nil, noopReporter, noopHookRerunTiming, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond)
 	if err != nil {
 		t.Fatalf("RunBoot() error = %v, want nil", err)
 	}
@@ -197,7 +203,7 @@ func TestRunBoot_MalformedManifestIsAFatalError(t *testing.T) {
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
-		nil, nil, noopReporter, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond)
+		nil, nil, noopReporter, noopHookRerunTiming, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond)
 	if err == nil {
 		t.Fatal("RunBoot() error = nil, want an error for a malformed services.yml")
 	}
@@ -237,7 +243,7 @@ func TestRunBoot_FatalFailureInRepoAStopsBeforeRepoB(t *testing.T) {
 	}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
-		nil, nil, noopReporter, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond)
+		nil, nil, noopReporter, noopHookRerunTiming, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond)
 	if err == nil {
 		t.Fatal("RunBoot() error = nil, want a fatal error (repo-a's primary service crashed)")
 	}

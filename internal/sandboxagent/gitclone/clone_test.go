@@ -13,9 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"go.opentelemetry.io/otel"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-
 	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 	"github.com/khazaddev/narvi/internal/sandboxagent/gitclone"
 	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
@@ -30,19 +27,6 @@ const (
 	testStopGrace    = 2 * time.Second
 )
 
-// otelReader is the SINGLE, GLOBAL ManualReader backing the SINGLE, GLOBAL
-// SDK MeterProvider TestMain below registers for this whole test binary --
-// mirrors internal/sandboxagent/boot/telemetry_test.go's own TestMain/
-// otelReader precedent exactly (audit-remediation batch B7, Finding 3):
-// this package's own gitFetchDurationHistogram/gitCheckoutDurationHistogram
-// (telemetry.go) each resolve LAZILY via sync.OnceValue on their very first
-// call, from WHICHEVER test in this package happens to invoke SyncAll
-// first -- TestMain's own setup runs before m.Run() ever invokes a single
-// test, so every test in this package (regardless of ordering) observes
-// the SAME, already-registered MeterProvider by the time that first call
-// happens.
-var otelReader *sdkmetric.ManualReader
-
 // TestMain sets GIT_SSL_NO_VERIFY=true ONCE, before any test runs (never
 // racing any test's own t.Parallel() goroutines, unlike an os.Setenv call
 // from inside a test would): every successful-clone test below now clones
@@ -55,16 +39,19 @@ var otelReader *sdkmetric.ManualReader
 // test servers, never anything resembling production configuration --
 // the same technique, for the same reason, as cmd/sandbox-agent's own
 // push_integration_test.go.
+//
+// This package used to ALSO register a global OTel SDK MeterProvider/
+// ManualReader here (audit-remediation batch B7, Finding 3), so
+// telemetry.go's own gitFetchDurationHistogram/gitCheckoutDurationHistogram
+// -- lazily resolved via sync.OnceValue on first use -- observed a real
+// reader regardless of which test in this package ran first. §33.3 (Step
+// 109) deleted that local histogram machinery entirely: this package now
+// reports fetch/checkout timing via OnGitFetchTiming/OnGitCheckoutTiming
+// callbacks (sync.go) instead of recording anything itself, so there is no
+// longer any OTel state for this test binary to set up.
 func TestMain(m *testing.M) {
 	_ = os.Setenv("GIT_SSL_NO_VERIFY", "true")
-
-	otelReader = sdkmetric.NewManualReader()
-	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(otelReader))
-	otel.SetMeterProvider(mp)
-
-	code := m.Run()
-	_ = mp.Shutdown(context.Background())
-	os.Exit(code)
+	os.Exit(m.Run())
 }
 
 // startGitHTTPSServer serves reposParent via git's own smart-HTTP backend

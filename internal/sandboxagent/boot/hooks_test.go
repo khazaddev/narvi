@@ -45,7 +45,7 @@ func TestRunHooks_EmptyRepos(t *testing.T) {
 	t.Parallel()
 
 	sup := supervisor.New()
-	err := boot.RunHooks(context.Background(), sup, t.TempDir(), nil, sandboxboot.BootModeFresh, nil, nil, nil, 5*time.Second, time.Second, time.Millisecond)
+	err := boot.RunHooks(context.Background(), sup, t.TempDir(), nil, sandboxboot.BootModeFresh, nil, nil, nil, noopHookRerunTiming, 5*time.Second, time.Second, time.Millisecond)
 	if err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil for an empty repos slice", err)
 	}
@@ -64,7 +64,7 @@ func TestRunHooks_AbsentHookSkipped(t *testing.T) {
 	sup := supervisor.New()
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
 
-	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil, nil, nil, 5*time.Second, time.Second, time.Millisecond)
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil, nil, nil, noopHookRerunTiming, 5*time.Second, time.Second, time.Millisecond)
 	if err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil (absent hooks are a routine no-op)", err)
 	}
@@ -89,7 +89,7 @@ func TestRunHooks_SuccessContinuesToLaterHooksAndRepos(t *testing.T) {
 	// fresh mode: repo-a's setup.sh runs (non-fatal); repo-b's start.sh
 	// runs (non-fatal, secondary). Both succeed, so RunHooks must run
 	// every hook across both repos.
-	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil, nil, nil, 5*time.Second, time.Second, time.Millisecond)
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil, nil, nil, noopHookRerunTiming, 5*time.Second, time.Second, time.Millisecond)
 	if err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil", err)
 	}
@@ -117,7 +117,7 @@ func TestRunHooks_FatalFailureStopsImmediately(t *testing.T) {
 		{Name: "repo-b", Primary: false},
 	}
 
-	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil, nil, nil, 5*time.Second, time.Second, time.Millisecond)
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil, nil, nil, noopHookRerunTiming, 5*time.Second, time.Second, time.Millisecond)
 	if err == nil {
 		t.Fatal("RunHooks() error = nil, want an error (build mode's setup.sh failure is fatal)")
 	}
@@ -142,7 +142,7 @@ func TestRunHooks_NonFatalFailureContinues(t *testing.T) {
 		{Name: "repo-b", Primary: false},
 	}
 
-	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil, nil, nil, 5*time.Second, time.Second, time.Millisecond)
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil, nil, nil, noopHookRerunTiming, 5*time.Second, time.Second, time.Millisecond)
 	if err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil (a secondary repo's start.sh failure is only a warning)", err)
 	}
@@ -167,7 +167,7 @@ func TestRunHooks_EnvExcludesSessionConfig(t *testing.T) {
 	sup := supervisor.New()
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
 
-	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil, nil, nil, 5*time.Second, time.Second, time.Millisecond)
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil, nil, nil, noopHookRerunTiming, 5*time.Second, time.Second, time.Millisecond)
 	if err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil (the spawned setup.sh must not see NARVI_SESSION_CONFIG)", err)
 	}
@@ -201,7 +201,7 @@ func TestRunHooks_SecretEnvReachesRealSpawnedHook(t *testing.T) {
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
 	secretEnv := []string{"MY_SANDBOX_SECRET=resolved-secret-value"}
 
-	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil, nil, secretEnv, 5*time.Second, time.Second, time.Millisecond)
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil, nil, secretEnv, noopHookRerunTiming, 5*time.Second, time.Second, time.Millisecond)
 	if err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil", err)
 	}
@@ -235,7 +235,7 @@ func TestRunHooks_SecretEnvNeverMutatesTestProcessEnvironment(t *testing.T) {
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
 	secretEnv := []string{"MY_OTHER_SANDBOX_SECRET=should-never-leak-into-this-process"}
 
-	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil, nil, secretEnv, 5*time.Second, time.Second, time.Millisecond)
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil, nil, secretEnv, noopHookRerunTiming, 5*time.Second, time.Second, time.Millisecond)
 	if err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil", err)
 	}
@@ -254,7 +254,7 @@ func TestRunHooks_TimeoutIsFatalWhenPolicyFatal(t *testing.T) {
 	sup := supervisor.New()
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
 
-	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil, nil, nil,
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil, nil, nil, noopHookRerunTiming,
 		200*time.Millisecond, 200*time.Millisecond, time.Millisecond)
 	if err == nil {
 		t.Fatal("RunHooks() error = nil, want an error (hook exceeded hookTimeout, fatal per build mode's setup.sh policy)")
@@ -286,7 +286,7 @@ func TestRunHooks_LogsSetupRerunDecision(t *testing.T) {
 	repos := []boot.RepoInfo{{Name: "repo-decision-test", Primary: true}}
 	workspaceMoved := map[string]bool{"repo-decision-test": true}
 
-	if err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved, nil, nil,
+	if err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved, nil, nil, noopHookRerunTiming,
 		5*time.Second, time.Second, time.Millisecond); err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil", err)
 	}
@@ -302,5 +302,73 @@ func TestRunHooks_LogsSetupRerunDecision(t *testing.T) {
 		if !strings.Contains(logged, want) {
 			t.Errorf("log output = %q, want it to contain %q", logged, want)
 		}
+	}
+}
+
+// hookRerunTimingCall records one OnHookRerunTiming (§33.3) callback
+// invocation for assertions.
+type hookRerunTimingCall struct {
+	repo, hook, bootMode   string
+	workspaceMoved, failed bool
+	seconds                float64
+}
+
+func recordingHookRerunTiming(calls *[]hookRerunTimingCall) boot.OnHookRerunTiming {
+	return func(repo, hook, bootMode string, workspaceMoved, failed bool, seconds float64) {
+		*calls = append(*calls, hookRerunTimingCall{repo, hook, bootMode, workspaceMoved, failed, seconds})
+	}
+}
+
+// TestRunHooks_RelaysHookRerunTiming proves §33.3's sandbox-side relay:
+// this Step deleted telemetry.go's own local sandbox_agent_hook_rerun_
+// duration_seconds histogram recording (recordHookRerunDuration) and
+// replaced it with the OnHookRerunTiming callback runRepoHooks now calls
+// once per actually-run hook instead -- this test drives a REAL setup.sh
+// run through RunHooks (the same call path production main.go uses) and
+// asserts the callback receives exactly the tags recordHookRerunDuration's
+// own deleted call site used to record locally: repo, hook, boot_mode, and
+// workspace_moved, plus a genuinely-elapsed (not the deleted feature's own
+// "recorded at all" bar).
+//
+// hookTimeout is generously large (unlike most other tests in this file,
+// which use 5*time.Second): a trivial `touch` command should never
+// approach it, but under this package's own heavier -tags=integration
+// suite (real docker/services subprocesses running in parallel) a tight
+// timeout can spuriously fire runSetupRerunLadder's own §19.6 "retry the
+// install on transient failure" path for the full-setup.sh tier this
+// BootModeRepoImage+workspaceMoved scenario routes through -- a LEGITIMATE
+// production behavior (a second OnHookRerunTiming call, the first tagged
+// failed=true) this test must tolerate rather than assume away. Checking
+// only the LAST call below (not asserting exactly one) is the fix: it
+// still proves the callback carries the right tags on the run that
+// actually produced the marker file, regardless of host contention.
+func TestRunHooks_RelaysHookRerunTiming(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	marker := filepath.Join(workspaceDir, "marker-setup-relay")
+	writeScript(t, filepath.Join(workspaceDir, "repo-relay-test", "setup.sh"), "touch "+marker)
+
+	sup := supervisor.New()
+	repos := []boot.RepoInfo{{Name: "repo-relay-test", Primary: true}}
+	workspaceMoved := map[string]bool{"repo-relay-test": true}
+
+	var calls []hookRerunTimingCall
+	if err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved, nil, nil,
+		recordingHookRerunTiming(&calls), 30*time.Second, time.Second, time.Millisecond); err != nil {
+		t.Fatalf("RunHooks() error = %v, want nil", err)
+	}
+	assertFileExists(t, marker)
+
+	if len(calls) == 0 {
+		t.Fatal("len(calls) = 0, want at least 1 (one setup.sh run, no start.sh present)")
+	}
+	got := calls[len(calls)-1]
+	want := hookRerunTimingCall{repo: "repo-relay-test", hook: "setup.sh", bootMode: "repo_image", workspaceMoved: true, failed: false}
+	if got.repo != want.repo || got.hook != want.hook || got.bootMode != want.bootMode || got.workspaceMoved != want.workspaceMoved || got.failed != want.failed {
+		t.Errorf("OnHookRerunTiming's own last call = %+v, want repo/hook/bootMode/workspaceMoved/failed = %+v", got, want)
+	}
+	if got.seconds < 0 {
+		t.Errorf("OnHookRerunTiming seconds = %v, want >= 0", got.seconds)
 	}
 }

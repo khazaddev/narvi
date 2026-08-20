@@ -372,7 +372,8 @@ func TestOIDCClusterBindingTokenReachesRealSpawnedHook(t *testing.T) {
 	sup := supervisor.New()
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
 
-	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil, nil, env, 5*time.Second, time.Second, time.Millisecond)
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil, nil, env,
+		func(_, _, _ string, _, _ bool, _ float64) {}, 5*time.Second, time.Second, time.Millisecond)
 	if err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil", err)
 	}
