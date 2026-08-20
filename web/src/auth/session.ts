@@ -61,12 +61,19 @@ export function isSignedOut(err: unknown): boolean {
 /**
  * installUnauthorizedHandler wires http.ts's own generic, app-agnostic
  * onUnauthorized hook (see that file's own doc comment) to THIS app's one
- * real consequence: mark the cached meQueryOptions entry stale, so the
- * NEXT thing that reads it (a route's own beforeLoad guard on the next
- * navigation, or a component remounting) gets a fresh answer instead of
- * a >60s-old cached "still signed in" -- catching a session that expires
- * or is revoked mid-use sooner than this query's own 60s staleTime alone
- * would.
+ * real consequence: mark the cached meQueryOptions entry INVALIDATED, so
+ * the next thing that reads it gets a fresh answer instead of a cached
+ * "still signed in" -- catching a session that expires or is revoked
+ * mid-use sooner than this query's own 60s staleTime alone would.
+ *
+ * That promise is only true of readers that actually consult invalidation.
+ * It was not true when written: requireAuth used ensureQueryData, which
+ * short-circuits on any cached data and consults neither staleness nor
+ * invalidation, so the one reader this comment names ignored it and a
+ * signed-out visitor passed the route guard. requireAuth now uses
+ * fetchQuery, whose isStaleByTime does honour isInvalidated -- see that
+ * file's own comment for why the fix belongs at the reader rather than
+ * here.
  *
  * refetchType: 'none' is load-bearing, not a style choice: the default
  * ('active') would immediately re-run every MOUNTED consumer of this

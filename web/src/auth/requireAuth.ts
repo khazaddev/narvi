@@ -42,10 +42,33 @@ export interface RequireAuthArgs {
  *   confusing failure mode: a visitor with a perfectly valid session
  *   bounced to the sign-in page by a transient backend hiccup).
  * - A valid session -> resolves, the guarded route proceeds normally.
+ *
+ * # fetchQuery, NOT ensureQueryData -- an auth decision must not trust a
+ * # cache entry that has already been invalidated
+ *
+ * ensureQueryData short-circuits the moment any data is cached: query-core's
+ * own implementation returns Promise.resolve(cachedData) whenever
+ * `cachedData !== undefined`, consulting neither staleness nor invalidation
+ * (revalidateIfStale only kicks off a BACKGROUND prefetch and still lets the
+ * current navigation through). Sign-out and the 401 hook both only INVALIDATE
+ * this entry -- deliberately, see session.ts -- so with ensureQueryData the
+ * guard resolved on the retained Member and a signed-out visitor passed it.
+ *
+ * fetchQuery asks query.isStaleByTime(...), which returns true whenever
+ * state.isInvalidated is set. So an invalidated entry is re-fetched, the 401
+ * surfaces, isSignedOut catches it, and the visitor is redirected -- while a
+ * genuinely fresh entry inside staleTime is still served from cache, so rapid
+ * navigation costs no extra request.
+ *
+ * Deliberately NOT removeQueries/resetQueries in the sign-out and 401 paths,
+ * which would also close this: removing the entry makes every MOUNTED
+ * observer refetch, which is exactly the unbounded 401 loop session.ts's own
+ * refetchType:'none' exists to prevent. Fixing it at the reader leaves that
+ * property intact.
  */
 export async function requireAuth({ context, location }: RequireAuthArgs): Promise<void> {
   try {
-    await context.queryClient.ensureQueryData(meQueryOptions)
+    await context.queryClient.fetchQuery(meQueryOptions)
   } catch (err) {
     if (!isSignedOut(err)) {
       throw err

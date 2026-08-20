@@ -9,8 +9,15 @@ import type { QueryClient } from '@tanstack/react-query'
 import { requireAuth } from '../requireAuth'
 import { ApiError } from '../../api/http'
 
-function fakeQueryClient(ensureQueryData: () => Promise<unknown>): QueryClient {
-  return { ensureQueryData } as unknown as QueryClient
+// Stubs fetchQuery, which is what requireAuth calls -- see that file's own
+// comment on why it is not ensureQueryData. These four cases cover the
+// guard's BRANCHING (signed out vs valid vs genuine failure) and a stub is
+// the right tool for that. They deliberately do not cover cache semantics:
+// stubbing the client cannot express staleness or invalidation at all, which
+// is exactly how a signed-out visitor once kept passing this guard. That half
+// is pinned against a real QueryClient in requireAuthCache.test.ts.
+function fakeQueryClient(fetchQuery: () => Promise<unknown>): QueryClient {
+  return { fetchQuery } as unknown as QueryClient
 }
 
 describe('requireAuth', () => {
