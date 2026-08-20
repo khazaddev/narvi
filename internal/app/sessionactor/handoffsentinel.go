@@ -25,7 +25,7 @@
 // automation and the handoff sentinel can act on it without re-deriving
 // intent."
 //
-// # Why NOT the verdict-posting path (Step 47/48)
+// # Why NOT the verdict-posting path (§8.2)
 //
 // This sentinel never calls POST .../review/verdict (reviewverdict.go),
 // never builds a review.Verdict, and never writes review_findings.

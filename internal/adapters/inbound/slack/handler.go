@@ -138,7 +138,7 @@ const (
 	ackNotEnrolledText = "This repository is not yet enrolled in Narvi's session rollout."
 )
 
-// ackPlanAwaitingText is this batch's own honest reply (Step 37/38
+// ackPlanAwaitingText is this batch's own honest reply (§8.1
 // follow-up fix, §8.1), posted instead of enqueuing a build turn when a
 // plain-text thread reply matches neither a plan verdict (plandomain.
 // MatchVerdict -- see this batch's own follow-up addition, "honour a typed

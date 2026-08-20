@@ -10,7 +10,7 @@
 // session -- it targets an ALREADY-KNOWN session_id (the URL itself), so
 // there is no "first mention on this PR" ambiguity for
 // github_pr_sessions' own atomic claim to resolve; this handler never
-// touches that claim row at all. What it DOES reuse from Step 32/45/46's
+// touches that claim row at all. What it DOES reuse from §8.2/46's
 // own existing machinery: CreateTurnCore (turn.go) with AlwaysQueue --
 // the SAME policy coalesce.go's own REUSE branch uses via
 // CreateTurnForBot (bot.go) -- so a manual re-review click behaves exactly

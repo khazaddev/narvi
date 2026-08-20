@@ -21,7 +21,7 @@ import (
 // /sessions/{sessionID}/ws?type=sandbox (§6.1): "Connect: wss://…/sessions/
 // {id}/ws?type=sandbox, Authorization: Bearer <sandbox_token>,
 // X-Sandbox-ID (+ X-Sandbox-Gen). Server: 410 when session stopped, 403 on
-// id/gen mismatch." internal/sandboxagent/wsbridge (Step 16/17) is the
+// id/gen mismatch." internal/sandboxagent/wsbridge (§6.1/§7) is the
 // CLIENT side of this exact same protocol; this is its server-side mirror.
 //
 // # Handshake status-code table (steps run in exactly this order; ALL must

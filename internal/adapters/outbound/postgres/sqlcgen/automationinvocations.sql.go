@@ -158,7 +158,7 @@ FOR UPDATE OF ai SKIP LOCKED
 // invocation already created (e.g. moments before a THIRD consecutive
 // failure elsewhere auto-pauses this same automation) is simply left
 // un-fanned-out -- still visible to this same query on a LATER tick, once
-// either the automation is resumed (Step 52/76's own future surface) or
+// either the automation is resumed (§8.4/§10's own future surface) or
 // never, if it stays paused -- rather than dispatching real sessions for
 // an automation the engine itself just decided to stop trusting. §8.4's
 // own future trigger evaluator is expected to check this same status

@@ -159,7 +159,7 @@ func (e *Engine) createRunAndSession(ctx context.Context, logger *slog.Logger, i
 		// closest existing fit. This does NOT lose the "which automation
 		// created this session" fact: automation_runs.session_id is the
 		// real, permanent link (a future read model joins through it,
-		// never spawn_source). Revisit if Step 52/76 want a dedicated
+		// never spawn_source). Revisit if §8.4/§10 want a dedicated
 		// value once/if the UI needs to distinguish an automation session
 		// from an ordinary web one at a glance.
 		SpawnSource: restdtos.CreateSessionRequestSpawnSourceWeb,

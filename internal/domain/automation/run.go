@@ -31,7 +31,7 @@ const (
 	// even reached a live sandbox before being abandoned -- turn.
 	// TriggerFail/TriggerTimeout/TriggerAbandon/TriggerCancel all collapse
 	// into this ONE RunStatus (a judgment call: an automation run is
-	// unattended by construction in this Step -- Step 52/76 own any future
+	// unattended by construction in this Step -- §8.4/§10 own any future
 	// surface that could ever legitimately "cancel" one -- so there is no
 	// present distinction worth a fifth RunStatus the way turn's own
 	// cancelled≠failed≠timeout≠never_started taxonomy earns its keep for

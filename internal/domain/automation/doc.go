@@ -168,7 +168,7 @@
 //     run at the end of every session) -- but an arbitrary automation's
 //     own turn has no equivalent tool call today, and building one
 //     (a new OpenCode-facing tool plus a server-side posting endpoint,
-//     mirroring Step 47/48's own review-verdict machinery) would be a
+//     mirroring §8.2's own review-verdict machinery) would be a
 //     materially larger, separate feature. Reusing already-persisted
 //     counts/names honestly closes mockups.html's own named gap ("the
 //     column exists in the UI but the backend never fills it") without

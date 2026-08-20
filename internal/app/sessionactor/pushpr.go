@@ -276,7 +276,7 @@ func (a *Actor) completeProcessingTurn(ctx context.Context, tx pgx.Tx, sandboxRo
 		return nil, err
 	}
 
-	// Step 55/56 ("workflow execution engine" / "workflow HITL gate +
+	// §25.6/§25.9 ("workflow execution engine" / "workflow HITL gate +
 	// circuit breaker", §25.6/§25.9): if processing's own turn is a live,
 	// engine-tracked workflow step attempt, finalize it (and, unless
 	// HITLAfter-gated, consult workflow.NextStep -- via ApplyStepOutcome,

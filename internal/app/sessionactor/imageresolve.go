@@ -33,7 +33,7 @@
 // three remain exactly as they were for pushpr.go/contractdrift.go/
 // scmcredentials.go's own, unrelated call sites (githubtoken.go).
 //
-// # Step 41/42 boundary (§19.1 vs §19.9) -- documented design decision
+// # §19.1/§19.2 boundary (§19.1 vs §19.9) -- documented design decision
 //
 // §19.1's own prose describes the builder resolving each repo's
 // default-branch tip SHA "at claim time" -- §19.9's phasing note assigns
@@ -196,7 +196,7 @@
 // creator, normalized repo URL) for platform.Timeouts.RepoAccessCacheTTL,
 // shared across every Actor via the Registry (like a.stores/a.sourceControl
 // already are) -- after the first check per (user, repo), this reduces to
-// zero network calls for the life of the TTL, preserving Step 41/42's own
+// zero network calls for the life of the TTL, preserving §19.1/§19.2's own
 // "zero network calls on the steady-state hot path" property for the
 // common case of a user who DOES have access.
 
@@ -404,7 +404,7 @@ func (a *Actor) repoAccessAllowedForSpawn(ctx context.Context, plan *spawnPlan, 
 	// all -- the decrypted token would never have been used anyway (every
 	// repo already answered from repoAccessCache) -- restoring the "zero
 	// network calls, minimal Postgres reads" property of the all-cache-hit
-	// hot path Step 41/42 built this gate to sit in front of, without
+	// hot path §19.1/§19.2 built this gate to sit in front of, without
 	// weakening CheckCreatorGuard's own always-fresh recheck above.
 	var (
 		token        string

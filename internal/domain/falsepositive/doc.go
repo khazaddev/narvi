@@ -29,7 +29,7 @@
 // concept from either -- review.Verdict is the structured verdict a
 // review session produces (§8.2), reviewpost.Finding is one verdict's
 // own per-finding content-anchored identity/position (§22.1/§22.1.1,
-// Step 48/63) -- a maintainer-taught PATTERN is neither; it is standing,
+// §8.2/§22) -- a maintainer-taught PATTERN is neither; it is standing,
 // repo-scoped guidance that exists independently of any single verdict or
 // finding, fed INTO every future review rather than produced BY one.
 package falsepositive

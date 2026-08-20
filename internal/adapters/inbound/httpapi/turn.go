@@ -532,7 +532,7 @@ func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.
 // their order changes nothing else -- only which message wins in this one
 // narrow overlap window.
 //
-// plans is Step 37/38's own follow-up fix (§8.1) addition, nil-safe like
+// plans is §8.1's own follow-up fix (§8.1) addition, nil-safe like
 // this codebase's other optional collaborators (e.g. Deps.IntentClassifier
 // elsewhere) -- a nil plans skips the awaiting-plan gate entirely rather
 // than panicking, so a caller/test that genuinely has no use for plan mode

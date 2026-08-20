@@ -35,7 +35,7 @@ func (s *AutomationStore) WithTx(tx pgx.Tx) *AutomationStore {
 }
 
 // Create inserts a brand-new automations row -- no HTTP caller exists yet
-// in this Step (Step 52/76 own that surface); used directly by this
+// in this Step (§8.4/§10 own that surface); used directly by this
 // package's own integration tests.
 func (s *AutomationStore) Create(ctx context.Context, arg sqlcgen.CreateAutomationParams) (sqlcgen.Automation, error) {
 	return s.q.CreateAutomation(ctx, arg)

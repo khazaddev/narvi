@@ -73,7 +73,7 @@ type Builder struct {
 
 	// sourceControl and gitHubImageBuildToken back BOTH claim-time SHA
 	// resolution for a brand-new repo-bearing build (attempt, §19.1/§19.9's
-	// own Step 41/42 boundary) AND the freshness pump's own per-repo
+	// own §19.1/§19.2 boundary) AND the freshness pump's own per-repo
 	// current-tip resolution (RefreshOnce, §19.2) -- the SAME platform-level
 	// credential, since neither call site has a session/creator context to
 	// borrow a token from (a shared image has no creator). sourceControl may
@@ -474,7 +474,7 @@ func (b *Builder) claimBatch(ctx context.Context) ([]sqlcgen.ImageBuild, error) 
 // (imageresolve.go's resolveAndSetImage never resolves one, for ANY
 // spawn). §19.1's own prose says the builder resolves each repo's
 // default-branch tip SHA "at claim time" -- this is that resolution,
-// landing here per §19.9's own Step 41/42 boundary note: it needs a
+// landing here per §19.9's own §19.1/§19.2 boundary note: it needs a
 // platform-level GitHub credential no session/creator context can supply
 // (a shared image has no creator), which Step 42 is the one that adds
 // (platform.Config.GitHubImageBuildToken, threaded through NewBuilder).

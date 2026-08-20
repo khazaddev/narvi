@@ -30,7 +30,7 @@ import (
 // comment on dispatch_integration_test.go's fakeSpawnProvider for how
 // BuildImage is faked.
 //
-// # Step 41/42 boundary this file's own tests are written against
+// # §19.1/§19.2 boundary this file's own tests are written against
 //
 // resolveAndSetImage no longer calls ResolveBranchSHA, CheckCreatorGuard,
 // or decryptCreatorGitHubToken at all (imageresolve.go's own top comment)

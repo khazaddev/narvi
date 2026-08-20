@@ -160,7 +160,7 @@ func TestRepoAccessGate_NoAccess_CannotMintPendingRowNorWarmHit(t *testing.T) {
 // off an already-'ready' row, and a SECOND spawn for the same (user,
 // repo) does not pay for a second CheckRepoAccess call -- the cache
 // (repoaccesscache.go) keeps the steady-state hot path network-free after
-// the first check, exactly like Step 41/42's own "zero network calls on
+// the first check, exactly like §19.1/§19.2's own "zero network calls on
 // warm hit" property, just amortized over one check per (user, repo) per
 // RepoAccessCacheTTL instead of zero forever.
 func TestRepoAccessGate_LegitimateAccess_WarmBootAndCachedOnRepeat(t *testing.T) {

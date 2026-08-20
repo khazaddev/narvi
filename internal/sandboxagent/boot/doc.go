@@ -13,7 +13,7 @@
 // Step 15, main.go populates it from cmd/sandbox-agent's own
 // internal/sandboxagent/gitclone.CloneAll results whenever Config.
 // SessionConfig is present, and passes nil (today's original no-op)
-// otherwise. Step 16/17 are expected to extend this package (or add
+// otherwise. §6.1/§7 are expected to extend this package (or add
 // sibling ones) further as the boot sequence grows.
 //
 // Step 15 also closes the "SESSION_CONFIG delivery" gap Steps 13/14

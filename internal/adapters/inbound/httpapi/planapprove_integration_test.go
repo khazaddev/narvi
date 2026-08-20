@@ -220,7 +220,7 @@ func TestApprovePlan_Owner_HappyPath(t *testing.T) {
 // verdict wins" is a real, race-safe DB guarantee, not an application
 // convention: firing two concurrent approve requests at the SAME
 // awaiting_approval plan must produce exactly one 200 and one 409 --
-// mirroring Step 35/36's own errgroup-based concurrency-test pattern
+// mirroring §5.1/§8.3's own errgroup-based concurrency-test pattern
 // (internal/app/sessionactor/registry_integration_test.go).
 func TestApprovePlan_ConcurrentDoubleApprove_ExactlyOneWins(t *testing.T) {
 	rig := newTestRig(t)

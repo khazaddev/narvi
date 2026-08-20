@@ -329,7 +329,7 @@ func TestApplyClusterBinding_KubeconfigPermissions(t *testing.T) {
 // end-to-end proof, mirroring cloudidentity_test.go's own
 // TestCloudIdentityTokenReachesRealSpawnedHook precedent exactly (same
 // rationale: "a REAL process... via boot.RunHooks -- the SAME threaded-
-// env seam every OTHER Step 72/73b injected value already goes
+// env seam every OTHER §27.1/§27.3 injected value already goes
 // through"). This is also a mutation-test target in its own right: a
 // spawned setup.sh -- with NARVI_SESSION_CONFIG deliberately absent from
 // its env, exactly like a real kubectl invocation inside opencode's own

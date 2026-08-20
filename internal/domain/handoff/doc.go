@@ -6,7 +6,7 @@
 // small logic), decide whether there is anything worth telling an
 // engineer about and, if so, render it into typed reviewpost.Finding
 // values plus a one-way comment body -- never parsed back from posted
-// markdown, exactly like Step 47/48 already established for the ordinary
+// markdown, exactly like §8.2 already established for the ordinary
 // review-verdict path (review/reviewpost.go's own doc comments).
 //
 // Every function here is pure per §11: no I/O, no time.Now(), no
@@ -20,7 +20,7 @@
 //
 // # Why this is its own package, not a new file in reviewpost
 //
-// reviewpost (Step 47/48) is specifically about POSTING A REVIEW VERDICT:
+// reviewpost (§8.2) is specifically about POSTING A REVIEW VERDICT:
 // its Finding type is minted by the verdict-posting-tool HTTP endpoint,
 // persisted into review_findings, and feeds rebuttal/re-review
 // reconciliation -- a lifecycle this Step's own findings never enter (see

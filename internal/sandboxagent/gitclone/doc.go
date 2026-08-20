@@ -3,7 +3,7 @@
 // repo named in a SESSION_CONFIG document's Repos list, IN ORDER, into
 // workspaceDir/<name>, each spawned as a real `git clone` subprocess via
 // the shared internal/sandboxagent/supervisor.Supervisor (the same
-// process-group/reap/drain machinery Step 13/14 already use for hooks and
+// process-group/reap/drain machinery §6.4/§14.2 already use for hooks and
 // services.yml -- never a bare exec.Command); WriteAgentsManifest then
 // renders the successfully-cloned subset as a plain markdown manifest at
 // workspaceDir/AGENTS.md.

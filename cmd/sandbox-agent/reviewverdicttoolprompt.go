@@ -1,6 +1,6 @@
 // This file (reviewverdicttoolprompt.go) closes the other half of Step
 // 47's ("server-side verdict", §8.2/§5.2/§21.2) own verdict-posting tool:
-// internal/domain/review.RenderTurnPrompt (Step 46/47) renders a review
+// internal/domain/review.RenderTurnPrompt (§8.2) renders a review
 // turn's prompt with a FIXED, deterministic block instructing the agent
 // how to call POST /sessions/{sessionID}/review/verdict -- but that
 // package runs at TURN-CREATION time, in the control plane, before any

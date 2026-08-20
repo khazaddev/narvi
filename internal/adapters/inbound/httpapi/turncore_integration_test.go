@@ -479,7 +479,7 @@ func TestCreateTurnCore_AlwaysQueue_ConcurrentRequests_AllSucceed(t *testing.T) 
 }
 
 // TestCreateTurnCore_AwaitingPlan_OrdinaryTurn_Gated is this batch's own
-// flagship regression test for the new awaiting-plan gate (Step 37/38
+// flagship regression test for the new awaiting-plan gate (§8.1
 // follow-up fix, §8.1): an ordinary (planMode == false) turn creation
 // attempt against a session that currently has a plan in
 // StatusAwaitingApproval must be declined -- via httpapi.

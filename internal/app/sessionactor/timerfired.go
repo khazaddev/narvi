@@ -447,14 +447,14 @@ func (a *Actor) handleTurnDeadlineTimer(ctx context.Context) error {
 		}
 
 		// sessionRow is fetched once here, reused below both by
-		// OnTurnCompleted (Step 55/56) and by enqueueOutboxNotification
+		// OnTurnCompleted (§25.6/§25.9) and by enqueueOutboxNotification
 		// (§5.1) further down this same transact.
 		sessionRow, err := a.stores.session.WithTx(tx).Get(ctx, a.sessionID)
 		if err != nil {
 			return fmt.Errorf("sessionactor: get session: %w", err)
 		}
 
-		// Step 55/56 ("workflow execution engine" / "workflow HITL gate +
+		// §25.6/§25.9 ("workflow execution engine" / "workflow HITL gate +
 		// circuit breaker", §25.6/§25.9): this turn just reached a real
 		// terminal state via its own turn_deadline, exactly like a real
 		// execution_complete event would (pushpr.go's completeProcessingTurn)

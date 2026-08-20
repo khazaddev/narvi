@@ -302,7 +302,7 @@ func renderArchDecision(ad ArchDecision) string {
 // general untrusted-free-text escaper: every field VerdictInput's POST
 // body lets the reviewing model author as open prose -- Finding.Description
 // (finding.go's own doc comment); since a Phase 5 audit finding closed
-// the gap Step 66/67/69 opened, every Digest field of the SAME
+// the gap §26.1/§26.2/69 opened, every Digest field of the SAME
 // provenance (Summary, AdequacyExplanation, StackRisks, UnverifiedLimits,
 // ProposedBody, ContestedPoints, and each ArchDecision's own three
 // fields); and the verdict's own narrative `summary` parameter

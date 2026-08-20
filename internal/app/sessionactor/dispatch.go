@@ -455,7 +455,7 @@ func (a *Actor) planDispatch(ctx context.Context) (*spawnPlan, *dispatchPlan, er
 		// force-respawning a healthy, actively-connected Ready sandbox out
 		// from under a live session -- worse than leaving this narrower gap
 		// open and documented, matching this project's own established
-		// practice elsewhere (e.g. Step 21/22's own documented, deliberate
+		// practice elsewhere (e.g. §9.3/§3.2's own documented, deliberate
 		// gaps) of naming a real, known-open limitation rather than
 		// silently leaving it unstated or attempting a half-solution.
 		status := sandbox.State(sandboxRow.Status)
@@ -1952,7 +1952,7 @@ func (a *Actor) failDispatchedTurn(ctx context.Context, turnID pgtype.UUID, reas
 			return fmt.Errorf("sessionactor: update turn status: %w", err)
 		}
 
-		// Step 55/56 ("workflow execution engine" / "workflow HITL gate +
+		// §25.6/§25.9 ("workflow execution engine" / "workflow HITL gate +
 		// circuit breaker", §25.6/§25.9): this turn just reached a real
 		// terminal state because its prompt never even reached the sandbox
 		// -- see OnTurnCompleted's own doc comment for why this, pushpr.go's

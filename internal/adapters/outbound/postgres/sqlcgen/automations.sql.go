@@ -489,7 +489,7 @@ RETURNING id, name, prompt, repos, status, consecutive_failures, created_by, cre
 `
 
 // Backs automation.TriggerResume (internal/domain/automation) -- no HTTP
-// caller exists yet in this Step (Step 52/76 own the actual "Resume"
+// caller exists yet in this Step (§8.4/§10 own the actual "Resume"
 // button, mockups.html's own Automations view), reserved so that surface
 // needs no store-layer change to use it. Guarded by "AND status =
 // 'paused'" so a non-paused automation's own resume attempt affects zero

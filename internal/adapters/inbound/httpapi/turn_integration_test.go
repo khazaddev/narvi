@@ -294,7 +294,7 @@ func TestCreateTurn_ConcurrentRequests_OnlyOneSucceeds(t *testing.T) {
 }
 
 // TestCreateTurn_AwaitingPlan_Returns409NothingCreated is this batch's own
-// REST-level regression test for the new awaiting-plan gate (Step 37/38
+// REST-level regression test for the new awaiting-plan gate (§8.1
 // follow-up fix, §8.1): a plan_mode=false relaunch POST against a session
 // that currently has a plan in StatusAwaitingApproval gets a 409 -- the
 // SAME CreateTurnError shape TestCreateTurn_InFlightTurnExists_Returns409

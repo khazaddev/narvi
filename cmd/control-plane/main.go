@@ -614,7 +614,7 @@ func serve() error {
 	// prompt instead of always falling back to bot attribution) AND into
 	// the magic-link consume route's own Deps further down. One shared
 	// identitylink.Deps value, built once here from the SAME userStore/
-	// identityStore/auditLogStore every other Step 20/39 caller already
+	// identityStore/auditLogStore every other §13.1/§13.2 caller already
 	// uses -- never a second, independently-constructed copy of any of
 	// them.
 	identityLinkPromptStore := postgres.NewIdentityLinkPromptStore(pool)
@@ -1219,7 +1219,7 @@ func serve() error {
 	// to GET /sessions/{sessionID}/ws above, which already has its OWN,
 	// type-specific auth (the sandbox half's header-bearer-token handshake
 	// and the client half's own post-upgrade ws-token subscribe message,
-	// both Step 18/19's own precedent, untouched) — gating the WS UPGRADE
+	// both §3.2/§6.2's own precedent, untouched) — gating the WS UPGRADE
 	// itself behind a cookie check would break the sandbox-agent's own
 	// connection, which carries no cookie at all, only its own
 	// Authorization header.

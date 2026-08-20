@@ -25,7 +25,7 @@ import (
 // every session. An arbitrary automation's own turn carries no such tool
 // call today, and building one (wiring a new OpenCode-facing tool +
 // server-side posting endpoint an agent must be prompted to call, mirroring
-// Step 47/48's own review-verdict machinery) would be a materially larger,
+// §8.2's own review-verdict machinery) would be a materially larger,
 // separate feature -- out of this Step's own scope, and NOT invented here
 // to avoid conflicting with a design nobody has specified for automations
 // generically. This function is the honest, shippable alternative: it
