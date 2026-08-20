@@ -699,10 +699,13 @@ const otlpEndpointEnvVarName = "NARVI_OTLP_ENDPOINT"
 
 // InvalidOTLPEndpointError is returned by Load when NARVI_OTLP_ENDPOINT is
 // set but is not a well-formed absolute http(s) URL with no path/query/
-// fragment -- platform.SetupOTel's own OTLP exporters each append their
-// well-known "/v1/traces"/"/v1/metrics" suffix to this SAME base URL (the
-// OTel spec's own "general endpoint" behavior), so a value already carrying
-// a path would produce a doubled-up URL no real collector could match.
+// fragment -- platform.SetupOTel's own OTLP exporters each use their own
+// fixed "/v1/traces"/"/v1/metrics" route as the DEFAULT for this SAME base
+// URL (the OTel spec's own "general endpoint" behavior: the exporter's
+// cleanPath step REPLACES whatever path it is given with that default, it
+// does not append to it), so a value already carrying a path would not
+// double up against that route -- it would silently override it and send
+// telemetry somewhere the real collector is not listening.
 type InvalidOTLPEndpointError struct {
 	Value  string
 	Reason string
@@ -997,16 +1000,21 @@ func canonicalCloudIdentityIssuerURL(raw string) (string, error) {
 // BOTH otlptracehttp.WithEndpointURL and otlpmetrichttp.WithEndpointURL
 // (§33): a well-formed absolute URL, http or https scheme (which also
 // selects TLS vs. plaintext for the exporter's own HTTP client), non-empty
-// host, and no path of its own -- not even a bare trailing slash. Mirrors
-// canonicalCloudIdentityIssuerURL's own reasoning one concatenation over:
-// both OTLP HTTP exporters append their own fixed "/v1/traces"/"/v1/metrics"
-// suffix to whatever base URL they are given (the OTel spec's own "general
-// endpoint" behavior, doc.go's own "target base URL (\"/v1/traces\" is
-// appended)"), so a value already carrying a path -- including a trailing
-// slash, a real path segment as far as that suffix logic is concerned --
-// would silently double up against it and never reach a real collector's
-// actual route. Returns the canonicalized "scheme://host" string built from
-// parsed.Scheme/parsed.Host alone, exactly like canonicalCloudIdentityIssuerURL,
+// host, and no path of its own -- not even a bare trailing slash. UNLIKE
+// canonicalCloudIdentityIssuerURL's own neighboring reasoning (that
+// function's own doc comment), this is not a concatenation hazard: each
+// OTLP HTTP exporter's own cleanPath step REPLACES whatever path its base
+// URL carries with its fixed "/v1/traces"/"/v1/metrics" default when none
+// was supplied, it does not append to one that was (internal/oconf's own
+// cleanPath -- see the inline comment on the Path-rejection check below
+// for the full mechanism). So a value already carrying a path -- including
+// a trailing slash, a real path segment as far as that logic is concerned
+// -- would not double up against the exporter's own route; it would
+// silently OVERRIDE it instead, and never reach a real collector's actual
+// route either way. Rejecting it here is still correct; only the
+// mechanism differs from canonicalCloudIdentityIssuerURL's own genuine
+// concatenation case. Returns the canonicalized "scheme://host" string
+// built from parsed.Scheme/parsed.Host alone, exactly like canonicalCloudIdentityIssuerURL,
 // so the raw env value never reaches Config.OTLPEndpoint and no downstream
 // caller needs to remember to normalize it itself.
 func canonicalOTLPEndpointURL(raw string) (string, error) {

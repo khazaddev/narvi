@@ -112,10 +112,14 @@ import (
 // validated absolute http(s) URL with no path of its own, guaranteed by
 // Config.OTLPEndpoint's own boot-time validation, never accepted raw from a
 // caller) swaps in otlptracehttp/otlpmetrichttp instead, both pointed at
-// the SAME base URL: each OTLP/HTTP exporter appends its own well-known
-// "/v1/traces" or "/v1/metrics" suffix (the OTel spec's own "general
-// endpoint" behavior), so one shared value correctly reaches both routes on
-// one collector rather than needing two separately-configured endpoints.
+// the SAME base URL: each OTLP/HTTP exporter's own cleanPath step uses its
+// well-known "/v1/traces" or "/v1/metrics" route as the default for a base
+// URL carrying no path of its own (the OTel spec's own "general endpoint"
+// behavior; that default REPLACES rather than appends -- Config.
+// OTLPEndpoint's own boot-time validation is what guarantees this base URL
+// never carries a path for it to replace), so one shared value correctly
+// reaches both routes on one collector rather than needing two
+// separately-configured endpoints.
 //
 // Every batching/export timing and retry knob -- the batch span
 // processor's own flush interval, each OTLP exporter's own per-batch
