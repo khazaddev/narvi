@@ -276,6 +276,39 @@ production-useful (mode A gains cross-PR memory). Steps 103-104 wait on Step 100
 on Step 102 actually shipping — under a kill decision neither has a corpus to build against, and
 both stay unscheduled.
 
+## Phase 10 — Metrics export (2 Steps, additive)
+
+The path from an emitted metric to a backend that can evaluate an alert on it. `platform.SetupOTel`
+wires `stdouttrace`/`stdoutmetric` and nothing else — there is no OTLP module in `go.mod` at all —
+so every instrument this platform registers is written to its own process's stdout and aggregated
+by nobody. That is the whole of why §10-P6's exit criterion ("platform serving production traffic
+under monitoring") is unmet: the code half is in place, the monitoring half is not, and
+`docs/PRODUCTION_CHECKLIST.md` item 5 already records it as a launch blocker rather than a silent
+gap. Technical plan §33.
+
+On placement: by the letter of the Phase 5/6 rule above this is rollout-enabling platform glue and
+belongs in Phase 6. It is not folded in, for the reason Phases 8 and 9 give for themselves —
+Phase 6's own Steps were long since scoped, shipped and audited, folding Steps into a closed phase
+would rewrite history, and inserting them mid-sequence would shift Steps 79-104 (the Phase 4
+standing rule) and every cross-reference that names them. It therefore lands appended as its own
+phase, with execution order stated here instead.
+
+Execution order: schedulable immediately; it waits on nothing and nothing waits on it. **The two
+Steps do not gate the same thing, and the distinction is the scheduling decision.** Step 105 alone
+closes P6's exit criterion — it makes real, at once, every instrument registered control-plane-side
+(outbox lag, orphan reaps, rollout refusals, image builds, cloud-identity mints, and Step 77's five
+spawn/liveness/watchdog/false-failure instruments). Step 106 reaches only the four instruments
+emitted inside the sandbox, and gates no phase: what it buys is that **SLO 1 and
+`BootDurationP95High` stop resting on a metric nobody can read**. Step 105 is small and urgent;
+Step 106 is neither, and may be scheduled independently. Step 106 is ordered after Step 105 so that
+its own exit criterion is checkable end to end.
+
+| Step | Title | Content | Ref. |
+|---|---|---|---|
+| 105 | control-plane OTLP export | Config-gated OTLP exporter in `platform.SetupOTel` behind a new validated `platform.Config` endpoint field (the flag-by-config precedent the object-store endpoint already sets); **unset → stdout exactly as today**, so dev, CI and every existing deployment are byte-identical and this Step is a no-op until an operator opts in. Makes every control-plane-side instrument real in one change. sandbox-agent shares `SetupOTel` but is never given the endpoint — and could not reach a collector anyway, since §27.6's server-appended allowlist floor admits only the control-plane host plus the session's git hosts (`allowlistFloorHosts`), which is a property to preserve, not to widen. Exit: an integration test against a fake OTLP receiver observes the control plane's metrics, and the unset-endpoint path is proven unchanged | §5.3, §33 |
+| 106 | sandbox boot-timing relay | The four sandbox-emitted histograms (`sandbox_agent_boot_duration_seconds`, `..._hook_rerun_...`, `..._git_fetch_...`, `..._git_checkout_...`) stop being recorded inside the sandbox and are recorded control-plane-side instead, from a new best-effort `boot_timing` sandbox-ws event carrying the **already-measured** seconds plus its low-cardinality tags — the fact crosses the wire, never raw observations or pre-aggregated buckets, so the value keeps being measured by the same `time.Since` bracket on the sandbox's own clock and §33.3's "identical semantics, same names, same buckets" property holds. Recording is gated on `appendRawEvent`'s own `inserted` flag, the Step 77 `turn_false_failure_total` precedent, because §6.1's reconnect resend would otherwise double-count. The repo name is dropped from metric attributes as unbounded cardinality (it still rides the event into the `events` log for per-session debugging). Deletes the two sandbox-side telemetry files; keeps sandbox-agent's `SetupOTel` bootstrap. Exit: a forced WS reconnect replay leaves each histogram holding its data point **exactly once** | §27, §33, §6.1 |
+
+
 ## Sequencing & parallelism
 
 - **Parallel streams in phase 1**: control-plane (07-08, 09-12, 18-20) ∥ sandbox-agent (13-17) — converge at 21.

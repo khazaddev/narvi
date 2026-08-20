@@ -4775,3 +4775,109 @@ WHICH repo_settings read failed and why, but the `transient` attribute on the re
 one signal to check first. A transient failure refuses that ONE attempt but is retried by the
 channel's own ordinary retry path (§32.5) once Postgres recovers; it is not evidence the rollback
 itself is broken, and does not need a rollback re-applied.
+
+## 33. Metrics export path
+
+§5.3 required observability "day one, not later", and the instruments exist — but nothing carries
+them anywhere. `platform.SetupOTel` (`internal/platform/otel.go`) builds a `stdouttrace` exporter
+and a `stdoutmetric` exporter, registers both globally, and stops; `go.mod` carries no OTLP module
+at all. Every metric this platform emits is therefore written as JSON to its own process's stdout
+and aggregated by nobody, which is precisely why §10-P6's exit criterion is unmet. The alert rules
+under `deploy/observability/alerts/` are correctly derived and CI-checked against real instrument
+names, and they page no one.
+
+### 33.1 The instruments are split across two processes, and only one of them is easy
+
+The control plane registers eleven files' worth of instruments and is a long-lived single process:
+an OTLP endpoint simply works there. sandbox-agent registers four histograms
+(`internal/sandboxagent/boot/telemetry.go`, `internal/sandboxagent/gitclone/telemetry.go`) and runs
+**inside the ephemeral sandbox** — minutes of life, one process per session, stdout going to the
+sandbox's own log stream. One of those four, `sandbox_agent_boot_duration_seconds`, is the metric
+behind SLO 1 and `BootDurationP95High`.
+
+Two properties make the sandbox side genuinely harder rather than merely different. The periodic
+metric reader runs at the library default while the process may live four minutes, and the bounded
+shutdown flush covers clean exits and panics but not a SIGKILL or a provider teardown — so metrics
+can be lost before they are ever exported. And §27.6's egress allowlist floor, appended server-side,
+admits exactly the control-plane host plus the session's git hosts (`allowlistFloorHosts`); a
+collector endpoint is not in it.
+
+### 33.2 Control-plane derivation was tested first, and fails for all four
+
+The cheapest possible design is no transport at all: recompute the durations control-plane-side from
+events already on the wire and already persisted. It does not hold, and the reasons are worth
+recording so the idea is not re-proposed.
+
+- **`sandbox_agent_boot_duration_seconds`.** A proxy exists — first "ready" arrival to the first
+  nil-phase heartbeat — and is disqualifyingly lossy at both ends. `Bridge.MarkBootComplete` is a
+  bare `setLastBootPhase(nil)` with **no forced heartbeat**, unlike its sibling
+  `Bridge.SetConversationID`, which does push `forceHeartbeat`. Boot completion is therefore learned
+  up to a full `SandboxWSHeartbeatInterval` (30s) late — against a 240s alert threshold, up to ~12%
+  systematic inflation of the exact p95 the alert reads. The start is separately offset because the
+  WS dial runs concurrently with boot. And SLO 1 pins the metric's semantics to the sandbox's own
+  wall-clock measurement, never including the connect handshake: an arrival-time derivation is a
+  different quantity wearing the same name.
+- **Failed boots vanish entirely.** On `bootErr != nil` sandbox-agent cancels its context and exits;
+  no wire event says a boot failed. The `failed=true` data points have no control-plane equivalent
+  at all.
+- **The hook and git-fetch phases emit nothing** on the wire, and the one `git_sync` checkout event
+  carries no timestamp. Arrival-time deltas are unusable by construction anyway: best-effort events
+  are buffered and **resent in bulk on reconnect**, so a mid-boot blip collapses every phase arrival
+  onto a single instant.
+
+### 33.3 The decision: ship the fact, record centrally
+
+sandbox-agent sends one new **best-effort** `boot_timing` event carrying the seconds it has already
+measured plus its low-cardinality tags, and the control plane records the histogram. Not raw
+observations, not pre-aggregated buckets — the measured fact.
+
+This keeps fidelity exactly: the duration is still produced by the same `time.Since` bracket on the
+sandbox's own clock, so SLO 1's documented semantics survive, and the metric keeps its name and its
+hand-tuned buckets. It needs no new transport, no protocol beyond one additive event type, and no
+egress change — the channel is the authenticated WebSocket that is already open before boot begins,
+which also dissolves the ephemeral-flush problem, since the fact crosses the wire at measurement
+time rather than waiting for an export interval the process may not survive.
+
+Three properties are load-bearing and are requirements, not implementation detail:
+
+1. **Best-effort, never critical.** Telemetry does not earn a place among §6.1's critical acked
+   types, and its loss must never fail a boot or a turn.
+2. **Recording is gated on `appendRawEvent`'s `inserted` flag.** §6.1's reconnect resend would
+   otherwise double-count every buffered timing — the identical defect Step 77 fixed in
+   `turn_false_failure_total`, whose fix is the precedent to copy rather than re-derive.
+3. **The repo name is dropped from metric attributes.** It is unbounded cardinality; it rides the
+   event into the `events` log instead, where per-session debugging actually wants it.
+
+### 33.4 Rejected: direct OTLP from the sandbox, and provider log scraping
+
+**Direct OTLP** would require widening §27.6's allowlist floor to admit a collector host in every
+customer sandbox's reachable set, and — decisively — any ingestion credential would have to live
+where customer-directed, model-authored code runs. That is the exact secret class this codebase
+strips from every child environment, and the reason §27.4's `kube-credential` subcommand was removed
+rather than given the environment it wanted.
+
+**Scraping the sandbox's stdout through the provider** has nothing to build on: the Modal adapter's
+surface is lifecycle operations only, with no log-fetch shape. It would mean inventing a wire
+operation *and* parsing an unstable exporter's JSON out of an interleaved boot log — a parallel
+mechanism, and a fragile one.
+
+### 33.5 Vendor stance, and the documents this invalidates
+
+The alert JSON's `condition` strings stay what they are: **CI-checked threshold documentation**, not
+a source to generate a backend's rule language from. §1 deliberately pins no observability vendor,
+`internal/ops/schema.go` is written to that, and generating vendor formats would pin one while
+duplicating a translation each deployment performs once. Evaluation remains the operator's
+collector's job, as `docs/PRODUCTION_CHECKLIST.md` item 5 already states.
+
+Shipping this invalidates text that must move with it: the checklist item asserting stdout-only
+export with no OTLP anywhere (Step 105 turns it into a passable check); SLO 1's Metric paragraph and
+`docs/runbooks/slow-boot-and-spawn.md`, both of which cite the sandbox-side telemetry file Step 106
+deletes — the `narvi-metrics` fences themselves stay valid, since no instrument name changes; and
+`internal/platform/otel.go`'s own top comment. SLO 1 additionally contains a loose claim that
+boot-progress reports are emitted throughout the gitclone phase — gitclone emits `git_sync`, not
+`boot_progress`; harmless for liveness, since both bump `last_seen_at`, but it should be corrected
+in the same pass.
+
+One consequence to state rather than discover: with the control plane recording these histograms, a
+multi-pod deployment splits each one across pods' exporters. That is ordinary OTel bucket merging at
+query time, not a defect, but it is a difference from the single-process recording it replaces.
