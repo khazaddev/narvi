@@ -14,7 +14,7 @@ func NormalizeBranchName(name string) string {
 	return strings.ToLower(name)
 }
 
-// sessionBranchPrefix is this package's own invented convention (Step 29,
+// sessionBranchPrefix is this package's own invented convention (§3.4,
 // "gitstate in-sandbox") for a GENERATED session branch name -- nothing
 // else in the codebase names one (internal/app/sessionactor/pushpr.go's own
 // doc comment documents the separate, pre-existing gap this fills: a repo

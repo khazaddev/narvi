@@ -1,4 +1,4 @@
-// This file (members.go) implements Step 39's ("identities + full RBAC")
+// This file (members.go) implements §13.2's ("identities + full RBAC")
 // own second deliverable: the backend-only members API (§13.2/§13.3) --
 // list members (with role, linked identities, and system-wide pending
 // link-prompt state), an admin-only role-change endpoint, admin manual

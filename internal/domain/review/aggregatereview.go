@@ -1,6 +1,6 @@
 package review
 
-// This file (aggregatereview.go) implements Step 50's own ("release PR
+// This file (aggregatereview.go) implements §15's own ("release PR
 // review", §15.3) conditional aggregate-diff-review trigger: a pure
 // decision function, "same style as the domain decision functions"
 // (§15.3's own words, §3.2/§9.1 -- e.g. sandbox.Transition/turn.

@@ -2,7 +2,7 @@ package reviewverdict
 
 import "github.com/khazaddev/narvi/internal/domain/review"
 
-// This file implements §26.4's own named residual, closed by Step 71:
+// This file implements §26.4's own named residual, closed by §26.4:
 // "Corroborating the claim against the persisted sub_task_finish trace is
 // what would make the heading 'structural'... until it ships this field is
 // trusted, not verified." A schema-required `CounterReview: done`
@@ -48,7 +48,7 @@ import "github.com/khazaddev/narvi/internal/domain/review"
 // SubTaskStartRecord is the one slice of a persisted sub_task_start
 // event's own wire payload (contracts/sandbox-ws/v1/events.schema.json)
 // this comparison needs: which sub-task (SubTaskID) was announced as
-// which named sub-agent (SubAgentType, Step 71's own new wire field,
+// which named sub-agent (SubAgentType, §26.4's own new wire field,
 // sourced from the task tool's own "subagent_type" dispatch parameter --
 // see internal/adapters/outbound/opencode/translate.go's
 // taskInputSubAgentType for the extraction, and that field's own doc

@@ -35,7 +35,7 @@ func testTimeouts() platform.Timeouts {
 }
 
 // TestSandboxSecretValidateName_RejectsOpenCodeConfigEnvVar is the direct
-// regression test for Step 72's own adversarial-review CRITICAL fix: this
+// regression test for an adversarial-review CRITICAL fix: this
 // binary's own openCodeConfigEnvVar constant (the literal name this file
 // injects) must itself be rejected by sandboxsecret.ValidateName -- proof
 // the reservation (internal/domain/sandboxsecret.OpenCodeReservedPrefix)

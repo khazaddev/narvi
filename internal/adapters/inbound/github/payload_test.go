@@ -268,9 +268,9 @@ func TestParsePullRequestReviewComment(t *testing.T) {
 // outside this package's own three-lane dispatch (issue_comment,
 // pull_request_review_comment, pull_request -- payload.go's own parseMention
 // doc comment) is acknowledged and ignored, never an error. "star" is used
-// here rather than "pull_request" (this test's own pre-Step-46 event type
-// choice): pull_request is NOW a recognized-and-dispatched event type (Step
-// 46, "review sessions", §8.2's own label-retrigger lane) -- see
+// here rather than "pull_request" (this test's own pre-existing event type
+// choice): pull_request is NOW a recognized-and-dispatched event type
+// ("review sessions", §8.2's own label-retrigger lane) -- see
 // TestParsePullRequestLabeled below for that lane's own dedicated coverage,
 // including its own "labeled action, but no configured label matches" case,
 // which is a DIFFERENT reason for ok=false than "this event type is not
@@ -358,7 +358,7 @@ func TestParseMention_CommenterIdentity(t *testing.T) {
 			wantCommenterLogin: "",
 		},
 		{
-			// Step 46 ("review sessions", §8.2): a label-triggered retrigger
+			// §8.2 ("review sessions", §8.2): a label-triggered retrigger
 			// has no comment/commenter at all -- CommenterID/CommenterLogin
 			// instead come from GitHub's own "sender" field (the label
 			// applier), mirroring the comment.user shape (mention.
@@ -399,7 +399,7 @@ func TestParseMention_CommenterIdentity(t *testing.T) {
 	}
 }
 
-// TestParsePullRequestLabeled is Step 46's ("review sessions", §8.2) own
+// TestParsePullRequestLabeled is §8.2's ("review sessions", §8.2) own
 // table-driven test for the manual re-trigger-via-label lane: a
 // pull_request/"labeled" event whose label.name matches this deployment's
 // own configured reReviewLabel is actionable; every other action/label

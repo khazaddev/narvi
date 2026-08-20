@@ -342,7 +342,7 @@ func doLogin(t *testing.T, client *http.Client, serverURL string) string {
 	return state
 }
 
-// doLoginWithNext mirrors doLogin but also passes ?next=next -- Step 39's
+// doLoginWithNext mirrors doLogin but also passes ?next=next -- §13.2's
 // ("identities + full RBAC", §13.2) own addition, letting a test drive the
 // post-login-redirect-target flow the SAME way internal/adapters/inbound/
 // identitylink's magic-link consume handler will (see login.go's own doc
@@ -480,7 +480,7 @@ func TestCallback_FirstTimeSignIn_HappyPath(t *testing.T) {
 	}
 }
 
-// TestCallback_HonorsSafeNextRedirect proves Step 39's ("identities + full
+// TestCallback_HonorsSafeNextRedirect proves §13.2's ("identities + full
 // RBAC", §13.2) own ?next= addition: a login started with a safe,
 // same-origin absolute-path next redirects there on success, instead of
 // this flow's own fixed "/" default.

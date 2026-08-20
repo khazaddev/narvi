@@ -160,7 +160,7 @@ type Timeouts struct {
 	// (invented).
 	HealthCheckTimeout time.Duration
 
-	// --- Step 07 standalone additions: no ordering relationship with the
+	// --- §3.2 standalone additions: no ordering relationship with the
 	// two chains above (or with the PR-06 additions), so — per that PR's
 	// own precedent — just plain fields with sensible defaults, not wired
 	// into a fake invariant link.
@@ -215,8 +215,8 @@ type Timeouts struct {
 	// alarm checks. Not given an explicit figure in the plan; chosen as 30s.
 	InactivityMinCheckInterval time.Duration
 
-	// --- Step 11 standalone additions: no ordering relationship with
-	// either invariant chain above (or with the PR-06/Step 07 additions),
+	// --- §2 standalone additions: no ordering relationship with
+	// either invariant chain above (or with the PR-06/§1 additions),
 	// so — per those additions' own precedent — plain fields with
 	// sensible defaults, not wired into a fake invariant link.
 
@@ -242,7 +242,7 @@ type Timeouts struct {
 	// reasonably quickly.
 	TimerClaimDuration time.Duration
 
-	// --- Step 13 standalone additions: no ordering relationship with
+	// --- §6.4 standalone additions: no ordering relationship with
 	// either invariant chain above (or with any prior Step's standalone
 	// additions), so — per those additions' own precedent — plain fields
 	// with sensible defaults, not wired into a fake invariant link.
@@ -277,7 +277,7 @@ type Timeouts struct {
 	// existing Timeouts field. Not specified in the plan; chosen as 5s.
 	RepoSHADiscoveryTimeout time.Duration
 
-	// --- Step 14 standalone additions: no ordering relationship with
+	// --- §14.2 standalone additions: no ordering relationship with
 	// either invariant chain above (or with any prior Step's standalone
 	// additions), so — per those additions' own precedent — plain fields
 	// with sensible defaults, not wired into a fake invariant link.
@@ -300,7 +300,7 @@ type Timeouts struct {
 	// health endpoint.
 	ServiceReadinessPollInterval time.Duration
 
-	// --- Step 15 standalone additions: no ordering relationship with
+	// --- §6.4 standalone additions: no ordering relationship with
 	// either invariant chain above (or with any prior Step's standalone
 	// additions), so — per those additions' own precedent — plain fields
 	// with sensible defaults, not wired into a fake invariant link.
@@ -323,7 +323,7 @@ type Timeouts struct {
 	// ExpiresAt is treated as already stale, never handed back as-is.
 	CredentialExpiryBuffer time.Duration
 
-	// ProviderCredentialFetchTimeout (Step 53, "provider credential
+	// ProviderCredentialFetchTimeout ("provider credential
 	// injection", §25.1/§25.3) bounds a single call to CP's
 	// /sessions/{id}/provider-credentials delivery endpoint
 	// (internal/sandboxagent/credentials.CPClient.FetchProviderCredentials),
@@ -334,7 +334,7 @@ type Timeouts struct {
 	// not a large data transfer") -- this call resolves and decrypts at
 	// most 3 rows server-side, comparably lightweight. Deliberately its
 	// own field, not a reuse of CredentialFetchTimeout: the two calls hit
-	// different CP endpoints for a different secret class, and Step 53's
+	// different CP endpoints for a different secret class, and §25.1's
 	// own "in-memory-only fetch, no disk cache" design (unlike the SCM
 	// credential-helper's own flock'd disk cache) means this timeout has
 	// no CredentialExpiryBuffer-shaped sibling of its own -- a failed
@@ -342,7 +342,7 @@ type Timeouts struct {
 	// stale-cache question.
 	ProviderCredentialFetchTimeout time.Duration
 
-	// --- Step 16 standalone additions: no ordering relationship with
+	// --- §6.1 standalone additions: no ordering relationship with
 	// either invariant chain above (or with any prior Step's standalone
 	// additions), so — per those additions' own precedent — plain fields
 	// with sensible defaults, not wired into a fake invariant link.
@@ -371,7 +371,7 @@ type Timeouts struct {
 	// above is capped at. Not specified in the plan; chosen as 30s.
 	SandboxWSReconnectMaxBackoff time.Duration
 
-	// --- Step 17 standalone additions: no ordering relationship with
+	// --- §7 standalone additions: no ordering relationship with
 	// either invariant chain above (or with any prior Step's standalone
 	// additions), so — per those additions' own precedent — plain fields
 	// with sensible defaults, not wired into a fake invariant link.
@@ -393,7 +393,7 @@ type Timeouts struct {
 	// ServiceReadinessPollInterval's own precedent exactly.
 	OpenCodeReadinessPollInterval time.Duration
 
-	// --- Step 18 standalone additions: no ordering relationship with
+	// --- §3.2 standalone additions: no ordering relationship with
 	// either invariant chain above (or with any prior Step's standalone
 	// additions), so — per those additions' own precedent — a plain field
 	// with a sensible default, not wired into a fake invariant link.
@@ -410,7 +410,7 @@ type Timeouts struct {
 	// heartbeat cadence would otherwise mask it.
 	SandboxEventAckTimeout time.Duration
 
-	// --- Step 19 standalone additions: no ordering relationship with
+	// --- §6.2 standalone additions: no ordering relationship with
 	// either invariant chain above (or with any prior Step's standalone
 	// additions), so — per those additions' own precedent — plain fields
 	// with sensible defaults, not wired into a fake invariant link.
@@ -429,7 +429,7 @@ type Timeouts struct {
 	// TTL".
 	WSTokenTTL time.Duration
 
-	// --- Step 20 standalone additions: no ordering relationship with
+	// --- §13.1 standalone additions: no ordering relationship with
 	// either invariant chain above (or with any prior Step's standalone
 	// additions), so — per those additions' own precedent — plain fields
 	// with sensible defaults, not wired into a fake invariant link.
@@ -453,7 +453,7 @@ type Timeouts struct {
 	// it for.
 	UserSessionTTL time.Duration
 
-	// --- Step 21 standalone additions ("e2e happy path"): no ordering
+	// --- §9.3 standalone additions ("e2e happy path"): no ordering
 	// relationship with either invariant chain above (or with any prior
 	// Step's standalone additions), so — per those additions' own
 	// precedent — plain fields with sensible defaults, not wired into a
@@ -518,7 +518,7 @@ type Timeouts struct {
 	// able to hang forever. Not specified in the plan; chosen as 30s.
 	OpenCodeRequestTimeout time.Duration
 
-	// --- Step 44 standalone addition ("OpenCode adapter: context-overflow
+	// --- §7.2 standalone addition ("OpenCode adapter: context-overflow
 	// compaction retry", §7.2): no ordering relationship with either
 	// invariant chain above (or with any prior Step's standalone
 	// additions), so -- per those additions' own precedent -- a plain
@@ -644,7 +644,7 @@ type Timeouts struct {
 	// specified in the plan; chosen as 1h.
 	ExpiredCredentialCleanupInterval time.Duration
 
-	// --- Step 22 standalone additions ("snapshots & restore"): no
+	// --- §3.2 standalone additions ("snapshots & restore"): no
 	// ordering relationship with either invariant chain above (or with any
 	// prior Step's standalone additions), so -- per those additions' own
 	// precedent -- a plain field with a sensible default, not wired into a
@@ -660,7 +660,7 @@ type Timeouts struct {
 	// can genuinely take longer. Not specified in the plan; chosen as 60s.
 	SnapshotMintTimeout time.Duration
 
-	// --- Step 25 standalone addition ("reconciler + GC"): no ordering
+	// --- §5.3 standalone addition ("reconciler + GC"): no ordering
 	// relationship with either invariant chain above (or with any prior
 	// Step's standalone additions), so -- per those additions' own
 	// precedent -- a plain field with a sensible default, not wired into a
@@ -673,7 +673,7 @@ type Timeouts struct {
 	// row 25 gives this explicitly: "60s loop against the provider API".
 	ReconcilerInterval time.Duration
 
-	// --- Step 25 fix (reconciler orphan-GC debounce): a real,
+	// --- §5.3 fix (reconciler orphan-GC debounce): a real,
 	// empirically-reproduced race, not covered by either invariant chain
 	// above -- but DOES need its own pairwise check against
 	// ReconcilerInterval (see Validate() below) for the guarantee it
@@ -730,7 +730,7 @@ type Timeouts struct {
 	// it uncleaned indefinitely.
 	ReconcilerOrphanConfirmationPeriod time.Duration
 
-	// --- Step 26 standalone additions ("image builds", §8.5-note/§10-P2):
+	// --- §8.5 standalone additions ("image builds", §8.5-note/§10-P2):
 	// no ordering relationship with either invariant chain above (or with
 	// any prior Step's standalone additions), so -- per those additions'
 	// own precedent -- plain fields with sensible defaults, not wired into
@@ -773,7 +773,7 @@ type Timeouts struct {
 	// first one, so it does not contradict §3.5.
 	ImageBuildBackoffMax time.Duration
 
-	// --- Step 27 standalone addition ("mocking + contract drift", §14.3):
+	// --- §14.3 standalone addition ("mocking + contract drift", §14.3):
 	// no ordering relationship with either invariant chain above (or with
 	// any prior Step's standalone additions), so -- per those additions'
 	// own precedent -- a plain field with a sensible default, not wired
@@ -788,13 +788,13 @@ type Timeouts struct {
 	// identical reasoning and value exactly (this codebase's own
 	// convention is one named timeout per distinct network-call type, even
 	// when two types happen to share the same chosen value -- see
-	// RepoSHAResolutionTimeout's own addition in Step 26 for the precedent
+	// RepoSHAResolutionTimeout's own addition in §8.5 for the precedent
 	// this repeats rather than reuses). Not specified in the plan; chosen
 	// as 10s, matching RepoSHAResolutionTimeout/CredentialFetchTimeout's
 	// own "lightweight call, not a large data transfer" reasoning.
 	ContractsFingerprintResolutionTimeout time.Duration
 
-	// --- Step 29 standalone addition ("gitstate in-sandbox", §3.4): no
+	// --- §3.4 standalone addition ("gitstate in-sandbox", §3.4): no
 	// ordering relationship with either invariant chain above (or with any
 	// prior Step's standalone additions), so -- per those additions' own
 	// precedent -- a plain field with a sensible default, not wired into a
@@ -814,7 +814,7 @@ type Timeouts struct {
 	// without stalling the whole boot sequence" reasoning.
 	GitSyncStepTimeout time.Duration
 
-	// --- Step 31 standalone addition ("webhook toolkit", §5.1/§5.2): no
+	// --- §5.1 standalone addition ("webhook toolkit", §5.1/§5.2): no
 	// ordering relationship with either invariant chain above (or with any
 	// prior Step's standalone additions), so -- per those additions' own
 	// precedent -- a plain field with a sensible default, not wired into a
@@ -837,7 +837,7 @@ type Timeouts struct {
 	// Slack's own commonly recommended replay window.
 	WebhookTimestampFreshnessWindow time.Duration
 
-	// --- Step 34 standalone additions ("Linear ingress", §8.10): no
+	// --- §8.10 standalone additions ("Linear ingress", §8.10): no
 	// ordering relationship with either invariant chain above (or with any
 	// prior Step's standalone additions), so -- per those additions' own
 	// precedent -- plain fields with sensible defaults, not wired into a
@@ -847,7 +847,7 @@ type Timeouts struct {
 	// body-level webhookTimestamp field may drift from now before this
 	// Step's webhook handler rejects it as a possible replay -- a
 	// DELIBERATELY DISTINCT field from WebhookTimestampFreshnessWindow
-	// above (Step 31's generic 5-minute default, "matching Slack's own
+	// above (§5.1's generic 5-minute default, "matching Slack's own
 	// commonly recommended replay window") even though both guard the same
 	// general class of check, because Linear's own real, current developer
 	// docs (confirmed during this Step's investigation) recommend a much
@@ -865,7 +865,7 @@ type Timeouts struct {
 	// webhook handler itself (posting an initial acknowledgment Agent
 	// Activity -- see internal/adapters/outbound/linearapi's own doc
 	// comment for why this is a minimal direct call, not the general
-	// Notifier/outbox abstraction Step 35 owns). Linear's own real docs
+	// Notifier/outbox abstraction §5.1 owns). Linear's own real docs
 	// require a webhook receiver to "return a response ... within 5
 	// seconds" -- this must clear that budget with real margin, so a slow
 	// or hanging Linear API call never itself causes Linear to consider
@@ -933,7 +933,7 @@ type Timeouts struct {
 	LinearSetSessionIDRetryBaseDelay time.Duration
 	LinearSetSessionIDRetryMaxDelay  time.Duration
 
-	// --- Step 33 standalone addition ("Slack ingress", §8.10): no
+	// --- §8.10 standalone addition ("Slack ingress", §8.10): no
 	// ordering relationship with either invariant chain above (or with
 	// any prior Step's standalone additions), so -- per those additions'
 	// own precedent -- a plain field with a sensible default, not wired
@@ -954,7 +954,7 @@ type Timeouts struct {
 	// noticeably worse.
 	SlackAckTimeout time.Duration
 
-	// --- Step 38 standalone addition ("plan mode, cross-channel", §8.1/
+	// --- §8.1 standalone addition ("plan mode, cross-channel", §8.1/
 	// §13.3): no ordering relationship with either invariant chain above (or
 	// with any prior Step's standalone additions), so -- per those
 	// additions' own precedent -- a plain field with a sensible default, not
@@ -996,13 +996,13 @@ type Timeouts struct {
 	// finishes.
 	SlackInteractivityAckTimeout time.Duration
 
-	// --- Step 35 standalone additions ("outbox delivery", §5.1): no
+	// --- §5.1 standalone additions ("outbox delivery", §5.1): no
 	// ordering relationship with either invariant chain above (or with any
 	// prior Step's standalone additions), so -- per those additions' own
 	// precedent -- plain fields with sensible defaults, not wired into a
 	// fake invariant link. OutboxClaimDuration is the one exception: see
-	// the audit-fix note directly above that field below, matching Step
-	// 25's own ReconcilerOrphanConfirmationPeriod precedent of a Step's
+	// the audit-fix note directly above that field below, matching
+	// §5.3's own ReconcilerOrphanConfirmationPeriod precedent of a Step's
 	// later fix adding its own single, independent pairwise check without
 	// retroactively promoting the whole family into either named chain.
 
@@ -1108,7 +1108,7 @@ type Timeouts struct {
 	// ever needs to comfortably outlast a SINGLE OutboxDeliveryTimeout-
 	// bounded attempt, which Validate() below enforces as a new,
 	// independent pairwise check (OutboxClaimDuration > OutboxDeliveryTimeout,
-	// mirroring Step 25's own ReconcilerInterval > ReconcilerOrphanConfirmationPeriod
+	// mirroring §5.3's own ReconcilerInterval > ReconcilerOrphanConfirmationPeriod
 	// precedent of a single, narrow link added outside either named chain).
 
 	// OutboxClaimDuration protects a just-claimed (or just-renewed) outbox
@@ -1147,7 +1147,7 @@ type Timeouts struct {
 	// sequential processing time.
 	OutboxClaimDuration time.Duration
 
-	// --- Step 36 standalone addition ("intent classifier", §8.3/§18): no
+	// --- §8.3 standalone addition ("intent classifier", §8.3/§18): no
 	// ordering relationship with either invariant chain above (or with any
 	// prior Step's standalone additions), so -- per those additions' own
 	// precedent -- a plain field with a sensible default, not wired into a
@@ -1171,7 +1171,7 @@ type Timeouts struct {
 	// thinking enabled).
 	IntentClassifierLLMTimeout time.Duration
 
-	// --- Step 39 standalone additions ("identities + full RBAC", §13.2):
+	// --- §13.2 standalone additions ("identities + full RBAC", §13.2):
 	// no ordering relationship with either invariant chain above (or with
 	// any prior Step's standalone additions), so -- per those additions'
 	// own precedent -- plain fields with sensible defaults, not wired into
@@ -1408,7 +1408,7 @@ type Timeouts struct {
 	// webhook response prompt.
 	GitHubGetPRTimeout time.Duration
 
-	// --- Step 40 standalone addition ("warm boot: fetch-aware git sync",
+	// --- §19.3 standalone addition ("warm boot: fetch-aware git sync",
 	// §19.3): no ordering relationship with either invariant chain above
 	// (or with any prior Step's standalone additions), so -- per those
 	// additions' own precedent -- a plain field with a sensible default,
@@ -1458,7 +1458,7 @@ type Timeouts struct {
 	// does not need that same budget).
 	GitFetchStepTimeout time.Duration
 
-	// --- Step 42 standalone addition ("warm boot: refresh pump + hook
+	// --- §19.2 standalone addition ("warm boot: refresh pump + hook
 	// policy", §19.2): no ordering relationship with either invariant chain
 	// above (or with any prior Step's standalone additions), so -- per
 	// those additions' own precedent -- a plain field with a sensible
@@ -1502,7 +1502,7 @@ type Timeouts struct {
 	// RepoAccessCacheTTL is how long a CheckRepoAccess verdict (positive OR
 	// negative) is trusted before this gate re-checks it live, keyed per
 	// (session creator, repo) -- required to keep this new gate off the
-	// steady-state hot path Step 41/42 (§19.1/§19.2) deliberately built:
+	// steady-state hot path (§19.1/§19.2) deliberately built:
 	// unlike RepoSHAResolutionTimeout's own SHA resolution (drift-
 	// sensitive, never cacheable -- §19.2's whole rationale for removing
 	// it from the spawn path), repo ACCESS changes rarely, so it is safe
@@ -1531,7 +1531,7 @@ type Timeouts struct {
 	// with repos, pay the full per-repo RepoAccessCheckTimeout again and
 	// again for as long as the incident lasts -- reintroducing exactly the
 	// "up to len(repos) * timeout of sequential GitHub latency per spawn"
-	// cost class Step 41/42's own commit message states was removed. This
+	// cost class a prior fix's own commit message states was removed. This
 	// breaker does not change the deny outcome (still fail-closed, exactly
 	// like an uncached indeterminate failure already was) -- it only stops
 	// paying for the network round trip once failures are clearly
@@ -1634,7 +1634,7 @@ type Timeouts struct {
 	// their next active day rather than only once, ever.
 	GitHubActorNoticeTTL time.Duration
 
-	// --- Step 46 standalone addition ("review sessions", §8.2): no
+	// --- §8.2 standalone addition ("review sessions", §8.2): no
 	// ordering relationship with either invariant chain above (or with any
 	// prior standalone addition), so -- per those additions' own precedent
 	// -- a plain field with a sensible default, not wired into a fake
@@ -1663,7 +1663,7 @@ type Timeouts struct {
 	// reason to fail the review session's own turn creation.
 	GitHubPRDiffTimeout time.Duration
 
-	// --- Step 50 standalone addition ("release PR review", §15.2): no
+	// --- §15 standalone addition ("release PR review", §15.2): no
 	// ordering relationship with either invariant chain above (or with any
 	// prior standalone addition), so -- per those additions' own precedent
 	// -- a plain field with a sensible default, not wired into a fake
@@ -1729,7 +1729,7 @@ type Timeouts struct {
 	// after ListMergedBetween itself returns.
 	ReleaseManifestCheckTimeout time.Duration
 
-	// --- Step 51 standalone addition ("automations: engine", §3.5): the
+	// --- §3.5 standalone addition ("automations: engine", §3.5): the
 	// two sweep thresholds are explicit in the plan ("orphaned starting
 	// runs >5 min, running >90 min"); the two poll intervals are not, and
 	// -- per every prior pump-interval addition's own precedent
@@ -1784,7 +1784,7 @@ type Timeouts struct {
 	// RunStatusRunning, is swept the same way. §3.5, explicit.
 	AutomationRunRunningOrphanThreshold time.Duration
 
-	// AutomationCronGranularity is Step 52's own ("automations: triggers &
+	// AutomationCronGranularity is §8.4's own ("automations: triggers &
 	// extras", §8.4) cron-trigger evaluation bucket size: internal/domain/
 	// automation.CronMatches evaluates a schedule against a whole UTC
 	// minute, and internal/app/automation's own trigger pump (triggerpump.go)
@@ -1837,7 +1837,7 @@ type Timeouts struct {
 	// (ProviderHTTPClientTimeout, OutboxClaimDuration, etc.).
 	AutomationCronCatchUpWindow time.Duration
 
-	// --- Step 57 standalone additions ("RWX provider + previews", §4.1.1):
+	// --- §4.1 standalone additions ("RWX provider + previews", §4.1.1):
 	// RWXCLIExecTimeout has no ordering relationship with either invariant
 	// chain above (or with any prior standalone addition), so — per those
 	// additions' own precedent — a plain field with a sensible default, not
@@ -1885,7 +1885,7 @@ type Timeouts struct {
 	// ProviderHardCap's 2-hour ceiling.
 	RWXSandboxInactivityTimeout time.Duration
 
-	// --- Step 58 standalone additions ("uploads, blob storage & the
+	// --- §8.6 standalone additions ("uploads, blob storage & the
 	// in-sandbox download_file tool", §28): UploadPresignPutTTL,
 	// UploadPresignGetTTL, and ObjectStoreHTTPClientTimeout have no
 	// ordering relationship with any invariant chain above (or with each
@@ -1938,7 +1938,7 @@ type Timeouts struct {
 	// is a HeadObject, Delete a DeleteObject, neither moves object bytes.
 	ObjectStoreHTTPClientTimeout time.Duration
 
-	// --- Step 59 standalone additions ("models: Codex via ChatGPT-account
+	// --- §8.8 standalone additions ("models: Codex via ChatGPT-account
 	// OAuth", §29.5/§29.9): no ordering relationship with either invariant
 	// chain above (or any prior Step's own standalone additions), so —
 	// per those additions' own precedent — plain fields with sensible
@@ -1994,7 +1994,7 @@ type Timeouts struct {
 	// same-datacenter Postgres/internal-service call's is.
 	ChatGPTOAuthHTTPClientTimeout time.Duration
 
-	// --- Step 60 ("decision inbox: read model + API", §16) standalone
+	// --- §16 ("decision inbox: read model + API", §16) standalone
 	// additions: no ordering relationship with any invariant chain above,
 	// matching every other standalone addition's own precedent.
 
@@ -2068,7 +2068,7 @@ type Timeouts struct {
 	// notimeliteral check treats them all alike.
 	DecisionInboxLatencyWindow time.Duration
 
-	// -- Step 62 ("review verdict persistence, analytics, digest &
+	// -- §21 ("review verdict persistence, analytics, digest &
 	// automated approval", §21) --
 
 	// ReviewVerdictAnalyticsWindow bounds every §21.1 analytics rollup
@@ -2125,7 +2125,7 @@ type Timeouts struct {
 	// expected meaning of "daily digest".
 	DigestContentWindow time.Duration
 
-	// -- Step 63 fix ("review: learned false-positive patterns" /
+	// -- §22 fix ("review: learned false-positive patterns" /
 	// content-anchored finding positioning, §22.1.1) -- no ordering
 	// relationship with either invariant chain above (or with any prior
 	// Step's standalone additions), so -- per those additions' own
@@ -2151,7 +2151,7 @@ type Timeouts struct {
 	// synchronous request path well short of a full minute.
 	FindingPositionResolveAllTimeout time.Duration
 
-	// -- Step 65 ("review: automatic re-review on new commits", §24) --
+	// -- §24 ("review: automatic re-review on new commits", §24) --
 	// no ordering relationship with either invariant chain above (or with
 	// any prior Step's standalone additions), so -- per those additions'
 	// own precedent -- a plain field with a sensible default, not wired
@@ -2176,7 +2176,7 @@ type Timeouts struct {
 	// visible cause.
 	ReviewRetriggerDebounce time.Duration
 
-	// -- Step 70 ("review: wire the cost budget", §26.7/§26.9) -- no
+	// -- §26.5 ("review: wire the cost budget", §26.7/§26.9) -- no
 	// ordering relationship with either invariant chain above (or with any
 	// prior Step's standalone additions), so -- per those additions' own
 	// precedent -- a plain field with a sensible default, not wired into a
@@ -2186,7 +2186,7 @@ type Timeouts struct {
 	// own FIRST HTTP server (reviewcostbudgetserver.go) -- a tiny,
 	// loopback-only (127.0.0.1) listener serving GET /review-cost-budget,
 	// the real production call site internal/domain/reviewtriage.
-	// ShouldSkipOptionalPass has been missing since Step 69. Applied as
+	// ShouldSkipOptionalPass has never had one. Applied as
 	// http.Server.ReadHeaderTimeout, guarding against a slow/stalled
 	// client leaving a connection's headers half-read indefinitely. Not
 	// specified in the plan; chosen as 5s -- matches
@@ -2200,7 +2200,7 @@ type Timeouts struct {
 	// sequenced into that SAME bounded teardown window, not a separate one.
 	ReviewCostBudgetServerReadHeaderTimeout time.Duration
 
-	// SandboxSecretFetchTimeout (Step 72, "sandbox secrets & opencode
+	// SandboxSecretFetchTimeout ("sandbox secrets & opencode
 	// config", §27.1) bounds a SINGLE ATTEMPT at CP's
 	// /sessions/{id}/sandbox-secrets delivery endpoint
 	// (internal/sandboxagent/credentials.CPClient.FetchSandboxSecrets),
@@ -2269,7 +2269,7 @@ type Timeouts struct {
 	SandboxSecretFetchRetryBaseDelay time.Duration
 	SandboxSecretFetchRetryMaxDelay  time.Duration
 
-	// OpenCodeConfigFetchTimeout (Step 72, §27.2) bounds a SINGLE ATTEMPT
+	// OpenCodeConfigFetchTimeout (§27.2) bounds a SINGLE ATTEMPT
 	// at CP's /sessions/{id}/opencode-config delivery endpoint
 	// (internal/sandboxagent/credentials.CPClient.FetchOpenCodeConfig),
 	// tried up to OpenCodeConfigFetchMaxAttempts times (below) at boot,
@@ -2300,7 +2300,7 @@ type Timeouts struct {
 	OpenCodeConfigFetchRetryBaseDelay time.Duration
 	OpenCodeConfigFetchRetryMaxDelay  time.Duration
 
-	// CloudIdentityTokenLifetime (Step 73a, §27.3) is how long a CP-minted
+	// CloudIdentityTokenLifetime (§27.3) is how long a CP-minted
 	// cloud-identity OIDC token (POST /sessions/{id}/cloud-identity-token)
 	// remains valid before its own `exp` claim expires. §27.3 gives this
 	// explicitly: "exp ≈ 10 minutes" -- taken literally as 10 * time.Minute,
@@ -2308,7 +2308,7 @@ type Timeouts struct {
 	// further without a stated reason.
 	CloudIdentityTokenLifetime time.Duration
 
-	// CloudIdentitySigningKeyOverlapWindow (Step 73a, §27.3) is how long a
+	// CloudIdentitySigningKeyOverlapWindow (§27.3) is how long a
 	// just-retired oidc_signing_keys row keeps publishing in the JWKS
 	// response after RotateSigningKeys marks its own retired_at, before it
 	// drops out entirely -- §27.3's own rotation rule: "an overlap window
@@ -2327,7 +2327,7 @@ type Timeouts struct {
 	// longer overlap being safer, never shorter).
 	CloudIdentitySigningKeyOverlapWindow time.Duration
 
-	// CloudIdentityConfigFetchTimeout (Step 73b, "cloud identity: sandbox-
+	// CloudIdentityConfigFetchTimeout ("cloud identity: sandbox-
 	// side consumption + kubeconfig injection", §27.3/§27.4) bounds a
 	// SINGLE ATTEMPT at CP's /sessions/{id}/cloud-identity-config delivery
 	// endpoint (internal/sandboxagent/credentials.CPClient.
@@ -2357,7 +2357,7 @@ type Timeouts struct {
 	CloudIdentityConfigFetchRetryBaseDelay time.Duration
 	CloudIdentityConfigFetchRetryMaxDelay  time.Duration
 
-	// CloudIdentityTokenMintTimeout (Step 73b, §27.3) bounds a SINGLE
+	// CloudIdentityTokenMintTimeout (§27.3) bounds a SINGLE
 	// ATTEMPT at CP's /sessions/{id}/cloud-identity-token minting endpoint
 	// (internal/sandboxagent/credentials.CPClient.MintCloudIdentityToken),
 	// tried up to CloudIdentityTokenMintMaxAttempts times (below) --
@@ -2397,7 +2397,7 @@ type Timeouts struct {
 	CloudIdentityTokenMintRetryBaseDelay time.Duration
 	CloudIdentityTokenMintRetryMaxDelay  time.Duration
 
-	// --- Step 74 standalone addition ("sandbox substrate: docker, egress
+	// --- §27.5 standalone addition ("sandbox substrate: docker, egress
 	// policy, toolchain", §27.5): no ordering relationship with either
 	// invariant chain above (or with any prior Step's standalone
 	// additions), so -- per those additions' own precedent -- a plain
@@ -2421,7 +2421,7 @@ type Timeouts struct {
 	// same "poll until ready or timeout" shape.
 	DockerReadinessTimeout time.Duration
 
-	// --- Step 75 standalone addition ("config/data seeding", §10-P6,
+	// --- §10 standalone addition ("config/data seeding", §10-P6,
 	// §13.4): no ordering relationship with either invariant chain above,
 	// so -- per every prior Step's own standalone-addition precedent -- a
 	// plain field with a sensible default, not wired into a fake
@@ -2582,78 +2582,78 @@ func DefaultTimeouts() Timeouts {
 
 		GitHubActorNoticeTTL: 24 * time.Hour, // batch fix/deny-unlinked-github-actors; not specified, chosen -- see field doc comment for why this is a DISTINCT constant from IdentityLinkPromptTTL despite sharing its value
 
-		GitHubPRDiffTimeout: 20 * time.Second, // not specified (Step 46 postdates the plan); chosen, double GitHubGetPRTimeout's own 10s -- generous for a real, possibly-large diff transfer
+		GitHubPRDiffTimeout: 20 * time.Second, // not specified (this value postdates the plan); chosen, double GitHubGetPRTimeout's own 10s -- generous for a real, possibly-large diff transfer
 
-		GitHubListMergedBetweenTimeout: 2 * time.Minute, // not specified (Step 50 postdates the plan); chosen, generous for the whole bounded call sequence a real release cut makes -- see field doc comment
+		GitHubListMergedBetweenTimeout: 2 * time.Minute, // not specified (this value postdates the plan); chosen, generous for the whole bounded call sequence a real release cut makes -- see field doc comment
 
 		ReleaseManifestCheckPumpInterval: 10 * time.Second, // blocking-finding fix #1; not specified, chosen -- see field doc comment
 		ReleaseManifestCheckTimeout:      3 * time.Minute,  // blocking-finding fix #1; not specified, chosen -- GitHubListMergedBetweenTimeout (2min) plus a full extra minute of margin, see field doc comment
 
-		AutomationEnginePumpInterval:         60 * time.Second, // Step 51; not specified, chosen, matches ReconcilerInterval's own cadence
-		AutomationSweepInterval:              60 * time.Second, // Step 51; not specified, chosen, matches AutomationEnginePumpInterval's own cadence
+		AutomationEnginePumpInterval:         60 * time.Second, // §3.5; not specified, chosen, matches ReconcilerInterval's own cadence
+		AutomationSweepInterval:              60 * time.Second, // §3.5; not specified, chosen, matches AutomationEnginePumpInterval's own cadence
 		AutomationRunStartingOrphanThreshold: 5 * time.Minute,  // §3.5, explicit ("orphaned starting runs >5 min")
 		AutomationRunRunningOrphanThreshold:  90 * time.Minute, // §3.5, explicit ("running >90 min")
-		AutomationCronGranularity:            1 * time.Minute,  // Step 52, §8.4; structural, not tunable -- see field doc comment
-		AutomationCronCatchUpWindow:          10 * time.Minute, // Step 52 review fix (missed cron evaluations); not specified, chosen -- see field doc comment
+		AutomationCronGranularity:            1 * time.Minute,  // §8.4; structural, not tunable -- see field doc comment
+		AutomationCronCatchUpWindow:          10 * time.Minute, // §8.4 fix (missed cron evaluations); not specified, chosen -- see field doc comment
 
-		RWXCLIExecTimeout:           2 * time.Minute,  // Step 57, §4.1.1; not specified (RWX publishes no p99), chosen generously -- see field doc comment
-		RWXSandboxInactivityTimeout: 45 * time.Minute, // Step 57, §4.1.1; not specified, chosen with margin above ActorIdleTTL (30min) -- see field doc comment
+		RWXCLIExecTimeout:           2 * time.Minute,  // §4.1.1; not specified (RWX publishes no p99), chosen generously -- see field doc comment
+		RWXSandboxInactivityTimeout: 45 * time.Minute, // §4.1.1; not specified, chosen with margin above ActorIdleTTL (30min) -- see field doc comment
 
-		UploadPresignPutTTL:            15 * time.Minute, // Step 58, §28.4, explicit ("propose 15 min")
-		UploadPresignGetTTL:            5 * time.Minute,  // Step 58, §28.5, explicit ("propose 5 min")
-		UploadPendingSweepAfter:        24 * time.Hour,   // Step 58, §28.4, explicit ("propose 24 h")
-		UploadAbandonmentSweepInterval: 15 * time.Minute, // Step 58, §28.4, explicit ("propose 15 min")
-		ObjectStoreHTTPClientTimeout:   10 * time.Second, // Step 58; not specified, chosen, matches RepoSHAResolutionTimeout's own "lightweight call" reasoning
+		UploadPresignPutTTL:            15 * time.Minute, // §28.4, explicit ("propose 15 min")
+		UploadPresignGetTTL:            5 * time.Minute,  // §28.5, explicit ("propose 5 min")
+		UploadPendingSweepAfter:        24 * time.Hour,   // §28.4, explicit ("propose 24 h")
+		UploadAbandonmentSweepInterval: 15 * time.Minute, // §28.4, explicit ("propose 15 min")
+		ObjectStoreHTTPClientTimeout:   10 * time.Second, // §8.6; not specified, chosen, matches RepoSHAResolutionTimeout's own "lightweight call" reasoning
 
-		ChatGPTOAuthRefreshMargin:       72 * time.Hour,   // Step 59, §29.5, explicit ("propose 72h")
-		ChatGPTOAuthRefreshPumpInterval: 6 * time.Hour,    // Step 59, §29.5, explicit ("propose 6h")
-		ChatGPTLinkAttemptTTL:           15 * time.Minute, // Step 59; not specified, chosen generously (human device-switch time)
-		ChatGPTOAuthHTTPClientTimeout:   15 * time.Second, // Step 59; not specified, chosen generously (a real third-party OAuth endpoint over the public internet)
+		ChatGPTOAuthRefreshMargin:       72 * time.Hour,   // §29.5, explicit ("propose 72h")
+		ChatGPTOAuthRefreshPumpInterval: 6 * time.Hour,    // §29.5, explicit ("propose 6h")
+		ChatGPTLinkAttemptTTL:           15 * time.Minute, // §8.8; not specified, chosen generously (human device-switch time)
+		ChatGPTOAuthHTTPClientTimeout:   15 * time.Second, // §8.8; not specified, chosen generously (a real third-party OAuth endpoint over the public internet)
 
-		GitHubListOpenPRsForUserTimeout: 3 * time.Minute,     // Step 60; not specified, matches ReleaseManifestCheckTimeout's own figure for a comparable bounded-but-many-call operation
-		GitHubResolveCodeOwnersTimeout:  30 * time.Second,    // Step 60; not specified, chosen generously (a handful of file/user/team fetches)
-		GitHubMergePRTimeout:            15 * time.Second,    // Step 60; not specified, half again GitHubGetPRTimeout's baseline (interactive, human-facing write)
-		DecisionInboxSCMCacheTTL:        2 * time.Minute,     // Step 60, §16.2's own worked example ("as of 2 min ago")
-		DecisionInboxStaleAfter:         48 * time.Hour,      // Step 60, §16.1, explicit ("stale items (>48h, configurable)")
-		DecisionInboxLatencyWindow:      30 * 24 * time.Hour, // Step 60, §16.2; not specified, chosen as a month of decision history -- long enough for a stable median, bounded per §21.1
+		GitHubListOpenPRsForUserTimeout: 3 * time.Minute,     // §16; not specified, matches ReleaseManifestCheckTimeout's own figure for a comparable bounded-but-many-call operation
+		GitHubResolveCodeOwnersTimeout:  30 * time.Second,    // §16; not specified, chosen generously (a handful of file/user/team fetches)
+		GitHubMergePRTimeout:            15 * time.Second,    // §16; not specified, half again GitHubGetPRTimeout's baseline (interactive, human-facing write)
+		DecisionInboxSCMCacheTTL:        2 * time.Minute,     // §16.2's own worked example ("as of 2 min ago")
+		DecisionInboxStaleAfter:         48 * time.Hour,      // §16.1, explicit ("stale items (>48h, configurable)")
+		DecisionInboxLatencyWindow:      30 * 24 * time.Hour, // §16.2; not specified, chosen as a month of decision history -- long enough for a stable median, bounded per §21.1
 
-		ReviewVerdictAnalyticsWindow:   30 * 24 * time.Hour, // Step 62, §21.1, explicit ("bounded from day one ... default 30 days, mirroring the decision inbox's own DecisionInboxLatencyWindow, §16.2 -- never DecisionInboxStaleAfter's own much narrower 48h item-staleness flag, §16.1, a different concept entirely") -- mirrors DecisionInboxLatencyWindow's own identical "a month, bounded" reasoning
-		AutoMergePumpInterval:          60 * time.Second,    // Step 62, §21.2; not specified, mirrors AutomationEnginePumpInterval's own identical periodic-background-policy-engine reasoning
-		AutoMergeCandidateLookback:     7 * 24 * time.Hour,  // Step 62, §21.2; not specified, chosen generously -- every candidate is re-confirmed live regardless
-		DigestPumpInterval:             5 * time.Minute,     // Step 62, §21.3; not specified, chosen -- a digest fires at most once per channel per day, so coarse polling is ample
-		DigestChannelDiscoveryLookback: 30 * 24 * time.Hour, // Step 62, §21.3; not specified, mirrors ReviewVerdictAnalyticsWindow's own identical "a month, bounded" reasoning
-		DigestContentWindow:            24 * time.Hour,      // Step 62, §21.3, explicit ("a daily digest") -- one calendar day of rollup content, distinct from the channel-discovery lookback above
+		ReviewVerdictAnalyticsWindow:   30 * 24 * time.Hour, // §21.1, explicit ("bounded from day one ... default 30 days, mirroring the decision inbox's own DecisionInboxLatencyWindow, §16.2 -- never DecisionInboxStaleAfter's own much narrower 48h item-staleness flag, §16.1, a different concept entirely") -- mirrors DecisionInboxLatencyWindow's own identical "a month, bounded" reasoning
+		AutoMergePumpInterval:          60 * time.Second,    // §21.2; not specified, mirrors AutomationEnginePumpInterval's own identical periodic-background-policy-engine reasoning
+		AutoMergeCandidateLookback:     7 * 24 * time.Hour,  // §21.2; not specified, chosen generously -- every candidate is re-confirmed live regardless
+		DigestPumpInterval:             5 * time.Minute,     // §21.3; not specified, chosen -- a digest fires at most once per channel per day, so coarse polling is ample
+		DigestChannelDiscoveryLookback: 30 * 24 * time.Hour, // §21.3; not specified, mirrors ReviewVerdictAnalyticsWindow's own identical "a month, bounded" reasoning
+		DigestContentWindow:            24 * time.Hour,      // §21.3, explicit ("a daily digest") -- one calendar day of rollup content, distinct from the channel-discovery lookback above
 
-		FindingPositionResolveAllTimeout: 45 * time.Second, // Step 63 fix; not specified, chosen -- generous for several per-finding relocation calls (10s each) while bounding the worst case on a synchronous verdict-POST handler path
+		FindingPositionResolveAllTimeout: 45 * time.Second, // §22 fix; not specified, chosen -- generous for several per-finding relocation calls (10s each) while bounding the worst case on a synchronous verdict-POST handler path
 
-		ReviewRetriggerDebounce: 2 * time.Minute, // Step 65, §24.2; not specified, chosen -- long enough to collapse a short burst of fixup-commit pushes into one quiet window, short enough that a single push still reviews promptly
+		ReviewRetriggerDebounce: 2 * time.Minute, // §24.2; not specified, chosen -- long enough to collapse a short burst of fixup-commit pushes into one quiet window, short enough that a single push still reviews promptly
 
-		ReviewCostBudgetServerReadHeaderTimeout: 5 * time.Second, // Step 70, §26.7/§26.9; not specified, chosen -- matches RepoSHADiscoveryTimeout/CredentialFetchTimeout's own "lightweight, purely local" precedent, see field doc comment
+		ReviewCostBudgetServerReadHeaderTimeout: 5 * time.Second, // §26.7/§26.9; not specified, chosen -- matches RepoSHADiscoveryTimeout/CredentialFetchTimeout's own "lightweight, purely local" precedent, see field doc comment
 
-		SandboxSecretFetchTimeout:         10 * time.Second,       // Step 72, §27.1; not specified, chosen, matches ProviderCredentialFetchTimeout's own reasoning
+		SandboxSecretFetchTimeout:         10 * time.Second,       // §27.1; not specified, chosen, matches ProviderCredentialFetchTimeout's own reasoning
 		SandboxSecretFetchMaxAttempts:     3,                      // adversarial-review MEDIUM fix (§27.1 "with bounded retry"); see field doc comment for the worst-case-budget arithmetic
 		SandboxSecretFetchRetryBaseDelay:  500 * time.Millisecond, // adversarial-review MEDIUM fix; see field doc comment
 		SandboxSecretFetchRetryMaxDelay:   2 * time.Second,        // adversarial-review MEDIUM fix; see field doc comment
-		OpenCodeConfigFetchTimeout:        10 * time.Second,       // Step 72, §27.2; not specified, chosen, matches ProviderCredentialFetchTimeout's own reasoning
+		OpenCodeConfigFetchTimeout:        10 * time.Second,       // §27.2; not specified, chosen, matches ProviderCredentialFetchTimeout's own reasoning
 		OpenCodeConfigFetchMaxAttempts:    3,                      // adversarial-review MEDIUM fix; mirrors SandboxSecretFetchMaxAttempts
 		OpenCodeConfigFetchRetryBaseDelay: 500 * time.Millisecond, // adversarial-review MEDIUM fix; mirrors SandboxSecretFetchRetryBaseDelay
 		OpenCodeConfigFetchRetryMaxDelay:  2 * time.Second,        // adversarial-review MEDIUM fix; mirrors SandboxSecretFetchRetryMaxDelay
 
-		CloudIdentityTokenLifetime:           10 * time.Minute, // Step 73a, §27.3, explicit ("exp ≈ 10 minutes")
-		CloudIdentitySigningKeyOverlapWindow: 15 * time.Minute, // Step 73a, §27.3; not specified numerically beyond ">= max token lifetime", chosen with margin -- see field doc comment
+		CloudIdentityTokenLifetime:           10 * time.Minute, // §27.3, explicit ("exp ≈ 10 minutes")
+		CloudIdentitySigningKeyOverlapWindow: 15 * time.Minute, // §27.3; not specified numerically beyond ">= max token lifetime", chosen with margin -- see field doc comment
 
-		CloudIdentityConfigFetchTimeout:        10 * time.Second,       // Step 73b, §27.3/§27.4; not specified, chosen, matches every other boot-time delivery fetch's own reasoning
+		CloudIdentityConfigFetchTimeout:        10 * time.Second,       // §27.3/§27.4; not specified, chosen, matches every other boot-time delivery fetch's own reasoning
 		CloudIdentityConfigFetchMaxAttempts:    3,                      // mirrors SandboxSecretFetchMaxAttempts
 		CloudIdentityConfigFetchRetryBaseDelay: 500 * time.Millisecond, // mirrors SandboxSecretFetchRetryBaseDelay
 		CloudIdentityConfigFetchRetryMaxDelay:  2 * time.Second,        // mirrors SandboxSecretFetchRetryMaxDelay
-		CloudIdentityTokenMintTimeout:          10 * time.Second,       // Step 73b, §27.3; not specified, chosen -- see field doc comment
+		CloudIdentityTokenMintTimeout:          10 * time.Second,       // §27.3; not specified, chosen -- see field doc comment
 		CloudIdentityTokenMintMaxAttempts:      3,                      // mirrors CloudIdentityConfigFetchMaxAttempts
 		CloudIdentityTokenMintRetryBaseDelay:   500 * time.Millisecond, // mirrors CloudIdentityConfigFetchRetryBaseDelay
 		CloudIdentityTokenMintRetryMaxDelay:    2 * time.Second,        // mirrors CloudIdentityConfigFetchRetryMaxDelay
 
-		DockerReadinessTimeout: 60 * time.Second, // Step 74, §27.5; not specified, chosen generously -- see field doc comment
+		DockerReadinessTimeout: 60 * time.Second, // §27.5; not specified, chosen generously -- see field doc comment
 
-		SeedRunTimeout: 5 * time.Minute, // Step 75, §10-P6/§13.4; not specified, chosen generously -- see field doc comment
+		SeedRunTimeout: 5 * time.Minute, // §10-P6/§13.4; not specified, chosen generously -- see field doc comment
 	}
 }
 
@@ -2722,7 +2722,7 @@ func (t Timeouts) Validate() error {
 	check("FirstConnectBudget > ImagePullBootP99",
 		"FirstConnectBudget", t.FirstConnectBudget, "ImagePullBootP99", t.ImagePullBootP99)
 
-	// Step 25 fix (reconciler orphan-GC debounce): ReconcilerOrphanConfirmationPeriod
+	// §5.3 fix (reconciler orphan-GC debounce): ReconcilerOrphanConfirmationPeriod
 	// must stay at least MinTimeoutMargin below ReconcilerInterval, or the
 	// "reaped on the SECOND consecutive tick, never the first" guarantee
 	// app/reconciler.Reconciler's own debounce promises silently degrades
@@ -2752,7 +2752,7 @@ func (t Timeouts) Validate() error {
 	check("ReleaseManifestCheckTimeout > GitHubListMergedBetweenTimeout",
 		"ReleaseManifestCheckTimeout", t.ReleaseManifestCheckTimeout, "GitHubListMergedBetweenTimeout", t.GitHubListMergedBetweenTimeout)
 
-	// Step 51 ("automations: engine", §3.5): AutomationSweepInterval must
+	// §3.5 ("automations: engine", §3.5): AutomationSweepInterval must
 	// stay at least MinTimeoutMargin below EACH of the two orphan
 	// thresholds it polls for, or a run that just crosses one could sit
 	// unswept for much longer than that threshold's own name implies --
@@ -2765,7 +2765,7 @@ func (t Timeouts) Validate() error {
 	check("AutomationRunRunningOrphanThreshold > AutomationSweepInterval",
 		"AutomationRunRunningOrphanThreshold", t.AutomationRunRunningOrphanThreshold, "AutomationSweepInterval", t.AutomationSweepInterval)
 
-	// Step 52 review fix ("cron trigger pump has no catch-up for missed
+	// §8.4 fix ("cron trigger pump has no catch-up for missed
 	// evaluations"): AutomationCronCatchUpWindow must stay at least
 	// MinTimeoutMargin above AutomationEnginePumpInterval (the trigger
 	// pump's own tick cadence), or the catch-up window could be too
@@ -2776,7 +2776,7 @@ func (t Timeouts) Validate() error {
 	check("AutomationCronCatchUpWindow > AutomationEnginePumpInterval",
 		"AutomationCronCatchUpWindow", t.AutomationCronCatchUpWindow, "AutomationEnginePumpInterval", t.AutomationEnginePumpInterval)
 
-	// Step 57 ("RWX provider + previews", §4.1.1): RWXSandboxInactivityTimeout
+	// §4.1 ("RWX provider + previews", §4.1.1): RWXSandboxInactivityTimeout
 	// must stay at least MinTimeoutMargin above ActorIdleTTL, or RWX's own
 	// `--inactivity-timeout` auto-stop could fire BEFORE Narvi's own
 	// session-idle authority ever gets a chance to decide idleness first —
@@ -2788,7 +2788,7 @@ func (t Timeouts) Validate() error {
 	check("RWXSandboxInactivityTimeout > ActorIdleTTL",
 		"RWXSandboxInactivityTimeout", t.RWXSandboxInactivityTimeout, "ActorIdleTTL", t.ActorIdleTTL)
 
-	// Step 58 ("uploads, blob storage & the in-sandbox download_file
+	// §8.6 ("uploads, blob storage & the in-sandbox download_file
 	// tool", §28.4): UploadPendingSweepAfter must stay at least
 	// MinTimeoutMargin above UploadAbandonmentSweepInterval, or a pending
 	// row could cross the abandonment threshold and still sit unswept for
@@ -2798,7 +2798,7 @@ func (t Timeouts) Validate() error {
 	check("UploadPendingSweepAfter > UploadAbandonmentSweepInterval",
 		"UploadPendingSweepAfter", t.UploadPendingSweepAfter, "UploadAbandonmentSweepInterval", t.UploadAbandonmentSweepInterval)
 
-	// Step 73a (§27.3): CloudIdentitySigningKeyOverlapWindow must stay at
+	// (§27.3): CloudIdentitySigningKeyOverlapWindow must stay at
 	// least MinTimeoutMargin above CloudIdentityTokenLifetime, or a token
 	// minted right before rotation could outlive the grace window its own
 	// signing key is still published for -- see
@@ -2814,7 +2814,7 @@ func (t Timeouts) Validate() error {
 // SecondsToDuration converts a raw whole-seconds count -- e.g. an OAuth
 // response's own interval/expires_in field (chatgptoauth), or a stored
 // *_seconds database column (chatgpt_link_attempts.interval_seconds) --
-// into a time.Duration. Step 59 ("models: Codex via ChatGPT-account OAuth")
+// into a time.Duration. §8.8 ("models: Codex via ChatGPT-account OAuth")
 // introduces the first callers that need to turn a plain wire/storage
 // integer into a Duration outside this package; this helper exists so
 // those callers never spell out time.Second themselves, which

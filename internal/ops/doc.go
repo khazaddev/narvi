@@ -1,7 +1,7 @@
-// Package ops implements Step 77's ("ops: dashboards, alerts, runbooks",
+// Package ops implements §5.3's ("ops: dashboards, alerts, runbooks",
 // §5.3) own structural guard: dashboards and alerts are committed to the
 // repo as data (deploy/observability/{dashboards,alerts}/*.json), and this
-// package is what keeps them honest as the code moves. Step 78 ("launch
+// package is what keeps them honest as the code moves. §10 ("launch
 // readiness", §10-P6) extends the SAME mechanism to a second, sibling
 // hazard: the per-surface user guide (docs/guides/*.md) it ships is
 // committed as data too, and this package is equally what keeps ITS own
@@ -40,7 +40,7 @@
 // the REAL deploy/observability directory — no separate CI job needed,
 // and no dashboard/alert can ship naming a metric nothing emits.
 //
-// # The guide-drift extension (Step 78)
+// # The guide-drift extension (§10)
 //
 // "the two checks are the same idea over different sources": every piece
 // above has a direct sibling scanning a DIFFERENT part of this repo's own

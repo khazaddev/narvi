@@ -1,4 +1,4 @@
-// This file (childsession.go) implements Step 48's own ("sentinels +
+// This file (childsession.go) implements §8.2's own ("sentinels +
 // suggestions", §17.2) "child session" mechanism -- the plan text at
 // §14.4/§17.2 describes this as an "existing mechanism", but it is not:
 // this Step is the first one that actually builds it (see this Step's own
@@ -54,7 +54,7 @@ import (
 // provenance tag to set should call CreateSessionCore instead, not this
 // function with an empty string.
 //
-// epistemicCheckDefault (F6, adversarial review, Step 61) mirrors
+// epistemicCheckDefault (F6, adversarial review) mirrors
 // CreateSessionOnTx's own identical required parameter -- see that
 // function's own doc comment. A sentinel-auto-fix child session is an
 // ordinary build session (it edits test/doc files to fix a finding),
@@ -64,7 +64,7 @@ import (
 // (whether through this function, or -- as internal/app/outboxworker's
 // own sentinelAutoFixNotifier now does, since the Finding-1 audit fix --
 // through the identical CreateSessionOnTx parameter directly).
-// rolloutMode/repoSettings (Step 76, §32) mirror CreateSessionOnTx's own
+// rolloutMode/repoSettings (§32) mirror CreateSessionOnTx's own
 // identical required parameters -- see that function's own doc comment.
 // This function has no real production caller today (childsession.go's
 // own top doc comment), but stays parameter-complete/consistent

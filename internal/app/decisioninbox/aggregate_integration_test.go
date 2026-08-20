@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration test for Build (Step 60, "decision inbox: read model +
+// Integration test for Build ("decision inbox: read model +
 // API", §16) against a REAL Postgres instance -- gated behind the
 // "integration" build tag, mirroring internal/app/actorauthz's own
 // testcontainers-Postgres-plus-embedded-migrations convention exactly
@@ -130,7 +130,7 @@ func newTestPool(t *testing.T) *pgxpool.Pool {
 // outboxworker's own fakeSentinelAutoFixSourceControl precedent.
 type fakeDecisionInboxSourceControl struct {
 	openPRsByExternalID map[string][]ports.OpenPR
-	// openPRsTruncated/openPRsErr (§60 review finding C1, TEST BATCH: this
+	// openPRsTruncated/openPRsErr (this
 	// fake previously hardcoded truncated=false and never errored, so
 	// Result.SCMFetchFailed=true had no test coverage at all) let a test
 	// drive ListOpenPRsForUser's own two degraded outcomes.
@@ -138,12 +138,12 @@ type fakeDecisionInboxSourceControl struct {
 	openPRsErr       error
 
 	// codeOwnersCalls captures every ResolveCodeOwners call this fake
-	// receives, in order -- §60 review finding B3 (TEST BATCH): "reverting
+	// receives, in order -- "reverting
 	// Ref: pr.BaseRef -> pr.HeadSHA... passes everything" because nothing
 	// previously inspected what spec this fake was actually called with.
 	codeOwnersCalls []ports.ResolveCodeOwnersSpec
 
-	// getOpenPRByKey/getOpenPRErr (Step 62, §21.2 stage 2) back GetOpenPR
+	// getOpenPRByKey/getOpenPRErr (§21.2 stage 2) back GetOpenPR
 	// below -- keyed by "owner/repo#number", the direct single-PR lookup
 	// internal/app/decisioninbox.RevalidateForAutoMerge uses instead of a
 	// user-scoped ListOpenPRsForUser search (revalidate_integration_test.go's
@@ -202,7 +202,7 @@ func (f *fakeDecisionInboxSourceControl) MergePR(context.Context, ports.MergePRS
 	return "", errors.New("fakeDecisionInboxSourceControl: MergePR not implemented")
 }
 
-// GetOpenPR (Step 62, §21.2 stage 2) looks up f.getOpenPRByKey by
+// GetOpenPR (§21.2 stage 2) looks up f.getOpenPRByKey by
 // "owner/repo#number" -- a miss (the ordinary case for every test that
 // never populates this field) reports found=false, err=nil, mirroring a
 // confirmed GitHub 404 (ports.SourceControl.GetOpenPR's own doc comment)
@@ -225,7 +225,7 @@ func (f *fakeDecisionInboxSourceControl) UpdatePRBody(context.Context, ports.Upd
 
 func strPtr(s string) *string { return &s }
 
-// seedAutoApprovedVerdict inserts a review_verdicts row (Step 62, §21.1)
+// seedAutoApprovedVerdict inserts a review_verdicts row (§21.1)
 // whose Shippable is 'auto' and whose head_sha matches headSHA exactly --
 // the ONE fact internal/domain/autoapproval.ComputeEligible now requires
 // before ANY PR can classify ready_to_merge (a missing verdict is
@@ -307,7 +307,7 @@ func TestBuild_FullScenario(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create pr artifact: %v", err)
 	}
-	// Step 62 (§21.1/§21.2): PR #10 needs a Shippable=auto review_verdicts
+	// (§21.1/§21.2): PR #10 needs a Shippable=auto review_verdicts
 	// row, at its own exact head sha, before the REAL eligibility engine
 	// will ever classify it ready_to_merge -- see seedAutoApprovedVerdict's
 	// own doc comment.
@@ -584,8 +584,7 @@ func TestBuild_NoLinkedGitHubIdentity(t *testing.T) {
 }
 
 // TestBuild_PlanOwnershipScoping proves buildPlanItems' own per-user
-// scoping actually excludes/includes the right rows (§60 review finding
-// B2) -- ListAwaitingApprovalPlans is DELIBERATELY unscoped by user
+// scoping actually excludes/includes the right rows -- ListAwaitingApprovalPlans is DELIBERATELY unscoped by user
 // (plans.sql's own doc comment: "this Step's own read model resolves
 // per-user ELIGIBILITY at the app layer, not in this query"), so
 // row.SessionCreatedBy==actor / participants.Exists is the ONLY per-user
@@ -693,7 +692,7 @@ func TestBuild_PlanOwnershipScoping(t *testing.T) {
 }
 
 // TestBuild_PRLabelVariations covers two read-path PR classifications
-// with no prior coverage (§60 review finding T4/T6):
+// with no prior coverage:
 //   - a PR carrying BOTH review:low-risk and review:needs-human must land
 //     needs_review, never ready_to_merge (the needs-human escape hatch,
 //     tested here alongside an otherwise-fully-eligible risk label so a
@@ -701,8 +700,8 @@ func TestBuild_PlanOwnershipScoping(t *testing.T) {
 //     fail).
 //   - a handoff-labeled PR must land awaiting_approval AND still carry
 //     its PR-shaped fields (CIGreen/Findings/IsHandoff) populated on the
-//     domain Item itself -- the read-model half of §60 review finding
-//     C4 (the DTO-mapping half is covered separately in httpapi's own
+//     domain Item itself -- the read-model half of this invariant
+//     (the DTO-mapping half is covered separately in httpapi's own
 //     decisioninbox_integration_test.go).
 func TestBuild_PRLabelVariations(t *testing.T) {
 	pool := newTestPool(t)
@@ -812,7 +811,7 @@ func TestBuild_PRLabelVariations(t *testing.T) {
 		t.Error("PR #21 (handoff) IsHandoff = false, want true")
 	}
 	if !handoffPR.CIGreen {
-		t.Error("PR #21 (handoff) CIGreen = false, want true -- PR-shaped fields must still populate for a handoff row (§60 review finding C4's read-path half)")
+		t.Error("PR #21 (handoff) CIGreen = false, want true -- PR-shaped fields must still populate for a handoff row (the read-path half of the handoff-PR-fields invariant)")
 	}
 	if handoffPR.Findings != 0 {
 		t.Errorf("PR #21 (handoff) Findings = %d, want 0", handoffPR.Findings)
@@ -849,11 +848,11 @@ func decisionInboxActorFixture(ctx context.Context, t *testing.T, pool *pgxpool.
 }
 
 // TestBuild_HasChangesRequestedDemotesFromReadyToMerge is the read-path
-// regression test for §60 review finding P1-4 (second round): before this
-// fix, buildPROpenItem never consulted HasChangesRequested at all when
-// classifying Kind, even though it is a HARD merge blocker at
-// RevalidateForMerge -- so such a PR sat in the TOP ready_to_merge section
-// with a Merge button that would unconditionally 409 at click time. This
+// regression test proving that buildPROpenItem consults
+// HasChangesRequested when classifying Kind, since it is a HARD merge
+// blocker at RevalidateForMerge -- previously such a PR sat in the TOP
+// ready_to_merge section with a Merge button that would unconditionally
+// 409 at click time. This
 // fixture is otherwise IDENTICAL to TestBuild_FullScenario's own
 // ready_to_merge PR #10 (platform-authored, low-risk, CI green, directly
 // assigned) so HasChangesRequested is the ONLY thing keeping it out of
@@ -878,7 +877,7 @@ func TestBuild_HasChangesRequestedDemotesFromReadyToMerge(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("mark PR #40 platform-authored: %v", err)
 	}
-	// Step 62 (§21.1/§21.2): PR #40 needs a Shippable=auto review_verdicts
+	// (§21.1/§21.2): PR #40 needs a Shippable=auto review_verdicts
 	// row at its own exact head sha too -- see seedAutoApprovedVerdict's
 	// own doc comment for why, WITHOUT this, HasChangesRequested would no
 	// longer be the ONLY thing this fixture demonstrates keeps a PR out
@@ -925,7 +924,7 @@ func TestBuild_HasChangesRequestedDemotesFromReadyToMerge(t *testing.T) {
 		t.Errorf("PR #40 (changes requested) Kind = %s, want needs_review -- HasChangesRequested must force it out of ready_to_merge even though it is otherwise fully eligible", pr40.Kind)
 	}
 	if !pr40.HasChangesRequested {
-		t.Error("PR #40 HasChangesRequested = false, want true -- the domain Item field itself must also surface this fact (§60 review finding P1-4)")
+		t.Error("PR #40 HasChangesRequested = false, want true -- the domain Item field itself must also surface this fact")
 	}
 }
 
@@ -1011,7 +1010,7 @@ func TestBuild_ChangedFilesListDegraded_NeverReadyToMerge(t *testing.T) {
 }
 
 // TestBuild_CodeOwnersResolvedAgainstBaseRefNeverHead is the B3 regression
-// test named explicitly in the §60 review's TEST BATCH: "reverting Ref:
+// test named explicitly to close a real gap: "reverting Ref:
 // pr.BaseRef -> pr.HeadSHA... passes everything" because no test captured
 // the actual ResolveCodeOwnersSpec resolvePRProvenance builds. HeadSHA is
 // deliberately a completely different, attacker-shaped string from
@@ -1034,8 +1033,7 @@ func TestBuild_CodeOwnersResolvedAgainstBaseRefNeverHead(t *testing.T) {
 					HTMLURL: "https://github.com/acme/widgets/pull/30",
 					// HeadSHA is deliberately attacker-shaped and distinct
 					// from BaseRef -- if resolvePRProvenance ever regresses
-					// to resolving CODEOWNERS at the PR's own head (§60
-					// review finding B3), the assertion below catches it
+					// to resolving CODEOWNERS at the PR's own head, the assertion below catches it
 					// immediately.
 					HeadSHA:      "attacker-controlled-head-sha",
 					BaseRef:      wantBaseRef,
@@ -1069,14 +1067,14 @@ func TestBuild_CodeOwnersResolvedAgainstBaseRefNeverHead(t *testing.T) {
 	}
 	for _, call := range fakeSCM.codeOwnersCalls {
 		if call.Ref != wantBaseRef {
-			t.Errorf("ResolveCodeOwners called with Ref = %q, want the PR's own BASE ref %q (never HeadSHA -- §60 review finding B3)", call.Ref, wantBaseRef)
+			t.Errorf("ResolveCodeOwners called with Ref = %q, want the PR's own BASE ref %q (never HeadSHA --)", call.Ref, wantBaseRef)
 		}
 	}
 }
 
 // TestBuild_SCMFetchFailedSignal proves Result.SCMFetchFailed actually
-// becomes true for its own producers (§60 review findings P1-2/P1-3,
-// second round; §60 review finding C1, TEST BATCH: SCMFetchFailed=true
+// becomes true for its own producers (
+// second round; SCMFetchFailed=true
 // had zero test coverage -- the fake hardcoded truncated=false and never
 // errored, so a mutation dropping the wiring entirely passed the whole
 // suite). Each subtest isolates ONE producer.
@@ -1116,7 +1114,7 @@ func TestBuild_SCMFetchFailedSignal(t *testing.T) {
 			t.Error("SCMFetchFailed = false, want true (the underlying SourceControl read reported truncated=true)")
 		}
 		if result.SCMAsOf == nil {
-			t.Error("SCMAsOf = nil, want non-nil -- a truncated read is still a REAL, if partial, fetch: SCMAsOf and SCMFetchFailed are no longer mutually exclusive (§60 review finding P1-2)")
+			t.Error("SCMAsOf = nil, want non-nil -- a truncated read is still a REAL, if partial, fetch: SCMAsOf and SCMFetchFailed are no longer mutually exclusive")
 		}
 	})
 
@@ -1150,7 +1148,7 @@ func TestBuild_SCMFetchFailedSignal(t *testing.T) {
 }
 
 // TestBuild_SentinelFixStoreErrorDegradesTheReadButNeverPanics is the
-// P1-3 regression test (§60 review, second round): a genuine SentinelFixes
+// P1-3 regression test: a genuine SentinelFixes
 // store error inside buildPRItems' per-PR loop must both (1) exclude ONLY
 // that one PR row (fail closed, exactly as before this fix) and (2) mark
 // the overall read degraded via Result.SCMFetchFailed, rather than
@@ -1214,12 +1212,12 @@ func TestBuild_SentinelFixStoreErrorDegradesTheReadButNeverPanics(t *testing.T) 
 		t.Errorf("PR #60 present in the inbox (%+v), want excluded -- the §17 exclusion check must fail CLOSED on a store error", item)
 	}
 	if !result.SCMFetchFailed {
-		t.Error("SCMFetchFailed = false, want true -- a per-PR SentinelFixStore error must degrade the overall read (§60 review finding P1-3), never silently render a fresh, complete queue with that row simply missing")
+		t.Error("SCMFetchFailed = false, want true -- a per-PR SentinelFixStore error must degrade the overall read, never silently render a fresh, complete queue with that row simply missing")
 	}
 }
 
 // TestBuild_CredentialResolutionErrorDegradesRatherThanRenderingNoGitHub
-// is the P2-1 regression test (§60 review, second round): a genuine
+// is the P2-1 regression test: a genuine
 // identity-store error resolving the actor's OWN GitHub credential must
 // route into the SAME degraded signal as P1-2/P1-3, never collapse into
 // the identical, indistinguishable ok=false empty state "no GitHub linked
@@ -1264,7 +1262,7 @@ func TestBuild_CredentialResolutionErrorDegradesRatherThanRenderingNoGitHub(t *t
 		t.Errorf("SCMAsOf = %v, want nil -- no fetch was ever attempted", *result.SCMAsOf)
 	}
 	if !result.SCMFetchFailed {
-		t.Error("SCMFetchFailed = false, want true -- a genuine identity-store error must never render identically to \"no GitHub linked at all\" (§60 review finding P2-1)")
+		t.Error("SCMFetchFailed = false, want true -- a genuine identity-store error must never render identically to \"no GitHub linked at all\"")
 	}
 }
 
@@ -1331,7 +1329,7 @@ func itoaTest(n int) string {
 }
 
 // TestBuild_EligibilityConfigStoreError_DemotesFromReadyToMerge is the C3
-// regression test (§62 review, BLOCKER, fixed) at the READ-MODEL level: an
+// regression test at the READ-MODEL level: an
 // otherwise-fully-eligible PR must be demoted to needs_review, never
 // rendered ready_to_merge, when this repo's own §21.2 eligibility config
 // cannot be read (a genuine, non-ErrNoRows repo_settings error) --
@@ -1387,7 +1385,7 @@ func TestBuild_EligibilityConfigStoreError_DemotesFromReadyToMerge(t *testing.T)
 }
 
 // TestBuild_ReviewDecisionDegraded_DemotesFromReadyToMerge is the C4
-// regression test (§62 review, HIGH, fixed) at the READ-MODEL level: a
+// regression test at the READ-MODEL level: a
 // degraded review-decision read (ports.OpenPR.ReviewDecisionDegraded)
 // must demote an otherwise-fully-eligible PR out of ready_to_merge, and
 // must mark the overall read SCMFetchFailed -- "we could not tell" must
@@ -1434,7 +1432,7 @@ func TestBuild_ReviewDecisionDegraded_DemotesFromReadyToMerge(t *testing.T) {
 		t.Error("Kind = ready_to_merge, want needs_review -- a degraded review-decision read must never render as the all-clear ready_to_merge promises")
 	}
 	if !result.SCMFetchFailed {
-		t.Error("SCMFetchFailed = false, want true -- a per-PR degraded review-decision read must mark the overall read incomplete (§62 review finding C4)")
+		t.Error("SCMFetchFailed = false, want true -- a per-PR degraded review-decision read must mark the overall read incomplete")
 	}
 }
 
@@ -1451,7 +1449,7 @@ func countAutoApprovalOutcomes(ctx context.Context, t *testing.T, pool *pgxpool.
 }
 
 // TestBuild_Contested_HasChangesRequestedHalf_RecordsOverridden is the T1
-// regression test (§62 review, BLOCKER, fixed) for the HALF of the
+// regression test for the HALF of the
 // contested guard that was PROVABLY BROKEN before this fix:
 // computeRealEligibility's own OLD code computed `eligible` gating on
 // HasNeedsHumanLabel (a real ComputeEligible input), then only entered
@@ -1510,7 +1508,7 @@ func TestBuild_Contested_HasChangesRequestedHalf_RecordsOverridden(t *testing.T)
 
 	total, contested := countAutoApprovalOutcomes(ctx, t, pool, repoFullName)
 	if total != 1 || contested != 1 {
-		t.Errorf("outcome counts = (total=%d, contested=%d), want (1, 1) -- the engine would have approved this PR on every real criterion, but a reviewer requested changes: this MUST record 'overridden' (§62 review finding T1 -- this exact half was previously unreachable)", total, contested)
+		t.Errorf("outcome counts = (total=%d, contested=%d), want (1, 1) -- the engine would have approved this PR on every real criterion, but a reviewer requested changes: this MUST record 'overridden' (this exact half was previously unreachable)", total, contested)
 	}
 }
 

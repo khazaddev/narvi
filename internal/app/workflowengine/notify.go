@@ -1,4 +1,4 @@
-// This file (notify.go) implements Step 56's ("workflow HITL gate +
+// This file (notify.go) implements §25.9's ("workflow HITL gate +
 // circuit breaker", §25.9) own notification delivery: enqueueWorkflowNotice
 // posts ONE already-rendered, human-readable notice to whichever channel
 // sessionRow's own spawn_source resolves to -- reused for BOTH §25.9
@@ -45,7 +45,7 @@ import (
 // HTTP decide endpoint (internal/adapters/inbound/httpapi) need to actually
 // carry out a workflow.NextStep verdict (advance.go's ApplyStepOutcome) --
 // every field MUST already be scoped to the caller's own open transaction
-// (store.WithTx(tx)), mirroring how OnTurnCompleted's pre-Step-56 signature
+// (store.WithTx(tx)), mirroring how OnTurnCompleted's pre-existing signature
 // already required its lone `workflows *postgres.WorkflowStore` parameter
 // to be pre-scoped that way: §5.1's own "written in the same tx as the
 // state change" applies to the outbox enqueue here exactly like it does to
@@ -53,7 +53,7 @@ import (
 // step-run/turn writes must all land atomically with whatever triggered
 // them (a turn completing, a human's decide-endpoint call).
 type Deps struct {
-	// Workflows is the engine's own pre-existing dependency (Step 55) --
+	// Workflows is the engine's own pre-existing dependency (§25.6) --
 	// every workflow_runs/workflow_step_runs read/write in this package
 	// goes through it.
 	Workflows *postgres.WorkflowStore
@@ -77,7 +77,7 @@ type Deps struct {
 	// this Step ever enqueues per event.
 	Outbox *postgres.OutboxStore
 
-	// EpistemicCheckDefault (F6, adversarial review, Step 61) is the SAME
+	// EpistemicCheckDefault (F6, adversarial review) is the SAME
 	// platform.Config.EpistemicCheckDefault value every other
 	// createTurnLocked-reaching caller in this codebase now threads
 	// through -- advance.go's own dispatchNextAttempt is this package's

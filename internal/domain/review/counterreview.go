@@ -1,7 +1,7 @@
 package review
 
 // CounterReviewStatus is the deep path's own structural-enforcement signal
-// (§26.4, Step 69, "the deep path: adversarial counter-review"): the
+// (§26.4, "the deep path: adversarial counter-review"): the
 // control plane cannot observe a sandbox's own internals (whether the
 // primary reviewer's orchestration actually spawned and adjudicated the
 // `counter-reviewer` sub-task via §7.1's engine-native fan-out), so the
@@ -54,9 +54,9 @@ const (
 
 // CounterReviewFloor is the FOURTH raise-only floor's single exported pure
 // function (§26.4, composing alongside CoverageFloor/PremiseFloor/
-// AdequacyFloor via the existing max(rank) in ComputeShippable, Step 45's
+// AdequacyFloor via the existing max(rank) in ComputeShippable, §8.2's
 // own exactly-one-pure-function-per-floor pattern, extended once already by
-// §26.2/Step 67 and now again by this Step): given the deep path's own
+// §26.2 and now again by this Step): given the deep path's own
 // CounterReviewStatus, it returns the MOST CONSERVATIVE Shippable value
 // counter-review alone ever forces. This function alone decides nothing
 // about whether a PR ships — see ComputeShippable (shippable.go) for the

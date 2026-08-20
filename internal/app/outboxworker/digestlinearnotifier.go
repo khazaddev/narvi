@@ -15,7 +15,7 @@ import (
 // transient failure.
 var ErrLinearDigestNotImplemented = errors.New("outboxworker: linear digest delivery is not yet implemented -- no organization-level Linear post capability exists in this codebase (see ports.NotificationKindLinearDigest's own doc comment)")
 
-// digestLinearNotifier implements ports.Notifier for Step 62's own
+// digestLinearNotifier implements ports.Notifier for §21's own
 // (§21.3) ports.NotificationKindLinearDigest rows.
 //
 // UNLIKE every other notifier in this package, Deliver here NEVER

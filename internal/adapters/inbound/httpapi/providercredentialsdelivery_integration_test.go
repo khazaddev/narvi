@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 53's own ("provider credential injection",
+// Integration tests for §25.1's own ("provider credential injection",
 // §25.1/§25.3) CP-side sandbox-facing delivery endpoint
 // (providercredentialsdelivery.go), against a real Postgres instance --
 // sharing this package's own testRig (httpapi_integration_test.go) and
@@ -26,7 +26,7 @@ import (
 // (unexported) providerCredentialsResponse for this test's own decode
 // target -- same convention scmCredResponse already establishes in this
 // package for the SCM case. credAuthValue mirrors that file's own
-// credentialAuthValue (Step 59, §29.6) -- deliberately independent Go
+// credentialAuthValue (§29.6) -- deliberately independent Go
 // types on each side of the wire, reconciled by hand, exactly like
 // scmcredentials.go's own documented precedent for this sibling endpoint
 // (providercredentialsdelivery.go's own top doc comment).
@@ -45,7 +45,7 @@ type credAuthValue struct {
 // apiKey returns v's own Key value for an "api"-typed entry, or "" for
 // anything else (including a genuinely absent map entry, Go's own zero
 // value) -- lets every one of this file's existing assertions (written
-// before Step 59 against a bare map[string]string) keep comparing a plain
+// before this typed value existed, against a bare map[string]string) keep comparing a plain
 // string, unchanged in spirit, against an api-kind credential's own
 // resolved value.
 func apiKey(v credAuthValue) string {
@@ -454,7 +454,7 @@ func encryptForTest(t *testing.T, rig testRig, plaintext string) []byte {
 	return encrypted
 }
 
-// --- Step 59 (§29.4/§29.6): user-scope oauth resolution ---
+// --- (§29.4/§29.6): user-scope oauth resolution ---
 
 // TestProviderCredentialsDelivery_UserScopeOAuth_Resolves is this Step's
 // own new-behavior test: a session's own creator has a linked ChatGPT

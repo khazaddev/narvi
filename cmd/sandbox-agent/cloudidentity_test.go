@@ -615,7 +615,7 @@ func TestRunCloudIdentityRefreshLoop_EmptyStatesBlocksThenReturnsOnCtxDone(t *te
 // TestCloudIdentityTokenReachesRealSpawnedHook proves the file-based
 // consumption mechanism §27.3 specifies actually works end to end,
 // rather than merely asserting it: a REAL process (a spawned setup.sh,
-// via boot.RunHooks -- the SAME threaded-env seam every OTHER Step 72/73b
+// via boot.RunHooks -- the SAME threaded-env seam every OTHER §27.1/§27.3
 // injected value already goes through) reads the token file at the exact
 // path the AWS_WEB_IDENTITY_TOKEN_FILE env var advertises, using ONLY
 // that env var -- never a hardcoded path -- and the file's own content is

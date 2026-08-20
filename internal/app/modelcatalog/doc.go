@@ -1,12 +1,12 @@
-// Package modelcatalog is Step 59's own "Catalog" deliverable
-// (IMPLEMENTATION_PLAN.md Step 59 row; §8 item 8; §29; §25.2's own "GET
+// Package modelcatalog is §8.8's own "Catalog" deliverable
+// (§8.8; §8 item 8; §29; §25.2's own "GET
 // /provider catalog is the source of truth for providers/models/variants/
 // cost" framing).
 //
 // # Structural decision (named here, since §29 leaves it open)
 //
 // snapshot.json is a control-plane-embedded SNAPSHOT of OpenCode's own
-// live GET /provider catalog for the 3 providers Step 53 already wires
+// live GET /provider catalog for the 3 providers §25.1 already wires
 // credential injection for (google/anthropic/openai) -- live-verified
 // against the pinned OpenCode 1.17.15 binary during this Step's own
 // implementation research (a clean-config instance; the same discipline

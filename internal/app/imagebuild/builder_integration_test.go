@@ -106,7 +106,7 @@ func (f *fakeSourceControl) CheckRepoAccess(context.Context, ports.CheckRepoAcce
 	return false, errors.New("fakeSourceControl: CheckRepoAccess not implemented")
 }
 
-// GetFileContent/UpdateFileContent/RegisterPRStack (Step 48, "sentinels +
+// GetFileContent/UpdateFileContent/RegisterPRStack (§8.2, "sentinels +
 // suggestions") are never reached from this package -- same "not
 // implemented" precedent as CheckRepoAccess above.
 func (f *fakeSourceControl) GetFileContent(context.Context, ports.GetFileContentSpec) (string, string, bool, error) {
@@ -121,7 +121,7 @@ func (f *fakeSourceControl) RegisterPRStack(context.Context, ports.RegisterPRSta
 	return errors.New("fakeSourceControl: RegisterPRStack not implemented")
 }
 
-// CreateBranch (Step 48 confirmed-finding fix) is never reached from this
+// CreateBranch (a confirmed-finding fix) is never reached from this
 // package either -- same "not implemented" precedent as
 // GetFileContent/UpdateFileContent/RegisterPRStack above.
 func (f *fakeSourceControl) CreateBranch(context.Context, ports.CreateBranchSpec) error {
@@ -137,14 +137,14 @@ func (f *fakeSourceControl) UpdatePRBody(context.Context, ports.UpdatePRBodySpec
 	return errors.New("fakeSourceControl: UpdatePRBody not implemented")
 }
 
-// ListMergedBetween (Step 50, "release PR review", §15.2) is never
+// ListMergedBetween ("release PR review", §15.2) is never
 // reached from this package either -- same "not implemented" precedent
 // as CreateBranch above.
 func (f *fakeSourceControl) ListMergedBetween(context.Context, ports.ListMergedBetweenSpec) ([]ports.MergedPR, bool, error) {
 	return nil, false, errors.New("fakeSourceControl: ListMergedBetween not implemented")
 }
 
-// ListOpenPRsForUser/ResolveCodeOwners/MergePR (Step 60, "decision inbox:
+// ListOpenPRsForUser/ResolveCodeOwners/MergePR ("decision inbox:
 // read model + API", §16.2) are never reached from this package -- same
 // "not implemented" precedent as ListMergedBetween above.
 func (f *fakeSourceControl) ListOpenPRsForUser(context.Context, ports.ListOpenPRsForUserSpec) ([]ports.OpenPR, bool, error) {
@@ -171,7 +171,7 @@ func (f *fakeSourceControl) shaCallCount() int {
 // exactly (configurable behavior + a recorded-calls slice, mutex-guarded),
 // narrowed to the one method this package's own Builder actually calls.
 //
-// echoPublishedCacheVersion (§19.1's closing paragraph, Step 43(c), third
+// echoPublishedCacheVersion (§19.1's closing paragraph(c), third
 // iteration) models the modal adapter's own real BuildImage contract
 // (BuildOutcome.PublishedCacheVersion's own doc comment): when true (the
 // default a caller opts into per test, mirroring a real adapter's
@@ -377,8 +377,8 @@ func dataPointAttrString(attrs attribute.Set, key string) (string, bool) {
 }
 
 // readImageBuildAttemptTotal sums every image_build_attempt_total data
-// point whose phase/outcome attributes match the given values -- Step
-// 43(c)'s own build-duration/failure-rate instrumentation (telemetry.go,
+// point whose phase/outcome attributes match the given values --
+// §19.9's own build-duration/failure-rate instrumentation (telemetry.go,
 // §19.9's closing paragraph). CUMULATIVE across every test in this binary
 // (readFailureStreak's own identical caveat, immediately above): callers
 // must diff a "before" and "after" reading around their own
@@ -462,14 +462,14 @@ func sumImageBuildDurationCount(ctx context.Context, t *testing.T, reader *sdkme
 // seedPendingImageBuild inserts a fresh 'pending' image_builds row directly
 // (bypassing app/sessionactor entirely -- this package's own tests exercise
 // Builder in isolation, matching its own doc.go's scope). repo_urls is
-// seeded EMPTY (a base+runtime-only fingerprint) deliberately: Step 41
-// ("warm boot: shared fingerprint", §19.1) has no claim-time SHA
-// resolution mechanism yet (that's Step 42, §19.2/§19.9 -- see attempt's
+// seeded EMPTY (a base+runtime-only fingerprint) deliberately: §19.1's
+// own "warm boot: shared fingerprint" mechanism has no claim-time SHA
+// resolution mechanism yet (that's §19.2/§19.9 -- see attempt's
 // own doc comment), so a row naming any repo can never actually reach a
 // real BuildImage call in this package's own tests -- only a repo-less row
 // can, which is exactly what these backoff/streak tests need to exercise
 // (they're testing the retry/streak MECHANISM, orthogonal to which
-// fingerprints Step 41 can build). See
+// fingerprints §19.1 can build). See
 // TestPumpOnce_RepoBearingRow_NoSHAResolutionYet_SkipsBuildImageCleanly
 // below for the repo-bearing case's own dedicated coverage.
 func seedPendingImageBuild(ctx context.Context, t *testing.T, store *narvipg.ImageBuildStore, fingerprint string) {
@@ -1407,7 +1407,7 @@ func TestPumpOnce_FailureStreak_FiresAtThresholdNotBefore(t *testing.T) {
 }
 
 // TestPumpOnce_RepoBearingRow_NoCredentialConfigured_DegradesCleanly proves
-// Step 42's own degrade-cleanly design for the deliberately-optional
+// §19.2's own degrade-cleanly design for the deliberately-optional
 // platform credential (§19.2): a missing/invalid credential is logged and
 // recorded as a failed attempt via the same retry/backoff path any other
 // resolution failure uses -- never a crash, never something that blocks
@@ -1490,7 +1490,7 @@ func TestPumpOnce_RepoBearingRow_NoCredentialConfigured_DegradesCleanly(t *testi
 }
 
 // TestPumpOnce_RepoBearingRow_CredentialConfigured_ResolvesSHAsAndBuilds
-// proves Step 42's own headline claim-time SHA resolution (§19.1/§19.2/
+// proves §19.2's own headline claim-time SHA resolution (§19.1/§19.2/
 // §19.9): with a real platform credential AND SourceControl configured, a
 // claimed row naming a repo now DOES build for real -- ResolveBranchSHA is
 // called once per named repo (with an empty Branch, resolving the repo's
@@ -2530,7 +2530,7 @@ func TestBuilderRun_RefreshPumpGoroutineStarts(t *testing.T) {
 	}
 }
 
-// --- Step 43(c): build-time dependency cache (§19.1's closing paragraph) ---
+// --- Build-time dependency cache (§19.1's closing paragraph) ---
 
 // TestPumpOnce_Success_RequestsCacheMountKeyedOnBaseAndRuntimeVersion proves
 // attempt (PumpOnce's own per-row body) now populates ImageSpec.CacheMount
@@ -2566,7 +2566,7 @@ func TestPumpOnce_Success_RequestsCacheMountKeyedOnBaseAndRuntimeVersion(t *test
 	}
 	mount := provider.buildCalls[0].CacheMount
 	if mount == nil {
-		t.Fatal("BuildImage called with ImageSpec.CacheMount = nil, want it populated (§19.1's closing paragraph, Step 43(c))")
+		t.Fatal("BuildImage called with ImageSpec.CacheMount = nil, want it populated (§19.1's closing paragraph(c))")
 	}
 	wantKey := domainimagebuild.CacheVolumeKey("narvi/base:test", "1.0.0-test")
 	if mount.Key != wantKey {

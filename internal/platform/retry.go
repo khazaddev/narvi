@@ -1,5 +1,5 @@
 // This file (retry.go) implements a small, generic synchronous retry
-// helper -- Step 39's ("identities + full RBAC", §13.2) own need: "Fetch
+// helper -- §13.2's ("identities + full RBAC", §13.2) own need: "Fetch
 // the actor's profile email from the provider API. This MUST be a
 // retryable operation... a provider email-API failure is a retryable
 // error, not an empty identity... retry with backoff and keep the last

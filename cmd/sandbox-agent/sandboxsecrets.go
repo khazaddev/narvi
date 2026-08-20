@@ -1,7 +1,7 @@
-// This file (sandboxsecrets.go) implements Step 72's own ("sandbox
+// This file (sandboxsecrets.go) implements §27.1's own ("sandbox
 // secrets & opencode config", §27.1) sandbox-agent-side FETCH +
 // INJECTION-ENV-BUILDING of general sandbox_secrets, mirroring main.go's
-// own fetchProviderCredentials/providerCredentialSpawnEnv split (Step 53)
+// own fetchProviderCredentials/providerCredentialSpawnEnv split (§25.1)
 // exactly in spirit, adapted to this feature's own "thread into EVERY
 // spawned process" requirement rather than opencode serve alone.
 //
@@ -48,11 +48,11 @@
 // it re-runs the SAME ValidateName against every DELIVERED name, a second
 // time, at the point of injection, dropping (never failing the boot on)
 // any name that no longer passes. This defense-in-depth re-validation was
-// added during Step 72's own review round specifically because the write
+// added during §27.1's own review round specifically because the write
 // path and the injection path can drift apart -- a control plane rolled
 // back to a build predating a later reservation, or a row written by some
 // other path entirely, would otherwise still inject a name the CURRENT
-// binary's own ValidateName would refuse. Step 73b later widened
+// binary's own ValidateName would refuse. §27.4 later widened
 // ValidateName itself with cloudidentity.ReservedEnvVarNames/
 // clusterbinding.ReservedEnvVarNames (internal/domain/sandboxsecret/
 // name.go) -- this file's re-validation call picks up that widened rule
@@ -163,7 +163,7 @@ func fetchSandboxSecrets(ctx context.Context, cfg boot.Config, timeouts platform
 	// enforces. The reserved namespaces exist to stop a sandbox secret from
 	// ever shadowing a mechanism sandbox-agent itself depends on -- most
 	// sharply OPENCODE_*, whose inline-config slot OUTRANKS the capability
-	// restriction Step 48 writes into the project slot. Enforcing that at
+	// restriction §8.2 writes into the project slot. Enforcing that at
 	// the write path alone would make it a rule every future writer has to
 	// remember, which §30 already ruled is not a guard; enforcing it again
 	// here, at the point of injection, makes the shadowing unrepresentable

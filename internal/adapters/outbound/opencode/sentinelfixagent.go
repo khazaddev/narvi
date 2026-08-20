@@ -2,7 +2,7 @@ package opencode
 
 import "encoding/json"
 
-// This file implements Step 48's own ("sentinels + suggestions", §17.2)
+// This file implements §8.2's own ("sentinels + suggestions", §17.2)
 // capability-restriction mechanism: "the child session's write/edit tool
 // capability is additionally restricted server-side to test/doc path
 // patterns at spawn time... a second, independent layer alongside §17.4's
@@ -23,7 +23,7 @@ import "encoding/json"
 //     "edit","pattern":"*","action":"deny"} -- i.e. glob-scoped edit
 //     permission is not a hypothetical capability this Step is hoping
 //     exists; it is the EXACT mechanism ALREADY gating every plan-mode
-//     turn in production today (Step 37).
+//     turn in production today (§8.1).
 //  2. A CUSTOM agent, defined via an opencode.json config file's own
 //     "agent" object with a narrower glob (e.g. "tests/**": "allow",
 //     "docs/**": "allow", "*": "deny" for the "edit" permission), was
@@ -115,7 +115,7 @@ func sentinelFixAgentEntryValue() sentinelFixAgentEntry {
 	}
 	return sentinelFixAgentEntry{
 		Mode:        "primary",
-		Description: "Sentinel auto-fix: restricted to test/doc paths only (Step 48, §17.2).",
+		Description: "Sentinel auto-fix: restricted to test/doc paths only (§17.2).",
 		Permission: map[string]map[string]string{
 			"edit": permission,
 		},

@@ -1,4 +1,4 @@
-// This file (oidcdiscovery.go) implements Step 73a's own ("cloud
+// This file (oidcdiscovery.go) implements §27.3's own ("cloud
 // identity: OIDC issuer, bindings, minting", §27.3) public issuer
 // surface: GET /.well-known/openid-configuration and GET
 // /.well-known/jwks.json.

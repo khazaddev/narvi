@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 73b's own ("cloud identity: sandbox-side
+// Integration tests for §27.4's own ("cloud identity: sandbox-side
 // consumption + kubeconfig injection", §27.4) CP-side management CRUD
 // surface (clusterbindings.go), against a real Postgres instance --
 // sharing this package's own testRig (httpapi_integration_test.go) and

@@ -1,4 +1,4 @@
-// Real, in-process round-trip test for HandleSnapshot (Step 22,
+// Real, in-process round-trip test for HandleSnapshot (§3.2,
 // "snapshots & restore", design decision 4): a fake control-plane server
 // backing BOTH the sandbox-WS endpoint and the new snapshot-mint endpoint,
 // driving a real *wsbridge.Bridge connection -- unlike

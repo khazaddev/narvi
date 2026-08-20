@@ -1,6 +1,6 @@
-// This file (reviewretrigger.go) implements Step 65's ("review: automatic
+// This file (reviewretrigger.go) implements §24's ("review: automatic
 // re-review on new commits", §24) own SECOND, automatic trigger for a
-// review session's own turns -- alongside, never replacing, Step 46's
+// review session's own turns -- alongside, never replacing, §8.2's
 // existing manual label/button re-trigger (internal/adapters/inbound/
 // httpapi/reviewretrigger.go), which this file's own logic never touches.
 //
@@ -23,7 +23,7 @@
 // Postgres reads; ACTUALLY enqueueing one (step 4) needs a fresh,
 // live-fetched diff/head-sha (internal/app/reviewcontext.Fetch, the SAME
 // "diff provably anchored to a live GetPullRequest call" guarantee every
-// other review-trigger path already gets, §62 review finding C2's own
+// other review-trigger path already gets own
 // fix) -- a real outbound GitHub API call. This mirrors dispatch.go's own
 // established "plan inside a transact, real network call OUTSIDE any
 // transaction, result written back in a fresh transact" shape
@@ -130,17 +130,17 @@ type reviewRetriggerDecision struct {
 	budgetNoticeAlreadySent bool
 	latestVerdictRiskLevel  string
 
-	// latestVerdictReviewPath (Step 68, §26.3) is the latest posted
+	// latestVerdictReviewPath (§26.3) is the latest posted
 	// verdict's own review_path column -- §24's own re-review floor
 	// input ("once deep, a PR stays deep, even if the delta itself
 	// would independently route light"). Empty when no verdict has ever
-	// been posted for this PR, or when the latest one predates Step 68 /
+	// been posted for this PR, or when the latest one predates §26.3 /
 	// never resolved a depth -- both degrade identically to "nothing to
 	// floor against", mirroring latestVerdictRiskLevel's own identical
 	// "no prior verdict" zero-value convention immediately above.
 	latestVerdictReviewPath string
 
-	// The four fields below are Step 68's own computed OUTPUT (§26.3),
+	// The four fields below are §26.3's own computed OUTPUT (§26.3),
 	// set by handleReviewRetriggerDebounceTimer between phase 2 (fetch)
 	// and phase 3 (finish/insert) -- never set by readReviewRetriggerState
 	// itself, which only ever reads latestVerdictReviewPath above as an
@@ -213,7 +213,7 @@ func (a *Actor) handleReviewRetriggerDebounceTimer(ctx context.Context) error {
 			// feature must never guess-and-dispatch. Without a live,
 			// provably-fresh head sha to anchor turns.review_head_sha to,
 			// enqueueing a turn here would produce a review that can
-			// never honestly be recorded in review_verdicts (Step 62's
+			// never honestly be recorded in review_verdicts (§21's
 			// NOT NULL head_sha column) -- downgrade to a plain no-op
 			// this cycle: clear pending_retrigger_head_sha (a fresh
 			// synchronize event will try again), delete the timer, spend
@@ -222,7 +222,7 @@ func (a *Actor) handleReviewRetriggerDebounceTimer(ctx context.Context) error {
 				"repo_full_name", decision.repoFullName, "pr_number", decision.prNumber)
 			decision.action = reviewRetriggerActionFetchFailed
 		} else {
-			// Step 68 (§26.3): depth re-evaluated on the delta (this
+			// (§26.3): depth re-evaluated on the delta (this
 			// PR's own CURRENT diff, reviewCtx above), THEN floored at
 			// the PR's own previous depth ("once deep, a PR stays deep,
 			// even if the delta itself would independently route
@@ -247,7 +247,7 @@ func (a *Actor) handleReviewRetriggerDebounceTimer(ctx context.Context) error {
 			// correctness difference (both reads name the SAME latest
 			// review_verdicts row for this repoFullName/prNumber).
 			//
-			// Adversarial-review fix (Step 69, §26.4/§26.7): computed
+			// Adversarial-review fix (§26.4/§26.7): computed
 			// BEFORE composeAutoRetriggerPrompt now, not after -- this
 			// lane previously rendered the prompt FIRST and only computed
 			// the floored depth afterward, so reviewCtx.DeepPath (never
@@ -260,8 +260,8 @@ func (a *Actor) handleReviewRetriggerDebounceTimer(ctx context.Context) error {
 			// the D2-class contradiction the OTHER two trigger lanes
 			// (internal/adapters/inbound/httpapi/reviewretrigger.go,
 			// internal/adapters/inbound/github/handler.go) were already
-			// fixed against, that this lane alone had never received. Before
-			// Step 69 this only mis-set the prompt's own wording; Step 69
+			// fixed against, that this lane alone had never received. Previously
+			// this only mis-set the prompt's own wording; now it
 			// makes it a guaranteed 400 (reviewpost.ValidateVerdictInput's
 			// own ErrInvalidCounterReview/ErrEmptyDigestArchDecisions) on
 			// every such verdict, since the agent was never told
@@ -324,7 +324,7 @@ func (a *Actor) handleReviewRetriggerDebounceTimer(ctx context.Context) error {
 			// httpapi.RetriggerReview's own manual-button lane and
 			// internal/adapters/inbound/github/handler.go's own mention/
 			// label lane byte-for-byte in ordering. Moved to AFTER the
-			// depth/cost-budget computation above (Step 69 fix, this
+			// depth/cost-budget computation above (§26.4, this
 			// block's own doc comment) -- reviewCtx.DeepPath/
 			// ReviewCostBudgetUSD must already reflect the FLOORED depth
 			// this turn is about to persist before its own prompt renders.
@@ -419,7 +419,7 @@ func (a *Actor) readReviewRetriggerState(ctx context.Context) (*reviewRetriggerD
 		} else {
 			verdictHeadSHA = latest.HeadSha
 			verdictRiskLevel = latest.RiskLevel
-			// Step 68 (§26.3): review_path is nullable (a pre-Step-68
+			// (§26.3): review_path is nullable (a pre-existing
 			// row, or a verdict whose own turn never resolved a depth)
 			// -- degrades to "", the SAME "nothing to floor against"
 			// reading as no prior verdict at all.
@@ -681,14 +681,14 @@ func (a *Actor) composeAutoRetriggerPrompt(ctx context.Context, repoFullName str
 }
 
 // insertAutoRetriggerTurn is §24.3 step 4's own turn creation -- CANNOT
-// call httpapi.CreateTurnForBot (Step 46's manual path): internal/app/
+// call httpapi.CreateTurnForBot (§8.2's manual path): internal/app/
 // sessionactor cannot import internal/adapters/inbound/httpapi (httpapi
 // already imports sessionactor throughout its bot/create/turn/plan files;
 // the reverse would be a compile-time import cycle), and createTurnLocked
 // (the function CreateTurnForBot wraps) is unexported besides. This
 // inserts the turn directly via a.stores.turn.Create -- the SAME
 // store-level primitive createTurnLocked itself calls
-// (internal/adapters/inbound/httpapi/turn.go) -- mirroring Step 46's
+// (internal/adapters/inbound/httpapi/turn.go) -- mirroring §8.2's
 // manual path at the storage layer rather than calling through it.
 //
 // prompt is ALREADY the fully-composed, fully-rendered turn text
@@ -725,7 +725,7 @@ func (a *Actor) composeAutoRetriggerPrompt(ctx context.Context, repoFullName str
 // now matches it, closing what was a real, if narrow, divergence between
 // the two.
 //
-// workflowengine (Step 55, §25.6) wiring is DELIBERATELY NOT duplicated:
+// workflowengine (§25.6) wiring is DELIBERATELY NOT duplicated:
 // createTurnLocked calls workflowengine.ResolveStepForNewTurn/AttachTurn
 // for every turn it creates, so that turn picks up its lane's configured
 // workflow prompt/model/effort and is tracked by a workflow run --
@@ -741,7 +741,7 @@ func (a *Actor) composeAutoRetriggerPrompt(ctx context.Context, repoFullName str
 // test in this codebase exercises today. Left as a documented, deliberate
 // omission (rereview finding 9) rather than a speculative rewrite of this
 // file's own prompt-composition contract.
-// reviewDepth/reviewDepthDecision/modelID/effort (Step 68, §26.3) are
+// reviewDepth/reviewDepthDecision/modelID/effort (§26.3) are
 // decision's own finalReviewDepth/reviewDepthDecisionJSON/triageModelID/
 // triageEffort fields, already computed and FLOORED (§24) by
 // handleReviewRetriggerDebounceTimer before this function's own caller
@@ -783,7 +783,7 @@ func (a *Actor) insertAutoRetriggerTurn(ctx context.Context, tx pgx.Tx, decision
 
 // enqueueAutoRetriggerBudgetExhaustedNotice is §24.6's own one-time
 // notice -- posted through the SAME verdict-posting mechanism every
-// OTHER review-session write to a PR already goes through (Step 47's
+// OTHER review-session write to a PR already goes through (§8.2's
 // raw-comment blocking: this is the sanctioned way review-session content
 // ever reaches a PR at all), never a raw comment. This is NOT a real
 // review.Verdict -- no risk assessment happened -- so, deliberately

@@ -129,13 +129,13 @@ func (e *IllegalTransitionError) Unwrap() error { return ErrIllegalTransition }
 // Every edge here has exactly one fixed destination (no dynamic-target
 // triggers, unlike internal/domain/sandbox's Recover/GraceExpired).
 //
-// Deliberately still true after Step 24 ("two-phase terminalization"),
+// Deliberately still true after §3.2 ("two-phase terminalization"),
 // which needed no new edge here: §3.2's own late-success reconciliation
 // ("a genuinely late execution_complete... turn marked completed") does
 // NOT require a Failed -> Completed edge, because by construction a turn
 // this genuinely-late event applies to is still Processing when it
-// arrives -- the sandbox-level Suspect-grace window Step 24 added
-// recovery for (internal/app/sessionactor/sandboxevent.go) is on the
+// arrives -- the sandbox-level Suspect-grace window that recovery relies
+// on (internal/app/sessionactor/sandboxevent.go) is on the
 // order of a couple of minutes, dwarfed by this turn's OWN independent
 // turn_deadline budget (tens of minutes) -- so the already-legal
 // Processing -> Completed edge below is the one that fires, never a new

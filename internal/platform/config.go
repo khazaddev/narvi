@@ -201,7 +201,7 @@ func (e *InvalidHMACSecretError) Error() string {
 }
 
 // gitHubClientIDEnvVarName, gitHubClientSecretEnvVarName, and
-// publicBaseURLEnvVarName are the env vars Load reads for Step 20's
+// publicBaseURLEnvVarName are the env vars Load reads for §13.1's
 // ("auth v1", §13.1) GitHub OAuth wiring. All three are required in every
 // stage — never defaulted, matching the 3 HMAC secrets' own "never a
 // baked-in default" convention.
@@ -212,7 +212,7 @@ const (
 )
 
 // gitHubWebhookSecretEnvVarName and gitHubBotHandleEnvVarName configure
-// Step 32's ("GitHub ingress", §8.2) own webhook adapter --
+// §8.2's ("GitHub ingress", §8.2) own webhook adapter --
 // internal/adapters/inbound/github. gitHubWebhookSecretEnvVarName is
 // DELIBERATELY DISTINCT from hmacWebhookSecretEnvVarName above: that
 // secret backs Narvi's OWN internal bearer HMAC scheme (a later, unrelated
@@ -220,7 +220,7 @@ const (
 // the full reasoning), never a real third-party provider signature.
 // GitHubWebhookSecret is the REAL secret GitHub itself signs
 // "X-Hub-Signature-256" with, configured on GitHub's own webhook settings
-// screen. gitHubBotHandleEnvVarName is the bot/app username Step 32's own
+// screen. gitHubBotHandleEnvVarName is the bot/app username §8.2's own
 // mention-detection matches comment bodies against (a plain "@handle"
 // substring check, internal/adapters/inbound/github). Both required in
 // every stage -- never defaulted, matching every other secret/credential
@@ -234,7 +234,7 @@ const (
 	gitHubBotHandleEnvVarName     = "NARVI_GITHUB_BOT_HANDLE"
 )
 
-// gitHubBotTokenEnvVarName configures Step 35's ("outbox delivery", §5.1)
+// gitHubBotTokenEnvVarName configures §5.1's ("outbox delivery", §5.1)
 // own GitHub Notifier adapter (internal/adapters/outbound/githubapi's new
 // issue-comment-posting method) -- read from NARVI_GITHUB_BOT_TOKEN.
 // Required in every stage -- never defaulted, matching every other secret
@@ -263,7 +263,7 @@ const (
 // per-commenter OAuth token either).
 const gitHubBotTokenEnvVarName = "NARVI_GITHUB_BOT_TOKEN"
 
-// gitHubImageBuildTokenEnvVarName configures Step 42's ("warm boot:
+// gitHubImageBuildTokenEnvVarName configures §19.2's ("warm boot:
 // refresh pump + hook policy", §19.2) own platform-level GitHub
 // credential, read from NARVI_GITHUB_IMAGE_BUILD_TOKEN. §19.2's own
 // words: "the freshness pump needs GitHub credentials belonging to no
@@ -309,7 +309,7 @@ const gitHubBotTokenEnvVarName = "NARVI_GITHUB_BOT_TOKEN"
 // whichever the deploying operator provisions) -- never logged anywhere.
 const gitHubImageBuildTokenEnvVarName = "NARVI_GITHUB_IMAGE_BUILD_TOKEN"
 
-// NARVI_CACHE_VOLUME_EPOCH (Step 43(c)'s attempt-2 rotation escape hatch)
+// NARVI_CACHE_VOLUME_EPOCH (§19.1's attempt-2 rotation escape hatch)
 // is GONE, deliberately, not merely unread: domain/imagebuild.
 // CacheVolumeKey (this Step's third iteration -- immutable versioned
 // cache snapshots) no longer takes an epoch argument at all. See that
@@ -322,7 +322,7 @@ const gitHubImageBuildTokenEnvVarName = "NARVI_GITHUB_IMAGE_BUILD_TOKEN"
 // silently-ignored env var precisely so this codebase never carries two
 // rotation mechanisms side by side, one live and one vestigial.
 
-// reviewModelDeepEnvVarName configures Step 68's ("review triage:
+// reviewModelDeepEnvVarName configures §26.3's ("review triage:
 // deterministic light/deep routing", §26.3) own deep-path model override,
 // read from NARVI_REVIEW_MODEL_DEEP. §26.3 states "depth drives model/
 // effort ... deep = frontier tier + high effort", but this codebase has
@@ -330,7 +330,7 @@ const gitHubImageBuildTokenEnvVarName = "NARVI_GITHUB_IMAGE_BUILD_TOKEN"
 // the only comparable precedent, IntentClassifierModel above, configures
 // the CLASSIFIER's own internal LLM call, an unrelated concern) -- so
 // this is the ONE new config knob this Step adds. Deliberately OPTIONAL,
-// unlike IntentClassifierModel (Step 36's own load-bearing, required
+// unlike IntentClassifierModel (§8.3's own load-bearing, required
 // feature): reviewtriage.ModelAndEffort's own doc comment (internal/
 // domain/reviewtriage/modeleffort.go) explains why leaving this unset
 // still forces high effort unconditionally on the deep path (safe on any
@@ -342,12 +342,12 @@ const gitHubImageBuildTokenEnvVarName = "NARVI_GITHUB_IMAGE_BUILD_TOKEN"
 // required configuration.
 const reviewModelDeepEnvVarName = "NARVI_REVIEW_MODEL_DEEP"
 
-// gitHubReReviewLabelEnvVarName configures Step 46's ("review sessions",
+// gitHubReReviewLabelEnvVarName configures §8.2's ("review sessions",
 // §8.2) own manual re-trigger-via-label lane (internal/adapters/inbound/
 // github's new pull_request/"labeled" handling): the exact label NAME a
 // maintainer applies to a PR to manually re-trigger its review session,
 // reusing the SAME atomic per-PR claim/coalescing (github_pr_sessions,
-// Step 32) an @mention already goes through -- never a NEW mechanism.
+// §8.2) an @mention already goes through -- never a NEW mechanism.
 // DELIBERATELY OPTIONAL, unlike gitHubBotHandleEnvVarName/
 // gitHubWebhookSecretEnvVarName above: this is a product/UX naming choice
 // with a genuinely safe out-of-the-box default (defaultGitHubReReviewLabel
@@ -357,7 +357,7 @@ const reviewModelDeepEnvVarName = "NARVI_REVIEW_MODEL_DEEP"
 // "optional: an unset/empty value defaults" precedent rather than the
 // three GitHub secrets/identity fields' own "never defaulted" one.
 //
-// Deliberately NOT reusing the `review:*` label PREFIX Step 47's own
+// Deliberately NOT reusing the `review:*` label PREFIX §8.2's own
 // verdict-posting tool will later write (`review: needs-human`, §21.2) --
 // this is a HUMAN-issued COMMAND label (§5.1's own distinction: "a human
 // applying a label ... is a legitimate, deliberate command"), never a
@@ -372,13 +372,13 @@ const gitHubReReviewLabelEnvVarName = "NARVI_GITHUB_REREVIEW_LABEL"
 // mirroring defaultHTTPAddr's own precedent (httpAddrEnvVarName's doc
 // comment above). "run-review" is a verb phrase, deliberately distinct in
 // SHAPE (not just prefix) from the noun-phrase `review: <state>` labels
-// Step 47 introduces later (gitHubReReviewLabelEnvVarName's own doc comment
+// used elsewhere (gitHubReReviewLabelEnvVarName's own doc comment
 // above) -- a human applying it reads unambiguously as "please run a
 // review", never confusable with a bot-posted status.
 const defaultGitHubReReviewLabel = "run-review"
 
 // gitHubReleaseLabelEnvVarName and gitHubReleaseBranchPatternEnvVarName
-// configure Step 50's own ("release PR review", §15.1) deterministic
+// configure §15's own ("release PR review", §15.1) deterministic
 // release-PR detection rule: "a PR is treated as a release review when
 // it matches a configurable pattern: originates from/targets a
 // release/* branch, or carries a release label." Both DELIBERATELY
@@ -465,7 +465,7 @@ func (e *EmptyAllowlistError) Error() string {
 // modalBaseURLEnvVarName, modalAuthTokenEnvVarName, and
 // modalEgressProxyURLEnvVarName configure the real
 // internal/adapters/outbound/modal.Provider construction in cmd/
-// control-plane/main.go (Step 21, "e2e happy path" -- this Step is the
+// control-plane/main.go (§9.3, "e2e happy path" -- this Step is the
 // SandboxProvider's first real production caller). BaseURL/AuthToken are
 // required in every stage, matching every other "never a baked-in
 // default" secret this file already reads (the 3 HMAC secrets, the GitHub
@@ -481,7 +481,7 @@ const (
 
 // rwxAccessTokenEnvVarName configures the real internal/adapters/outbound/
 // rwx package's Dispatches API notifier construction in cmd/control-plane/
-// main.go (Step 57, §4.1.1/§4.1.2). Unlike modalAuthTokenEnvVarName above,
+// main.go (§4.1.1/§4.1.2). Unlike modalAuthTokenEnvVarName above,
 // this is OPTIONAL in every stage: RWX preview links are an off-by-default,
 // per-repo opt-in feature layered ON TOP of this platform-wide credential
 // (§4.1.2 point 1: "absent = feature off"; §24.5's posture) — a deployment
@@ -498,7 +498,7 @@ const (
 // error rather than silently vanishing.
 const rwxAccessTokenEnvVarName = "NARVI_RWX_ACCESS_TOKEN"
 
-// openCodeRuntimeVersionEnvVarName is the env var Load reads for Step 26's
+// openCodeRuntimeVersionEnvVarName is the env var Load reads for §8.5's
 // ("image builds", §8.5-note/§10-P2) own RuntimeVersion fingerprint input
 // (domain/imagebuild.Fingerprint's third argument) -- the pinned OpenCode
 // version this control plane assumes every base/prebuilt sandbox image
@@ -526,8 +526,8 @@ const openCodeRuntimeVersionEnvVarName = "NARVI_OPENCODE_RUNTIME_VERSION"
 const defaultOpenCodeRuntimeVersion = "1.17.15"
 
 // linearWebhookSecretEnvVarName, linearOAuthClientIDEnvVarName, and
-// linearOAuthClientSecretEnvVarName are the env vars Load reads for Step
-// 34's ("Linear ingress", §8.10) Linear wiring. All three are required in
+// linearOAuthClientSecretEnvVarName are the env vars Load reads for
+// §8.10's ("Linear ingress") Linear wiring. All three are required in
 // every stage — never defaulted, matching every other "never a baked-in
 // default" secret this file already reads.
 //
@@ -559,7 +559,7 @@ const (
 
 // linearDefaultRepoNameEnvVarName and linearDefaultRepoURLEnvVarName name
 // the single repo a Linear-originated session's Repos field is populated
-// with (both required, no default). Scope note (Step 34): Linear's own
+// with (both required, no default). Scope note (§8.10): Linear's own
 // AgentSessionEvent webhook payload carries no repository information at
 // all (confirmed against Linear's real schema during this Step's
 // investigation — an agent is expected to either already know its own
@@ -576,8 +576,8 @@ const (
 	linearDefaultRepoURLEnvVarName  = "NARVI_LINEAR_DEFAULT_REPO_URL"
 )
 
-// slackSigningSecretEnvVarName and slackBotTokenEnvVarName configure Step
-// 33's ("Slack ingress", §8.10) real Slack Events API adapter
+// slackSigningSecretEnvVarName and slackBotTokenEnvVarName configure
+// §8.10's ("Slack ingress") real Slack Events API adapter
 // (internal/adapters/inbound/slack). Deliberately NOT HMACWebhookSecret --
 // see internal/platform/webhooksig.go's own doc comment for why a real
 // provider's own signature scheme never matches that internal bearer
@@ -586,7 +586,7 @@ const (
 // closed); SlackBotToken authenticates the one direct
 // chat.postMessage call this Step's own in-thread ack makes (see that
 // package's own doc.go for why this is a single direct API call, not the
-// general Notifier/outbox abstraction Step 35 builds). Both required in
+// general Notifier/outbox abstraction (§5.1)). Both required in
 // every stage -- never defaulted, matching every other secret this file
 // already reads.
 const (
@@ -596,7 +596,7 @@ const (
 
 // slackDefaultRepoNameEnvVarName and slackDefaultRepoURLEnvVarName name the
 // single repo a brand-new Slack-spawned session's CreateSessionRequest
-// carries (Step 33, "Slack ingress"). Deliberately OPTIONAL, unlike the two
+// carries (§8.10, "Slack ingress"). Deliberately OPTIONAL, unlike the two
 // vars above: the technical plan has no per-channel/per-workspace repo
 // routing design yet (that is a genuinely open gap, left to a future
 // automations/routing Step), so this Step's own honest, minimal stand-in is
@@ -610,7 +610,7 @@ const (
 )
 
 // anthropicAPIKeyEnvVarName and intentClassifierModelEnvVarName configure
-// Step 36's ("intent classifier", §8.3/§18) real Anthropic adapter
+// §8.3's ("intent classifier", §8.3/§18) real Anthropic adapter
 // (internal/adapters/outbound/llm), read from NARVI_ANTHROPIC_API_KEY /
 // NARVI_INTENT_CLASSIFIER_MODEL. Both required in every stage -- never
 // defaulted, matching every other secret/required-choice this file
@@ -649,7 +649,7 @@ const intentClassifierActiveSurfacesEnvVarName = "NARVI_INTENT_CLASSIFIER_ACTIVE
 // own model-recognition table.
 
 // cloudIdentityIssuerURLEnvVarName is the env var Load reads for
-// Config.CloudIdentityIssuerURL (Step 73a, §27.3). DELIBERATELY OPTIONAL --
+// Config.CloudIdentityIssuerURL (§27.3). DELIBERATELY OPTIONAL --
 // an empty value means the entire cloud-identity feature is off, fail-
 // closed (see that field's own doc comment) -- but a NON-empty value gets
 // real validation (InvalidCloudIdentityIssuerURLError below), unlike most
@@ -685,7 +685,7 @@ func (e *InvalidCloudIdentityIssuerURLError) Error() string {
 // objectStoreEndpointEnvVarName, objectStorePublicEndpointEnvVarName,
 // objectStoreRegionEnvVarName, objectStoreBucketEnvVarName,
 // objectStoreAccessKeyIDEnvVarName, objectStoreSecretAccessKeyEnvVarName,
-// and objectStoreUsePathStyleEnvVarName configure Step 58's ("uploads,
+// and objectStoreUsePathStyleEnvVarName configure §8.6's ("uploads,
 // blob storage & the in-sandbox download_file tool", §28.7) object-storage
 // block: "The root storage credential exists in exactly one place:
 // platform.Config ... endpoint, region, bucket, access key/secret (or
@@ -807,7 +807,7 @@ func (e *InvalidObjectStoreMaxBytesError) Error() string {
 // sign-in defaults to role "member".
 const initialAdminEmailsEnvVarName = "NARVI_INITIAL_ADMIN_EMAILS"
 
-// epistemicCheckDefaultEnvVarName configures Step 61's ("builder
+// epistemicCheckDefaultEnvVarName configures §20's ("builder
 // epistemic pre-action check", §20.4) own platform-wide default for the
 // devil's-advocate pre-action check on build turns, read from
 // NARVI_EPISTEMIC_CHECK_DEFAULT. Optional, default false (§20.4: "Off by
@@ -857,7 +857,7 @@ const (
 	RolloutModeCohort = rollout.ModeCohort
 )
 
-// rolloutModeEnvVarName configures Step 76's ("feature-flagged cohort
+// rolloutModeEnvVarName configures §10's ("feature-flagged cohort
 // rollout of sessions, with documented rollback", §10 Phase 6, §32) own
 // master switch, read from NARVI_ROLLOUT_MODE. Optional -- unlike
 // NARVI_STAGE (required, no default: envVarName's own doc comment), an
@@ -995,10 +995,10 @@ type Config struct {
 	// NARVI_HMAC_WEBHOOK_SECRET respectively. All three are required in
 	// every stage, including development — never defaulted.
 	//
-	// HMACWebhookSecret note (Step 31, "webhook toolkit"): this secret
+	// HMACWebhookSecret note (§5.1, "webhook toolkit"): this secret
 	// pairs with platform.Sign/Verify's own internal "{timestamp}.
 	// {signature}" bearer format (hmacauth.go) -- it is NOT the secret
-	// GitHub/Slack/Linear ingress adapters (Steps 32-34) use to verify
+	// GitHub/Slack/Linear ingress adapters (§8.2/§8.10) use to verify
 	// their OWN provider's webhook signature (a real provider signature
 	// never matches this bearer format at all; see
 	// internal/platform/webhooksig.go's own doc comment for the full
@@ -1016,7 +1016,7 @@ type Config struct {
 	GitHubClientID     string
 	GitHubClientSecret string
 
-	// GitHubWebhookSecret and GitHubBotHandle configure Step 32's
+	// GitHubWebhookSecret and GitHubBotHandle configure §8.2's
 	// ("GitHub ingress", §8.2) webhook adapter, read from
 	// NARVI_GITHUB_WEBHOOK_SECRET / NARVI_GITHUB_BOT_HANDLE. Both required
 	// in every stage -- never defaulted. See gitHubWebhookSecretEnvVarName's
@@ -1025,7 +1025,7 @@ type Config struct {
 	GitHubWebhookSecret string
 	GitHubBotHandle     string
 
-	// GitHubReReviewLabel is Step 46's ("review sessions", §8.2) own manual
+	// GitHubReReviewLabel is §8.2's ("review sessions", §8.2) own manual
 	// re-trigger-via-label lane's configured label NAME, read from
 	// NARVI_GITHUB_REREVIEW_LABEL. Deliberately OPTIONAL, unlike
 	// GitHubWebhookSecret/GitHubBotHandle immediately above -- see
@@ -1033,7 +1033,7 @@ type Config struct {
 	// default (defaultGitHubReReviewLabel) exists here at all.
 	GitHubReReviewLabel string
 
-	// GitHubReleaseLabel/GitHubReleaseBranchPattern are Step 50's own
+	// GitHubReleaseLabel/GitHubReleaseBranchPattern are §15's own
 	// ("release PR review", §15.1) deterministic release-PR detection
 	// configuration, read from NARVI_GITHUB_RELEASE_LABEL/
 	// NARVI_GITHUB_RELEASE_BRANCH_PATTERN. Both deliberately OPTIONAL --
@@ -1042,7 +1042,7 @@ type Config struct {
 	GitHubReleaseLabel         string
 	GitHubReleaseBranchPattern string
 
-	// GitHubBotToken configures Step 35's ("outbox delivery", §5.1) own
+	// GitHubBotToken configures §5.1's ("outbox delivery", §5.1) own
 	// GitHub Notifier adapter, read from NARVI_GITHUB_BOT_TOKEN. Required
 	// in every stage -- never defaulted. See gitHubBotTokenEnvVarName's own
 	// doc comment above for why this is a distinct credential from every
@@ -1052,7 +1052,7 @@ type Config struct {
 	// githubingress.Config.BotToken). Never logged.
 	GitHubBotToken string
 
-	// GitHubImageBuildToken is Step 42's ("warm boot: refresh pump + hook
+	// GitHubImageBuildToken is §19.2's ("warm boot: refresh pump + hook
 	// policy", §19.2) own platform-level GitHub credential, read from
 	// NARVI_GITHUB_IMAGE_BUILD_TOKEN. Empty string means "not configured" --
 	// see gitHubImageBuildTokenEnvVarName's own doc comment for why this,
@@ -1060,7 +1060,7 @@ type Config struct {
 	// OPTIONAL and how it differs from GitHubBotToken. Never logged.
 	GitHubImageBuildToken string
 
-	// ReviewModelDeep is Step 68's own optional deep-path model override,
+	// ReviewModelDeep is §26.3's own optional deep-path model override,
 	// read from NARVI_REVIEW_MODEL_DEEP -- empty string means "not
 	// configured" (see reviewModelDeepEnvVarName's own doc comment for
 	// the full "why this is optional and how the deep path degrades when
@@ -1100,7 +1100,7 @@ type Config struct {
 	// time instead of the enum's own "member" default.
 	InitialAdminEmails []string
 
-	// EpistemicCheckDefault is Step 61's ("builder epistemic pre-action
+	// EpistemicCheckDefault is §20's ("builder epistemic pre-action
 	// check", §20.4) own platform-wide default for the devil's-advocate
 	// pre-action check on build turns, read from
 	// NARVI_EPISTEMIC_CHECK_DEFAULT. Optional: defaults to false (§20.4:
@@ -1110,7 +1110,7 @@ type Config struct {
 	// field is consulted only when that override is unset (NULL).
 	EpistemicCheckDefault bool
 
-	// RolloutMode is Step 76's own master switch (§10 Phase 6, §32:
+	// RolloutMode is §10's own master switch (§10 Phase 6, §32:
 	// "feature-flagged cohort rollout of sessions"), read from
 	// NARVI_ROLLOUT_MODE. Optional: defaults to rollout.ModeOpen when
 	// unset (§32: "so this Step lands as a byte-for-byte no-op for every
@@ -1124,13 +1124,13 @@ type Config struct {
 
 	// ModalBaseURL and ModalAuthToken configure the real
 	// internal/adapters/outbound/modal.Provider cmd/control-plane/main.go
-	// constructs (Step 21, "e2e happy path"), read from
+	// constructs (§9.3, "e2e happy path"), read from
 	// NARVI_MODAL_BASE_URL / NARVI_MODAL_AUTH_TOKEN. Both required in
 	// every stage — never defaulted (there is no real Modal account
 	// reachable from this codebase's own tests/CI, see
 	// internal/adapters/outbound/modal/doc.go; a real value must be
 	// supplied by whoever deploys this binary against an actual Modal
-	// account, or a mock standing in for one, e.g. Step 27's own future
+	// account, or a mock standing in for one, e.g. §14.3's own future
 	// Prism-based mock server).
 	ModalBaseURL   string
 	ModalAuthToken string
@@ -1141,12 +1141,12 @@ type Config struct {
 	ModalEgressProxyURL string
 
 	// RWXAccessToken optionally configures the real internal/adapters/
-	// outbound/rwx package's Dispatches API notifier (Step 57, §4.1.1/
+	// outbound/rwx package's Dispatches API notifier (§4.1.1/
 	// §4.1.2), read from NARVI_RWX_ACCESS_TOKEN. See that env var's own
 	// doc comment above for why this is optional, unlike ModalAuthToken.
 	RWXAccessToken string
 
-	// OpenCodeRuntimeVersion is Step 26's ("image builds") own
+	// OpenCodeRuntimeVersion is §8.5's ("image builds") own
 	// RuntimeVersion fingerprint input, read from
 	// NARVI_OPENCODE_RUNTIME_VERSION. Optional: defaults to
 	// defaultOpenCodeRuntimeVersion (see that constant's own doc comment
@@ -1155,7 +1155,7 @@ type Config struct {
 	OpenCodeRuntimeVersion string
 
 	// LinearWebhookSecret, LinearOAuthClientID, and LinearOAuthClientSecret
-	// are Step 34's ("Linear ingress", §8.10) own Linear wiring, read from
+	// are §8.10's ("Linear ingress", §8.10) own Linear wiring, read from
 	// NARVI_LINEAR_WEBHOOK_SECRET / NARVI_LINEAR_CLIENT_ID /
 	// NARVI_LINEAR_CLIENT_SECRET respectively — see those env var names'
 	// own doc comments above for why each is a separate secret from its
@@ -1172,7 +1172,7 @@ type Config struct {
 	LinearDefaultRepoName string
 	LinearDefaultRepoURL  string
 
-	// SlackSigningSecret and SlackBotToken configure Step 33's ("Slack
+	// SlackSigningSecret and SlackBotToken configure §8.10's ("Slack
 	// ingress") real Slack Events API adapter, read from
 	// NARVI_SLACK_SIGNING_SECRET / NARVI_SLACK_BOT_TOKEN. Both required in
 	// every stage -- never defaulted (see slackSigningSecretEnvVarName's
@@ -1189,7 +1189,7 @@ type Config struct {
 	SlackDefaultRepoURL  string
 
 	// AnthropicAPIKey, IntentClassifierProvider, and IntentClassifierModel
-	// configure Step 36's ("intent classifier", §8.3/§18) real Anthropic
+	// configure §8.3's ("intent classifier", §8.3/§18) real Anthropic
 	// adapter, read from NARVI_ANTHROPIC_API_KEY /
 	// NARVI_INTENT_CLASSIFIER_PROVIDER / NARVI_INTENT_CLASSIFIER_MODEL. All
 	// three required in every stage -- never defaulted. See
@@ -1211,7 +1211,7 @@ type Config struct {
 	// surface runs in shadow.
 	IntentClassifierActiveSurfaces []string
 
-	// CloudIdentityIssuerURL (Step 73a, §27.3) is the public, externally
+	// CloudIdentityIssuerURL (§27.3) is the public, externally
 	// reachable base URL the control plane's own OIDC issuer serves
 	// discovery/JWKS from (GET {CloudIdentityIssuerURL}/.well-known/
 	// openid-configuration, GET {CloudIdentityIssuerURL}/.well-known/
@@ -1244,7 +1244,7 @@ type Config struct {
 	// rather than loudly at boot.
 	CloudIdentityIssuerURL string
 
-	// ObjectStorage is Step 58's ("uploads, blob storage & the in-sandbox
+	// ObjectStorage is §8.6's ("uploads, blob storage & the in-sandbox
 	// download_file tool", §28.7) typed, boot-validated object-storage
 	// block. Nil means the feature is OFF (the mint endpoints return a
 	// structured "uploads not configured" error and nothing else
@@ -1253,7 +1253,7 @@ type Config struct {
 	ObjectStorage *ObjectStorageConfig
 }
 
-// ObjectStorageConfig is Step 58's typed object-storage configuration
+// ObjectStorageConfig is §8.6's typed object-storage configuration
 // (§28.7) -- endpoint, region, bucket, access key/secret (or ambient IAM
 // when both are empty), an optional PublicEndpoint used to sign presigned
 // URLs instead of Endpoint, a path-style toggle for MinIO-style backends,
@@ -1432,7 +1432,7 @@ func Load() (*Config, error) {
 	// configuration, not a boot-time failure.
 	gitHubImageBuildToken := os.Getenv(gitHubImageBuildTokenEnvVarName)
 
-	// reviewModelDeep (Step 68, §26.3): OPTIONAL, no default -- an empty
+	// reviewModelDeep (§26.3): OPTIONAL, no default -- an empty
 	// value here is a valid, expected, degraded-gracefully configuration
 	// (reviewModelDeepEnvVarName's own doc comment), not a boot-time
 	// failure.
@@ -1467,7 +1467,7 @@ func Load() (*Config, error) {
 
 	initialAdminEmails := parseCommaSeparatedList(os.Getenv(initialAdminEmailsEnvVarName))
 
-	// epistemicCheckDefault (Step 61, §20.4): optional, default false --
+	// epistemicCheckDefault (§20.4): optional, default false --
 	// mirrors objectStoreUsePathStyle's own identical "empty means
 	// unset, parse only when present, reject anything ParseBool doesn't
 	// recognize" idiom (Load's own object-storage block, below).
@@ -1481,7 +1481,7 @@ func Load() (*Config, error) {
 		}
 	}
 
-	// rolloutMode (Step 76, §32): optional, default rollout.ModeOpen --
+	// rolloutMode (§32): optional, default rollout.ModeOpen --
 	// mirrors epistemicCheckDefault's own identical "empty means unset,
 	// parse only when present" idiom immediately above, but with an
 	// explicit two-value switch (like Stage, envVarName's own block
@@ -1589,7 +1589,7 @@ func Load() (*Config, error) {
 
 	intentClassifierActiveSurfaces := parseCommaSeparatedList(os.Getenv(intentClassifierActiveSurfacesEnvVarName))
 
-	// cloudIdentityIssuerURL (Step 73a, §27.3): DELIBERATELY OPTIONAL --
+	// cloudIdentityIssuerURL (§27.3): DELIBERATELY OPTIONAL --
 	// see cloudIdentityIssuerURLEnvVarName's own doc comment for the full
 	// "off when unset" gating rule and why a non-empty value gets real
 	// URL-shape validation (unlike PublicBaseURL above). Assigned the

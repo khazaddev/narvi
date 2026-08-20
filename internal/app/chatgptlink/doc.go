@@ -1,5 +1,5 @@
 // Package chatgptlink implements the ChatGPT-account (Codex) OAuth link
-// flow's own control-plane orchestration (Step 59, §29.3): StartLink
+// flow's own control-plane orchestration (§29.3): StartLink
 // begins (or reuses a still-live) device-flow attempt, PollLink drives it
 // forward at most one upstream step per call, and Unlink removes a linked
 // account. There is deliberately NO background worker here — §29.3 point

@@ -91,7 +91,7 @@ func (f *testFixture) createAutomation(t *testing.T, name string, numTargets int
 	prompt := "do the thing"
 	row, err := f.automations.Create(ctx, sqlcgen.CreateAutomationParams{
 		Name: name, Prompt: &prompt, Repos: reposJSON, CreatedBy: pgtype.UUID{},
-		// TriggerType/TriggerConfig/EnvVars (Step 52, "automations: triggers
+		// TriggerType/TriggerConfig/EnvVars ("automations: triggers
 		// & extras", §8.4) are all NOT NULL columns as of migrations/
 		// 000055_automations_triggers_and_extras.up.sql -- 'manual'/'{}'/'[]'
 		// here mean exactly what they mean everywhere else in this Step:

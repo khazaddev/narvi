@@ -1,5 +1,5 @@
 // Package chatgptrefresh is the control plane's own single background
-// refresh pump for ChatGPT-account OAuth credentials (Step 59, §29.5) --
+// refresh pump for ChatGPT-account OAuth credentials (§29.5) --
 // a sibling of app/outboxworker/app/reconciler/app/imagebuild, not folded
 // into any of them (TECHNICAL_PLAN.md §1's own repo-layout convention:
 // one package per major loop/subsystem under internal/app/).

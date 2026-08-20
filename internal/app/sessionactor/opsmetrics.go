@@ -1,4 +1,4 @@
-// This file (opsmetrics.go) is Step 77's ("ops: dashboards, alerts,
+// This file (opsmetrics.go) is §5.3's ("ops: dashboards, alerts,
 // runbooks", §5.3) own instrumentation fix: before this Step, §5.3's own
 // metric list -- "spawn latency, boot phase durations, liveness gaps,
 // watchdog activations (and how many were false alarms -- target: ~0),
@@ -56,7 +56,7 @@ const (
 	watchdogLivenessCheck      watchdogKind = "liveness_check"
 )
 
-// opsMetrics bundles Step 77's five new OTel instruments, constructed
+// opsMetrics bundles §5.3's five new OTel instruments, constructed
 // exactly once per Registry (newOpsMetrics, called from NewRegistry) --
 // mirroring internal/app/imagebuild's own buildTelemetry bundling
 // precedent (telemetry.go) for a package that, like this one, already has
@@ -93,7 +93,7 @@ type opsMetrics struct {
 
 	// watchdogFalseAlarm is §5.3's "(and how many were false alarms --
 	// target: ~0)": incremented every time a Suspect sandbox recovers
-	// DURING its own terminal_grace window (sandboxevent.go's own Step-24
+	// DURING its own terminal_grace window (sandboxevent.go's own
 	// Suspect-recovery-during-grace branch, §3.2's "any liveness signal
 	// during grace returns to previous state") -- proof, after the fact,
 	// that the watchdog that suspected it was WRONG: the sandbox was
@@ -121,7 +121,7 @@ type opsMetrics struct {
 	falseFailure metric.Int64Counter
 
 	// rolloutRefused is the Phase 6 audit's own fix for Finding 4:
-	// session_rollout_refused_total (Step 76, §32) was, before this fix,
+	// session_rollout_refused_total (§32) was, before this fix,
 	// incremented ONLY by httpapi.checkRolloutGate -- the session-creation-
 	// time half of §32's own "fail-closed, twice" pair. The dispatch-time
 	// half (this package's own refuseIfRolloutUnenrolled/
@@ -198,7 +198,7 @@ func newOpsMetrics(meter metric.Meter) (opsMetrics, error) {
 
 	rolloutRefused, err := meter.Int64Counter(
 		"session_rollout_refused_total",
-		metric.WithDescription("Count of every session-creation attempt, spawn/restore/resume attempt, or turn dispatch refused by Step 76's cohort-rollout gate (§32) because a named repo was not enrolled (repo_settings.sessions_enabled) -- the SAME instrument httpapi.checkRolloutGate registers (internal/adapters/inbound/httpapi/rolloutgate.go), incremented here too for this package's own two dispatch-time re-checks (refuseIfRolloutUnenrolled, rolloutRefusalForDispatch). Tagged by spawn_source. Only a genuine, DEMONSTRATED policy refusal increments this -- a refusal caused by a transient repo_settings read error never does, mirroring checkRolloutGate's own identical fail-closed-vs-terminal discipline (§32.5)."),
+		metric.WithDescription("Count of every session-creation attempt, spawn/restore/resume attempt, or turn dispatch refused by §10's cohort-rollout gate (§32) because a named repo was not enrolled (repo_settings.sessions_enabled) -- the SAME instrument httpapi.checkRolloutGate registers (internal/adapters/inbound/httpapi/rolloutgate.go), incremented here too for this package's own two dispatch-time re-checks (refuseIfRolloutUnenrolled, rolloutRefusalForDispatch). Tagged by spawn_source. Only a genuine, DEMONSTRATED policy refusal increments this -- a refusal caused by a transient repo_settings read error never does, mirroring checkRolloutGate's own identical fail-closed-vs-terminal discipline (§32.5)."),
 		metric.WithUnit("{refusal}"),
 	)
 	if err != nil {

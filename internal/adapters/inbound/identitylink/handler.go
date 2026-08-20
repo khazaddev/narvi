@@ -18,7 +18,7 @@ import (
 
 // githubLoginPath is the fixed path this handler redirects an
 // unauthenticated visitor to (with its own ?next= carrying them back here
-// afterward, auth.NewLoginHandler's own Step 39 addition) -- must match
+// afterward, auth.NewLoginHandler's own §13.2 addition) -- must match
 // cmd/control-plane/main.go's own literal route registration
 // ("/auth/github/login") exactly; no exported constant exists for it in
 // internal/adapters/inbound/auth (that package's own route strings are

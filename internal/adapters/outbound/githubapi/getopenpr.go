@@ -1,5 +1,5 @@
-// This file (getopenpr.go) implements ports.SourceControl.GetOpenPR (Step
-// 62, §21.2 stage 2) -- see that method's own doc comment (internal/app/
+// This file (getopenpr.go) implements ports.SourceControl.GetOpenPR
+// (§21.2 stage 2) -- see that method's own doc comment (internal/app/
 // ports/sourcecontrol.go) for the full "why a machine-initiated caller
 // needs a DIFFERENT discovery primitive than ListOpenPRsForUser" design.
 

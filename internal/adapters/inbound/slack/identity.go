@@ -1,4 +1,4 @@
-// This file (identity.go) implements Step 39's ("identities + full RBAC",
+// This file (identity.go) implements §13.2's ("identities + full RBAC",
 // §13.2) own auto-linking wiring for Slack ingress -- shared by both
 // handler.go (the Events API route) and interactive.go (the Interactivity
 // route), replacing this package's PREVIOUS unconditional bot-attribution
@@ -35,7 +35,7 @@ import (
 // authzSurface is this package's own "surface" label passed to every
 // actorauthz.AuthorizeResolvedActor call below -- see that function's own
 // doc comment for why (keeps this package's log lines prefixed "slack: "
-// exactly as they were before the Step 39 shared-helper extraction into
+// exactly as they were before the §13.2 shared-helper extraction into
 // internal/app/actorauthz, batch fix/audit-github-actor-rbac).
 const authzSurface = "slack"
 
@@ -159,7 +159,7 @@ func resolveSlackActorSingleAttempt(ctx context.Context, logger *slog.Logger, sl
 	return res.UserID, res.NotificationText()
 }
 
-// authorizeResolvedActor/ownedOrJoined used to live here (Step 39,
+// authorizeResolvedActor/ownedOrJoined used to live here (
 // "identities + full RBAC", §13.2/§13.3) but moved verbatim into
 // internal/app/actorauthz (batch fix/audit-github-actor-rbac) once GitHub
 // ingress became a third consumer of the identical logic Linear's own

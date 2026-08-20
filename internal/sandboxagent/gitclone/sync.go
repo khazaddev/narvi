@@ -46,12 +46,12 @@ type SyncResult struct {
 	// State is the boot machine's own final state for this repo
 	// (internal/domain/gitstate): gitstate.StateReady on success, one of
 	// the five terminal failure states otherwise (including
-	// gitstate.StateFetchFailed, Step 40, §19.3 -- the boot-time fetch
+	// gitstate.StateFetchFailed, §19.3 -- the boot-time fetch
 	// failed and the degrade policy did not allow proceeding), or the zero
 	// State (the empty string, never actually assigned) if this repo never
 	// even entered the machine (a validation failure, a real `git status`
 	// failure that made it impossible to tell whether the tree was even
-	// dirty, or -- Step 40 -- a real `git rev-parse --verify` failure while
+	// dirty, or -- §19.3 -- a real `git rev-parse --verify` failure while
 	// determining whether the target branch already exists locally, needed
 	// BEFORE the fetch step itself to decide whether the degrade policy
 	// applies).
@@ -728,7 +728,7 @@ func gitFetchRef(ctx context.Context, sup *supervisor.Supervisor, credHelperArg,
 // failure) is returned as a real error. fullRef is always a caller-supplied,
 // already-fully-qualified ref path (refs/heads/<branch> or
 // refs/remotes/origin/<branch>) -- shared by branchExistsLocally (a LOCAL
-// branch) and remoteBranchExists (Step 40, §19.3: a REMOTE-TRACKING branch,
+// branch) and remoteBranchExists (§19.3: a REMOTE-TRACKING branch,
 // checking whether this Step's own new boot-time fetch step actually
 // fetched it), each of which supplies its own prefix so this function itself
 // stays agnostic to which kind of ref it is checking.
@@ -801,7 +801,7 @@ func remoteBranchExists(ctx context.Context, sup *supervisor.Supervisor, dir, br
 // positional" convention as closely as checkout's own real semantics
 // allow.
 //
-// §19.3 point 2 (Step 40): when branch does NOT exist locally, the base to
+// §19.3 point 2 (§19.3): when branch does NOT exist locally, the base to
 // create it FROM is no longer unconditionally HEAD -- checkoutBase (below)
 // implements the full remote-tracking preference chain the boot-time fetch
 // step (gitFetchStep) makes possible: prefer origin/<branch> (this Step's

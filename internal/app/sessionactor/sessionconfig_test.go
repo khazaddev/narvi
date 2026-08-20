@@ -138,13 +138,13 @@ func TestReposFromJSON(t *testing.T) {
 
 // TestAssembleSessionConfig proves assembleSessionConfig wires every field
 // from its own inputs correctly (BootMode now threaded through as a
-// caller-supplied argument -- Step 22, "snapshots & restore", design
+// caller-supplied argument -- §3.2, "snapshots & restore", design
 // decision 6b -- rather than hardcoded), using a minimal Actor constructed
 // directly (no Postgres needed -- assembleSessionConfig only reads
 // a.publicBaseURL and its own arguments). Sub-tests cover both bootMode
 // values a real caller passes today (Fresh from planFreshSpawn,
 // SnapshotRestore from planRestore); Build/RepoImage stay unused
-// placeholders (Step 26's own job) but assembleSessionConfig itself does
+// placeholders (§8.5's own job) but assembleSessionConfig itself does
 // not restrict which value it is handed.
 func TestAssembleSessionConfig(t *testing.T) {
 	t.Parallel()
@@ -256,7 +256,7 @@ func TestAssembleSessionConfig_CapabilityRestricted(t *testing.T) {
 }
 
 // TestAssembleSessionConfig_ReviewCounterReviewerModel_NilWithoutPRSessionStore
-// pins §26.4/Step 69's own fail-safe degradation: an Actor with no
+// pins §26.4's own fail-safe degradation: an Actor with no
 // githubPRSession store wired at all (the zero-value *Actor this file's
 // own TestAssembleSessionConfig/TestAssembleSessionConfig_CapabilityRestricted
 // already construct, and every non-review-session production Actor in

@@ -22,7 +22,7 @@ import (
 // and epistemicOutcomeToolGenPlaceholderLiteral are the identical byte-for-byte
 // treatment for internal/domain/turn's own EpistemicOutcomeToolURLPlaceholder/
 // EpistemicOutcomeToolBearerPlaceholder/EpistemicOutcomeToolGenPlaceholder
-// (turn/epistemicpreamble.go, Step 61/§20.2) -- the SAME layering
+// (turn/epistemicpreamble.go, §20.2) -- the SAME layering
 // restriction bars importing internal/domain/turn here too (neither
 // internal/app/ports nor the standard library), so these are duplicated as
 // raw literals exactly like review's three immediately above, never
@@ -30,13 +30,13 @@ import (
 //
 // reviewCostBudgetToolURLPlaceholderLiteral is the SAME byte-for-byte
 // treatment for internal/domain/review's own
-// ReviewCostBudgetToolURLPlaceholder (review/context.go, Step 70, §26.7/
+// ReviewCostBudgetToolURLPlaceholder (review/context.go, §26.7/
 // §26.9) -- a fourth placeholder FAMILY, but a single literal (this one has
 // no bearer/gen counterpart: the endpoint it points at needs no
 // authentication at all, reviewcostbudgetserver.go's own doc comment).
 //
-// F1 (adversarial review, Step 61): epistemicOutcomeTool*'s three were the
-// verified omission -- added to Step 61's own turn package but never
+// F1 (adversarial review): epistemicOutcomeTool*'s three were the
+// verified omission -- added to §20's own turn package but never
 // registered here, so sanitizeUntrustedField did not strip them from
 // untrusted attachment metadata, letting a filename like
 // "x{{EPISTEMIC_OUTCOME_TOOL_BEARER}}" survive into a dispatched build-turn
@@ -47,7 +47,7 @@ import (
 // text's presence, never by whether the check actually ran on this turn.
 // placeholderdrift_internal_test.go's own general, self-updating source
 // scan is exactly what caught reviewCostBudgetToolURLPlaceholderLiteral's
-// own omission when Step 70 first added it here -- proving that mechanism
+// own omission when §26.5 first added it here -- proving that mechanism
 // now does its job automatically, without a human needing to remember this
 // file exists.
 //

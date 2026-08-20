@@ -119,7 +119,7 @@ func TestValidateVerdictInput(t *testing.T) {
 			wantErr: reviewpost.ErrEmptySummary,
 		},
 		{
-			name:    "empty digest summary (Step 66, §26.1: required on every review)",
+			name:    "empty digest summary (§26.1: required on every review)",
 			mutate:  func(in *reviewpost.VerdictInput) { in.Digest.Summary = "" },
 			wantErr: reviewpost.ErrEmptyDigestSummary,
 		},
@@ -129,7 +129,7 @@ func TestValidateVerdictInput(t *testing.T) {
 			wantErr: reviewpost.ErrEmptyDigestSummary,
 		},
 		{
-			name: "empty ArchDecisions/StackRisks/UnverifiedLimits is legal (Step 66: requested, not required, until §26.3/Step 68 defines the deep path)",
+			name: "empty ArchDecisions/StackRisks/UnverifiedLimits is legal (§26.1: requested, not required, until §26.3 defines the deep path)",
 			mutate: func(in *reviewpost.VerdictInput) {
 				in.Digest.ArchDecisions = nil
 				in.Digest.StackRisks = ""
@@ -138,7 +138,7 @@ func TestValidateVerdictInput(t *testing.T) {
 			wantErr: nil,
 		},
 		{
-			name:    "missing digest.descriptionAdequacy (zero value, §26.2/Step 67: required on every review)",
+			name:    "missing digest.descriptionAdequacy (zero value, §26.2: required on every review)",
 			mutate:  func(in *reviewpost.VerdictInput) { in.Digest.DescriptionAdequacy = "" },
 			wantErr: reviewpost.ErrInvalidDescriptionAdequacy,
 		},
@@ -160,7 +160,7 @@ func TestValidateVerdictInput(t *testing.T) {
 			wantErr: nil,
 		},
 		{
-			name:    "empty digest.adequacyExplanation (§26.2/Step 67: required on every review)",
+			name:    "empty digest.adequacyExplanation (§26.2: required on every review)",
 			mutate:  func(in *reviewpost.VerdictInput) { in.Digest.AdequacyExplanation = "" },
 			wantErr: reviewpost.ErrEmptyAdequacyExplanation,
 		},
@@ -247,12 +247,12 @@ func TestValidateVerdictInput_FieldOrder(t *testing.T) {
 }
 
 // TestValidateVerdictInput_DigestSummaryCheckedLastAmongExisting proves
-// Step 66's own new Digest.Summary check runs AFTER every pre-existing
+// §26.1's own new Digest.Summary check runs AFTER every pre-existing
 // check (added at the end of the fixed order, never interleaved earlier,
 // per this function's own doc comment) -- a payload with BOTH an empty
 // top-level Summary AND an empty Digest.Summary must still report
 // ErrEmptySummary, never ErrEmptyDigestSummary, so this Step never changes
-// which error an already-malformed pre-Step-66 payload reports.
+// which error an already-malformed pre-existing payload reports.
 func TestValidateVerdictInput_DigestSummaryCheckedLastAmongExisting(t *testing.T) {
 	in := validInput()
 	in.Summary = ""
@@ -265,12 +265,12 @@ func TestValidateVerdictInput_DigestSummaryCheckedLastAmongExisting(t *testing.T
 }
 
 // TestValidateVerdictInput_AdequacyCheckedAfterDigestSummary proves §26.2/
-// Step 67's own new Digest.DescriptionAdequacy/AdequacyExplanation checks
+// §26.2's own new Digest.DescriptionAdequacy/AdequacyExplanation checks
 // run AFTER Digest.Summary (added at the end of the fixed order, per this
 // function's own doc comment) -- a payload with BOTH an empty
 // Digest.Summary AND a garbled Digest.DescriptionAdequacy must still
 // report ErrEmptyDigestSummary, never ErrInvalidDescriptionAdequacy, so
-// this Step never changes which error an already-malformed pre-Step-67
+// this Step never changes which error an already-malformed pre-existing
 // payload reports.
 func TestValidateVerdictInput_AdequacyCheckedAfterDigestSummary(t *testing.T) {
 	in := validInput()
@@ -319,7 +319,7 @@ func TestBuildVerdict_ShippableAlwaysComputedNeverCopiedFromProposed(t *testing.
 	}
 }
 
-// TestBuildVerdict_MisleadingAdequacyRaisesShippable is §26.2/Step 67's
+// TestBuildVerdict_MisleadingAdequacyRaisesShippable is §26.2's
 // own end-to-end pin, one layer up from
 // TestComputeShippable_MisleadingRaisesShippable (internal/domain/review):
 // an otherwise-completely-clean VerdictInput (low risk, ok premise,
@@ -383,7 +383,7 @@ func TestBuildVerdict_AdequacyNeverAffectsRiskLevel(t *testing.T) {
 	}
 }
 
-// TestBuildVerdict_CounterReviewSkippedRaisesShippable is §26.4/Step 69's
+// TestBuildVerdict_CounterReviewSkippedRaisesShippable is §26.4's
 // own end-to-end pin, one layer up from
 // TestComputeShippable_CounterReviewSkippedRaisesShippable
 // (internal/domain/review/shippable_test.go): an otherwise-completely-clean,
@@ -491,7 +491,7 @@ func TestBuildVerdict_ExplicitCounterReviewSkippedNeverOverwrittenOnLightPath(t 
 
 // TestBuildVerdict_CorroboratedDeepPathKeepsCounterReviewDoneFloor pins
 // the ORDINARY, expected-common-case outcome of the second substitution
-// (§26.4, Step 71): a deep-path verdict that claims CounterReview: done
+// (§26.4): a deep-path verdict that claims CounterReview: done
 // AND whose claim the caller has independently corroborated against the
 // persisted sub_task_finish trace (CounterReviewCorroborated: true) keeps
 // counterReviewForFloor at CounterReviewDone -- floor stays whatever
@@ -676,7 +676,7 @@ func TestComputeShippable_FactCheckSkippedNeverRaisesShippable(t *testing.T) {
 }
 
 // TestValidateVerdictInput_DigestLengthCaps is this Step's own regression
-// test for G3 (Step 62 hardening): table-driven, pinning the EXACT
+// test for G3 (hardening): table-driven, pinning the EXACT
 // boundary of every Max*Bytes cap declared above (validate.go) -- a field
 // AT the cap is legal, one byte OVER is rejected. strings.Repeat("a", n)
 // is used throughout (never a multi-byte rune) so len() (a byte count) and

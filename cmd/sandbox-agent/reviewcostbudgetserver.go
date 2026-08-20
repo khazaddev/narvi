@@ -1,7 +1,7 @@
 // This file (reviewcostbudgetserver.go) gives internal/domain/reviewtriage.
 // ShouldSkipOptionalPass (§26.7, costbudget.go) its first production call
-// site (Step 70) -- that function's own doc comment states plainly it was
-// shipped in Step 69 as a tested, exported pure function with ZERO
+// site (§26.5) -- that function's own doc comment states plainly it was
+// shipped in §26.4 as a tested, exported pure function with ZERO
 // production callers: "the actual mechanism putting §26.7's policy into
 // effect is the review agent's OWN judgment" today, guided only by a
 // dollar figure baked as prose into its own prompt (internal/domain/
@@ -73,8 +73,9 @@ import (
 // fatal WS handshake status), and shut it down cleanly as part of the SAME
 // bounded teardown sequence sup.StopAll already uses -- never a second,
 // independently-tracked process class that could become a new orphan to
-// force-kill (the exact class of leak Step 171 closed for a different
-// subsystem; this Step does not reintroduce it for a new one).
+// force-kill (the exact class of leak the process supervisor already
+// closed for a different subsystem; this server does not reintroduce it
+// for a new one).
 type reviewCostBudgetServer struct {
 	listener net.Listener
 	server   *http.Server
@@ -163,7 +164,7 @@ type reviewCostBudgetResponse struct {
 // (formatUSD(ctx.ReviewCostBudgetUSD), context.go) -- a literal, already-
 // deterministic number the control plane computed, never scraped from
 // free English prose (this codebase's own "typed field, never a marker
-// parsed from markdown" discipline, Step 45's invariant, applied here to
+// parsed from markdown" discipline, §8.2's invariant, applied here to
 // a query parameter rather than a JSON field only because a GET request
 // has no natural body slot of its own).
 //

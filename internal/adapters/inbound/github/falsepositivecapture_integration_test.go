@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 63's own §22.2 capture command against a
+// Integration tests for §22's own §22.2 capture command against a
 // real Postgres instance -- gated behind the "integration" build tag,
 // reusing newTestPool/testWebhookSecret/testBotHandleIntegration/sign/
 // postWebhook/createLinkedGitHubUser from handler_integration_test.go

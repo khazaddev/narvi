@@ -1,4 +1,4 @@
-// This file (planslacknotifier.go) implements Step 38's ("plan mode,
+// This file (planslacknotifier.go) implements §8.1's ("plan mode,
 // cross-channel", §8.1/§13.3) own Slack plan-mode notifier: one small
 // ports.Notifier implementation handling BOTH
 // ports.NotificationKindSlackPlanApproval (post the real interactive
@@ -57,7 +57,7 @@ func NewPlanSlackNotifier(client *slackapi.Client, plans *postgres.PlanStore) po
 // the three kinds it is registered for (see this file's own top doc
 // comment), so an unrecognized fourth kind here is defensive, not expected.
 //
-// ports.NotificationKindSlackWorkflowDecision is Step 56's own addition
+// ports.NotificationKindSlackWorkflowDecision is §25.9's own addition
 // ("workflow HITL gate + circuit breaker", §25.9) -- the SECOND kind this
 // SAME wrapper type gains beyond its original two (mirroring
 // linearNotifier's own identical "a THIRD kind, same wrapper" precedent,

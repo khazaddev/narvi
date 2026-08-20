@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for ProviderCredentialStore (Step 53, "provider
+// Integration tests for ProviderCredentialStore ("provider
 // credential injection", §25.1/§25.3) against a real Postgres instance --
 // migrations/000056_provider_credentials.up.sql.
 package postgres_test
@@ -191,7 +191,7 @@ func TestProviderCredentialStore_ListByScope_Global(t *testing.T) {
 // query returns exactly the candidate rows that could apply to a given
 // session shape: the global row for every provider, the repo-scoped row
 // for a NAMED repo, the environment-scoped row for a NAMED environment id,
-// and (Step 59, §29.4) the user-scoped row for a NAMED creator userID --
+// and (§29.4) the user-scoped row for a NAMED creator userID --
 // and nothing for an UNNAMED repo/environment/user.
 func TestProviderCredentialStore_ListForResolution(t *testing.T) {
 	ctx := context.Background()
@@ -254,7 +254,7 @@ func TestProviderCredentialStore_ListForResolution(t *testing.T) {
 }
 
 // TestProviderCredentialStore_ListForResolution_ExcludesNeedsRelink proves
-// Step 59's own resolution-query addition (§29.5: "the row stops being
+// §8.8's own resolution-query addition (§29.5: "the row stops being
 // served"): a user-scope oauth row marked oauth_needs_relink is excluded
 // from the candidate set entirely, even though it is otherwise a perfect
 // match for the named creator userID.

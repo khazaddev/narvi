@@ -1,9 +1,9 @@
-// This file (reviewverdict.go) implements Step 47's ("server-side
+// This file (reviewverdict.go) implements §8.2's ("server-side
 // verdict", §8.2/§5.2/§21.2) own VERDICT-POSTING TOOL: POST
 // /sessions/{sessionID}/review/verdict. This is the ONLY sanctioned way a
 // review session's output reaches its pull request as a comment or formal
 // review -- internal/app/sessionactor/outboxenqueue.go's own github-origin
-// branch (Step 47's own RAW-COMMENT BLOCKING) no longer enqueues anything
+// branch (§8.2's own RAW-COMMENT BLOCKING) no longer enqueues anything
 // on its own, so a review session that never calls this endpoint simply
 // posts nothing.
 //
@@ -26,7 +26,7 @@
 // endpoint pattern gives "the agent calls it with typed fields, validated
 // server-side" (this Step's own central requirement) without touching the
 // sandbox WS protocol or the OpenCode adapter at all -- the review turn's
-// own prompt (review.RenderTurnPrompt, Step 46) is the natural place to
+// own prompt (review.RenderTurnPrompt, §8.2) is the natural place to
 // instruct the agent HOW to call this endpoint (URL, bearer token, gen
 // header, JSON shape), exactly like it already instructs the agent about
 // pre-fetched diff/stack context. A genuine native tool-call integration
@@ -118,7 +118,7 @@ import (
 //     (internal/adapters/outbound/githubapi.VerdictNotifier delivers it:
 //     the formal review, then the label sync).
 //
-// Step 48 ("sentinels + suggestions", §17/§22.1) extends this handler,
+// §8.2 ("sentinels + suggestions", §17/§22.1) extends this handler,
 // never replaces it: after building the verdict, it ALSO builds
 // []reviewpost.Finding from req.Findings (optional, additive -- see
 // restdtos.PostReviewVerdictRequest's own doc comment), computes each
@@ -142,7 +142,7 @@ func PostReviewVerdict(
 	outbox *postgres.OutboxStore,
 	reviewVerdicts *postgres.ReviewVerdictStore,
 	turns *postgres.TurnStore,
-	// events (Step 71, §26.4/§7.1) backs post-hoc sub-task corroboration:
+	// events (§26.4/§7.1) backs post-hoc sub-task corroboration:
 	// reading back this session's own already-persisted sub_task_start/
 	// sub_task_finish trace, scoped to BOTH turns' own
 	// dispatched_sandbox_gen AND dispatched_at -- see corroborateCounterReview's
@@ -150,7 +150,7 @@ func PostReviewVerdict(
 	// required together.
 	events *postgres.EventStore,
 	botHandle string,
-	// botToken (Step 63, §22.1.1) is the SAME GitHub bot credential
+	// botToken (§22.1.1) is the SAME GitHub bot credential
 	// platform.Config.GitHubBotToken already supplies to every other
 	// diff-fetching call site (internal/app/reviewcontext.Fetch's own
 	// callers, handler.go/reviewretrigger.go) -- distinct from botHandle
@@ -158,7 +158,7 @@ func PostReviewVerdict(
 	// needs a REAL token to authenticate FetchDiffAt's own GitHub API
 	// calls, which botHandle alone cannot provide.
 	botToken string,
-	// diffFetcher/positionResolver/timeouts (Step 63, §22.1.1) back this
+	// diffFetcher/positionResolver/timeouts (§22.1.1) back this
 	// handler's OWN content-anchored positioning: diffFetcher re-fetches
 	// (internal/app/reviewcontext.FetchDiffAt) the SAME diff a review
 	// turn's own prompt was anchored to, pinned to the resolved
@@ -250,7 +250,7 @@ func PostReviewVerdict(
 			return
 		}
 
-		// §62 review finding C2 (CRITICAL, fixed): resolve the head SHA
+		// resolve the head SHA
 		// THIS session's own CURRENTLY-PROCESSING turn was anchored to --
 		// never prSession.PendingHeadSha (github_pr_sessions' own shared,
 		// mutable per-(repo,PR) column, REMOVED by this fix; see
@@ -263,8 +263,8 @@ func PostReviewVerdict(
 		// (migrations/000005_turns.up.sql) guarantees at most one such
 		// row can ever exist.
 		//
-		// Moved here (Step 68, §26.3 -- one step EARLIER than the
-		// Step-63-era "before §22.1.1's own position-resolution step"
+		// Moved here (§26.3 -- one step EARLIER than the
+		// previous "before §22.1.1's own position-resolution step"
 		// position this fetch previously held) so reviewDepth, below, is
 		// available BEFORE ValidateVerdictInput runs: the deep-path
 		// digest-completeness check (validate.go, this Step's own
@@ -317,7 +317,7 @@ func PostReviewVerdict(
 		var reviewDepth reviewtriage.ReviewDepth
 		var serverComputedChangedFiles int
 		var diffDelivered bool
-		// dispatchedSandboxGen/dispatchedEventID (Step 71, §26.4/§7.1) are
+		// dispatchedSandboxGen/dispatchedEventID (§26.4/§7.1) are
 		// this SAME processing turn's own turns.dispatched_sandbox_gen/
 		// dispatched_event_id -- the sandbox gen this turn's prompt was
 		// actually dispatched to (migrations/000026_turn_dispatch_gen.up.sql)
@@ -384,7 +384,7 @@ func PostReviewVerdict(
 			input.Findings = append(input.Findings, findingInputFromWire(f))
 		}
 
-		// Step 71 (§26.4/§7.1): post-hoc sub-task corroboration -- see
+		// (§26.4/§7.1): post-hoc sub-task corroboration -- see
 		// reviewpost.VerdictInput.CounterReviewCorroborated's own doc
 		// comment and reviewpost.BuildVerdict's own "Second substitution"
 		// doc comment for what this feeds and why. The two corroboration
@@ -470,18 +470,17 @@ func PostReviewVerdict(
 				"repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
 		}
 
-		// verdictHeadSHA/reviewDepth (§62 review finding C2 / Step 68,
-		// §26.3) were both already resolved above, before
+		// verdictHeadSHA/reviewDepth (§26.3) were both already resolved above, before
 		// ValidateVerdictInput ran -- see that block's own doc comment
 		// for the full "why" (the deep-path digest check needs
 		// reviewDepth before validation, and this is simply the earliest
-		// point verdictHeadSHA's own pre-existing Step-63-era move
+		// point verdictHeadSHA's own pre-existing move
 		// already established).
 		//
 		// §22.1.1's own content-anchored positioning: resolved ONCE, here,
 		// before RenderVerdictComment ever renders findings -- "no second
 		// pass, by construction" (every finding already present in this
-		// SAME payload, Step 45's structured-verdict invariant). Skipped
+		// SAME payload, §8.2's structured-verdict invariant). Skipped
 		// entirely (every finding stays at its own honest StartLine=0/
 		// EndLine=0 zero value, reviewpost.BuildFindings' own default) when
 		// there is nothing to anchor against at all: no findings, or no
@@ -543,7 +542,7 @@ func PostReviewVerdict(
 			correlationID = &id
 		}
 
-		// Step 48: is the sentinel-auto-fix flow even a CANDIDATE for this
+		// §17.6: is the sentinel-auto-fix flow even a CANDIDATE for this
 		// verdict at all -- the toggle is on AND at least one posted
 		// finding names a sentinel kind? Computed BEFORE opening the
 		// transaction below (a pure, in-memory check) so the "fetch the
@@ -610,10 +609,10 @@ func PostReviewVerdict(
 			findingIdentityHashes = append(findingIdentityHashes, f.IdentityHash)
 		}
 
-		// Step 62 (§21.1): append one review_verdicts row, in the SAME
+		// (§21.1): append one review_verdicts row, in the SAME
 		// transaction as the findings upserts/outbox write above -- pure
 		// storage of the verdict already computed above, forwarding
-		// head_sha verbatim from verdictHeadSHA (§62 review finding C2:
+		// head_sha verbatim from verdictHeadSHA (
 		// resolved above from this session's own processing turn, never
 		// re-derived or asked of the agent). A missing head SHA (empty --
 		// e.g. a review turn whose own context fetch degraded to no diff
@@ -647,7 +646,7 @@ func PostReviewVerdict(
 			return
 		}
 
-		// §26.2/Step 67: enqueue exactly one further outbox row whenever
+		// §26.2: enqueue exactly one further outbox row whenever
 		// the agent proposed a PR-body rewrite (Digest.ProposedBody
 		// non-blank) AND the floor that rewrite is meant to remediate
 		// actually fired (Digest.DescriptionAdequacy is "drift" or
@@ -793,7 +792,7 @@ func findingInputFromWire(f restdtos.PostedFinding) reviewpost.FindingInput {
 }
 
 // digestInputFromWire converts one restdtos.Digest (the wire shape,
-// Step 66, §26.1, extended by Step 67, §26.2) into reviewpost.Digest --
+// §26.1, extended by §26.2) into reviewpost.Digest --
 // the one place this conversion happens, mirroring findingInputFromWire's
 // own identical "one conversion site" convention immediately above.
 // d.Summary/d.DescriptionAdequacy/d.AdequacyExplanation are decode-time-
@@ -882,7 +881,7 @@ type subTaskFinishPayload struct {
 	Outcome   string `json:"outcome"`
 }
 
-// corroborateCounterReview (§26.4, Step 71) is this handler's own I/O +
+// corroborateCounterReview (§26.4) is this handler's own I/O +
 // decode half of post-hoc sub-task corroboration -- the pure comparison
 // itself lives in reviewverdict.CounterReviewCorroborated (internal/
 // domain/reviewverdict/corroboration.go), which this function is the

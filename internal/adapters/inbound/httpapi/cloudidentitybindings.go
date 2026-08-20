@@ -1,4 +1,4 @@
-// This file (cloudidentitybindings.go) implements Step 73a's own ("cloud
+// This file (cloudidentitybindings.go) implements §27.3's own ("cloud
 // identity: OIDC issuer, bindings, minting", §27.3) CP-side MANAGEMENT
 // surface over cloud_identity_bindings (migrations/
 // 000093_cloud_identity_bindings.up.sql) -- mirrors providercredentials.

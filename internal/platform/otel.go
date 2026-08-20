@@ -23,7 +23,7 @@
 // this file's own scope is still unchanged — bootstrap only, no
 // instruments defined here.
 //
-// Step 77 ("ops: dashboards, alerts, runbooks") found the three remaining
+// §5.3 ("ops: dashboards, alerts, runbooks") found the three remaining
 // names on this comment's own PR-11/12/13/14/24/35 list — spawn latency,
 // liveness gaps, watchdog activations — had never actually landed at any
 // of those PRs, or anywhere else: a repo-wide audit at that Step turned up

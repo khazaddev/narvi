@@ -43,7 +43,7 @@ import (
 // that case distinctly ("still working on the previous message") rather
 // than silently queuing a second turn behind it.
 //
-// planMode (Step 37/38 follow-up fix, §8.1) lets handleEvent (handler.go)
+// planMode (a follow-up fix, §8.1) lets handleEvent (handler.go)
 // route a revise:-prefixed reply through as a real plan_mode=true
 // "request changes" turn instead of always hardcoding false -- see that
 // function's own doc comment. err is a plain *httpapi.CreateTurnError
@@ -57,7 +57,7 @@ import (
 // own already-resolved actorUserID, which previously had nowhere at all to
 // flow into for a reply on an existing thread.
 //
-// intentSvc (Step 64, §23.1/§23.2) is threaded straight through to
+// intentSvc (§23.1/§23.2) is threaded straight through to
 // httpapi.CreateTurnCore's own plan_followup block, exactly like plans
 // immediately before it -- handleEvent's own caller passes the SAME
 // deps.IntentClassifier every other classification use in this package

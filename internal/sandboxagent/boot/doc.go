@@ -3,20 +3,19 @@
 // (config.go), assembling the boot fingerprint §5.3 requires be logged
 // first (fingerprint.go), running the hook policy from
 // internal/domain/sandboxboot against real, disk-resident scripts using
-// internal/sandboxagent/supervisor for execution (hooks.go), and -- as of
-// Step 14 -- RunBoot (runboot.go), the top-level per-repo dispatcher that
+// internal/sandboxagent/supervisor for execution (hooks.go), and
+// RunBoot (runboot.go), the top-level per-repo dispatcher that
 // chooses, per repo, between the multi-service manifest contract
 // (internal/sandboxagent/services, §14.2) and this package's own
 // setup.sh/start.sh hook contract (§6.4), falling back to the latter
 // whenever a repo has no .narvi/services.yml. RunBoot (like RunHooks
-// before it) takes its repo list as a plain []RepoInfo parameter; as of
-// Step 15, main.go populates it from cmd/sandbox-agent's own
+// before it) takes its repo list as a plain []RepoInfo parameter; main.go populates it from cmd/sandbox-agent's own
 // internal/sandboxagent/gitclone.CloneAll results whenever Config.
 // SessionConfig is present, and passes nil (today's original no-op)
-// otherwise. Step 16/17 are expected to extend this package (or add
+// otherwise. §6.1/§7 are expected to extend this package (or add
 // sibling ones) further as the boot sequence grows.
 //
-// Step 15 also closes the "SESSION_CONFIG delivery" gap Steps 13/14
+// This also closes the "SESSION_CONFIG delivery" gap §6.4/§14.2
 // repeatedly flagged as honest, undecided territory: config.go's Load()
 // now additionally reads an OPTIONAL NARVI_SESSION_CONFIG env var carrying
 // the full SESSION_CONFIG document as JSON, parsed into Config.
@@ -37,10 +36,10 @@
 // are entirely disjoint from control-plane's own, and platform/config.go
 // itself is out of scope for this Step.
 //
-// Step 16 adds one further optional env var: NARVI_SANDBOX_ID (default
+// One further optional env var: NARVI_SANDBOX_ID (default
 // "", an HONEST GAP -- see Config.SandboxID's own doc comment), consumed
 // by the sibling internal/sandboxagent/wsbridge package as the sandbox WS
 // connection's X-Sandbox-ID header value. Nothing else in this package
 // changes: RunBoot, hook policy, and the fingerprint remain exactly as
-// Steps 13/14/15 left them.
+// §6.4/§14.2 left them.
 package boot

@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 72's own ("sandbox secrets & opencode
+// Integration tests for §27.1's own ("sandbox secrets & opencode
 // config", §27.1) CP-side management CRUD surface (sandboxsecrets.go),
 // against a real Postgres instance -- sharing this package's own testRig
 // (httpapi_integration_test.go) and mirroring

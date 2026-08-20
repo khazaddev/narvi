@@ -1,6 +1,6 @@
 //go:build integration
 
-// Full HTTP-level integration test for POST /webhooks/linear (Step 34,
+// Full HTTP-level integration test for POST /webhooks/linear (
 // "Linear ingress", §8.10): a synthetic, correctly-signed Linear
 // AgentSessionEvent webhook payload (built to mirror the REAL field
 // names this Step's own investigation confirmed against Linear's live

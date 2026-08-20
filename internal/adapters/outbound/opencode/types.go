@@ -34,7 +34,7 @@ type sessionResponse struct {
 // "reasoning-effort overrides") carries cmd.Effort verbatim -- see
 // postPromptAsync (session.go).
 //
-// Agent (Step 37, "plan mode, web", §8.1) is this adapter's own wiring of
+// Agent ("plan mode, web", §8.1) is this adapter's own wiring of
 // cmd.PlanMode (sandboxws.Prompt) onto OpenCode's REAL, NATIVE plan/build
 // agent split -- empirically confirmed live against the pinned OpenCode
 // 1.17.15 binary (GET /agent returns 7 agents; "plan" is

@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration coverage for Step 50's own ("release PR review", §15)
+// Integration coverage for §15's own ("release PR review", §15)
 // end-to-end wiring -- updated for blocking-finding fix #1's own
 // two-phase split: a real webhook POST, through the real
 // coalescer.CreateOrJoin (a real Postgres session-creation transaction),

@@ -26,7 +26,7 @@ type Signals struct {
 	ChangedPaths []string
 
 	// NeedsHumanLabelPresent reports whether this PR currently carries
-	// reviewpost.LabelNeedsHuman (Step 47's own maintainer escape hatch)
+	// reviewpost.LabelNeedsHuman (§8.2's own maintainer escape hatch)
 	// -- see doc.go's own "v1 rules -- five, not three" section for why
 	// this is one of Decide's five triggers.
 	NeedsHumanLabelPresent bool

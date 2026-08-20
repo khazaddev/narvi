@@ -1,4 +1,4 @@
-// This file (providercredentials.go) implements Step 53's own ("provider
+// This file (providercredentials.go) implements §25.1's own ("provider
 // credential injection", §25.1/§25.3) CP-side MANAGEMENT surface over
 // provider_credentials (migrations/000056_provider_credentials.up.sql) --
 // this codebase's first generic secret-storage table. Mirrors
@@ -20,7 +20,7 @@
 // No single-row GET by id: List already returns every row at one (scope,
 // scopeTarget) pair, at most 3 (one per Provider) -- a dedicated GET
 // endpoint would be duplicate surface for no real gain, so it is
-// deliberately left out (mirrors the automations engine's own Step 51
+// deliberately left out (mirrors the automations engine's own §3.5
 // "don't over-build" precedent for a comparably narrow surface).
 //
 // # Write-only credential value (never returned)

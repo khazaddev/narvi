@@ -1,4 +1,4 @@
-// This file (sandboxsecretsdelivery.go) implements Step 72's own
+// This file (sandboxsecretsdelivery.go) implements §27.1's own
 // ("sandbox secrets & opencode config", §27.1) CP-side DELIVERY endpoint
 // for sandbox-agent: POST /sessions/{sessionID}/sandbox-secrets (note: no
 // /api prefix, exactly like scm-credentials/provider-credentials/
@@ -28,7 +28,7 @@
 //  5. X-Sandbox-Gen missing/malformed/mismatched -> 403.
 //  6. The presented token fails verifySandboxBearerToken -> 401.
 //  7. Otherwise -> 200 with a plain name->plaintext map of RESOLVED
-//     winners only, losers never decrypted (Step 53's decrypt-only-the-
+//     winners only, losers never decrypted (§25.1's decrypt-only-the-
 //     winner discipline, reused here unchanged) -- resolved via
 //     internal/domain/providercredential.Resolve over every candidate row
 //     (across every scope this Step actually resolves -- repo/
@@ -69,7 +69,7 @@ import (
 // shape: a plain map from secret name to its resolved plaintext value.
 // Mirrors providerCredentialsResponse's own "small, explicit, invented
 // wire shape" precedent (providercredentialsdelivery.go), simplified --
-// unlike a provider credential (Step 59's discriminated api/oauth union),
+// unlike a provider credential (§8.8's discriminated api/oauth union),
 // a sandbox secret is ALWAYS a plain string value (there is no oauth-kind
 // concept for a general env var), so the map's own value type is a bare
 // string, not a struct.

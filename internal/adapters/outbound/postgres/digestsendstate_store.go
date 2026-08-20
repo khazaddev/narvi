@@ -12,7 +12,7 @@ import (
 )
 
 // DigestSendStateStore is a thin, pass-through wrapper around the
-// sqlc-generated digest_send_state queries (Step 62, §21.3) -- see
+// sqlc-generated digest_send_state queries (§21.3) -- see
 // migrations/000071_digest_send_state.up.sql's own doc comment for the
 // full two-phase (idempotent seed, then SKIP LOCKED claim) at-most-one-
 // send-per-channel-per-day design.

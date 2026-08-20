@@ -45,14 +45,14 @@ type Engine struct {
 	pool         *pgxpool.Pool
 	registry     *sessionactor.Registry
 	timeouts     platform.Timeouts
-	// epistemicCheckDefault (F6, adversarial review, Step 61) is the SAME
+	// epistemicCheckDefault (F6, adversarial review) is the SAME
 	// platform.Config.EpistemicCheckDefault value every other
 	// CreateSessionOnTx-reaching caller in this codebase now threads
 	// through -- createRunAndSession (fanout.go) is this Engine's own ONE
 	// caller, an ordinary (never review-session) build turn, so no F7-style
 	// hardcoded-false carve-out applies here.
 	epistemicCheckDefault bool
-	// rolloutMode/repoSettings (Step 76, §10 Phase 6, §32) are the SAME
+	// rolloutMode/repoSettings (§10 Phase 6, §32) are the SAME
 	// two REQUIRED httpapi.CreateSessionOnTx parameters every other
 	// caller now threads through -- createRunAndSession (fanout.go) is
 	// this Engine's own ONE caller. An automation-created session is
@@ -113,8 +113,8 @@ func NewEngine(
 // (never a bare `go` statement, §11; a zero-value Group, NOT
 // errgroup.WithContext, so one loop's own ctx.Err() return can never
 // cancel-race the others -- mirrors app/imagebuild.Builder.Run's own
-// identical two-loop fan-out, scaled to four here: Step 51's original
-// three, plus Step 52's own cron trigger pump). Each tick's own error is
+// identical two-loop fan-out, scaled to four here: §3.5's original
+// three, plus §8.4's own cron trigger pump). Each tick's own error is
 // logged, never propagated, so one bad tick never kills the other loops.
 // The caller starts this via its own errgroup.Go exactly once per process
 // (cmd/control-plane/main.go).
@@ -175,7 +175,7 @@ func (e *Engine) runSweepPump(ctx context.Context) error {
 	}
 }
 
-// runTriggerPump is Step 52's own cron-trigger evaluation loop (§8.4) --
+// runTriggerPump is §8.4's own cron-trigger evaluation loop (§8.4) --
 // reuses AutomationEnginePumpInterval as its own TICKER cadence (the SAME
 // 60s the fan-out/reconcile pumps already tick at) rather than a dedicated
 // new interval field: a standard cron schedule's own finest resolution is

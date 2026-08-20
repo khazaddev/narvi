@@ -1,13 +1,13 @@
 // Package httpapi holds the REST adapter serving the web UI and external
 // clients (§6.3): "The BFF-facing routes: sessions CRUD/create, events,
 // artifacts, secrets, environments, automations, uploads, ws-token."
-// Step 19's own plan row explicitly narrows that to exactly
+// §6.2's own plan row explicitly narrows that to exactly
 // "create/get/events/artifacts" (+ ws-token, named separately by §6.2) --
 // secrets/environments/automations/uploads are NOT this Step's job (see
 // contracts/README.md's own scope note on rest/v1/dtos.schema.json).
 //
 // # Routes (all under /api/sessions, mounted by cmd/control-plane/main.go,
-// behind internal/adapters/inbound/auth.Middleware as of Step 20 -- see
+// behind internal/adapters/inbound/auth.Middleware -- see
 // that package's own doc.go)
 //
 //   - POST /api/sessions -- create.go's CreateSession: decodes
@@ -31,12 +31,12 @@
 //     (platform.HashToken), and responds 200 with
 //     restdtos.WSTokenResponse{Token: <plaintext>, ExpiresAt}.
 //
-// # The auth gap -- resolved (Step 20, "auth v1")
+// # The auth gap -- resolved (§13.1, "auth v1")
 //
 // Every route above is now mounted behind internal/adapters/inbound/auth.
 // Middleware in cmd/control-plane/main.go: a request with no valid
 // narvi_auth_session cookie gets 401 before reaching any handler in this
-// package. Both of Step 19's own honest gaps are directly closed as a
+// package. Both of §6.2's own honest gaps are directly closed as a
 // result:
 //
 //   - CreateSession now inserts created_by with the REAL authenticated
@@ -45,7 +45,7 @@
 //   - MintWSToken now scopes ws_tokens.user_id to the REAL authenticated
 //     caller the same way, instead of always NULL.
 //
-// # Step 21 ("e2e happy path") updates
+// # §9.3 ("e2e happy path") updates
 //
 // CreateSession now actually PERSISTS req.Repos (design decision 1,
 // migrations/000018_session_repos.up.sql) and, when req.Prompt is
@@ -62,13 +62,13 @@
 //   - POST /sessions/{sessionID}/scm-credentials -- scmcredentials.go's
 //     own ScmCredentials: a sandbox-bearer-token-authenticated endpoint
 //     (mirrors wshub's own header-bearer-token handshake precedent, NOT
-//     Step 20's cookie-based auth.Middleware) that decrypts and hands
+//     §13.1's cookie-based auth.Middleware) that decrypts and hands
 //     back the session's own created_by user's GitHub OAuth access token
 //     as a git-over-https credential (§5.2). This is the control-plane
 //     side of the wire contract internal/sandboxagent/credentials.
-//     CPClient (Step 15) already built and tested the client side of.
+//     CPClient (§6.4) already built and tested the client side of.
 //
-// # Step 22 ("snapshots & restore") updates
+// # §3.2 ("snapshots & restore") updates
 //
 // A SEVENTH route is added, mounted the SAME way scm-credentials is
 // (outside /api/sessions and outside auth.Middleware entirely):
@@ -83,7 +83,7 @@
 //     then reports back over the WS bridge as a CRITICAL "snapshot_ready"
 //     event (design decision 2's own full round-trip reasoning).
 //
-// # Step 28 ("turn recovery") update
+// # §3.3 ("turn recovery") update
 //
 // An EIGHTH route is added, INSIDE the /api/sessions group (so it shares
 // that group's own auth.Middleware gate, unlike scm-credentials/snapshot
@@ -104,12 +104,12 @@
 // Wiring participants/presence (§8.11) is still untouched -- a distinct,
 // not-yet-scoped concern.
 //
-// # Step 31 ("webhook toolkit") update
+// # §5.1 ("webhook toolkit") update
 //
 // No new route is added by this Step -- it adds no concrete provider
 // wiring at all. CreateSession's own doc comment above (create.go) is
 // split in two: everything after decoding the request body is now
-// createSessionCore (unexported as of this Step -- Step 33 exports it,
+// createSessionCore (unexported as of this Step -- §8.10 exports it,
 // see below), taking an already-decoded restdtos.CreateSessionRequest
 // plus a NULLABLE creator (pgtype.UUID, Valid == false for "no human
 // caller"). CreateSession itself is now a thin wrapper: decode body ->
@@ -117,20 +117,20 @@
 // REST route) -> createSessionCore -> write the JSON response. This is a
 // pure refactor for this route -- every existing test in this package's
 // own _test.go files passes unchanged. The point of the split is reuse:
-// Steps 32/33/34's own GitHub/Slack/Linear webhook ingress handlers call
+// §8.2/§8.10's own GitHub/Slack/Linear webhook ingress handlers call
 // createSessionCore directly, with their own already-verified,
 // already-decoded request and a NULL creator (no cookie, no human) --
 // never this package's own CreateSession, which stays browser-only.
 // Whether those ingress handlers end up living in THIS package (as new
 // files alongside create.go/get.go/events.go/artifacts.go/wstoken.go) or
 // export createSessionCore to reach it from their own separate packages
-// is left open by this Step -- see the Step 33 update immediately below
+// is left open by this Step -- see the §8.10 update immediately below
 // for how that question was actually resolved.
 //
-// # Step 33 ("Slack ingress") update
+// # §8.10 ("Slack ingress") update
 //
 // internal/adapters/inbound/slack (a separate package, mirroring
-// github/linear's own reserved package-per-surface shape) is Step 33's
+// github/linear's own reserved package-per-surface shape) is §8.10's
 // own new Slack webhook ingress adapter -- see that package's own doc.go.
 // It needs to reach createSessionCore from outside this package, so this
 // Step exports it (CreateSessionCore) and its error type (CreateSessionError,
@@ -158,7 +158,7 @@
 // Independent webhook-ingress adapters each ended up needing "create a
 // session (+ optional turn), then post-commit trigger dispatch" from
 // OUTSIDE this package -- CreateSessionCore/CreateSessionError are already
-// exported as of Step 33 above (Status/Message fields, same Error()
+// exported above (Status/Message fields, same Error()
 // method), so no further export/rename is needed here. At least one
 // such adapter also needs to create a session+turn while ALREADY holding
 // an unrelated lock on its own already-open transaction (e.g. an atomic
@@ -209,7 +209,7 @@
 //     outer transaction commits -- never CreateSessionCore, which is only
 //     safe for a caller with no transaction of its own yet.
 //
-// # Step 32 ("GitHub ingress") update
+// # §8.2 ("GitHub ingress") update
 //
 // The real webhook handler lives in its own package,
 // internal/adapters/inbound/github (mounted at POST /webhooks/github,
@@ -242,7 +242,7 @@
 // bot-session entry point for a caller that isn't simultaneously holding
 // a transaction open of its own.
 //
-// # Step 39 ("identities + full RBAC", §13.3) update
+// # §13.2 ("identities + full RBAC", §13.3) update
 //
 // Every state-changing REST handler in this package now calls the real
 // internal/domain/authz.Authorize BEFORE its own effect:
@@ -282,7 +282,7 @@
 // -- distinct from, and in addition to, ActionCreateSession above already
 // refusing a viewer at session-creation time.
 //
-// # Step 39 ("identities + full RBAC", §13.2) second-half update
+// # §13.2 ("identities + full RBAC", §13.2) second-half update
 //
 // Identity auto-linking (the actual DECISION/persistence logic) and the
 // magic-link consume flow both live OUTSIDE this package -- internal/app/

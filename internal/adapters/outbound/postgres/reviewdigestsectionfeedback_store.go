@@ -10,7 +10,7 @@ import (
 )
 
 // ReviewDigestSectionFeedbackStore is a thin, pass-through wrapper around
-// the sqlc-generated review_digest_section_feedback queries (Step 69,
+// the sqlc-generated review_digest_section_feedback queries (
 // "review deep path: adversarial counter-review + readout measurement",
 // §26.5) -- see migrations/000086_review_digest_section_feedback.up.sql's
 // own doc comment for the table's full design. No caching, no retries, no

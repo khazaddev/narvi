@@ -146,7 +146,7 @@ func TestTriggerForFetch(t *testing.T) {
 // correctly with Transition across all realistic end-to-end trajectories
 // the real SyncAll (internal/sandboxagent/gitclone) drives -- clean-tree
 // happy path, dirty-tree happy path, a stash failure, a pop failure, and
-// (§19.3, Step 40) the boot-time fetch step's own three outcomes -- entirely
+// (§19.3) the boot-time fetch step's own three outcomes -- entirely
 // without any real git I/O.
 func TestFullBootSequenceViaHelpers(t *testing.T) {
 	t.Parallel()

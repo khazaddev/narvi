@@ -395,8 +395,8 @@ func TestDecodeTaskMetadata(t *testing.T) {
 
 // TestTranslateSubTaskStartFromTask directly tests the translation
 // function (matching translate_test.go's own established style), pinning
-// the Label-fallback behavior taskInputDescription implements, and (Step
-// 71, §26.4/§7.1) the SubAgentType extraction taskInputSubAgentType
+// the Label-fallback behavior taskInputDescription implements, and
+// (§26.4/§7.1) the SubAgentType extraction taskInputSubAgentType
 // implements alongside it -- the real, reliable dispatch parameter
 // reviewverdict.CounterReviewCorroborated keys off, sourced from the SAME
 // task-tool input object as Label, just a different key.
@@ -462,8 +462,8 @@ func TestTranslateSubTaskStartFromTask(t *testing.T) {
 
 // TestTranslateSubTaskStart_LegacyPathNeverPopulatesSubAgentType pins
 // translateSubTaskStart's own (the legacy/unverified-live subtaskPart
-// fallback, ~line 210 of translate.go) deliberate exclusion from Step
-// 71's SubAgentType wiring: that path has no task-tool input to extract
+// fallback, ~line 210 of translate.go) deliberate exclusion from
+// §26.4's SubAgentType wiring: that path has no task-tool input to extract
 // "subagent_type" from at all, so its own built sandboxws.SubTaskStart
 // leaves SubAgentType at its own zero value, nil -- omitted on the wire
 // exactly like every producer that predates this field.
@@ -479,7 +479,7 @@ func TestTranslateSubTaskStart_LegacyPathNeverPopulatesSubAgentType(t *testing.T
 
 // TestTaskInputSubAgentType directly unit-tests the extraction helper
 // (matching taskInputDescription's own established indirect-test
-// precedent, but as its own direct test since this field is Step 71's
+// precedent, but as its own direct test since this field is §26.4's
 // own new addition worth pinning independently of the translation
 // function that consumes it).
 func TestTaskInputSubAgentType(t *testing.T) {

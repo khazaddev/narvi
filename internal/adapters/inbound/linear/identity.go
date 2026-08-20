@@ -1,4 +1,4 @@
-// This file (identity.go) implements Step 39's ("identities + full RBAC",
+// This file (identity.go) implements §13.2's ("identities + full RBAC",
 // §13.2) own auto-linking wiring for Linear ingress: replacing this
 // package's PREVIOUS unconditional bot-attribution (an always-invalid
 // decidedBy/creator pgtype.UUID, every prior Step's own explicit
@@ -28,7 +28,7 @@ import (
 // authzSurface is this package's own "surface" label passed to every
 // actorauthz.AuthorizeResolvedActor call below -- see that function's own
 // doc comment for why (keeps this package's log lines prefixed "linear: "
-// exactly as they were before the Step 39 shared-helper extraction into
+// exactly as they were before the §13.2 shared-helper extraction into
 // internal/app/actorauthz, batch fix/audit-github-actor-rbac).
 const authzSurface = "linear"
 
@@ -169,7 +169,7 @@ func (deps Deps) postIdentityNotice(ctx context.Context, organizationID, agentSe
 // (identitylink.Resolution.NotificationText) rather than sending a
 // second, separate activity.
 //
-// Residual risk (Step 39, "identities + full RBAC", §13.2 -- documented,
+// Residual risk ("identities + full RBAC", §13.2 -- documented,
 // deliberate, Linear-specific): unlike Slack (ack.go's own postEphemeral),
 // this text -- including a still-sensitive magic-link URL -- is posted as
 // an ordinary Agent Activity, visible to whoever can see this Linear
@@ -208,7 +208,7 @@ func appendNotice(base, notice string) string {
 	return base + "\n\n" + notice
 }
 
-// authorizeResolvedActor/ownedOrJoined used to live here (Step 39,
+// authorizeResolvedActor/ownedOrJoined used to live here (
 // "identities + full RBAC", §13.2/§13.3) but moved verbatim into
 // internal/app/actorauthz (batch fix/audit-github-actor-rbac), confirmed
 // identical to Slack's own copy -- see that package's own doc.go for the

@@ -343,7 +343,7 @@ func ParseOwnerRepo(rawURL string) (owner, repo string, err error) {
 // itself calls "full_name" -- no URL to parse, no host, no ".git" suffix to
 // trim, just one split on "/".
 //
-// Moved here (Step 46, "review sessions", §8.2) from what used to be
+// Moved here ("review sessions", §8.2) from what used to be
 // internal/adapters/inbound/github/headresolve.go's own unexported
 // splitOwnerRepo -- that package's own resolveIssueCommentHead was this
 // logic's only caller until this Step's own manual re-trigger REST endpoint

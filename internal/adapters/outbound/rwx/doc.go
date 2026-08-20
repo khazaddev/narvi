@@ -1,5 +1,5 @@
 // Package rwx implements the RWX (rwx.com) SandboxProvider adapter and PR
-// preview links (Step 57, §4.1.1/§4.1.2) — internal/app/ports.
+// preview links (§4.1.1/§4.1.2) — internal/app/ports.
 // SandboxProvider's SECOND real implementation, alongside
 // internal/adapters/outbound/modal, integrating RWX's real, public product
 // exactly as modal integrates Modal's API and githubapi integrates
@@ -68,7 +68,7 @@
 // ImageBuilds: false, and — the one flag genuinely unresolved without real
 // RWX access — Resume: false, the conservative default until stop→start
 // state preservation is verified empirically against a real account
-// (§4.1.3 names this as Step 57's own first exit criterion; see
+// (§4.1.3 names this as §4.1's own first exit criterion; see
 // Provider.Capabilities' own doc comment, provider.go, for the full
 // reasoning). TakeSnapshot/RestoreFromSnapshot/BuildImage/DeleteImage/
 // ResumeSandbox each return the permanent UNSUPPORTED_OPERATION

@@ -1,6 +1,6 @@
 //go:build integration
 
-// This file proves Step 76's own per-channel refusal contract (§10 Phase
+// This file proves §10's own per-channel refusal contract (§10 Phase
 // 6, §32) for automation fan-out specifically: "already does the right
 // thing unmodified" -- createRunAndSession's own existing cerr != nil
 // branch (fanout.go) already routes ANY httpapi.CreateSessionOnTx

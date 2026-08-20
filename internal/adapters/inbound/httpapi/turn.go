@@ -44,7 +44,7 @@ func hasOpenTurn(turns []sqlcgen.Turn) bool {
 	return false
 }
 
-// CreateTurn backs POST /api/sessions/{sessionID}/turns (Step 28, "turn
+// CreateTurn backs POST /api/sessions/{sessionID}/turns ("turn
 // recovery", §8.7 "Recovery UX: relaunch-and-resume (conversation id
 // replay)"): the relaunch-and-resume REST API. Enqueues a new Pending turn
 // on an EXISTING session -- 404 if the session doesn't exist, 409 if
@@ -159,7 +159,7 @@ func CreateTurn(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *post
 			return
 		}
 
-		// Step 58 (§28.5): attachmentIds is parsed here, at the REST
+		// (§28.5): attachmentIds is parsed here, at the REST
 		// boundary, rather than deep inside createTurnLocked's own
 		// transaction -- a malformed uuid string is a client-input
 		// mistake the same 400 turn.go's own other decode failures
@@ -223,7 +223,7 @@ func (e *CreateTurnError) Error() string { return e.Message }
 func (e *CreateTurnError) Unwrap() error { return e.sentinel }
 
 // ErrPlanAwaitingApproval is createTurnLocked's own sentinel (this batch's
-// own follow-up fix to Steps 37/38, §8.1, closing the "reply matching no
+// own follow-up fix to §8.1, closing the "reply matching no
 // verdict keyword dispatches an ordinary build turn anyway" hole found
 // during design review) for the one new reason a turn creation can be
 // declined that every other CreateTurnError construction never carries:
@@ -296,7 +296,7 @@ const (
 )
 
 // CreateTurnOptions bundles CreateTurnCore/createTurnLocked's own REST-only,
-// opt-in concerns (Step 58, §28.5) into the ONE trailing variadic parameter
+// opt-in concerns (§28.5) into the ONE trailing variadic parameter
 // a bare "attachmentIDs ...pgtype.UUID" used to occupy alone -- Go permits
 // only one variadic parameter, and it must be last, so a second,
 // independent optional concern (StorageConfigured, added by this batch's
@@ -331,7 +331,7 @@ type CreateTurnOptions struct {
 	StorageConfigured bool
 
 	// Effort mirrors modelID's own "per-message override" role one field
-	// over (Step 59, §29.8) -- bundled into this same options struct
+	// over (§29.8) -- bundled into this same options struct
 	// rather than a new positional parameter alongside modelID for the
 	// identical reason AttachmentIDs/StorageConfigured are: every one of
 	// this core's five OTHER call sites (reviewretrigger.go, linear/
@@ -343,7 +343,7 @@ type CreateTurnOptions struct {
 	// Configured. Only CreateTurn's own REST handler below ever sets it.
 	Effort *string
 
-	// ReviewHeadSHA (§62 review finding C2, CRITICAL, fixed) is the
+	// ReviewHeadSHA is the
 	// commit SHA THIS turn's own pre-fetched review diff was anchored to
 	// -- non-nil ONLY for a review-session turn (reviewretrigger.go's own
 	// manual-retrigger path; the GitHub mention/label-retrigger path via
@@ -360,7 +360,7 @@ type CreateTurnOptions struct {
 	// leaves this nil, exactly like Effort/StorageConfigured above.
 	ReviewHeadSHA *string
 
-	// ReviewDepth/ReviewDepthDecision (Step 68, §26.3) mirror
+	// ReviewDepth/ReviewDepthDecision (§26.3) mirror
 	// ReviewHeadSHA's own identical shape one field further -- non-nil
 	// ONLY for a review-session turn, the SAME callers that set
 	// ReviewHeadSHA. Stored verbatim onto turns.review_depth/
@@ -373,10 +373,10 @@ type CreateTurnOptions struct {
 	ReviewDepth         *string
 	ReviewDepthDecision []byte
 
-	// ClassifyText (Step 64 follow-up fix, review Finding 1) is the raw,
+	// ClassifyText (a follow-up fix, review Finding 1) is the raw,
 	// unprefixed human reply text the plan_followup block below (just
 	// before tx.Begin) should classify -- mirrors github/coalesce.go's own
-	// pre-existing classifyText parameter for the Step 36 classifier
+	// pre-existing classifyText parameter for the §8.3 classifier
 	// (that function's own doc comment: "Audit fix: this used to be
 	// *req.Prompt directly, which ... already had ... the entire PR diff
 	// ... appended -- feeding the classifier's LLM call the entire PR
@@ -387,8 +387,7 @@ type CreateTurnOptions struct {
 	// `prompt` value ALREADY folded with review.RenderTurnPrompt's own
 	// full diff/stack/verdict-tool-instructions text -- inflating the
 	// classifier's own LLM call cost/latency by orders of magnitude and
-	// risking exceeding the model's context window, exactly like the
-	// Step 36 finding.
+	// risking exceeding the model's context window, exactly like before.
 	//
 	// nil (every caller other than github/coalesce.go's REUSE-path
 	// CreateTurnForBot call) means "no raw text was captured separately
@@ -409,7 +408,7 @@ type CreateTurnOptions struct {
 // the rest (the policy-gated open-turn check, insert, audit, commit,
 // dispatch) to createTurnLocked below.
 //
-// Exported (Step 38, "plan mode, cross-channel", §8.1/§13.3) so Slack's
+// Exported ("plan mode, cross-channel", §8.1/§13.3) so Slack's
 // own "Request changes" modal submission (internal/adapters/inbound/slack/
 // interactive.go) can create a real plan_mode=true turn through the EXACT
 // SAME path POST .../turns itself uses, rather than a third, duplicated
@@ -432,7 +431,7 @@ type CreateTurnOptions struct {
 // this function's own pre-transaction existence check below -- see that
 // function's own doc comment for why.
 //
-// actorUserID is Step 39's own addition, for the audit_log row
+// actorUserID is §13.2's own addition, for the audit_log row
 // createTurnLocked writes on the SAME tx as the turn insert (§13.3): a
 // real authenticated caller's id from CreateTurn (the REST handler above,
 // which ALSO already ran authz.Authorize against this same actor before
@@ -445,7 +444,7 @@ type CreateTurnOptions struct {
 // precisely so a still-unlinked actor's call can keep its existing,
 // documented bot-attribution behavior unchanged).
 //
-// opts (Step 58, §28.5, extended by this batch's own FIX D) is a TRAILING
+// opts (§28.5, extended by this batch's own FIX D) is a TRAILING
 // VARIADIC parameter, deliberately not a plain struct: mirrors workflows'
 // own "constructed fresh from pool, not threaded as a new parameter"
 // precedent just above in spirit, but for genuinely caller-supplied values
@@ -459,7 +458,7 @@ type CreateTurnOptions struct {
 // only CreateTurn's own handler below, the sole caller that ever has
 // either to pass, changed at all.
 //
-// epistemicCheckDefault (Step 61, "builder epistemic pre-action check",
+// epistemicCheckDefault ("builder epistemic pre-action check",
 // §20.4) is a REQUIRED positional parameter, deliberately NOT bundled into
 // CreateTurnOptions' own trailing variadic slot: unlike StorageConfigured/
 // Effort there (genuinely REST-only concerns, §28.5/§29.8, safe to leave
@@ -532,7 +531,7 @@ func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.
 // their order changes nothing else -- only which message wins in this one
 // narrow overlap window.
 //
-// plans is Step 37/38's own follow-up fix (§8.1) addition, nil-safe like
+// plans is §8.1's own follow-up fix (§8.1) addition, nil-safe like
 // this codebase's other optional collaborators (e.g. Deps.IntentClassifier
 // elsewhere) -- a nil plans skips the awaiting-plan gate entirely rather
 // than panicking, so a caller/test that genuinely has no use for plan mode
@@ -540,10 +539,10 @@ func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.
 // (cmd/control-plane/main.go) always passes the SAME, real *postgres.
 // PlanStore, so this is never nil outside tests.
 //
-// intentSvc (Step 64, §23.1/§23.2) is this function's own plan_followup
+// intentSvc (§23.1/§23.2) is this function's own plan_followup
 // classifier collaborator -- nil-safe exactly like plans immediately
 // above (a nil intentSvc, or a nil plans, skips classification entirely
-// and falls back to the pre-Step-64 "always decline" awaiting-plan gate
+// and falls back to the pre-existing "always decline" awaiting-plan gate
 // behavior, never a panic). Every real production caller
 // (cmd/control-plane/main.go) passes the SAME, real *intentclassifier.
 // Service every OTHER intentSvc-consuming caller in this codebase does
@@ -576,7 +575,7 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 		reviewDepthDecision = opts[0].ReviewDepthDecision
 	}
 
-	// Step 64 ("plan mode: follow-up intent classification", §23.1/§23.2):
+	// §23 ("plan mode: follow-up intent classification", §23.1/§23.2):
 	// plan_followup classification, gated STRICTLY on "planMode is false
 	// AND sessionID currently has a plan sitting in plan.
 	// StatusAwaitingApproval" (§23.1: "the classifier is never invoked for
@@ -617,7 +616,7 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	// lock), which is strictly worse than occasionally paying for a call
 	// whose result goes unused.
 	//
-	// classifyText (F1, Step 64 follow-up fix, review Finding 1) is used
+	// classifyText (F1, a follow-up fix, review Finding 1) is used
 	// here INSTEAD OF prompt when non-nil -- see CreateTurnOptions.
 	// ClassifyText's own doc comment for the full "why": prompt itself may
 	// already carry review.RenderTurnPrompt's own diff/stack/verdict-tool
@@ -694,7 +693,7 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	}
 
 	// Awaiting-plan gate (this batch's own follow-up fix, §8.1; extended by
-	// Step 64, §23.2/§23.3): an ordinary (planMode == false) turn must never
+	// §23.2/§23.3): an ordinary (planMode == false) turn must never
 	// dispatch while sessionID has a plan sitting in StatusAwaitingApproval
 	// -- that plan is work a human has not yet approved, and BEFORE the
 	// original fix, any reply matching neither plandomain.MatchVerdict nor
@@ -723,7 +722,7 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 		}
 		for _, s := range summaries {
 			if s.Status == sqlcgen.PlanStatusAwaitingApproval {
-				// Step 64 (§23.2/§23.3): consult the PRE-COMPUTED
+				// (§23.2/§23.3): consult the PRE-COMPUTED
 				// plan_followup classification (answerOnly, computed above,
 				// before tx.Begin) -- never re-run the classifier here,
 				// inside the transaction/row lock. answerOnly == nil
@@ -757,7 +756,7 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 		}
 	}
 
-	// Step 55 ("workflow execution engine", §25.6): resolve which
+	// §25.6 ("workflow execution engine", §25.6): resolve which
 	// WorkflowDefinition/StepDefinition governs this new turn, and use its
 	// PromptTemplate/ModelID to build it -- internal/app/workflowengine's
 	// own doc.go documents the full design and its fail-open contract in
@@ -780,7 +779,7 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	// UNCHANGED, exactly as if this Step did not exist -- rather than
 	// failing turn creation over what is fundamentally an engine
 	// bookkeeping concern.
-	// Step 58 ("uploads, blob storage & the in-sandbox download_file
+	// §8.6 ("uploads, blob storage & the in-sandbox download_file
 	// tool", §28.5): validate attachmentIDs INSIDE this same locked
 	// transaction -- every id must be a status='ready' upload artifact of
 	// THIS session, else a structured 4xx; a failed or foreign upload can
@@ -818,7 +817,7 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	}
 
 	effectivePrompt, effectiveModelID, effectiveEffort := prompt, modelID, effort
-	// epistemicCheckOverride/epistemicCheckSessionKnown (Step 61,
+	// epistemicCheckOverride/epistemicCheckSessionKnown (
 	// §20.2/§20.4): epistemicCheckSessionKnown starts false -- the same
 	// safe, off-by-default fallback the sessErr != nil branch below already
 	// applies to workflow-engine resolution, reused here rather than a
@@ -839,7 +838,7 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 		epistemicCheckSessionKnown = true
 	}
 
-	// Step 58 (§28.5): the attachment block (deterministic per-attachment
+	// (§28.5): the attachment block (deterministic per-attachment
 	// listing + download_file command) and the upload-tool note are
 	// appended to the FULLY RESOLVED prompt -- after, never before,
 	// workflowengine's own {{prompt}} template substitution above -- so
@@ -898,7 +897,7 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 		effectivePrompt += domainupload.RenderUploadToolNote(sessionID.String())
 	}
 
-	// Step 61 (§20.1/§20.3): the devil's-advocate preamble is PRECEDED --
+	// (§20.1/§20.3): the devil's-advocate preamble is PRECEDED --
 	// prepended, never appended -- onto the turn's own FULLY assembled
 	// prompt (after workflow-template resolution and the attachment/
 	// upload-tool blocks above, so it is the very first thing the agent
@@ -933,7 +932,7 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 		ReviewHeadSha:       reviewHeadSHA,
 		ReviewDepth:         reviewDepth,
 		ReviewDepthDecision: reviewDepthDecision,
-		// answerOnly (Step 64, §23.2) is nil ("classification did not
+		// answerOnly (§23.2) is nil ("classification did not
 		// apply") for every turn that predates this Step, or that never hit
 		// the plan_followup block above -- see that block's own doc
 		// comment for the full enumeration. By construction, the only real

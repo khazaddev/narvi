@@ -73,7 +73,7 @@ type Builder struct {
 
 	// sourceControl and gitHubImageBuildToken back BOTH claim-time SHA
 	// resolution for a brand-new repo-bearing build (attempt, §19.1/§19.9's
-	// own Step 41/42 boundary) AND the freshness pump's own per-repo
+	// own §19.1/§19.2 boundary) AND the freshness pump's own per-repo
 	// current-tip resolution (RefreshOnce, §19.2) -- the SAME platform-level
 	// credential, since neither call site has a session/creator context to
 	// borrow a token from (a shared image has no creator). sourceControl may
@@ -89,7 +89,7 @@ type Builder struct {
 	sourceControl         ports.SourceControl
 	gitHubImageBuildToken string
 
-	// cacheVersionStore backs Step 43(c)'s own build-time dependency cache
+	// cacheVersionStore backs the build-time dependency cache
 	// (§19.1's closing paragraph), third iteration: immutable versioned
 	// cache snapshots. Mints a fresh PublishVersion and resolves the most
 	// recent CONFIRMED MountVersion for a given cache key (cacheMount,
@@ -140,7 +140,7 @@ type Builder struct {
 	// turn mirrors).
 	refreshClaimReclaimed metric.Int64Counter
 
-	// buildTelemetry bundles Step 43(c)'s own build-duration/failure-rate
+	// buildTelemetry bundles the build-duration/failure-rate
 	// instrumentation (§19.9's closing paragraph; telemetry.go) -- recorded
 	// around every real BuildImage call in both attempt and attemptRefresh.
 	buildTelemetry buildTelemetry
@@ -153,10 +153,10 @@ type Builder struct {
 // provider (the real ports.SandboxProvider whose BuildImage this builder
 // drives), timeouts (for ImageBuildPumpInterval/ImageRefreshCheckInterval/
 // backoff config, consulted by Run/PumpOnce/RefreshOnce), sourceControl
-// (Step 42's own claim-time/freshness-pump SHA resolution, §19.2 -- may be
+// (§19.2's own claim-time/freshness-pump SHA resolution, §19.2 -- may be
 // nil), gitHubImageBuildToken (the new platform-level credential,
 // platform.Config.GitHubImageBuildToken -- may be empty), and
-// cacheVersionStore (Step 43(c)'s own immutable-cache-version bookkeeping,
+// cacheVersionStore (immutable-cache-version bookkeeping,
 // third iteration -- may be nil; see the Builder field's own doc comment).
 //
 // The image_build_failure_streak OTel counter is constructed exactly once,
@@ -213,7 +213,7 @@ func NewBuilder(store *postgres.ImageBuildStore, pool *pgxpool.Pool, provider po
 }
 
 // cacheMount resolves the ports.CacheMount a real BuildImage call requests
-// to accelerate a build (§19.1's closing paragraph, Step 43(c), third
+// to accelerate a build (§19.1's closing paragraph(c), third
 // iteration: immutable versioned cache snapshots). Key is
 // domain/imagebuild.CacheVolumeKey(base, runtimeVersion) -- deliberately
 // NOT a function of repos, so every fingerprint sharing the same
@@ -466,7 +466,7 @@ func (b *Builder) claimBatch(ctx context.Context) ([]sqlcgen.ImageBuild, error) 
 // outcome-record call) is logged and returns -- it never propagates, so
 // one row's problem can never abort the rest of PumpOnce's own batch.
 //
-// # Step 42's own claim-time SHA resolution (§19.1/§19.2/§19.9)
+// # §19.2's own claim-time SHA resolution (§19.1/§19.2/§19.9)
 //
 // row.RepoUrls (§19.1's redefined image_builds column) carries the
 // fingerprint's own URL-keyed inputs (repo name -> normalized clone URL),
@@ -474,9 +474,9 @@ func (b *Builder) claimBatch(ctx context.Context) ([]sqlcgen.ImageBuild, error) 
 // (imageresolve.go's resolveAndSetImage never resolves one, for ANY
 // spawn). §19.1's own prose says the builder resolves each repo's
 // default-branch tip SHA "at claim time" -- this is that resolution,
-// landing here per §19.9's own Step 41/42 boundary note: it needs a
+// landing here per §19.9's own §19.1/§19.2 boundary note: it needs a
 // platform-level GitHub credential no session/creator context can supply
-// (a shared image has no creator), which Step 42 is the one that adds
+// (a shared image has no creator) -- §19.2 is what adds it
 // (platform.Config.GitHubImageBuildToken, threaded through NewBuilder).
 //
 // A row naming at least one repo resolves EVERY named repo's current

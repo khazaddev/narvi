@@ -23,7 +23,7 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// This file proves Step 37's ("plan mode, web", §8.1/§12.2 item 3) two new
+// This file proves §8.1's ("plan mode, web", §8.1/§12.2 item 3) two new
 // REST endpoints -- POST .../plans/:planId/approve and .../reject -- and
 // their shared authorization stopgap (planauthz.go's canActOnPlan).
 
@@ -220,7 +220,7 @@ func TestApprovePlan_Owner_HappyPath(t *testing.T) {
 // verdict wins" is a real, race-safe DB guarantee, not an application
 // convention: firing two concurrent approve requests at the SAME
 // awaiting_approval plan must produce exactly one 200 and one 409 --
-// mirroring Step 35/36's own errgroup-based concurrency-test pattern
+// mirroring §5.1/§8.3's own errgroup-based concurrency-test pattern
 // (internal/app/sessionactor/registry_integration_test.go).
 func TestApprovePlan_ConcurrentDoubleApprove_ExactlyOneWins(t *testing.T) {
 	rig := newTestRig(t)

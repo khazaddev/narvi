@@ -1,4 +1,4 @@
-// Package linear implements Linear ingress (Step 34, "Linear ingress",
+// Package linear implements Linear ingress ("Linear ingress",
 // §8.10) end to end:
 //
 //   - Workspace OAuth connection (install.go, callback.go, oauth.go): a
@@ -8,7 +8,7 @@
 //     Linear's real, current developer docs during this Step's
 //     investigation), so the control plane can later call Linear's own
 //     API on that workspace's behalf. This is DELIBERATELY NOT a second
-//     way for a human to sign into Narvi itself -- that is Step 20's
+//     way for a human to sign into Narvi itself -- that is §13.1's
 //     already-shipped GitHub OAuth login (internal/adapters/inbound/auth),
 //     entirely untouched by this package.
 //   - Webhook ingress (webhook.go, signature.go, payload.go): Linear's
@@ -28,5 +28,5 @@
 // activity Linear's own docs require within 10 seconds of a `created`
 // event (internal/adapters/outbound/linearapi.CreateThoughtActivity,
 // called directly and synchronously) -- the general, retried,
-// asynchronous Notifier/outbox-consumer path is Step 35's job.
+// asynchronous Notifier/outbox-consumer path is §5.1's job.
 package linear

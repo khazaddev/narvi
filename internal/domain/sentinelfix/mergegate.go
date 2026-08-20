@@ -1,4 +1,4 @@
-// Package sentinelfix implements the pure decision logic behind Step 48's
+// Package sentinelfix implements the pure decision logic behind §8.2's
 // own ("sentinels + suggestions") sentinel-auto-fix merge-gating step
 // (§17.4): "the fix branch is re-checked... the same facts a human
 // clicking Merge would rely on: the cherry-picked diff touches nothing

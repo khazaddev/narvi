@@ -1,4 +1,4 @@
-// This file (reviewfindings.go) implements Step 48's own ("sentinels +
+// This file (reviewfindings.go) implements §8.2's own ("sentinels +
 // suggestions") two maintainer+-facing REST actions on a review finding
 // (§12.2 item 2, §22.1):
 //

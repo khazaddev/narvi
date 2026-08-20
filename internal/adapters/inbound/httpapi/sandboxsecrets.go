@@ -1,10 +1,10 @@
-// This file (sandboxsecrets.go) implements Step 72's own ("sandbox
+// This file (sandboxsecrets.go) implements §27.1's own ("sandbox
 // secrets & opencode config", §27.1) CP-side MANAGEMENT surface over
 // sandbox_secrets (migrations/000090_sandbox_secrets.up.sql) -- this
 // codebase's SECOND generic secret-storage table. Mirrors
 // providercredentials.go's own shape almost exactly (that file's own top
 // doc comment describes the full reasoning this file reuses verbatim --
-// §27.1's own "Step 53's idioms reused throughout" instruction), swapping
+// §27.1's own "§25.1's idioms reused throughout" instruction), swapping
 // ProviderCredentialStore/ProviderCredentialScope for
 // SandboxSecretStore/SandboxSecretScope and provider (a closed ENUM) for
 // name (a user-chosen, validated string):

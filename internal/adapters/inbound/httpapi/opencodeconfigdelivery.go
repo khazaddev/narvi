@@ -1,4 +1,4 @@
-// This file (opencodeconfigdelivery.go) implements Step 72's own
+// This file (opencodeconfigdelivery.go) implements §27.1's own
 // ("sandbox secrets & opencode config", §27.2) CP-side DELIVERY endpoint
 // for sandbox-agent: POST /sessions/{sessionID}/opencode-config (note: no
 // /api prefix -- a sandbox-to-CP endpoint, not a browser-facing REST

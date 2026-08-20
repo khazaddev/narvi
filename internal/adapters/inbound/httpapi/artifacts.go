@@ -20,8 +20,8 @@ import (
 // restdtos.ArtifactsResponse. Nothing in this codebase mints an artifact
 // row yet (see internal/adapters/outbound/postgres/artifact_store.go's
 // own doc comment) -- this endpoint's happy-path response is an empty
-// array until a later Step (PR creation Step 21+, previews Step 48,
-// uploads Step 58) starts producing rows.
+// array until a later Step (PR creation §9.3+, previews §8.2,
+// uploads §8.6) starts producing rows.
 func ListArtifacts(sessions *postgres.SessionStore, artifacts *postgres.ArtifactStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID, ok := parseSessionID(w, r)
@@ -61,7 +61,7 @@ func ListArtifacts(sessions *postgres.SessionStore, artifacts *postgres.Artifact
 // sqlcgen.Artifact.Metadata is likewise a plain []byte needing the same
 // json.RawMessage treatment to avoid base64-encoding.
 func artifactWireMap(a sqlcgen.Artifact) map[string]interface{} {
-	// status/failureReason (Step 58, §28.6) are additive fields on the
+	// status/failureReason (§28.6) are additive fields on the
 	// wire ArtifactsResponse shape, mirroring the sandbox-ws artifact
 	// event's own identical additive change and wshub's own
 	// artifactWireMap twin -- always present here (never omitted), since

@@ -21,7 +21,7 @@ import (
 // /sessions/{sessionID}/ws?type=sandbox (§6.1): "Connect: wss://…/sessions/
 // {id}/ws?type=sandbox, Authorization: Bearer <sandbox_token>,
 // X-Sandbox-ID (+ X-Sandbox-Gen). Server: 410 when session stopped, 403 on
-// id/gen mismatch." internal/sandboxagent/wsbridge (Step 16/17) is the
+// id/gen mismatch." internal/sandboxagent/wsbridge (§6.1/§7) is the
 // CLIENT side of this exact same protocol; this is its server-side mirror.
 //
 // # Handshake status-code table (steps run in exactly this order; ALL must
@@ -30,8 +30,8 @@ import (
 // committed as a 101 upgrade and no further status-code rejection is
 // possible):
 //
-//  1. `type` query param != "sandbox" -> 400 (the client-hub type is Step
-//     19's own job).
+//  1. `type` query param != "sandbox" -> 400 (the client-hub type is
+//     §6.2's own job).
 //  2. `sessionID` path param does not parse as a UUID -> 404 (a malformed
 //     id and a nonexistent one both mean "no such session" from the
 //     caller's own perspective; wsbridge's own isFatalStatus only
@@ -62,7 +62,7 @@ import (
 //     until conn.Read errors or ctx is done.
 func NewSandboxHandler(registry *sessionactor.Registry, sandboxes *postgres.SandboxStore, commander *SandboxRegistry, timeouts platform.Timeouts) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// (1) ?type=sandbox -- the client-hub type is Step 19's own job,
+		// (1) ?type=sandbox -- the client-hub type is §6.2's own job,
 		// not yet implemented; this route only serves the sandbox half.
 		if r.URL.Query().Get("type") != "sandbox" {
 			http.Error(w, "unsupported or missing ws type", http.StatusBadRequest)
@@ -174,7 +174,7 @@ func NewSandboxHandler(registry *sessionactor.Registry, sandboxes *postgres.Sand
 		// Register this connection as sessionID's own live sandbox
 		// connection BEFORE entering readLoop, so a SandboxCommander.
 		// SendCommand call from app/sessionactor can reach it the instant
-		// the handshake completes (Step 21, "e2e happy path", design
+		// the handshake completes (§9.3, "e2e happy path", design
 		// decision 4). unregister runs on this same goroutine's own
 		// return, guaranteeing the registry never holds a dead connection
 		// past this handler's own lifetime.

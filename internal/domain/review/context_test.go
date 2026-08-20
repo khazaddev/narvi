@@ -251,7 +251,7 @@ func TestRenderTurnPrompt_DiffAndStackOrdering(t *testing.T) {
 // three optional context blocks, when all present at once, render in a
 // fixed order: diff (the primary review artifact) first, then description
 // (the pre-fetched title/body the descriptionAdequacy check compares
-// against digest.summary -- adversarial-review fix, §26.2/Step 67's own
+// against digest.summary -- adversarial-review fix, §26.2's own
 // follow-up), then stack (auxiliary context) last, before the
 // unconditional verdict-tool block.
 func TestRenderTurnPrompt_DiffThenDescriptionThenStackOrdering(t *testing.T) {
@@ -278,7 +278,7 @@ func TestRenderTurnPrompt_DiffThenDescriptionThenStackOrdering(t *testing.T) {
 }
 
 // TestRenderTurnPrompt_VerdictToolInstructionsAlwaysLast proves the
-// verdict-tool-calling block (Step 47, §8.2/§5.2) is unconditionally
+// verdict-tool-calling block (§8.2/§5.2) is unconditionally
 // appended after every other optional piece (diff, stack) and after the
 // human's own basePrompt -- confirmed 46 findings deep or not, an agent
 // reading top-to-bottom always sees "what to review" before "how to
@@ -304,7 +304,7 @@ func TestRenderTurnPrompt_VerdictToolInstructionsAlwaysLast(t *testing.T) {
 // TestRenderTurnPrompt_DeepPathRequiresDigestFields pins D2's own fix: on
 // the light path (DeepPath false, the zero value) the three deep-path
 // digest fields still read "REQUESTED, not required", exactly as every
-// pre-Step-68 review turn's prompt always has -- but on the deep path
+// pre-existing review turn's prompt always has -- but on the deep path
 // (DeepPath true) the SAME three fields now read as REQUIRED, matching
 // reviewpost.ValidateVerdictInput's own deep-path digest-completeness
 // check to the letter. A mutation that hardcodes verdictToolInstructions
@@ -380,7 +380,7 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 		string(restdtos.PostReviewVerdictRequestBlastRadiusElemInfra), string(restdtos.PostReviewVerdictRequestBlastRadiusElemPublicApi),
 		string(restdtos.PostReviewVerdictRequestBlastRadiusElemDataLayer), string(restdtos.PostReviewVerdictRequestBlastRadiusElemDependencies),
 		`"summary"`,
-		// Confirmed-finding fix (Step 48 own re-review): "findings" (and its
+		// Confirmed-finding fix (§8.2 own re-review): "findings" (and its
 		// own per-object fields/enum) was completely absent from this
 		// template before this fix -- see verdictToolInstructions' own doc
 		// comment for why that silently made review_findings/sentinel-auto-
@@ -389,29 +389,29 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 		`"findings"`, `"sentinelKind"`, `"filePath"`, `"line"`, `"description"`, `"suggestedFix"`,
 		`"severity"`,
 		string(restdtos.PostedFindingSeverityLow), string(restdtos.PostedFindingSeverityMedium), string(restdtos.PostedFindingSeverityHigh),
-		// Step 66 (§26.1): "digest" (and its own per-field object) was
+		// (§26.1): "digest" (and its own per-field object) was
 		// completely absent from this template before this Step -- an agent
-		// following only the pre-Step-66 template could never emit a
+		// following only the pre-existing template could never emit a
 		// digest at all, and PostReviewVerdictRequest.digest is now
 		// REQUIRED (unlike findings above), so every such call would be
 		// rejected 400 by reviewpost.ValidateVerdictInput's own
 		// ErrEmptyDigestSummary.
 		`"digest"`, `"archDecisions"`, `"decision"`, `"rejectedAlternative"`, `"conventionConformance"`,
 		`"stackRisks"`, `"unverifiedLimits"`,
-		// Step 67 (§26.2): "descriptionAdequacy"/"adequacyExplanation"
+		// (§26.2): "descriptionAdequacy"/"adequacyExplanation"
 		// (REQUIRED)/"proposedBody" (REQUESTED) were completely absent from
 		// this template before this Step -- an agent following only the
-		// pre-Step-67 template could never emit them, and
+		// pre-existing template could never emit them, and
 		// PostReviewVerdictRequest.digest.descriptionAdequacy/
 		// adequacyExplanation are now REQUIRED, so every such call would be
 		// rejected 400 by reviewpost.ValidateVerdictInput's own
 		// ErrInvalidDescriptionAdequacy/ErrEmptyAdequacyExplanation.
 		`"descriptionAdequacy"`, string(restdtos.DigestDescriptionAdequacyOk), string(restdtos.DigestDescriptionAdequacyDrift), string(restdtos.DigestDescriptionAdequacyMisleading),
 		`"adequacyExplanation"`, `"proposedBody"`,
-		// Step 69 (§26.4/§26.6): "factCheck"/"factCheckKilled" (REQUIRED,
+		// (§26.4/§26.6): "factCheck"/"factCheckKilled" (REQUIRED,
 		// both paths) and "counterReview" (deep-path only) were completely
 		// absent from this template before this Step -- an agent following
-		// only the pre-Step-69 template could never emit them, and
+		// only the pre-existing template could never emit them, and
 		// PostReviewVerdictRequest.factCheck/factCheckKilled are now
 		// REQUIRED, so every such call would be rejected 400 by
 		// reviewpost.ValidateVerdictInput's own ErrInvalidFactCheck.
@@ -760,7 +760,7 @@ func TestRenderTurnPrompt_CostBudget_GoldenParagraph(t *testing.T) {
 }
 
 // TestRenderTurnPrompt_CostBudget_LoopbackEndpoint is this Step's own
-// central pin (Step 70, §26.7/§26.9): the cost-budget paragraph now
+// central pin (§26.7/§26.9): the cost-budget paragraph now
 // instructs a real GET to a loopback endpoint carrying the ceiling as a
 // query parameter, rather than asking the agent to self-estimate spend --
 // and NEVER routes architecture-scribe through that check, on either

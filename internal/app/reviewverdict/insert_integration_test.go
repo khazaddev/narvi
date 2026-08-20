@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration test for Step 62's own write-path digest sanitization (G1)
+// Integration test for §21's own write-path digest sanitization (G1)
 // against a REAL Postgres instance -- this package (internal/app/
 // reviewverdict) had no test file of any kind before this Step; this file
 // adds one, mirroring internal/app/reviewtriage's own established

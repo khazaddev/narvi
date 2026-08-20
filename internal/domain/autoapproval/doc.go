@@ -1,5 +1,5 @@
 // Package autoapproval implements §21.2 stage 1's auto-approval
-// eligibility engine (Step 62) -- the REAL replacement for Step 60's own
+// eligibility engine (§21) -- the REAL replacement for §16's own
 // interim stand-in, internal/domain/decisioninbox.ComputeAutoApprovalEligible
 // (deleted by this Step; see that function's own former doc comment for
 // the full "why this existed, and what replaces it" history this package

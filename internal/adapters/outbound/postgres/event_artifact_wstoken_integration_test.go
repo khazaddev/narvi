@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for the 3 new stores this Step (19) adds:
+// Integration tests for the 3 new stores §6.2 adds:
 // EventStore.ListForSession, ArtifactStore (new), and WSTokenStore (new)
 // -- gated behind the "integration" build tag, matching this package's
 // own postgres_integration_test.go conventions (testcontainers Postgres,
@@ -130,7 +130,7 @@ func TestEventStore_ListForSession(t *testing.T) {
 // TestEventStore_ListRecentForSession proves ListRecentForSession's own
 // mirror-image pagination direction from ListForSession above: newest id
 // first, limit honored exactly, and scoped to sessionID alone -- the
-// mechanism sessionactor.planContentText (Step 38, "plan mode,
+// mechanism sessionactor.planContentText (§8.1, "plan mode,
 // cross-channel") relies on to find a plan-mode turn's own final token
 // event within a bounded window regardless of how much EARLIER history a
 // long-lived session has already accumulated.

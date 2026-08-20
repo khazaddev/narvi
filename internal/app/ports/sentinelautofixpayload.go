@@ -1,7 +1,7 @@
 package ports
 
 // SentinelAutoFixPayload is NotificationKindSentinelAutoFix's own outbox
-// payload shape (Step 48, "sentinels + suggestions", §17.2) --
+// payload shape ("sentinels + suggestions", §17.2) --
 // constructed by internal/adapters/inbound/httpapi/reviewverdict.go (the
 // only writer, inside the SAME transaction as the triggering verdict's
 // own findings-upsert/verdict-outbox-enqueue write) and consumed by

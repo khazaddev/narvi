@@ -109,7 +109,7 @@ func TestMatch_LastPatternWins_BroadPatternLast(t *testing.T) {
 	// implementation would satisfy every OTHER test in this file by
 	// coincidence alone -- Match must pick the LAST matching rule in FILE
 	// order, never the most specific one, and this is the one fixture
-	// shape that actually pins that (§60 review finding T8, pairs with
+	// shape that actually pins that (pairs with
 	// C2's own compilePattern fix immediately above).
 	rules := codeowners.Parse(`/apps/web/legacy/ @legacy-owner
 * @global-owner
@@ -185,7 +185,7 @@ func TestMatch_PatternSyntax(t *testing.T) {
 		{"double-star middle matches zero segments", "a/**/b", "a/b", true},
 		{"double-star middle matches multiple segments", "a/**/b", "a/x/y/b", true},
 		{"catch-all star matches everything", "*", "any/deep/path.txt", true},
-		// §60 review finding C2: a bare trailing "*" must stay within the
+		// a bare trailing "*" must stay within the
 		// one path segment it is written in -- GitHub's own documentation
 		// gives "docs/build-app/troubleshooting.md" as the canonical
 		// NON-match for "docs/*" (a nested file one directory deeper than

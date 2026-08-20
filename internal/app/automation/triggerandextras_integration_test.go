@@ -1,7 +1,7 @@
 //go:build integration
 
-// This file covers Step 52's own ("automations: triggers & extras", §8.4)
-// additions to the engine Step 51 already built: the cron trigger pump
+// This file covers §8.4's own ("automations: triggers & extras")
+// additions to the engine §3.5 already built: the cron trigger pump
 // (triggerpump.go), sandboxSettings honored on automation sessions
 // (fanout.go's own applySandboxSettings), per-automation env vars threaded
 // into the dispatched prompt (fanout.go's own buildRunPrompt), and
@@ -296,7 +296,7 @@ func TestFanOut_HonorsSandboxSettings(t *testing.T) {
 // comment for why this is surfaced via the dispatched turn's own prompt
 // text rather than the sandbox process's OS environment (no generic
 // per-automation/per-session env-injection mechanism into cmd.Env exists
-// anywhere in this codebase yet -- Step 53's own explicit scope).
+// anywhere in this codebase yet -- §25.1's own explicit scope).
 func TestFanOut_ThreadsEnvVarsIntoDispatchedPrompt(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
@@ -434,8 +434,8 @@ func TestCloseout_RecordsLastRunAndArtifactSummaryOnFailure(t *testing.T) {
 
 // TestCreateInvocation_StillWorksUnchangedForATriggerAgnosticCaller is a
 // small regression guard: invocationenqueue.go's own CreateInvocation
-// signature/behavior must stay exactly what it was in Step 51 -- Step
-// 52's trigger evaluators (the cron pump, the webhook handler) call it
+// signature/behavior must stay exactly what it was -- §8.4's
+// trigger evaluators (the cron pump, the webhook handler) call it
 // completely unchanged, per its own doc comment's own explicit promise.
 func TestCreateInvocation_StillWorksUnchangedForATriggerAgnosticCaller(t *testing.T) {
 	f := newFixture(t)

@@ -36,7 +36,7 @@ func TestHashSandboxToken_DeterministicHexDigest(t *testing.T) {
 	}
 }
 
-// TestVerifySandboxToken is table-driven over every case Step 18's own
+// TestVerifySandboxToken is table-driven over every case §3.2's own
 // spec names: empty presented always fails regardless of storedHash; nil
 // storedHash (the universal case today, nothing mints one yet) accepts any
 // non-empty presented; a matching hash succeeds; a non-matching hash fails.

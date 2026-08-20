@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 73b's own ("cloud identity: sandbox-side
+// Integration tests for §27.4's own ("cloud identity: sandbox-side
 // consumption + kubeconfig injection", §27.3/§27.4) sandbox-facing
 // discovery endpoint (cloudidentityconfigdelivery.go), against a real
 // Postgres instance -- sharing this package's own testRig

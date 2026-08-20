@@ -13,7 +13,7 @@ import (
 // ParticipantStore is a thin, pass-through wrapper around the
 // sqlc-generated participants queries (migrations/000011_participants.
 // up.sql). Nothing populates this table yet (§8.11's own "distinct,
-// not-yet-scoped concern") -- Step 37's own authorization stopgap
+// not-yet-scoped concern") -- §8.1's own authorization stopgap
 // predicate (internal/adapters/inbound/httpapi/planauthz.go's
 // canActOnPlan) is this store's first real reader, querying it
 // defensively even though it will only ever find rows once a later Step

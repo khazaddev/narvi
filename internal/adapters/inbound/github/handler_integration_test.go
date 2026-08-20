@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for the GitHub webhook ingress adapter (Step 32,
+// Integration tests for the GitHub webhook ingress adapter (
 // "GitHub ingress", §8.2), against a real Postgres instance -- gated
 // behind the "integration" build tag, matching internal/adapters/inbound/
 // httpapi's own testcontainers-Postgres-plus-embedded-migrations
@@ -104,7 +104,7 @@ func newTestRig(t *testing.T, mutate ...func(*githubingress.Config)) testRig {
 		Environments: narvipg.NewEnvironmentStore(pool),
 		Registry:     registry,
 		AuditLog:     narvipg.NewAuditLogStore(pool),
-		// Plans (Step 37/38 follow-up fix, Finding 1): wired unconditionally
+		// Plans (a follow-up fix, Finding 1): wired unconditionally
 		// for every test in this file, mirroring cmd/control-plane/main.go's
 		// own production wiring -- harmless for every EXISTING test here
 		// (none of them ever seed a plan row, so ListSummariesForSession
@@ -224,7 +224,7 @@ func issueCommentBody(repoFullName, repoName, cloneURL string, prNumber int, lab
 // createLinkedGitHubUser creates a Narvi user with role, and a matching
 // "github" identities row for commenterID -- the direct (provider,
 // external_id) link a real GitHub OAuth sign-in would have already
-// produced (Step 20), which is exactly what resolveCommenterActor
+// produced (§13.1), which is exactly what resolveCommenterActor
 // (identity.go) looks up. Batch fix/deny-unlinked-github-actors means
 // EVERY test in this package now needs one of these for its own mention
 // to be processed at all (an unresolved commenter's mention is now
@@ -264,8 +264,8 @@ func postWebhook(t *testing.T, rig testRig, body []byte, deliveryID string) int 
 	return postWebhookEventType(t, rig, body, deliveryID, "issue_comment")
 }
 
-// postWebhookEventType is postWebhook's own generalization (Step 46,
-// "review sessions", §8.2): every pre-Step-46 test in this file only ever
+// postWebhookEventType is postWebhook's own generalization (
+// "review sessions", §8.2): every pre-existing test in this file only ever
 // posts an "issue_comment" event, so postWebhook itself stays a thin,
 // unchanged wrapper around this -- this Step's own new tests below need to
 // post a "pull_request" event instead (the label-retrigger lane), which
@@ -289,8 +289,8 @@ func postWebhookEventType(t *testing.T, rig testRig, body []byte, deliveryID, ev
 }
 
 // pullRequestLabeledBody builds a synthetic, real-shaped "pull_request"
-// webhook payload with action="labeled" and the given label name -- Step
-// 46's ("review sessions", §8.2) own manual re-trigger-via-label lane.
+// webhook payload with action="labeled" and the given label name --
+// §8.2's ("review sessions") own manual re-trigger-via-label lane.
 func pullRequestLabeledBody(repoFullName, cloneRepoName, cloneURL string, prNumber int, labelName string, senderID int64, senderLogin string) []byte {
 	body, err := json.Marshal(map[string]any{
 		"action": "labeled",
@@ -314,15 +314,14 @@ func pullRequestLabeledBody(repoFullName, cloneRepoName, cloneURL string, prNumb
 // fakeReviewContextFetcher is a test-only diffFetcher (the union
 // interface backing Config.DiffFetcher, handler.go) -- no real HTTP round
 // trip, satisfying GetPullRequest (also PullRequestResolver,
-// headresolve.go), GetCompareDiff (reviewcontext.Fetcher, §62 review
-// finding C2), and GetPullRequestDiff (prDiffFetcher,
+// headresolve.go), GetCompareDiff (reviewcontext.Fetcher), and GetPullRequestDiff (prDiffFetcher,
 // pullrequestevent.go's sentinel-fix merge-gate -- unused by this file's
 // own tests today, stubbed only to satisfy the union interface) so one
 // fake can back cfg.PullRequests AND cfg.DiffFetcher identically in a
 // test that wires both to the same instance.
 //
 // diffOwner/diffRepo/diffBase/diffHead/diffToken (audit fix, test-coverage
-// finding, updated for §62 review finding C2) record GetCompareDiff's own
+// finding, updated for) record GetCompareDiff's own
 // last call args -- asserted against in
 // TestGitHubIntegration_InlineDiffAndStackPreFetched_FoldedIntoTurnPrompt
 // below, closing a confirmed gap where this fake used to ignore its own
@@ -365,11 +364,11 @@ func (f *fakeReviewContextFetcher) GetPullRequestDiff(context.Context, string, s
 }
 
 // TestGitHubIntegration_ConcurrentMentionAndLabelRetriggerCoalesceToOneSession
-// is Step 46's ("review sessions", §8.2) own headline concurrency proof for
+// is §8.2's ("review sessions", §8.2) own headline concurrency proof for
 // the NEW label-retrigger lane: N concurrent triggers on the SAME brand-new
 // PR, split evenly between the EXISTING @mention (comment) trigger and the
 // NEW label-retrigger trigger, must still coalesce onto exactly ONE
-// session -- proving the label lane genuinely reuses Step 32's own atomic
+// session -- proving the label lane genuinely reuses §8.2's own atomic
 // claim (github_pr_sessions' EnsureRow+LockForUpdate, coalesce.go) rather
 // than a second, independent mechanism that could race it. Mirrors
 // TestGitHubIntegration_ConcurrentMentionsCoalesceToOneSessionManyTurns'
@@ -652,7 +651,7 @@ func TestGitHubIntegration_SecondMention_NeverGetsEpistemicPreamble(t *testing.T
 }
 
 // TestGitHubIntegration_InlineDiffAndStackPreFetched_FoldedIntoTurnPrompt
-// is Step 46's ("review sessions", §8.2/§17.6) own end-to-end proof that
+// is §8.2's ("review sessions", §8.2/§17.6) own end-to-end proof that
 // the pre-fetched diff AND GitHub-native stack context are actually folded
 // into the resulting turn's own persisted prompt -- via the real handler
 // and real Postgres, not just internal/domain/review's own unit-tested
@@ -664,7 +663,7 @@ func TestGitHubIntegration_InlineDiffAndStackPreFetched_FoldedIntoTurnPrompt(t *
 	fetcher := &fakeReviewContextFetcher{
 		pr: githubapi.PullRequest{
 			HeadRef: "feature-x",
-			// §62 review finding C2: HeadSHA/BaseRef are now REQUIRED on
+			// HeadSHA/BaseRef are now REQUIRED on
 			// this fixture -- reviewcontext.Fetch pins the diff fetch to
 			// exactly these two values (GetCompareDiff), so a fixture
 			// that left them at their own zero value would silently
@@ -706,10 +705,10 @@ func TestGitHubIntegration_InlineDiffAndStackPreFetched_FoldedIntoTurnPrompt(t *
 		t.Errorf("prompt = %q, want it to contain the pre-fetched stack context block", prompt)
 	}
 
-	// Audit fix (test-coverage finding, updated for §62 review finding
-	// C2): prove reviewcontext.Fetch's own GetCompareDiff call was
-	// actually made with THIS mention's own owner/repo/token AND -- the
-	// C2 fix's own core property -- pinned to EXACTLY pr.BaseRef/
+	// Audit fix (test-coverage finding): prove reviewcontext.Fetch's own
+	// GetCompareDiff call was actually made with THIS mention's own
+	// owner/repo/token AND -- the fix's own core property -- pinned to
+	// EXACTLY pr.BaseRef/
 	// pr.HeadSHA (never some other, independently-suppliable value).
 	// owner ("acme") and repo ("prefetch-repo") are deliberately
 	// distinguishable strings, so a swapped-argument regression at either
@@ -720,7 +719,7 @@ func TestGitHubIntegration_InlineDiffAndStackPreFetched_FoldedIntoTurnPrompt(t *
 			fetcher.diffOwner, fetcher.diffRepo, fetcher.diffBase, fetcher.diffHead, fetcher.diffToken, "acme", "prefetch-repo", "main", "resolved-head-sha", "test-bot-token")
 	}
 
-	// §62 review finding C2: the turn's own persisted review_head_sha
+	// the turn's own persisted review_head_sha
 	// must equal exactly the SHA the diff above was pinned to -- proving
 	// the fix end to end, through the real HTTP handler and real
 	// Postgres, not just reviewcontext.Fetch in isolation.
@@ -904,7 +903,7 @@ func TestGitHubIntegration_FailedFirstAttemptReleasesClaimForRedelivery(t *testi
 // is this Step's own headline concurrency proof: N concurrent, distinctly
 // -delivered @mentions on the SAME PR must result in exactly ONE session
 // and N turns -- never N sessions. Driven with real concurrent HTTP
-// requests against the real handler/real Postgres, matching Step 31's
+// requests against the real handler/real Postgres, matching §5.1's
 // own ClaimWebhookDelivery concurrency-test style (real goroutines, not
 // sequential calls).
 func TestGitHubIntegration_ConcurrentMentionsCoalesceToOneSessionManyTurns(t *testing.T) {
@@ -1080,7 +1079,7 @@ func TestGitHubIntegration_IssueCommentGetPullRequestFailureFallsBack(t *testing
 }
 
 // TestGitHubIntegration_AwaitingPlanBlocksReuseTurn_HonestReplyNoRelease is
-// Finding 1's own end-to-end regression test (Step 37/38 follow-up fix): a
+// Finding 1's own end-to-end regression test (a follow-up fix): a
 // second mention landing on a PR whose review session already has a plan
 // in StatusAwaitingApproval hits the SAME awaiting-plan gate Slack/Linear
 // ingress hit (httpapi/turn.go's createTurnLocked, reached here via

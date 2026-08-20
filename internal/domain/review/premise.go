@@ -2,7 +2,7 @@ package review
 
 // PremiseState is the reviewer's own assessment of whether a PR's stated
 // premise (why this change, what problem it solves) holds up — exactly the
-// three states §8.2/Step 45 names: ok, questionable, not_a_pr.
+// three states §8.2 names: ok, questionable, not_a_pr.
 type PremiseState string
 
 // The three PremiseState values. The zero value ("") is deliberately not
@@ -24,7 +24,7 @@ const (
 )
 
 // PremiseFloor is the premise raise-only floor's single exported pure
-// function (§8.2/Step 45): given the reviewer's own PremiseState, it
+// function (§8.2): given the reviewer's own PremiseState, it
 // returns the MOST CONSERVATIVE Shippable value premise alone ever forces.
 // This function alone decides nothing about whether a PR ships — see
 // ComputeShippable (shippable.go) for the actual composition; a floor may

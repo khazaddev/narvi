@@ -78,14 +78,14 @@ type EnsureGitHubPRSessionRowParams struct {
 }
 
 // Queries backing GitHubPRSessionStore (§8.2's "atomic claim coalescing of
-// concurrent @mentions", Step 32 "GitHub ingress"). See
+// concurrent @mentions" "GitHub ingress"). See
 // migrations/000028_github_pr_sessions.up.sql's own doc comment for the
 // full two-step claim design (ensure the row exists via ON CONFLICT, then
 // lock + branch via FOR UPDATE) these three queries implement together.
 // Idempotently ensures a (repo_full_name, pr_number) claim row exists,
 // with session_id left NULL on a fresh insert -- the SAME
-// "INSERT ... ON CONFLICT" atomic-claim idiom ClaimWebhookDelivery (Step
-// 31) already establishes. DO NOTHING here since this step's only job is
+// "INSERT ... ON CONFLICT" atomic-claim idiom ClaimWebhookDelivery
+// (§5.1) already establishes. DO NOTHING here since this step's only job is
 // "make sure the row is there to lock next" -- the following
 // LockGitHubPRSessionForUpdate call, in the SAME transaction, is what
 // actually determines who won.
@@ -99,11 +99,11 @@ SELECT repo_full_name, pr_number, session_id, claimed_at, pending_retrigger_head
 WHERE session_id = $1
 `
 
-// The REVERSE lookup Step 35 ("outbox delivery") needs: given a
+// The REVERSE lookup §5.1 ("outbox delivery") needs: given a
 // session_id, which (repo_full_name, pr_number) PR does it back? Backed
 // by migrations/000032_github_pr_sessions_session_id_idx.up.sql's own new
-// index (this table had no session_id index before that Step, since Step
-// 32's own ingress path only ever needed the FORWARD direction, its own
+// index (this table had no session_id index before that Step, since §8.2's
+// own ingress path only ever needed the FORWARD direction, its own
 // primary key). A pgx.ErrNoRows result means this session was never
 // created via a GitHub PR mention -- the caller skips enqueuing a GitHub
 // notification entirely rather than fabricating one.
@@ -282,13 +282,13 @@ type UpsertPendingRetriggerHeadSHAParams struct {
 }
 
 // SetGitHubPRSessionHeadSHA (and pending_head_sha, migrations/000068) is
-// REMOVED as of migrations/000072_turns_review_head_sha.up.sql (§62
+// REMOVED as of migrations/000072_turns_review_head_sha.up.sql (§21
 // review finding C2, CRITICAL, fixed) -- superseded by turns.
 // review_head_sha, set once at turn-creation time and read back via
 // TurnStore.GetProcessingTurnForSession, never a shared per-(repo,PR)
 // column any later, unrelated turn's own context-fetch could overwrite.
 // See that migration's own doc comment for the full "why".
-// Queries backing Step 65's ("review: automatic re-review on new
+// Queries backing §24's ("review: automatic re-review on new
 // commits", §24) trailing-edge debounce + per-PR budget -- see
 // migrations/000075_github_pr_sessions_retrigger.up.sql's own doc comment
 // for the three columns below, including why pending_retrigger_head_sha

@@ -82,7 +82,7 @@ func moveSandboxStatus(ctx context.Context, t *testing.T, pool *pgxpool.Pool, se
 
 // setSandboxTokenHash writes sessionID's sandbox row's token_hash directly
 // via raw SQL -- no sqlc query exists for this (real token MINTING is
-// Step 21+'s own job, see migrations/000015_sandbox_token_hash.up.sql's own
+// §9.3+'s own job, see migrations/000015_sandbox_token_hash.up.sql's own
 // doc comment); this is test-fixture setup only, proving verifySandboxToken
 // actually enforces a REAL stored hash when one exists.
 func setSandboxTokenHash(ctx context.Context, t *testing.T, pool *pgxpool.Pool, sessionID pgtype.UUID, hash string) {
@@ -156,7 +156,7 @@ func newTestServer(registry *sessionactor.Registry, sandboxes *narvipg.SandboxSt
 // NewClientHandler at the single shared route) -- used by client_test.go
 // for the client-hub's own tests and for proving the type=sandbox vs
 // type=client routing itself, as opposed to newTestServer above (which
-// mounts the sandbox handler alone, unchanged since Step 18, still used by
+// mounts the sandbox handler alone, still used by
 // this package's pre-existing sandbox-only tests).
 func newDispatcherTestServer(
 	registry *sessionactor.Registry,

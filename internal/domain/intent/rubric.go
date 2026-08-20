@@ -47,7 +47,7 @@ const (
 	ModeBuild = "build"
 )
 
-// The two Target values Step 50's own release-vs-feature category
+// The two Target values §15's own release-vs-feature category
 // distinguishes (§15.1, §18.6: "release-vs-feature is just one more
 // category alongside review-vs-request and plan-vs-build ... through the
 // same contract, rubric, and record shape"). A release PR review (§15) is

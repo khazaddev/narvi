@@ -1,6 +1,6 @@
 // Package chatgptoauth is the control plane's own small, direct outbound
 // HTTP client for the ChatGPT-account (Codex) OAuth device-authorization
-// flow (Step 59, §29.2/§29.3/§29.9) -- the "one small CP-side outbound
+// flow (§29.2/§29.3/§29.9) -- the "one small CP-side outbound
 // adapter (four HTTP calls: usercode, token-poll, code exchange, refresh
 // -- §29.2's shapes)" §29.9 specifies, structurally mirroring internal/
 // adapters/outbound/githubapi's own "plain *http.Client wrapper,

@@ -62,7 +62,7 @@ const actorAppValue = "app"
 // adapters/inbound/auth's own NewGitHubOAuthConfig (same library, same
 // shape), but is a functionally distinct flow: see this package's own
 // doc.go for why. cfg.LinearOAuthClientID/LinearOAuthClientSecret are
-// Step 34's own, SEPARATE credentials from cfg.GitHubClientID/
+// §8.10's own, SEPARATE credentials from cfg.GitHubClientID/
 // GitHubClientSecret (see internal/platform/config.go's own doc comment
 // on those env vars for the full reasoning).
 func NewOAuthConfig(cfg platform.Config) *oauth2.Config {

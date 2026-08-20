@@ -9,7 +9,7 @@ import (
 // HashSandboxToken hex-encodes the SHA-256 digest of token. Exported
 // specifically so a future sandbox-token-MINTING Step (§5.2: "Sandbox
 // tokens: hashed at rest, one per gen, rotated on identity rotation with a
-// previous-gen grace window during overlapping spawns"; Step 21+, once a
+// previous-gen grace window during overlapping spawns"; §9.3+, once a
 // real SandboxProvider.Spawn call exists to mint one against) can call this
 // exact function when it starts writing sandboxes.token_hash at spawn time,
 // rather than reinventing its own hashing convention. Nothing calls this in
@@ -35,7 +35,7 @@ func HashSandboxToken(token string) string {
 //   - presented == "" is never valid, regardless of storedHash.
 //   - storedHash == nil is the universal case today (nothing mints a
 //     token yet) -- accepted, an explicit, documented, forward-compatible
-//     bridge exactly like Step 13's NARVI_IMAGE_DIGEST gap and Step 15's
+//     bridge exactly like §6.4's NARVI_IMAGE_DIGEST gap and §6.4's
 //     scm-credentials gap.
 //   - Otherwise, HashSandboxToken(presented) is compared against
 //     *storedHash in constant time (crypto/subtle.ConstantTimeCompare, not

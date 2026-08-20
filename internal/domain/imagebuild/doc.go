@@ -1,6 +1,6 @@
-// Package imagebuild implements the pure decision functions Step 26
-// ("image builds") needs (§8.5-note, §10-P2, §3.5), redefined by Step 41
-// ("warm boot: shared fingerprint + spawn-path simplification", §19.1):
+// Package imagebuild implements the pure decision functions §8.5
+// ("image builds") needs (§8.5-note, §10-P2, §3.5), redefined by §19.1
+// ("warm boot: shared fingerprint + spawn-path simplification"):
 //
 //   - Fingerprint (fingerprint.go): a deterministic hash of
 //     (base, repos, runtimeVersion), where repos maps repo name to its
@@ -22,7 +22,7 @@
 //     sandbox.CircuitBreakerThreshold's own "plain int, not a duration"
 //     convention.
 //   - CacheVolumeKey/WellKnownCachePaths/PruneCacheVersions (cachemount.go):
-//     Step 43(c)'s own build-time dependency cache (§19.1's closing
+//     the build-time dependency cache (§19.1's closing
 //     paragraph), third iteration — immutable versioned cache snapshots.
 //     CacheVolumeKey names a cache LINEAGE (base, runtimeVersion only,
 //     never repo content, never a rotation epoch — versions make rotation

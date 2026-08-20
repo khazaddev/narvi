@@ -13,7 +13,7 @@ import (
 // OutboxStore is a thin, pass-through wrapper around the sqlc-generated
 // outbox queries (§4.3 Outbox, §5.1 outbox pattern). No caching, no
 // retries, no business rules -- the claim/attempt/record delivery loop
-// lives in internal/app/outboxworker (Step 35, "outbox delivery").
+// lives in internal/app/outboxworker (§5.1, "outbox delivery").
 type OutboxStore struct {
 	q *sqlcgen.Queries
 }
@@ -101,7 +101,7 @@ func (s *OutboxStore) CountPending(ctx context.Context) (int64, error) {
 }
 
 // ListDeadLetter returns up to limit 'dead_letter' outbox rows, most-
-// recently-created first -- Step 60's own needs_attention row source (see
+// recently-created first -- §16's own needs_attention row source (see
 // ListDeadLetterOutboxEntries' own generated doc comment for the full
 // design, including why this orders by created_at rather than a "became
 // dead-lettered at" instant this table does not carry).

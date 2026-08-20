@@ -3,13 +3,13 @@
 // repo named in a SESSION_CONFIG document's Repos list, IN ORDER, into
 // workspaceDir/<name>, each spawned as a real `git clone` subprocess via
 // the shared internal/sandboxagent/supervisor.Supervisor (the same
-// process-group/reap/drain machinery Step 13/14 already use for hooks and
+// process-group/reap/drain machinery §6.4/§14.2 already use for hooks and
 // services.yml -- never a bare exec.Command); WriteAgentsManifest then
 // renders the successfully-cloned subset as a plain markdown manifest at
 // workspaceDir/AGENTS.md.
 //
 // Criticality semantics mirror internal/sandboxagent/boot.RunHooks
-// (Step 13) and internal/sandboxagent/services.Run (Step 14) exactly:
+// (§6.4) and internal/sandboxagent/services.Run (§14.2) exactly:
 // repos[0] (§3.4: "position 0 = primary") failing to clone is fatal and
 // stops the whole sequence immediately -- no repo after it is even
 // attempted; a secondary repo's clone failure is logged as a warning
@@ -25,14 +25,14 @@
 //
 // A nil Repo.Branch (§3.4's own documented "nil means the repo's own
 // default branch") means CloneAll passes NO --branch flag at all -- it
-// never invents or creates a branch; that is explicitly Step 29's
+// never invents or creates a branch; that is explicitly §3.4's
 // (internal/domain/gitstate's) job, not this package's.
 //
 // WriteAgentsManifest's exact markdown shape is this Step's own invented,
 // documented convention -- no contracts/ schema governs it, exactly like
-// Step 14 documented its own invented Readiness.Health shape.
+// §14.2 documented its own invented Readiness.Health shape.
 //
-// Step 29 ("gitstate in-sandbox", §3.4) adds SyncAll (sync.go) -- the
+// §3.4 ("gitstate in-sandbox", §3.4) adds SyncAll (sync.go) -- the
 // counterpart to CloneAll for a boot whose workspace ALREADY has a real
 // git repo on disk (a BootModeRepoImage/BootModeSnapshotRestore boot,
 // baked into the image or restored from a snapshot), never invoked

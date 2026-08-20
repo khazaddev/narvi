@@ -211,7 +211,7 @@ func classifyNetworkError(op ports.Op, err error) *ports.ProviderError {
 	}
 }
 
-// --- Cache-mount decline detection (§19.1's closing paragraph, Step 43(c)) ---
+// --- Cache-mount decline detection (§19.1's closing paragraph(c)) ---
 
 // cacheMountTroubleCodes is the fixed, closed set of STRUCTURED error codes
 // this adapter's own invented wire protocol (doc.go: no real Modal

@@ -172,7 +172,7 @@ func TestVerdictNotifier_Deliver_ReviewFailure_NeverSyncsLabels(t *testing.T) {
 }
 
 // TestVerdictNotifier_Deliver_EmptyRiskLevel_SkipsLabelSync is rereview
-// fix (Step 65 finding 6)'s own regression test: an empty payload.
+// fix (§24 finding 6)'s own regression test: an empty payload.
 // RiskLevel means no real verdict was ever posted for this PR at all
 // (e.g. sessionactor's own §24.6 budget-exhausted notice, when every
 // automatic re-review for a PR declined before ever posting one) --

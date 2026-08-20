@@ -1,5 +1,5 @@
 // Package automation is the process-wide background automation engine
-// (Step 51, "automations: engine", §3.5) -- a sibling of app/reconciler,
+// ("automations: engine", §3.5) -- a sibling of app/reconciler,
 // app/imagebuild, and app/outboxworker, not folded into any of them
 // (TECHNICAL_PLAN.md §1's own repo-layout convention: one package per
 // major loop/subsystem under internal/app/). See internal/domain/
@@ -22,7 +22,7 @@
 //     already bounds this at invocation-creation time, CreateInvocation
 //     below). Each target's own run+session pair is created together, on
 //     ONE freshly opened transaction, via the SAME httpapi.CreateSessionOnTx
-//     core Step 31 established and Steps 32/33/34 already reuse three
+//     core §5.1 established and the GitHub/Slack/Linear ingress adapters already reuse three
 //     times -- exactly mirroring internal/adapters/inbound/github's own
 //     SessionCoalescer.CreateOrJoin, which calls CreateSessionOnTx inline on
 //     its own already-open tx rather than the pool-based CreateSessionCore
@@ -131,7 +131,7 @@
 // ListDueForFanOut's own "AND a.status = 'active'" join condition
 // (queries/automationinvocations.sql) is commit 431e4b3's own "SECOND,
 // independent layer" of defense-in-depth against fanning out a pending
-// invocation whose automation has since been auto-paused -- Step 52's own
+// invocation whose automation has since been auto-paused -- §8.4's own
 // future trigger evaluator is the FIRST layer (never calling CreateInvocation
 // for a paused automation in the first place). Because claimBatch claims an
 // entire BATCH of due invocations inside one transaction, an automation can
@@ -154,14 +154,14 @@
 //
 // # CreateInvocation -- this Step's own minimal entry point
 //
-// Step 52 ("automations: triggers & extras", §8.4) owns WHAT causes an
+// §8.4 ("automations: triggers & extras", §8.4) owns WHAT causes an
 // invocation to be created (GitHub/Linear/webhook/cron trigger condition
 // evaluation) -- out of this Step's own scope entirely. invocationenqueue.go's
 // CreateInvocation is this Step's own minimal, durable "an invocation now
 // exists, fan it out" hand-off (mirrors internal/app/releasereview.Enqueue's
 // own "one cheap INSERT, the real work happens later on a dedicated
 // background loop's own schedule" shape) -- callable directly by this
-// package's own tests today, and ready for Step 52's own trigger evaluator to
+// package's own tests today, and ready for §8.4's own trigger evaluator to
 // call unchanged once it exists. It does NOT itself decide whether an
 // automation should fire; it only validates targets (automation.
 // ValidateTargets) and durably records that a firing has already been

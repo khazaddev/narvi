@@ -224,7 +224,7 @@ func TestHandleSandboxEvent_FullRoundTrip(t *testing.T) {
 	}
 }
 
-// --- Step 22 ("snapshots & restore"): triggerSnapshotBestEffort's own full
+// --- §3.2 ("snapshots & restore"): triggerSnapshotBestEffort's own full
 // decision tree (design decision 1) and handleSandboxEvent's new
 // snapshot_ready branch (design decision 3).
 

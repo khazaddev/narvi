@@ -23,7 +23,7 @@ type ExistsSentinelFixByFixPRNumberParams struct {
 	FixPrNumber  *int32 `json:"fix_pr_number"`
 }
 
-// Step 60 ("decision inbox: read model + API")'s own §17 structural
+// §16 ("decision inbox: read model + API")'s own §17 structural
 // exclusion: "sentinel auto-fix follow-up PRs must never appear as inbox
 // rows... Make this a structural exclusion, not a filter someone can
 // forget." A PR is a sentinel-auto-fix follow-up iff it appears as SOME
@@ -179,7 +179,7 @@ type InsertSentinelFixIfAbsentParams struct {
 	OriginHeadBranch      string      `json:"origin_head_branch"`
 }
 
-// Queries backing SentinelFixStore (Step 48, "sentinels + suggestions",
+// Queries backing SentinelFixStore ("sentinels + suggestions",
 // §17) -- see migrations/000047_sentinel_fixes.up.sql's own doc comment
 // for the full table design and its two-step claim idiom.
 // Step ONE of the atomic claim (mirrors github_pr_sessions' own identical

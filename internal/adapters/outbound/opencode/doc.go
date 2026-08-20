@@ -6,7 +6,7 @@
 // does NOT spawn or supervise that process itself; that is
 // internal/sandboxagent/opencodeproc's own job (a Spawn call that reuses
 // internal/sandboxagent/supervisor, never a bare exec.Command), the same
-// separation Modal's adapter already has from Step 13's own supervisor.
+// separation Modal's adapter already has from §6.4's own supervisor.
 //
 // See adapter.go's own doc comment on Adapter for the verified-vs-schema-
 // derived-vs-best-effort breakdown of the real OpenCode wire shapes this

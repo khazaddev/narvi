@@ -8,7 +8,7 @@ import (
 )
 
 // RenderManifestComment renders the release manifest check's own typed
-// findings (Step 50, "release PR review", §15.2, review.ManifestFinding)
+// findings ("release PR review", §15.2, review.ManifestFinding)
 // into the markdown comment body posted on a release PR -- "an audit,
 // not a risk verdict" (§15.2's own words), mirroring RenderVerdictComment's
 // identical "typed fields -> markdown, nothing parsed back" discipline

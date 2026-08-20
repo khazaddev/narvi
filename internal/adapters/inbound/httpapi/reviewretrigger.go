@@ -1,7 +1,7 @@
-// This file (reviewretrigger.go) implements Step 46's ("review sessions",
+// This file (reviewretrigger.go) implements §8.2's ("review sessions",
 // §8.2) own manual re-trigger-via-BUTTON surface: POST
 // /api/sessions/:id/review/retrigger (§12.2 item 2's own "re-run action"
-// on the Code review view). This is the THIRD of Step 46's three manual
+// on the Code review view). This is the THIRD of §8.2's three manual
 // re-trigger surfaces -- see internal/adapters/inbound/github's own doc.go
 // for the other two (an @mention comment, and the new label lane) and for
 // why all three are equally legitimate, deliberate human commands (§5.1).
@@ -10,7 +10,7 @@
 // session -- it targets an ALREADY-KNOWN session_id (the URL itself), so
 // there is no "first mention on this PR" ambiguity for
 // github_pr_sessions' own atomic claim to resolve; this handler never
-// touches that claim row at all. What it DOES reuse from Step 32/45/46's
+// touches that claim row at all. What it DOES reuse from §8.2/46's
 // own existing machinery: CreateTurnCore (turn.go) with AlwaysQueue --
 // the SAME policy coalesce.go's own REUSE branch uses via
 // CreateTurnForBot (bot.go) -- so a manual re-review click behaves exactly
@@ -55,7 +55,7 @@ import (
 // internal/adapters/inbound/github's own labelRetriggerPromptText constant
 // exactly in kind (a plain, fixed string, never model-generated) -- worded
 // distinctly only so a maintainer reading turns.prompt later can tell
-// which of Step 46's three manual surfaces actually triggered a given
+// which of §8.2's three manual surfaces actually triggered a given
 // turn.
 const manualRetriggerPromptText = "Manual re-review requested via the web review button."
 
@@ -84,7 +84,7 @@ const manualRetriggerPromptText = "Manual re-review requested via the web review
 // Action doesn't consult), avoiding a wasted Postgres participants read on
 // every call.
 //
-// No intentSvc parameter (F1, Step 64 follow-up fix, review Finding 1):
+// No intentSvc parameter (F1, §23 follow-up fix, review Finding 1):
 // this endpoint used to thread the platform's real *intentclassifier.
 // Service straight through to CreateTurnCore below, which meant a plan
 // sitting in StatusAwaitingApproval on this session made createTurnLocked's
@@ -97,13 +97,13 @@ const manualRetriggerPromptText = "Manual re-review requested via the web review
 // now always called with a literal nil intentSvc below, which -- per that
 // function's own nil-safe contract (turn.go's own doc comment: "a nil
 // intentSvc ... skips classification entirely and falls back to the
-// pre-Step-64 'always decline' awaiting-plan gate behavior") -- degrades
+// pre-existing 'always decline' awaiting-plan gate behavior") -- degrades
 // this endpoint to the SAME safe, deterministic "decline while a plan is
-// awaiting approval" outcome every pre-Step-64 caller already got, with no
+// awaiting approval" outcome every pre-existing caller already got, with no
 // outbound LLM call spent classifying text that was never a reply to
-// begin with (the fail-safe direction Step 64's own review batch requires:
+// begin with (the fail-safe direction §23's own review batch requires:
 // "when in doubt, skip classification rather than guess").
-// reviewTriageDeps/reviewModelDeep (Step 68, §26.3) mirror internal/
+// reviewTriageDeps/reviewModelDeep (§26.3) mirror internal/
 // adapters/inbound/github's own identical SessionCoalescer.ReviewTriage/
 // ReviewModelDeep fields -- see that struct's own doc comment.
 func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, prSessions *postgres.GitHubPRSessionStore, diffFetcher reviewcontext.Fetcher, reviewFindings reviewcontext.FindingsFetcher, falsePositivePatterns reviewcontext.FalsePositivePatternsFetcher, botToken string, timeouts platform.Timeouts, reviewTriageDeps appreviewtriage.Deps, reviewModelDeep string) http.HandlerFunc {
@@ -142,8 +142,8 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		}
 
 		// This action is meaningful ONLY for a session that IS a GitHub PR
-		// review session -- the reverse (session_id -> repo/PR) lookup Step
-		// 35 ("outbox delivery") already added GitHubPRSessionStore for.
+		// review session -- the reverse (session_id -> repo/PR) lookup
+		// §5.1 ("outbox delivery") already added GitHubPRSessionStore for.
 		// pgx.ErrNoRows here means sessionID was never created via a GitHub
 		// PR mention/label -- a plain web/Slack/Linear session has no PR to
 		// re-review, so this is a genuine 400, not a transient failure.
@@ -159,7 +159,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		}
 
 		prompt := manualRetriggerPromptText
-		// Step 63 (§22.3): prepend this repo's own currently-active
+		// (§22.3): prepend this repo's own currently-active
 		// learned false-positive patterns BEFORE the already-answered
 		// facts below -- "injected into every review pass, first pass and
 		// re-review alike": a manual re-trigger is exactly a re-review
@@ -170,7 +170,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 				prompt = advisory + prompt
 			}
 		}
-		// Step 48 (§22.1)/Step 70 (§22.1.2 retirement, this Step): prepend
+		// (§22.1)/(§22.1.2 retirement, this Step): prepend
 		// this PR's own already-answered facts (open+rebutted
 		// review_findings) BEFORE calling RenderTurnPrompt -- prepended
 		// to, never replacing, the prose fallback above. This call is
@@ -188,7 +188,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		// call later in EXECUTION order, while keeping it the LAST
 		// prepend before RenderTurnPrompt, preserves its own existing
 		// FIRST position in the text exactly.
-		// reviewHeadSHA (§62 review finding C2, CRITICAL, fixed) is
+		// reviewHeadSHA is
 		// captured here and threaded into CreateTurnCore below via
 		// CreateTurnOptions.ReviewHeadSHA -- persisted onto THIS turn's
 		// own row (turns.review_head_sha, set once at creation), never
@@ -197,7 +197,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		// previous github_pr_sessions.pending_head_sha design this fix
 		// replaces -- see migrations/000072_turns_review_head_sha.up.sql's
 		// own doc comment for the full "why").
-		// prCtx (Step 68, §26.3) is hoisted to this outer scope -- the
+		// prCtx (§26.3) is hoisted to this outer scope -- the
 		// WHOLE struct is needed further down to compute this manual
 		// re-trigger's own light/deep triage decision, mirroring
 		// internal/adapters/inbound/github's own identical hoist
@@ -229,7 +229,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 			}
 		}
 
-		// Step 68 (§26.3): the depth decision, computed from prCtx above.
+		// (§26.3): the depth decision, computed from prCtx above.
 		// Adversarial-review fix D2 ("deep-path digest requirement
 		// contradicts the prompt the agent actually receives"): this MUST
 		// run, and be floored (D1, immediately below), BEFORE
@@ -275,7 +275,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 			flooredDepth = domainreviewtriage.Floor(triageDecision.Depth, priorReviewDepth)
 		}
 		prCtx.DeepPath = flooredDepth == domainreviewtriage.DepthDeep
-		// ReviewCostBudgetUSD (Step 69, §26.7): the SAME triageConfig
+		// ReviewCostBudgetUSD (§26.7): the SAME triageConfig
 		// ComputeDecision already resolved, above -- no second repo_settings
 		// read. Read AFTER flooredDepth is known so a re-review that got
 		// floored deep by §24's own "once deep, stays deep" rule correctly
@@ -289,7 +289,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		// must set it, never review itself (doc.go's own "zero external
 		// imports" convention).
 		prCtx.CostBudgetSafetyMarginPercent = int(domainreviewtriage.CostBudgetSafetyMargin * 100)
-		// Step 48 (§22.1)/Step 70 (§22.1.2 retirement): see this
+		// (§22.1)/(§22.1.2 retirement): see this
 		// function's own earlier comment (where this block used to sit,
 		// right after the false-positive-patterns block) for why it moved
 		// here -- prCtx.ChangedPaths is only known now, after the diff
@@ -332,7 +332,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		// REST policy.
 		//
 		// epistemicCheckDefault: hardcoded false, deliberately never the
-		// operator's own platform.Config.EpistemicCheckDefault -- Step 61's
+		// operator's own platform.Config.EpistemicCheckDefault -- §20's
 		// own devil's-advocate preamble (§20) is a BUILDER check ("domain/
 		// turn: builder epistemic pre-action check", the Step's own title);
 		// a review turn is never a build turn (this function creates
@@ -350,7 +350,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		// comment ("No intentSvc parameter") for the full "why": a manual
 		// re-review click carries no human reply for the plan_followup
 		// classifier to legitimately read, so this path always falls open
-		// to the safe, deterministic pre-Step-64 "decline while a plan is
+		// to the safe, deterministic pre-existing "decline while a plan is
 		// awaiting approval" behavior instead of guessing from
 		// manualRetriggerPromptText/the pre-fetched diff.
 		created, _, cerr := CreateTurnCore(ctx, pool, sessions, turns, plans, nil, auditLog, registry, sessionID, prompt, triageModelID, false, false, actorUserID, AlwaysQueue, CreateTurnOptions{ReviewHeadSHA: reviewHeadSHA, Effort: triageEffort, ReviewDepth: &reviewDepthStr, ReviewDepthDecision: triageRecordJSON})

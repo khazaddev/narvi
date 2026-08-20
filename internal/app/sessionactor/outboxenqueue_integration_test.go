@@ -20,7 +20,7 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// This file proves Step 35's ("outbox delivery", §5.1) own enqueue-side
+// This file proves §5.1's ("outbox delivery", §5.1) own enqueue-side
 // wiring: a slack/github/linear-origin session's turn completion writes
 // exactly one correctly-shaped outbox row, and a web-origin session's
 // completion writes none -- see outboxenqueue.go's own doc comment for the
@@ -138,7 +138,7 @@ func TestCompleteProcessingTurn_SlackOrigin_EnqueuesExactlyOneSlackOutboxRow(t *
 // proves a github-origin session's FAILED turn completion enqueues NO
 // outbox row at all any more.
 //
-// Step 47 ("server-side verdict", §8.2/§5.2) audit fix -- RAW-COMMENT
+// §8.2 ("server-side verdict", §8.2/§5.2) audit fix -- RAW-COMMENT
 // BLOCKING: a github-origin session is, by construction, a review
 // session (github_pr_sessions is the ONLY mechanism that ever creates
 // one, internal/adapters/inbound/github/doc.go) -- so this generic,
@@ -190,7 +190,7 @@ func TestCompleteProcessingTurn_GitHubOrigin_EnqueuesNoRawCommentOutboxRow(t *te
 	})
 
 	if n := countOutboxRowsForSession(ctx, t, pool, sessionID); n != 0 {
-		t.Errorf("outbox row count = %d, want 0 (raw-comment posting must be blocked for a review session, §8.2/Step 47)", n)
+		t.Errorf("outbox row count = %d, want 0 (raw-comment posting must be blocked for a review session, §8.2)", n)
 	}
 }
 
@@ -260,7 +260,7 @@ func TestCompleteProcessingTurn_LinearOrigin_EnqueuesExactlyOneLinearOutboxRow(t
 // enqueues the same per-origin outbox notification the real-
 // execution_complete path (completeProcessingTurn) already did.
 //
-// The gap this locks closed: Step 35 wired enqueueOutboxNotification into
+// The gap this locks closed: §5.1 wired enqueueOutboxNotification into
 // completeProcessingTurn only. A turn that reached its terminal `failed`
 // state via turn_deadline expiring -- the SAME turn.Transition +
 // UpdateStatus + synthetic execution_complete shape, just driven by a
@@ -271,7 +271,7 @@ func TestCompleteProcessingTurn_LinearOrigin_EnqueuesExactlyOneLinearOutboxRow(t
 //
 // Table-driven across all four spawn_source values, since the correct
 // answer genuinely differs per origin and each case must be pinned
-// independently: slack/linear DO get a row, github does NOT (Step 47's own
+// independently: slack/linear DO get a row, github does NOT (§8.2's own
 // raw-comment blocking, §8.2/§5.2 -- see the github case in
 // outboxenqueue.go), and web does NOT (no external channel at all).
 func TestTurnDeadlineTimeout_EnqueuesOutboxNotificationPerOrigin(t *testing.T) {
@@ -359,7 +359,7 @@ func TestTurnDeadlineTimeout_EnqueuesOutboxNotificationPerOrigin(t *testing.T) {
 			},
 		},
 		{
-			name:        "github origin stays silent (Step 47 raw-comment blocking)",
+			name:        "github origin stays silent (§8.2 raw-comment blocking)",
 			spawnSource: sqlcgen.SessionSpawnSourceGithub,
 			seedReverseLookup: func(ctx context.Context, t *testing.T, pool *pgxpool.Pool, sessionID pgtype.UUID) {
 				t.Helper()

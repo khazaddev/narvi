@@ -131,7 +131,7 @@ func TestCreateResponseActivity_GraphQLError(t *testing.T) {
 // TestCreateThoughtActivity_Success proves CreateThoughtActivity posts a
 // "thought"-typed AgentActivity via a real agentActivityCreate GraphQL
 // mutation, authenticated with the given access token -- the synchronous
-// 10-second acknowledgment Step 34's webhook handler sends on a `created`
+// 10-second acknowledgment §8.10's webhook handler sends on a `created`
 // AgentSessionEvent, and the outbox worker's async mid-turn progress
 // notification.
 func TestCreateThoughtActivity_Success(t *testing.T) {

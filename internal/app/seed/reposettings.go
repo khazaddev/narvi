@@ -21,12 +21,12 @@ import (
 // postgres/reposettings_store.go). block_on_high_risk/
 // sentinel_autofix_enabled are the one EXCEPTION: RepoSettingsStore.
 // Upsert writes both together (it predates the column-scoped
-// convention, §62 review finding C5's own fix only landed for the LATER
+// convention own fix only landed for the LATER
 // toggles) -- so when only one of the two is declared, this function
 // first reads the current row to carry the undeclared one through
 // unchanged, rather than resetting it to false.
 //
-// # SessionsEnabled (Step 76, §10 Phase 6, §32) is why this tool exists
+// # SessionsEnabled (§10 Phase 6, §32) is why this tool exists
 // for cohort rollout at all
 //
 // Under NARVI_ROLLOUT_MODE=cohort, httpapi.CreateSessionOnTx refuses
@@ -143,7 +143,7 @@ func seedRepoSetting(ctx context.Context, deps Deps, s seedmanifest.RepoSetting,
 // seedRWXPreview reconciles ONE rwxPreview manifest entry against
 // repo_settings.rwx_preview_* (reconcile-to-declared, always all 3
 // fields together -- see doc.go's own "integrations" scope writeup for
-// why this table is this tool's answer to Step 75's "integrations"
+// why this table is this tool's answer to §10's "integrations"
 // checklist item).
 func seedRWXPreview(ctx context.Context, deps Deps, e seedmanifest.RWXPreview, dryRun bool) Item {
 	key := e.RepoFullName

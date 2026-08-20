@@ -1,4 +1,4 @@
-// This file (kubeconfig.go) implements Step 73b's own ("cloud identity:
+// This file (kubeconfig.go) implements §27.4's own ("cloud identity:
 // sandbox-side consumption + kubeconfig injection", §27.4) IN-SANDBOX
 // half of §27.4: rendering a kubeconfig from this session's own
 // Environment's cluster_bindings row (delivered alongside §27.3's own
@@ -74,7 +74,7 @@
 // cloudIdentityDir that sandbox-agent refreshes and the consumer (here,
 // client-go, via kubeconfig's own tokenFile field) re-reads on its own.
 // docs/TECHNICAL_PLAN.md §27.4 rung 2 and docs/IMPLEMENTATION_PLAN.md's
-// Step 73 row are corrected in the SAME commit as this fix, for the same
+// §27.3 row are corrected in the SAME commit as this fix, for the same
 // "a future reader must not re-derive the broken design from a stale
 // spec" reason cloudidentity.go's own gap-1/gap-2 write-ups exist.
 //

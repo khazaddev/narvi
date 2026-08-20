@@ -9,7 +9,7 @@ import (
 // LLM is a genuinely reusable, provider-agnostic structured-output text-
 // completion port (§4.3) -- deliberately NOT shaped narrowly around
 // "classify intent". internal/app/intentclassifier is its first caller
-// (Step 36), but the future model catalog/code-review work (§4.3, §8.8)
+// (§8.3), but the future model catalog/code-review work (§4.3, §8.8)
 // is designed to reuse the SAME port rather than invent its own.
 //
 // Two real implementations are expected over time, exactly like

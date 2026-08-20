@@ -1,8 +1,8 @@
-// This file implements Step 69's own §26.5 capture command: an explicit
+// This file implements §26.4's own §26.5 capture command: an explicit
 // `arch recap wrong: <reason>` PR-thread comment contests the deep path's
 // own architecture-recap digest section. Handled DISPATCH-BEFORE-ROUTER,
 // exactly mirroring falsepositivecapture.go's own identical `false
-// positive: <reason>` capture command (Step 63, §22.2) -- checked in
+// positive: <reason>` capture command (§22.2) -- checked in
 // handler.go BEFORE parseMention ever runs, so a contest command never
 // reaches CreateOrJoin/the mention router at all: it is not a review-
 // session trigger, and a maintainer contesting a recap must never

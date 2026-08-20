@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 58's ("uploads, blob storage & the
+// Integration tests for §8.6's ("uploads, blob storage & the
 // in-sandbox download_file tool", §28) mint/confirm/content endpoints,
 // both auth variants, against a real Postgres instance -- gated behind
 // the "integration" build tag, using this package's own shared rig

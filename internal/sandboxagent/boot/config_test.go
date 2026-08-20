@@ -262,7 +262,7 @@ func TestLoad_SandboxIDMismatch(t *testing.T) {
 
 // TestLoad_SessionConfigAbsent proves NARVI_SESSION_CONFIG's absence
 // remains a fully valid, correct state: SessionConfig is nil and every
-// other field behaves exactly as it did before this Step (Steps 13/14's
+// other field behaves exactly as it did before this Step (§6.4/§14.2's
 // own tests, unmodified, already cover that).
 func TestLoad_SessionConfigAbsent(t *testing.T) {
 	t.Setenv("NARVI_BOOT_MODE", "fresh")

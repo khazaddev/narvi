@@ -382,7 +382,7 @@ var (
 // above) in ONE transaction, then deletes EVERY pending prompt for that
 // same (provider, externalID) so a stale link can never be replayed.
 //
-// # Deliberate design note (Step 39, "identities + full RBAC", §13.2 --
+// # Deliberate design note ("identities + full RBAC", §13.2 --
 // security review remediation)
 //
 // This function performs NO correlation at all between authenticatedUserID
@@ -421,7 +421,7 @@ var (
 // separately-documented residual.)
 //
 // # Investigated and NOT done: narrowing Consume to the ambiguous
-// candidate set (Step 39's own SECOND fix-pass re-review)
+// candidate set (§13.2's own SECOND fix-pass re-review)
 //
 // One sub-case of createOrReuseLinkPrompt's own "zero or multiple
 // matches -> never guess" branch (identitylink.Decide) is narrower than

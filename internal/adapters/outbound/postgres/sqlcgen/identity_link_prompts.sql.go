@@ -30,7 +30,7 @@ type CreateIdentityLinkPromptParams struct {
 // migration's own doc comment for the full column-naming reasoning,
 // especially why this is nonce_HASH, not the spec's own literal "nonce").
 //
-// This is Step 39's ("identities + full RBAC") own auto-linking half: the
+// This is §13.2's ("identities + full RBAC") own auto-linking half: the
 // storage shape that migration built now gets its first real reader/
 // writer, internal/app/identitylink.Resolve (creates a row when a fetched
 // profile email matches zero or multiple users) and internal/adapters/
@@ -152,7 +152,7 @@ SELECT id, provider, external_id, nonce_hash, expires_at, created_at FROM identi
 ORDER BY created_at DESC
 `
 
-// Backs the members API's own overview endpoint (§13.2/§13.3, Step 39's
+// Backs the members API's own overview endpoint (§13.2/§13.3, §13.2's
 // own "linked identities incl. pending-link state" requirement) -- every
 // row currently in this table IS still pending (there is no soft-delete;
 // a consumed/superseded prompt is row-deleted, see

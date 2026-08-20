@@ -1,4 +1,4 @@
-// Package github implements the GitHub webhook ingress adapter (Step 32,
+// Package github implements the GitHub webhook ingress adapter (
 // "GitHub ingress", §8.2's own phrase "atomic claim coalescing of
 // concurrent @mentions"). It is the INGRESS layer only: detect a PR
 // @mention of this deploy's own bot handle, atomically coalesce
@@ -6,13 +6,13 @@
 // session (reusing it via a new turn rather than spawning a duplicate),
 // and get a session/turn genuinely created and dispatched -- laying the
 // groundwork Phase 4's actual code-review logic (verdict posting,
-// risk-map, sentinels -- §8.2's fuller feature list, Steps 40+) builds on
-// later. This Step deliberately does NOT implement any of that later
+// risk-map, sentinels -- §8.2's fuller feature list) builds on
+// later. This work deliberately does NOT implement any of that later
 // logic, and does NOT touch internal/domain/automation (confirmed an
-// empty stub, Step 46/47's own job, Phase 4) -- the plan row's own
+// empty stub, §8.2's own job, Phase 4) -- the plan row's own
 // "events -> automations" phrase is aspirational/forward-looking (where
-// this ingress eventually plugs in once a later Step builds the
-// automations engine), not a concrete Step-32 deliverable.
+// this ingress eventually plugs in once later work builds the
+// automations engine), not a concrete §8.2 deliverable.
 //
 // # Route
 //
@@ -37,7 +37,7 @@
 //     header, malformed hex, mismatch) is rejected 401, fail-closed.
 //  3. Claim (provider="github", deliveryID=the "X-GitHub-Delivery"
 //     header) via postgres.WebhookDeliveryStore.Claim (§5.1's atomic
-//     INSERT ... ON CONFLICT dedupe, Step 31) -- a redelivery of an
+//     INSERT ... ON CONFLICT dedupe) -- a redelivery of an
 //     already-claimed delivery id is acknowledged 200 without being
 //     processed again.
 //  4. Parse "X-GitHub-Event": only "issue_comment" (a comment on an issue
@@ -69,7 +69,7 @@
 // migrations/000028_github_pr_sessions.up.sql adds a small mapping table,
 // github_pr_sessions, keyed on the natural (repo_full_name, pr_number)
 // identity -- mirroring webhook_deliveries' own minimal-columns,
-// composite-key shape (Step 31) rather than inventing a different claim
+// composite-key shape (§5.1) rather than inventing a different claim
 // shape, per §5.1's own "INSERT ... ON CONFLICT atomic claims" house
 // style. The claim is a TWO-STEP sequence inside one Postgres
 // transaction, composing two idioms this codebase ALREADY uses elsewhere
@@ -78,7 +78,7 @@
 //  1. `INSERT ... ON CONFLICT (repo_full_name, pr_number) DO NOTHING`
 //     ensures a claim row exists (session_id NULL on a fresh insert) --
 //     the SAME atomic-claim idiom ClaimWebhookDelivery already
-//     establishes (Step 31).
+//     establishes (§5.1).
 //  2. `SELECT session_id ... FOR UPDATE` locks that row for the rest of
 //     the transaction -- the SAME session-row-locking precedent
 //     internal/adapters/inbound/httpapi/turn.go's own CreateTurn already
@@ -129,17 +129,17 @@
 // exactly one session and N turns, dispatched one at a time by that
 // session's own actor -- exactly what "session reuse" (§8.2) means.
 //
-// # Step 46 ("review sessions", §8.2): manual re-trigger via label, and
+// # §8.2 ("review sessions", §8.2): manual re-trigger via label, and
 // inline pre-fetched diff/stack context
 //
-// Step 32 above already delivers two of Step 46's own three named
+// §8.2 above already delivers two of §8.2's own three named
 // properties in full -- "per-PR reuse: a second mention on the same PR
 // joins the existing review session" IS the REUSE branch this file's own
 // coalescing design section already describes, and "atomic claim on
 // concurrent mentions" IS the two-step EnsureRow+LockForUpdate sequence
-// that same section documents. Step 46 does not rebuild either: it
+// that same section documents. §8.2 does not rebuild either: it
 // EXTENDS them to a new trigger surface and adds the one genuinely new
-// capability neither Step 32 nor Step 45 (domain/review, the Verdict type)
+// capability neither §8.2 nor §8.2 (domain/review, the Verdict type)
 // touches.
 //
 //  1. Manual re-trigger via LABEL, alongside the existing @mention (comment)
@@ -157,7 +157,7 @@
 //     @mention would); a label event on a PR that already has one becomes
 //     an ordinary REUSE, enqueuing a new turn. The manual re-review REST
 //     button (internal/adapters/inbound/httpapi's RetriggerReview) is
-//     Step 46's own THIRD re-trigger surface, targeting an already-known
+//     §8.2's own THIRD re-trigger surface, targeting an already-known
 //     session_id directly rather than routing through this per-PR claim at
 //     all (that handler's own doc comment explains why it doesn't need
 //     to). Every one of these three manual triggers is a STRUCTURED signal

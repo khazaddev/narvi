@@ -10,8 +10,7 @@ import "time"
 import "unicode/utf8"
 
 // 200 response body for POST
-// /api/sessions/:id/review/findings/:identityHash/apply-suggestion (Step 48, §12.2
-// item 2).
+// /api/sessions/:id/review/findings/:identityHash/apply-suggestion (§12.2 item 2).
 type ApplySuggestionResponse struct {
 	// The new commit this call created on the PR's own head branch, applying the
 	// finding's suggestedFix.
@@ -54,10 +53,10 @@ func (j *ApplySuggestionResponse) UnmarshalJSON(value []byte) error {
 // silently dropped) rather than rejected. Digest.archDecisions as a WHOLE,
 // however, is application-level required to contain at least one entry with real,
 // non-blank content in ANY of these three fields whenever this session's own
-// review-depth is 'deep' (Step 68, §26.3, now implemented) -- see
-// Digest.archDecisions' own description, and
-// internal/domain/reviewpost.ValidateVerdictInput's own hasNonBlankArchDecision
-// check, for the exact rule this per-object schema cannot itself express.
+// review-depth is 'deep' (§26.3, now implemented) -- see Digest.archDecisions' own
+// description, and internal/domain/reviewpost.ValidateVerdictInput's own
+// hasNonBlankArchDecision check, for the exact rule this per-object schema cannot
+// itself express.
 type ArchDecision struct {
 	// How this decision conforms to (or diverges from) the repo's own established
 	// conventions.
@@ -81,8 +80,8 @@ type ArchDecisionDecision *string
 type ArchDecisionRejectedAlternative *string
 
 // GET /api/sessions/:id/artifacts (§6.3). Unbounded (no pagination) -- this list
-// is expected to stay small. Each element's own status/failureReason fields (Step
-// 58, §28.6) are additive here too, loosely typed like every element in this array
+// is expected to stay small. Each element's own status/failureReason fields
+// (§28.6) are additive here too, loosely typed like every element in this array
 // already was -- see MintUploadResponse/ConfirmUploadResponse below for the
 // strictly-typed upload-specific shapes this schema DOES pin.
 type ArtifactsResponse struct {
@@ -191,8 +190,8 @@ func (j *AuditLogEntry) UnmarshalJSON(value []byte) error {
 }
 
 // One automations row's own REST wire shape (migrations/000051_automations.up.sql,
-// extended by migrations/000055_automations_triggers_and_extras.up.sql, Step 52
-// '§8.4'). Returned by POST/GET/list.
+// extended by migrations/000055_automations_triggers_and_extras.up.sql '§8.4').
+// Returned by POST/GET/list.
 type Automation struct {
 	// A short, one-sentence, mechanically generated description of the most recently
 	// closed invocation's own outcome
@@ -274,11 +273,10 @@ type AutomationArtifactSummary *string
 // Null for a system-attributed automation with no direct human creator.
 type AutomationCreatedBy *string
 
-// One entry of an automation's own env_vars (Step 52, §8.4's own 'per-automation
-// env vars') -- plain, non-secret configuration only
-// (internal/domain/automation.EnvVar). See internal/domain/automation/doc.go's own
-// writeup for why per-automation SECRETS are a deliberately different, unbuilt
-// thing (deferred to Step 53).
+// One entry of an automation's own env_vars (§8.4's own 'per-automation env vars')
+// -- plain, non-secret configuration only (internal/domain/automation.EnvVar). See
+// internal/domain/automation/doc.go's own writeup for why per-automation SECRETS
+// are a deliberately different, unbuilt thing (deferred to §25.1.
 type AutomationEnvVarElem struct {
 	// A POSIX shell/environment-variable-legal identifier
 	// (internal/domain/automation.ValidateEnvVars) -- letters/digits/underscore, not
@@ -547,7 +545,7 @@ func (j *Automation) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Response body for POST/GET /api/me/chatgpt-link (Step 59, §29.3/§29.9): the
+// Response body for POST/GET /api/me/chatgpt-link (§29.3/§29.9): the
 // ChatGPT-account-OAuth link flow's own status, read by the Settings page's own
 // poll loop -- there is no background worker driving this flow forward; the human
 // sitting on the page IS the polling loop (§29.3 point 2), so GET simply reports
@@ -644,7 +642,7 @@ func (j *ChatGPTLinkStatus) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// One cloud_identity_bindings row's own REST wire shape (Step 73a, §27.3,
+// One cloud_identity_bindings row's own REST wire shape (§27.3,
 // migrations/000093_cloud_identity_bindings.up.sql). Returned by the
 // create/list/update routes mounted at
 // /api/environments/{environmentID}/cloud-identity-bindings and
@@ -695,7 +693,7 @@ type CloudIdentityBinding struct {
 
 	// The EXACT `sub` claim string (narvi:environment:<environment_id>) a customer
 	// must paste into their cloud-side trust policy for this binding to take effect
-	// -- Step 73a's own gap-4 resolution: the management API surfaces this directly
+	// -- §27.3's own gap-4 resolution: the management API surfaces this directly
 	// rather than making the customer construct the string format themselves.
 	// Non-null only for scope=environment (a single, fixed, well-defined
 	// Environment); null for scope=global, since a global-scope binding's own token
@@ -778,9 +776,9 @@ func (j *CloudIdentityBindingScope) UnmarshalJSON(value []byte) error {
 
 // The EXACT `sub` claim string (narvi:environment:<environment_id>) a customer
 // must paste into their cloud-side trust policy for this binding to take effect --
-// Step 73a's own gap-4 resolution: the management API surfaces this directly
-// rather than making the customer construct the string format themselves. Non-null
-// only for scope=environment (a single, fixed, well-defined Environment); null for
+// §27.3's own gap-4 resolution: the management API surfaces this directly rather
+// than making the customer construct the string format themselves. Non-null only
+// for scope=environment (a single, fixed, well-defined Environment); null for
 // scope=global, since a global-scope binding's own token carries a DIFFERENT sub
 // per Environment it is ever minted for -- there is no single string to surface
 // (see this Step's own cloudidentity package doc comment for the full "what global
@@ -829,7 +827,7 @@ func (j *CloudIdentityBinding) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// One cluster_bindings row's own REST wire shape (Step 73b, §27.4,
+// One cluster_bindings row's own REST wire shape (§27.4,
 // migrations/000094_cluster_bindings.up.sql). Returned by GET/PUT
 // /api/environments/{environmentID}/cluster-binding -- environmentId is always
 // implied by the route, never a separate request field, mirroring
@@ -861,7 +859,7 @@ type ClusterBinding struct {
 
 	// Auth-kind-specific identifiers, never secrets -- authKind='cloud': {cloud:
 	// "aws"|"gcp"|"azure"[, region]}; authKind='oidc': {clientId}; authKind='static':
-	// {secretName} (the Step 72 sandbox_secrets NAME whose value is the complete
+	// {secretName} (the §27.1 sandbox_secrets NAME whose value is the complete
 	// kubeconfig file content). Modeled as an opaque raw-JSON passthrough, the SAME
 	// precision-preserving convention CloudIdentityBinding.params already establishes
 	// in this schema.
@@ -1062,7 +1060,7 @@ func (j *ConfirmUploadResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// POST /api/automations's own request body (Step 52, §8.4). Admin/maintainer only
+// POST /api/automations's own request body (§8.4). Admin/maintainer only
 // (authz.ActionManageAutomations).
 type CreateAutomationRequest struct {
 	// Optional -- absent/empty means no per-automation env vars.
@@ -1381,7 +1379,7 @@ func (j *CreateProviderCredentialRequest) UnmarshalJSON(value []byte) error {
 // scope/scopeTarget are never body fields). Gated by
 // authz.ActionManageRepoSecrets/ActionManageEnvSecrets/ActionManageGlobalSecrets
 // respectively -- the SAME 3 already-reserved actions ProviderCredential's own
-// routes use (§27.1: 'Step 53's idioms reused throughout'). A duplicate (scope,
+// routes use (§27.1: ”s idioms reused throughout'). A duplicate (scope,
 // scopeTarget, name) is rejected 409 -- rotate the existing secret via PUT instead
 // of creating a second row for it.
 type CreateSandboxSecretRequest struct {
@@ -1432,16 +1430,16 @@ func (j *CreateSandboxSecretRequest) UnmarshalJSON(value []byte) error {
 // The one CreateSessionRequest shape used by every ingress surface (§10 Phase-3
 // milestone: 'atomic dedupe, one CreateSessionRequest').
 type CreateSessionRequest struct {
-	// Optional (Step 59, §29.8), mirroring buildModelId's own optional-key convention
-	// exactly, one field over: the reasoning effort the eventual approval-dispatched
+	// Optional (§29.8), mirroring buildModelId's own optional-key convention exactly,
+	// one field over: the reasoning effort the eventual approval-dispatched
 	// IMPLEMENTATION turn should use, distinct from effort (which names the PLAN
 	// turn's own effort). Absent/null means 'use the default'. Stored as
 	// sessions.build_effort (migrations/000063_turn_session_effort.up.sql).
 	BuildEffort CreateSessionRequestBuildEffort `json:"buildEffort,omitempty,omitzero" yaml:"buildEffort,omitempty" mapstructure:"buildEffort,omitempty"`
 
-	// Optional (Step 37, 'plan mode, web', §12.2 item 3). Like pathScope/mockConfig
-	// below, this key is genuinely OPTIONAL (may be absent from the request body
-	// entirely) -- only meaningful when planMode is true: the model the eventual
+	// Optional ('plan mode, web', §12.2 item 3). Like pathScope/mockConfig below,
+	// this key is genuinely OPTIONAL (may be absent from the request body entirely)
+	// -- only meaningful when planMode is true: the model the eventual
 	// approval-dispatched IMPLEMENTATION turn should use, distinct from modelId
 	// (which names the PLAN turn's own model). Absent/null means 'use the default
 	// model catalog entry', the same convention modelId itself already establishes.
@@ -1451,10 +1449,10 @@ type CreateSessionRequest struct {
 	// resubmits it).
 	BuildModelId CreateSessionRequestBuildModelId `json:"buildModelId,omitempty,omitzero" yaml:"buildModelId,omitempty" mapstructure:"buildModelId,omitempty"`
 
-	// Optional (Step 74, 'sandbox substrate: docker, egress policy, toolchain',
-	// §27.5). Deliberately stays OUT of this schema's own top-level required list
-	// (unlike planMode) so every existing caller that does not yet send this key
-	// keeps working unchanged -- mirrors capabilityRestricted's own precedent in the
+	// Optional ('sandbox substrate: docker, egress policy, toolchain', §27.5).
+	// Deliberately stays OUT of this schema's own top-level required list (unlike
+	// planMode) so every existing caller that does not yet send this key keeps
+	// working unchanged -- mirrors capabilityRestricted's own precedent in the
 	// session-config schema, not planMode's. true creates (or attaches to) this
 	// session's own session-scoped Environment (like pathScope/mockConfig below) with
 	// docker_required=true -- refused up front, before any Postgres write, if the
@@ -1463,28 +1461,27 @@ type CreateSessionRequest struct {
 	// independently at dispatch time).
 	Docker bool `json:"docker,omitempty,omitzero" yaml:"docker,omitempty" mapstructure:"docker,omitempty"`
 
-	// Step 59 (§29.8). Reasoning-effort override for this session's first turn; null
+	// §8.8 (§29.8). Reasoning-effort override for this session's first turn; null
 	// means use the default. Required-nullable, mirroring modelId's own convention
 	// exactly -- valid values are owned per-model by OpenCode's own catalog
 	// `variants` maps (GET /api/models, this Step's own catalog endpoint), never a
 	// Narvi-side enum.
 	Effort CreateSessionRequestEffort `json:"effort" yaml:"effort" mapstructure:"effort"`
 
-	// Optional (Step 74, §27.6). Like pathScope/mockConfig above, this key is
-	// genuinely OPTIONAL (may be absent from the request body entirely) and
-	// independent of docker/pathScope/mockConfig -- presence alone (with
-	// mode/allowlist both required inside it, unlike this key itself) creates a
-	// session-scoped Environment carrying this egress_policy. mode "allowlist" is
-	// refused up front, before any Postgres write, if the configured sandbox provider
-	// does not report EgressPolicy support -- the SAME CheckSubstrateCapabilities
-	// check docker uses. The server-appended allowlist floor (CP host + this
-	// session's own git hosts) is never accepted from the caller here -- it is
-	// computed and appended fresh, every time a SessionConfig is assembled from the
-	// resulting Environment row, never merely validated against what this request
-	// supplied.
+	// Optional (§27.6). Like pathScope/mockConfig above, this key is genuinely
+	// OPTIONAL (may be absent from the request body entirely) and independent of
+	// docker/pathScope/mockConfig -- presence alone (with mode/allowlist both
+	// required inside it, unlike this key itself) creates a session-scoped
+	// Environment carrying this egress_policy. mode "allowlist" is refused up front,
+	// before any Postgres write, if the configured sandbox provider does not report
+	// EgressPolicy support -- the SAME CheckSubstrateCapabilities check docker uses.
+	// The server-appended allowlist floor (CP host + this session's own git hosts) is
+	// never accepted from the caller here -- it is computed and appended fresh, every
+	// time a SessionConfig is assembled from the resulting Environment row, never
+	// merely validated against what this request supplied.
 	EgressPolicy *CreateSessionRequestEgressPolicy `json:"egressPolicy,omitempty,omitzero" yaml:"egressPolicy,omitempty" mapstructure:"egressPolicy,omitempty"`
 
-	// Optional (Step 61, 'builder epistemic pre-action check', §20.4), mirroring
+	// Optional ('builder epistemic pre-action check', §20.4), mirroring
 	// buildModelId's own optional-key convention exactly: this session's own override
 	// of the platform-wide default for the devil's-advocate pre-action check on its
 	// own (non-plan-mode) build turns. Absent/null means 'use platform.Config's own
@@ -1544,43 +1541,42 @@ type CreateSessionRequest struct {
 	Title CreateSessionRequestTitle `json:"title" yaml:"title" mapstructure:"title"`
 }
 
-// Optional (Step 59, §29.8), mirroring buildModelId's own optional-key convention
-// exactly, one field over: the reasoning effort the eventual approval-dispatched
+// Optional (§29.8), mirroring buildModelId's own optional-key convention exactly,
+// one field over: the reasoning effort the eventual approval-dispatched
 // IMPLEMENTATION turn should use, distinct from effort (which names the PLAN
 // turn's own effort). Absent/null means 'use the default'. Stored as
 // sessions.build_effort (migrations/000063_turn_session_effort.up.sql).
 type CreateSessionRequestBuildEffort *string
 
-// Optional (Step 37, 'plan mode, web', §12.2 item 3). Like pathScope/mockConfig
-// below, this key is genuinely OPTIONAL (may be absent from the request body
-// entirely) -- only meaningful when planMode is true: the model the eventual
-// approval-dispatched IMPLEMENTATION turn should use, distinct from modelId (which
-// names the PLAN turn's own model). Absent/null means 'use the default model
-// catalog entry', the same convention modelId itself already establishes. Stored
-// as sessions.build_model_id (migrations/000034_plan_mode.up.sql) -- a
-// session-level, set-once value, unlike modelId/planMode which are per-turn
-// (CreateTurnRequest does NOT carry this field: a 'request changes' turn never
-// resubmits it).
+// Optional ('plan mode, web', §12.2 item 3). Like pathScope/mockConfig below, this
+// key is genuinely OPTIONAL (may be absent from the request body entirely) -- only
+// meaningful when planMode is true: the model the eventual approval-dispatched
+// IMPLEMENTATION turn should use, distinct from modelId (which names the PLAN
+// turn's own model). Absent/null means 'use the default model catalog entry', the
+// same convention modelId itself already establishes. Stored as
+// sessions.build_model_id (migrations/000034_plan_mode.up.sql) -- a session-level,
+// set-once value, unlike modelId/planMode which are per-turn (CreateTurnRequest
+// does NOT carry this field: a 'request changes' turn never resubmits it).
 type CreateSessionRequestBuildModelId *string
 
-// Step 59 (§29.8). Reasoning-effort override for this session's first turn; null
+// §8.8 (§29.8). Reasoning-effort override for this session's first turn; null
 // means use the default. Required-nullable, mirroring modelId's own convention
 // exactly -- valid values are owned per-model by OpenCode's own catalog `variants`
 // maps (GET /api/models, this Step's own catalog endpoint), never a Narvi-side
 // enum.
 type CreateSessionRequestEffort *string
 
-// Optional (Step 74, §27.6). Like pathScope/mockConfig above, this key is
-// genuinely OPTIONAL (may be absent from the request body entirely) and
-// independent of docker/pathScope/mockConfig -- presence alone (with
-// mode/allowlist both required inside it, unlike this key itself) creates a
-// session-scoped Environment carrying this egress_policy. mode "allowlist" is
-// refused up front, before any Postgres write, if the configured sandbox provider
-// does not report EgressPolicy support -- the SAME CheckSubstrateCapabilities
-// check docker uses. The server-appended allowlist floor (CP host + this session's
-// own git hosts) is never accepted from the caller here -- it is computed and
-// appended fresh, every time a SessionConfig is assembled from the resulting
-// Environment row, never merely validated against what this request supplied.
+// Optional (§27.6). Like pathScope/mockConfig above, this key is genuinely
+// OPTIONAL (may be absent from the request body entirely) and independent of
+// docker/pathScope/mockConfig -- presence alone (with mode/allowlist both required
+// inside it, unlike this key itself) creates a session-scoped Environment carrying
+// this egress_policy. mode "allowlist" is refused up front, before any Postgres
+// write, if the configured sandbox provider does not report EgressPolicy support
+// -- the SAME CheckSubstrateCapabilities check docker uses. The server-appended
+// allowlist floor (CP host + this session's own git hosts) is never accepted from
+// the caller here -- it is computed and appended fresh, every time a SessionConfig
+// is assembled from the resulting Environment row, never merely validated against
+// what this request supplied.
 type CreateSessionRequestEgressPolicy struct {
 	// Allowlist corresponds to the JSON schema field "allowlist".
 	Allowlist []string `json:"allowlist" yaml:"allowlist" mapstructure:"allowlist"`
@@ -1640,12 +1636,12 @@ func (j *CreateSessionRequestEgressPolicy) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Optional (Step 61, 'builder epistemic pre-action check', §20.4), mirroring
-// buildModelId's own optional-key convention exactly: this session's own override
-// of the platform-wide default for the devil's-advocate pre-action check on its
-// own (non-plan-mode) build turns. Absent/null means 'use platform.Config's own
-// global default' (off, unless an operator has turned the default on) -- a
-// non-null value always wins regardless of that default. Stored as
+// Optional ('builder epistemic pre-action check', §20.4), mirroring buildModelId's
+// own optional-key convention exactly: this session's own override of the
+// platform-wide default for the devil's-advocate pre-action check on its own
+// (non-plan-mode) build turns. Absent/null means 'use platform.Config's own global
+// default' (off, unless an operator has turned the default on) -- a non-null value
+// always wins regardless of that default. Stored as
 // sessions.epistemic_check_enabled
 // (migrations/000066_builder_epistemic_check.up.sql). Session-scoped, not
 // turn-scoped, exactly like buildModelId/buildEffort -- CreateTurnRequest does NOT
@@ -1816,27 +1812,27 @@ func (j *CreateSessionRequest) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// POST /api/sessions/:id/turns (Step 28, 'turn recovery', §8.7
-// 'relaunch-and-resume: conversation id replay'). Enqueues a new turn on an
-// EXISTING session -- mirrors CreateSessionRequest's own prompt/modelId/planMode
-// fields exactly (same shape, not reinvented) for the turn's own dispatch-time
-// inputs. Deliberately has NO 'resume'/'conversationId' field of its own:
-// sessions.opencode_conversation_id (already persisted across turns, §3.3) is
-// threaded into every dispatched Prompt automatically by the control plane's own
-// dispatch logic, so a new turn on a session that already has one continues that
-// same OpenCode conversation with no separate request field needed.
+// POST /api/sessions/:id/turns ('turn recovery', §8.7 'relaunch-and-resume:
+// conversation id replay'). Enqueues a new turn on an EXISTING session -- mirrors
+// CreateSessionRequest's own prompt/modelId/planMode fields exactly (same shape,
+// not reinvented) for the turn's own dispatch-time inputs. Deliberately has NO
+// 'resume'/'conversationId' field of its own: sessions.opencode_conversation_id
+// (already persisted across turns, §3.3) is threaded into every dispatched Prompt
+// automatically by the control plane's own dispatch logic, so a new turn on a
+// session that already has one continues that same OpenCode conversation with no
+// separate request field needed.
 type CreateTurnRequest struct {
-	// Optional (Step 58, 'uploads, blob storage & the in-sandbox download_file tool',
-	// §28.5). Genuinely OPTIONAL -- may be absent from the request body entirely,
-	// matching CreateSessionRequest.pathScope's own precedent, never merely an empty
-	// array. Each id must name a status='ready' upload artifact of THIS session --
-	// validated at the turn-creation chokepoint; any unknown, foreign, or
-	// not-yet-ready id is refused with a structured 4xx before any turn is created.
-	// Absent (or an empty array) means no attachment block is rendered into the
-	// turn's own prompt -- a byte-for-byte no-op, not a degraded case.
+	// Optional ('uploads, blob storage & the in-sandbox download_file tool', §28.5).
+	// Genuinely OPTIONAL -- may be absent from the request body entirely, matching
+	// CreateSessionRequest.pathScope's own precedent, never merely an empty array.
+	// Each id must name a status='ready' upload artifact of THIS session -- validated
+	// at the turn-creation chokepoint; any unknown, foreign, or not-yet-ready id is
+	// refused with a structured 4xx before any turn is created. Absent (or an empty
+	// array) means no attachment block is rendered into the turn's own prompt -- a
+	// byte-for-byte no-op, not a degraded case.
 	AttachmentIds []string `json:"attachmentIds,omitempty,omitzero" yaml:"attachmentIds,omitempty" mapstructure:"attachmentIds,omitempty"`
 
-	// Step 59 (§29.8). Reasoning-effort override for this turn; null means use the
+	// §8.8 (§29.8). Reasoning-effort override for this turn; null means use the
 	// default -- same convention and required-nullable shape as
 	// CreateSessionRequest.effort.
 	Effort CreateTurnRequestEffort `json:"effort" yaml:"effort" mapstructure:"effort"`
@@ -1854,7 +1850,7 @@ type CreateTurnRequest struct {
 	Prompt string `json:"prompt" yaml:"prompt" mapstructure:"prompt"`
 }
 
-// Step 59 (§29.8). Reasoning-effort override for this turn; null means use the
+// §8.8 (§29.8). Reasoning-effort override for this turn; null means use the
 // default -- same convention and required-nullable shape as
 // CreateSessionRequest.effort.
 type CreateTurnRequestEffort *string
@@ -1967,8 +1963,8 @@ func (j *CreateTurnResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Step 60 ('decision inbox: read model + API', §16): one decision-inbox row. Only
-// the fields relevant to `kind` are populated -- every OTHER field is present but
+// §16 ('decision inbox: read model + API', §16): one decision-inbox row. Only the
+// fields relevant to `kind` are populated -- every OTHER field is present but
 // null, matching this schema's own established nullability convention (this file's
 // own top doc comment: 'nullable means a required key whose value may be JSON
 // null'). Mirrors internal/app/decisioninbox.Item 1:1 -- see that type's own doc
@@ -1992,9 +1988,9 @@ type DecisionInboxItem struct {
 	// kind=needs_attention, an auto-paused automation, only.
 	AutomationId DecisionInboxItemAutomationId `json:"automationId" yaml:"automationId" mapstructure:"automationId"`
 
-	// Set for any PR-shaped row, exactly like repoFullName above (§60 review finding
-	// C4 -- this field, findings, and isHandoff used to be nulled out for the handoff
-	// sub-case of kind=awaiting_approval, the one row isHandoff exists to identify).
+	// Set for any PR-shaped row, exactly like repoFullName above (this field,
+	// findings, and isHandoff used to be nulled out for the handoff sub-case of
+	// kind=awaiting_approval, the one row isHandoff exists to identify).
 	CiGreen DecisionInboxItemCiGreen `json:"ciGreen" yaml:"ciGreen" mapstructure:"ciGreen"`
 
 	// When this row first became a pending decision -- the ranking (§16.1: 'by
@@ -2013,11 +2009,11 @@ type DecisionInboxItem struct {
 
 	// Count of still-open (never rebutted/fixed) review findings on this PR. Set for
 	// any PR-shaped row -- see ciGreen's own description -- UNLESS the count itself
-	// could not be determined (a store error): §60 review finding P3-3 (second round)
-	// -- a transient failure fails the *eligibility computation* closed (treated
-	// internally as though a blocking finding were present) but that fail-closed
-	// sentinel must never be presented on the wire as an honest, real count, so this
-	// is null in that case instead, never the synthetic value used internally.
+	// could not be determined (a store error) -- a transient failure fails the
+	// *eligibility computation* closed (treated internally as though a blocking
+	// finding were present) but that fail-closed sentinel must never be presented on
+	// the wire as an honest, real count, so this is null in that case instead, never
+	// the synthetic value used internally.
 	Findings DecisionInboxItemFindings `json:"findings" yaml:"findings" mapstructure:"findings"`
 
 	// The PR's own current GitHub review-decision fact -- display only, NEVER what
@@ -2028,15 +2024,13 @@ type DecisionInboxItem struct {
 	HasApprovingReview DecisionInboxItemHasApprovingReview `json:"hasApprovingReview" yaml:"hasApprovingReview" mapstructure:"hasApprovingReview"`
 
 	// The PR's own current GitHub review-decision fact, reduced to each reviewer's
-	// LATEST review (§60 review finding P1-1, second round) so a reviewer who
-	// requested changes and has since re-reviewed and approved no longer counts here.
-	// UNLIKE hasApprovingReview above, this DOES gate an action: RevalidateForMerge
-	// treats a true value as a hard block on the Merge endpoint (§60 review finding
-	// A4, first round) -- a client should use this field, not hasApprovingReview, to
-	// pre-disable/explain a disabled Merge action (§60 review finding P1-4, second
-	// round: this field previously did not exist on the wire at all, even though the
-	// fact it surfaces already hard-blocked the merge server-side). Set for any
-	// PR-shaped row, exactly like ciGreen above.
+	// LATEST review (so a reviewer who requested changes and has since re-reviewed
+	// and approved no longer counts here). UNLIKE hasApprovingReview above, this DOES
+	// gate an action: RevalidateForMerge treats a true value as a hard block on the
+	// Merge endpoint -- a client should use this field, not hasApprovingReview, to
+	// pre-disable/explain a disabled Merge action (this field previously did not
+	// exist on the wire at all, even though the fact it surfaces already hard-blocked
+	// the merge server-side). Set for any PR-shaped row, exactly like ciGreen above.
 	HasChangesRequested DecisionInboxItemHasChangesRequested `json:"hasChangesRequested" yaml:"hasChangesRequested" mapstructure:"hasChangesRequested"`
 
 	// The PR's current head SHA at the moment this response's own scmAsOf snapshot
@@ -2115,9 +2109,9 @@ type DecisionInboxItemArtifactSummary *string
 // kind=needs_attention, an auto-paused automation, only.
 type DecisionInboxItemAutomationId *string
 
-// Set for any PR-shaped row, exactly like repoFullName above (§60 review finding
-// C4 -- this field, findings, and isHandoff used to be nulled out for the handoff
-// sub-case of kind=awaiting_approval, the one row isHandoff exists to identify).
+// Set for any PR-shaped row, exactly like repoFullName above (this field,
+// findings, and isHandoff used to be nulled out for the handoff sub-case of
+// kind=awaiting_approval, the one row isHandoff exists to identify).
 type DecisionInboxItemCiGreen *bool
 
 // Matches Postgres session_failure_reason -- kind=needs_attention, a failed
@@ -2126,11 +2120,11 @@ type DecisionInboxItemFailureReason *string
 
 // Count of still-open (never rebutted/fixed) review findings on this PR. Set for
 // any PR-shaped row -- see ciGreen's own description -- UNLESS the count itself
-// could not be determined (a store error): §60 review finding P3-3 (second round)
-// -- a transient failure fails the *eligibility computation* closed (treated
-// internally as though a blocking finding were present) but that fail-closed
-// sentinel must never be presented on the wire as an honest, real count, so this
-// is null in that case instead, never the synthetic value used internally.
+// could not be determined (a store error) -- a transient failure fails the
+// *eligibility computation* closed (treated internally as though a blocking
+// finding were present) but that fail-closed sentinel must never be presented on
+// the wire as an honest, real count, so this is null in that case instead, never
+// the synthetic value used internally.
 type DecisionInboxItemFindings *int
 
 // The PR's own current GitHub review-decision fact -- display only, NEVER what
@@ -2141,15 +2135,13 @@ type DecisionInboxItemFindings *int
 type DecisionInboxItemHasApprovingReview *bool
 
 // The PR's own current GitHub review-decision fact, reduced to each reviewer's
-// LATEST review (§60 review finding P1-1, second round) so a reviewer who
-// requested changes and has since re-reviewed and approved no longer counts here.
-// UNLIKE hasApprovingReview above, this DOES gate an action: RevalidateForMerge
-// treats a true value as a hard block on the Merge endpoint (§60 review finding
-// A4, first round) -- a client should use this field, not hasApprovingReview, to
-// pre-disable/explain a disabled Merge action (§60 review finding P1-4, second
-// round: this field previously did not exist on the wire at all, even though the
-// fact it surfaces already hard-blocked the merge server-side). Set for any
-// PR-shaped row, exactly like ciGreen above.
+// LATEST review (so a reviewer who requested changes and has since re-reviewed and
+// approved no longer counts here). UNLIKE hasApprovingReview above, this DOES gate
+// an action: RevalidateForMerge treats a true value as a hard block on the Merge
+// endpoint -- a client should use this field, not hasApprovingReview, to
+// pre-disable/explain a disabled Merge action (this field previously did not exist
+// on the wire at all, even though the fact it surfaces already hard-blocked the
+// merge server-side). Set for any PR-shaped row, exactly like ciGreen above.
 type DecisionInboxItemHasChangesRequested *bool
 
 // The PR's current head SHA at the moment this response's own scmAsOf snapshot was
@@ -2363,15 +2355,15 @@ func (j *DecisionInboxItem) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Step 66's own additive extension (§26.1, 'review digest: verdict as merge
+// §26.1's own additive extension (§26.1, 'review digest: verdict as merge
 // readout'): the merge-readout's typed content -- 'what this PR does',
 // architecture choices, and risks to the stack -- that fronts the rendered
 // verdict, ahead of the pre-existing findings/coverage/docs-drift content (now
 // collapsed into an appendix, internal/domain/reviewpost.RenderVerdictComment).
-// Extended by Step 67 (§26.2, 'description adequacy + graduated remediation') with
-// descriptionAdequacy/adequacyExplanation/proposedBody below, and by Step 68
-// (§26.3, light/deep review-depth triage) with a CONDITIONAL requirement on three
-// more fields. REQUIRED on the request as a whole (unlike findings above):
+// Extended by §26.2 (§26.2, 'description adequacy + graduated remediation') with
+// descriptionAdequacy/adequacyExplanation/proposedBody below, and by §26.3 (§26.3,
+// light/deep review-depth triage) with a CONDITIONAL requirement on three more
+// fields. REQUIRED on the request as a whole (unlike findings above):
 // summary/descriptionAdequacy/adequacyExplanation within it are ALWAYS
 // hard-required (internal/domain/reviewpost.ValidateVerdictInput);
 // archDecisions/stackRisks/unverifiedLimits are requested on every review (the
@@ -2385,22 +2377,22 @@ func (j *DecisionInboxItem) UnmarshalJSON(value []byte) error {
 // application-level enforced rule. proposedBody remains requested but never
 // required, on every path.
 type Digest struct {
-	// Step 67's own addition (§26.2): the tri-state's own required one-line
-	// explanation of WHY descriptionAdequacy is what it is -- REQUIRED non-blank,
-	// mirroring summary's own 'a verdict with no human-readable explanation at all
-	// defeats the point' treatment.
+	// §26.2's own addition (§26.2): the tri-state's own required one-line explanation
+	// of WHY descriptionAdequacy is what it is -- REQUIRED non-blank, mirroring
+	// summary's own 'a verdict with no human-readable explanation at all defeats the
+	// point' treatment.
 	AdequacyExplanation string `json:"adequacyExplanation" yaml:"adequacyExplanation" mapstructure:"adequacyExplanation"`
 
 	// Zero or more structural decisions the diff makes -- schema-optional at this
 	// JSON Schema level (absent/empty always decodes fine), but application-level
 	// REQUIRED (at least one entry with real, non-blank content) whenever this
-	// session's own server-resolved review-depth is 'deep' (Step 68, §26.3) -- see
-	// this object's own description, and
-	// internal/domain/reviewpost.ValidateVerdictInput's own doc comment, for the
-	// exact conditional rule this schema alone cannot express.
+	// session's own server-resolved review-depth is 'deep' (§26.3) -- see this
+	// object's own description, and internal/domain/reviewpost.ValidateVerdictInput's
+	// own doc comment, for the exact conditional rule this schema alone cannot
+	// express.
 	ArchDecisions []ArchDecision `json:"archDecisions,omitempty,omitzero" yaml:"archDecisions,omitempty" mapstructure:"archDecisions,omitempty"`
 
-	// Step 69's own addition (§26.4, 'the deep path: adversarial counter-review'):
+	// §26.4's own addition (§26.4, 'the deep path: adversarial counter-review'):
 	// free-text prose naming where the primary reviewer's own findings/digest and the
 	// counter-reviewer sub-task's own adjudication genuinely disagreed --
 	// 'inter-agent disagreement is precisely the signal that a human must decide'.
@@ -2409,18 +2401,17 @@ type Digest struct {
 	// disagree with anything (§26.9).
 	ContestedPoints DigestContestedPoints `json:"contestedPoints,omitempty,omitzero" yaml:"contestedPoints,omitempty" mapstructure:"contestedPoints,omitempty"`
 
-	// Step 67's own addition (§26.2): the agent's own comparison of THIS SAME
-	// digest's summary (written from the diff) against the pull request's own
-	// title+body -- which stay untrusted input throughout, consumed by this
-	// comparison, never obeyed by it. Matches
-	// internal/domain/review.DescriptionAdequacy's own three values exactly. REQUIRED
-	// -- directly feeds review.ComputeShippable's own third raise-only floor
-	// (review.AdequacyFloor): 'misleading' floors Shippable at needs_human,
-	// 'ok'/'drift' impose no floor of their own.
+	// §26.2's own addition (§26.2): the agent's own comparison of THIS SAME digest's
+	// summary (written from the diff) against the pull request's own title+body --
+	// which stay untrusted input throughout, consumed by this comparison, never
+	// obeyed by it. Matches internal/domain/review.DescriptionAdequacy's own three
+	// values exactly. REQUIRED -- directly feeds review.ComputeShippable's own third
+	// raise-only floor (review.AdequacyFloor): 'misleading' floors Shippable at
+	// needs_human, 'ok'/'drift' impose no floor of their own.
 	DescriptionAdequacy DigestDescriptionAdequacy `json:"descriptionAdequacy" yaml:"descriptionAdequacy" mapstructure:"descriptionAdequacy"`
 
-	// Step 67's own addition (§26.2): the agent's OWN optional rewrite proposal for
-	// the pull request's body -- 'the agent MAY rewrite the PR body'. OPTIONAL, not
+	// §26.2's own addition (§26.2): the agent's OWN optional rewrite proposal for the
+	// pull request's body -- 'the agent MAY rewrite the PR body'. OPTIONAL, not
 	// validation-enforced: most reviews propose no rewrite at all. Rendered as a
 	// suggestion in the digest for every PR regardless of authorship; ALSO delivered
 	// as a real write only for a Narvi-authored PR with this repo's own
@@ -2432,7 +2423,7 @@ type Digest struct {
 	// Free-text prose: coupling and deployment risks (migrations, multi-phase
 	// deploys, image rebuilds) and reversibility -- rendered alongside the verdict's
 	// own existing blastRadius. Schema-optional; application-level REQUIRED non-blank
-	// on a 'deep' review-depth turn, mirroring archDecisions above (Step 68, §26.3).
+	// on a 'deep' review-depth turn, mirroring archDecisions above (§26.3).
 	StackRisks DigestStackRisks `json:"stackRisks,omitempty,omitzero" yaml:"stackRisks,omitempty" mapstructure:"stackRisks,omitempty"`
 
 	// 'What this PR does' -- 2-4 sentences written FROM THE DIFF, never copied from
@@ -2444,11 +2435,11 @@ type Digest struct {
 
 	// Free-text prose: what was explicitly NOT verified (honest limits).
 	// Schema-optional; application-level REQUIRED non-blank on a 'deep' review-depth
-	// turn, mirroring archDecisions above (Step 68, §26.3).
+	// turn, mirroring archDecisions above (§26.3).
 	UnverifiedLimits DigestUnverifiedLimits `json:"unverifiedLimits,omitempty,omitzero" yaml:"unverifiedLimits,omitempty" mapstructure:"unverifiedLimits,omitempty"`
 }
 
-// Step 69's own addition (§26.4, 'the deep path: adversarial counter-review'):
+// §26.4's own addition (§26.4, 'the deep path: adversarial counter-review'):
 // free-text prose naming where the primary reviewer's own findings/digest and the
 // counter-reviewer sub-task's own adjudication genuinely disagreed -- 'inter-agent
 // disagreement is precisely the signal that a human must decide'. OPTIONAL, not
@@ -2489,8 +2480,8 @@ func (j *DigestDescriptionAdequacy) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Step 67's own addition (§26.2): the agent's OWN optional rewrite proposal for
-// the pull request's body -- 'the agent MAY rewrite the PR body'. OPTIONAL, not
+// §26.2's own addition (§26.2): the agent's OWN optional rewrite proposal for the
+// pull request's body -- 'the agent MAY rewrite the PR body'. OPTIONAL, not
 // validation-enforced: most reviews propose no rewrite at all. Rendered as a
 // suggestion in the digest for every PR regardless of authorship; ALSO delivered
 // as a real write only for a Narvi-authored PR with this repo's own
@@ -2502,12 +2493,12 @@ type DigestProposedBody *string
 // Free-text prose: coupling and deployment risks (migrations, multi-phase deploys,
 // image rebuilds) and reversibility -- rendered alongside the verdict's own
 // existing blastRadius. Schema-optional; application-level REQUIRED non-blank on a
-// 'deep' review-depth turn, mirroring archDecisions above (Step 68, §26.3).
+// 'deep' review-depth turn, mirroring archDecisions above (§26.3).
 type DigestStackRisks *string
 
 // Free-text prose: what was explicitly NOT verified (honest limits).
 // Schema-optional; application-level REQUIRED non-blank on a 'deep' review-depth
-// turn, mirroring archDecisions above (Step 68, §26.3).
+// turn, mirroring archDecisions above (§26.3).
 type DigestUnverifiedLimits *string
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -2578,8 +2569,8 @@ func (j *EventsResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// One review_false_positive_patterns row's own REST wire shape (Step 63, 'review:
-// learned false-positive patterns', §22.2/§22.4,
+// One review_false_positive_patterns row's own REST wire shape ('review: learned
+// false-positive patterns', §22.2/§22.4,
 // migrations/000073_review_false_positive_patterns.up.sql) -- returned by the
 // audit-view GET and the retire POST so a caller can confirm the resulting state.
 // Capture itself has no REST shape at all: it happens exclusively via the `false
@@ -2833,10 +2824,9 @@ func (j *ListAuditLogResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// GET /api/automations's own response body (Step 52, §8.4's own 'creator/status
-// filters', applied as ?createdBy=<uuid|me>&status=<active|paused> query params).
-// Unbounded (no pagination), matching ListMembersResponse's own identical
-// precedent.
+// GET /api/automations's own response body (§8.4's own 'creator/status filters',
+// applied as ?createdBy=<uuid|me>&status=<active|paused> query params). Unbounded
+// (no pagination), matching ListMembersResponse's own identical precedent.
 type ListAutomationsResponse struct {
 	// Automations corresponds to the JSON schema field "automations".
 	Automations []Automation `json:"automations" yaml:"automations" mapstructure:"automations"`
@@ -2889,8 +2879,8 @@ func (j *ListCloudIdentityBindingsResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// GET /api/decision-inbox's own response body (Step 60, §16.2/§16.3 -- Phase 5
-// half: read model + endpoints; the UI is Phase 7).
+// GET /api/decision-inbox's own response body (§16.2/§16.3 -- Phase 5 half: read
+// model + endpoints; the UI is Phase 7).
 type ListDecisionInboxResponse struct {
 	// DecisionLatencyComputed corresponds to the JSON schema field
 	// "decisionLatencyComputed".
@@ -2913,10 +2903,10 @@ type ListDecisionInboxResponse struct {
 	// When the PR-derived rows (ready_to_merge/needs_review) were actually fetched
 	// from GitHub (§16.2: 'the response carries its as-of timestamp... never
 	// presented as live truth') -- null iff the caller has no linked GitHub identity,
-	// so no SCM read was attempted AT ALL. Distinct from scmFetchFailed below (§60
-	// review finding C1): scmAsOf==null alone used to be the ONLY signal here, which
-	// meant a GitHub outage or a revoked token (a read that WAS attempted and failed)
-	// was indistinguishable from never having linked GitHub in the first place -- a
+	// so no SCM read was attempted AT ALL. Distinct from scmFetchFailed below:
+	// scmAsOf==null alone used to be the ONLY signal here, which meant a GitHub
+	// outage or a revoked token (a read that WAS attempted and failed) was
+	// indistinguishable from never having linked GitHub in the first place -- a
 	// contract-abiding client would render 'no GitHub linked' for what was actually a
 	// transient failure. goJSONSchema forces the literal *time.Time type -- see
 	// Plan.decidedAt's own doc comment for why a named pointer-type wrapper silently
@@ -2925,24 +2915,23 @@ type ListDecisionInboxResponse struct {
 
 	// True iff the caller's PR-derived rows (ready_to_merge/needs_review) are a
 	// known-incomplete or degraded picture -- ONE channel fed by several independent
-	// producers (§60 review findings P1-2/P1-3/P2-1, second round, extending §60
-	// review finding C1, first round): the live PR fetch failing outright (a revoked
-	// token, a GitHub incident, a timeout, or a linked-identity lookup/decrypt
-	// failure -- scmAsOf stays null in these cases, no fetch was attempted or it
-	// never returned); one of GitHub's own underlying discovery queries failing while
-	// the other still returned a real, if partial, result (scmAsOf IS set here -- a
-	// genuine, if partial, fetch happened); or an individual PR's own §17
-	// sentinel-fix exclusion check erroring (that one row is dropped, fail-closed,
-	// but the overall read is no longer complete). UNLIKE this field's own previous
-	// doc comment claimed, scmAsOf non-null and scmFetchFailed true are NOT mutually
-	// exclusive -- a partial-but-real fetch legitimately carries both a real as-of
-	// instant and a flag telling the caller not to trust the rows present as
-	// complete. Always false alongside scmAsOf==null when no linked identity exists
-	// at all (a legitimate, non-degraded empty state). A client should render a
-	// distinct 'temporarily unable to load your pull requests, try again shortly'
-	// state whenever this is true -- never the same 'no GitHub linked' empty state
-	// scmAsOf==null with scmFetchFailed==false means, and never silently trust the
-	// rows present as a complete queue.
+	// producers: the live PR fetch failing outright (a revoked token, a GitHub
+	// incident, a timeout, or a linked-identity lookup/decrypt failure -- scmAsOf
+	// stays null in these cases, no fetch was attempted or it never returned); one of
+	// GitHub's own underlying discovery queries failing while the other still
+	// returned a real, if partial, result (scmAsOf IS set here -- a genuine, if
+	// partial, fetch happened); or an individual PR's own §17 sentinel-fix exclusion
+	// check erroring (that one row is dropped, fail-closed, but the overall read is
+	// no longer complete). UNLIKE this field's own previous doc comment claimed,
+	// scmAsOf non-null and scmFetchFailed true are NOT mutually exclusive -- a
+	// partial-but-real fetch legitimately carries both a real as-of instant and a
+	// flag telling the caller not to trust the rows present as complete. Always false
+	// alongside scmAsOf==null when no linked identity exists at all (a legitimate,
+	// non-degraded empty state). A client should render a distinct 'temporarily
+	// unable to load your pull requests, try again shortly' state whenever this is
+	// true -- never the same 'no GitHub linked' empty state scmAsOf==null with
+	// scmFetchFailed==false means, and never silently trust the rows present as a
+	// complete queue.
 	ScmFetchFailed bool `json:"scmFetchFailed" yaml:"scmFetchFailed" mapstructure:"scmFetchFailed"`
 }
 
@@ -2985,8 +2974,8 @@ func (j *ListDecisionInboxResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// GET /api/repos/{owner}/{repo}/false-positive-patterns's own response body (Step
-// 63, §22.4's own audit view) -- EVERY pattern for this repo, active or retired,
+// GET /api/repos/{owner}/{repo}/false-positive-patterns's own response body
+// (§22.4's own audit view) -- EVERY pattern for this repo, active or retired,
 // newest-first.
 type ListFalsePositivePatternsResponse struct {
 	// Patterns corresponds to the JSON schema field "patterns".
@@ -3228,8 +3217,8 @@ func (j *Member) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// POST /api/decision-inbox/merge's own request body (Step 60, §16.2's own Merge
-// endpoint, mockups.html decision 33: 'Auto-approved still means human-merged...
+// POST /api/decision-inbox/merge's own request body (§16.2's own Merge endpoint,
+// mockups.html decision 33: 'Auto-approved still means human-merged...
 // re-validates CI, approval state, and RBAC server-side at click time').
 type MergePullRequestRequest struct {
 	// PrNumber corresponds to the JSON schema field "prNumber".
@@ -3298,8 +3287,8 @@ func (j *MergePullRequestResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// POST /api/sessions/:id/uploads (Step 58, §28.4/§28.5): declares the file about
-// to be uploaded. The control plane checks sizeBytes against
+// POST /api/sessions/:id/uploads (§28.4/§28.5): declares the file about to be
+// uploaded. The control plane checks sizeBytes against
 // MaxUploadBytes/MaxSessionUploadBytes and returns a presigned PUT URL; an
 // over-limit request is refused with a structured 4xx and no artifact row is
 // created. The sandbox-bearer twin of this same mint (POST
@@ -3394,26 +3383,26 @@ func (j *MintUploadResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Response body for GET /api/models -- Step 59's own 'Catalog' deliverable
-// (IMPLEMENTATION_PLAN.md Step 59 row; §8 item 8; §29; §25.2). STRUCTURAL
-// DECISION, named here since §29 leaves it open: sourced from a
-// control-plane-embedded snapshot of OpenCode's own GET /provider catalog
-// (live-verified against the pinned OpenCode 1.17.15 binary during this Step's own
-// implementation), NOT a live per-sandbox proxy -- the control-plane image does
-// not ship the OpenCode binary (§29.9's own identical reasoning for why the
-// ChatGPT device-flow client is a direct CP-side adapter rather than brokered
-// through a spawned sandbox), so there is no running OpenCode server this endpoint
-// could query live even if it wanted to. This is the SAME 'pinned known-good set'
-// convention §7 already established for the sandbox-side per-turn fallback (the
-// opencode adapter's own resolveProviderModel/fallbackModel), applied here as the
-// control plane's ONLY source rather than a fallback of last resort -- refreshed
-// by hand whenever the pinned OpenCode version bumps, exactly like that fallback
-// constant already is. Scope: the 3 providers Step 53 already wires credential
-// injection for (google/anthropic/openai) -- every model id is the exact catalog
-// id OpenCode itself recognizes, usable verbatim as the '<providerId>/<modelId>'
-// string modelId/buildModelId/effort/buildEffort already accept end to end today
-// (§25.1's own 'no Narvi-side allowlist' passthrough, unchanged by this catalog's
-// existence -- it is a discovery aid, never a validating allowlist).
+// Response body for GET /api/models -- §8.8's own 'Catalog' deliverable
+// (IMPLEMENTATION_PLAN.md row; §8 item 8; §29; §25.2). STRUCTURAL DECISION, named
+// here since §29 leaves it open: sourced from a control-plane-embedded snapshot of
+// OpenCode's own GET /provider catalog (live-verified against the pinned OpenCode
+// 1.17.15 binary during this Step's own implementation), NOT a live per-sandbox
+// proxy -- the control-plane image does not ship the OpenCode binary (§29.9's own
+// identical reasoning for why the ChatGPT device-flow client is a direct CP-side
+// adapter rather than brokered through a spawned sandbox), so there is no running
+// OpenCode server this endpoint could query live even if it wanted to. This is the
+// SAME 'pinned known-good set' convention §7 already established for the
+// sandbox-side per-turn fallback (the opencode adapter's own
+// resolveProviderModel/fallbackModel), applied here as the control plane's ONLY
+// source rather than a fallback of last resort -- refreshed by hand whenever the
+// pinned OpenCode version bumps, exactly like that fallback constant already is.
+// Scope: the 3 providers §25.1 already wires credential injection for
+// (google/anthropic/openai) -- every model id is the exact catalog id OpenCode
+// itself recognizes, usable verbatim as the '<providerId>/<modelId>' string
+// modelId/buildModelId/effort/buildEffort already accept end to end today (§25.1's
+// own 'no Narvi-side allowlist' passthrough, unchanged by this catalog's existence
+// -- it is a discovery aid, never a validating allowlist).
 type ModelCatalog struct {
 	// Providers corresponds to the JSON schema field "providers".
 	Providers []ModelCatalogProvider `json:"providers" yaml:"providers" mapstructure:"providers"`
@@ -3582,7 +3571,7 @@ func (j *ModelCatalog) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// One opencode_configs row's own REST wire shape (Step 72, §27.2,
+// One opencode_configs row's own REST wire shape (§27.2,
 // migrations/000091_opencode_configs.up.sql). Returned by GET/PUT
 // /api/environments/{environmentID}/opencode-config and GET/PUT
 // /api/opencode-config (global). UNLIKE SandboxSecret/ProviderCredential, document
@@ -3761,9 +3750,9 @@ func (j *PendingLinkPrompt) UnmarshalJSON(value []byte) error {
 
 // One plan-mode VERSION's own REST wire shape
 // (migrations/000034_plan_mode.up.sql), returned by GET /api/sessions/:id/plans
-// (audit finding M3, completeness: Step 37 shipped approve/reject with no way for
-// a web client to ever discover a planId to approve). Deliberately omits turnId
-// and slack_channel_id/slack_message_ts, both present on the underlying plans row:
+// (audit finding M3, completeness: §8.1 shipped approve/reject with no way for a
+// web client to ever discover a planId to approve). Deliberately omits turnId and
+// slack_channel_id/slack_message_ts, both present on the underlying plans row:
 // turnId is an internal linkage to the producing turn's own event stream (where
 // the plan's actual text/steps live, per that migration's own doc comment), not
 // needed for a client whose job here is discovering/approving a planId;
@@ -3983,10 +3972,9 @@ func (j *Plan) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Request body for POST /sessions/:id/turn/epistemic-outcome (Step 61, 'builder
-// epistemic pre-action check', §20.2) -- the devil's-advocate preamble's own
-// reporting tool, mirroring
-// PostWorkflowStepOutcomeRequest/PostReviewVerdictRequest's own
+// Request body for POST /sessions/:id/turn/epistemic-outcome ('builder epistemic
+// pre-action check', §20.2) -- the devil's-advocate preamble's own reporting tool,
+// mirroring PostWorkflowStepOutcomeRequest/PostReviewVerdictRequest's own
 // sandbox-bearer-authenticated-endpoint shape exactly (see reviewverdict.go's doc
 // comment for the full 'why an HTTP endpoint, not a genuine OpenCode/LLM
 // tool-call' reasoning, which applies identically here). Posts onto whichever turn
@@ -4054,8 +4042,8 @@ func (j *PostEpistemicOutcomeRequest) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// 201 response body for POST /sessions/:id/turn/epistemic-outcome (Step 61, §20.2)
-// -- confirms which turn actually recorded the posted outcome.
+// 201 response body for POST /sessions/:id/turn/epistemic-outcome (§20.2) --
+// confirms which turn actually recorded the posted outcome.
 type PostEpistemicOutcomeResponse struct {
 	// TurnId corresponds to the JSON schema field "turnId".
 	TurnId string `json:"turnId" yaml:"turnId" mapstructure:"turnId"`
@@ -4079,14 +4067,14 @@ func (j *PostEpistemicOutcomeResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Request body for POST /sessions/:id/review/verdict (Step 47, 'server-side
-// verdict', §8.2/§5.2) -- the verdict-posting tool's own typed-fields call,
-// validated server-side (internal/domain/reviewpost.ValidateVerdictInput). Mirrors
+// Request body for POST /sessions/:id/review/verdict ('server-side verdict',
+// §8.2/§5.2) -- the verdict-posting tool's own typed-fields call, validated
+// server-side (internal/domain/reviewpost.ValidateVerdictInput). Mirrors
 // internal/domain/review.Verdict's own fields exactly, EXCEPT Shippable itself,
 // which this endpoint always recomputes server-side (review.ComputeShippable) and
 // NEVER accepts from a caller -- see that package's own Verdict.Shippable doc
 // comment (verdict.go) for why. factCheck/factCheckKilled and counterReview are
-// Step 69's own additions (§26.4/§26.6, 'review deep path: adversarial
+// §26.4's own additions (§26.4/§26.6, 'review deep path: adversarial
 // counter-review + readout measurement') -- see those two properties' own doc
 // comments below.
 type PostReviewVerdictRequest struct {
@@ -4094,7 +4082,7 @@ type PostReviewVerdictRequest struct {
 	// empty array is legal (the reviewer found no tagged area touched).
 	BlastRadius []PostReviewVerdictRequestBlastRadiusElem `json:"blastRadius" yaml:"blastRadius" mapstructure:"blastRadius"`
 
-	// Step 69's own addition (§26.4, 'the deep path: adversarial counter-review'):
+	// §26.4's own addition (§26.4, 'the deep path: adversarial counter-review'):
 	// whether the primary reviewer's orchestration spawned and adjudicated the
 	// counter-reviewer sub-task (§7.1's engine-native fan-out) before posting this
 	// verdict. One of 'done'/'skipped' when present, matching
@@ -4110,7 +4098,7 @@ type PostReviewVerdictRequest struct {
 	// ErrInvalidCounterReview), which this JSON Schema cannot express (review-depth
 	// lives on the turn, not on this payload -- mirrors
 	// digest.archDecisions/stackRisks/unverifiedLimits' own identical
-	// conditional-requirement shape, Step 68). 'skipped' raises the server-computed
+	// conditional-requirement shape, §26.3. 'skipped' raises the server-computed
 	// Shippable floor to needs_human (review.CounterReviewFloor) -- the deliberate,
 	// load-bearing difference from factCheck above, which never raises anything.
 	CounterReview PostReviewVerdictRequestCounterReview `json:"counterReview,omitempty,omitzero" yaml:"counterReview,omitempty" mapstructure:"counterReview,omitempty"`
@@ -4121,19 +4109,18 @@ type PostReviewVerdictRequest struct {
 	// Matches internal/domain/review.DocsDriftState's own three values exactly.
 	DocsDrift PostReviewVerdictRequestDocsDrift `json:"docsDrift" yaml:"docsDrift" mapstructure:"docsDrift"`
 
-	// Step 69's own addition (§26.6, 'diff-only fact-check pass, both paths'):
-	// whether the primary reviewer's orchestration spawned the diff-only fact-check
-	// sub-task (§7.1's engine-native fan-out, no tool access) before posting this
-	// verdict. Matches internal/domain/reviewpost.FactCheckStatus's own two values
-	// exactly. REQUIRED UNCONDITIONALLY -- both paths, not merely deep, since the
-	// fact-check pass itself runs on every review regardless of depth. Never an input
-	// to the server-computed Shippable -- 'skipped' can only mean published findings
-	// were not additionally pruned of provably-wrong ones, never that a real defect
-	// went unverified (the deliberate, load-bearing difference from counterReview
-	// below).
+	// §26.4's own addition (§26.6, 'diff-only fact-check pass, both paths'): whether
+	// the primary reviewer's orchestration spawned the diff-only fact-check sub-task
+	// (§7.1's engine-native fan-out, no tool access) before posting this verdict.
+	// Matches internal/domain/reviewpost.FactCheckStatus's own two values exactly.
+	// REQUIRED UNCONDITIONALLY -- both paths, not merely deep, since the fact-check
+	// pass itself runs on every review regardless of depth. Never an input to the
+	// server-computed Shippable -- 'skipped' can only mean published findings were
+	// not additionally pruned of provably-wrong ones, never that a real defect went
+	// unverified (the deliberate, load-bearing difference from counterReview below).
 	FactCheck PostReviewVerdictRequestFactCheck `json:"factCheck" yaml:"factCheck" mapstructure:"factCheck"`
 
-	// Step 69's own addition (§26.6): the count of findings the fact-check pass
+	// §26.4's own addition (§26.6): the count of findings the fact-check pass
 	// actually removed as provably wrong from the diff alone. REQUIRED
 	// UNCONDITIONALLY, alongside factCheck above -- MUST be 0 when factCheck is
 	// 'skipped' (a skipped pass, by construction, removed nothing;
@@ -4144,8 +4131,8 @@ type PostReviewVerdictRequest struct {
 	// FilesChanged corresponds to the JSON schema field "filesChanged".
 	FilesChanged int `json:"filesChanged" yaml:"filesChanged" mapstructure:"filesChanged"`
 
-	// Step 48's own additive extension (§8.2/§17/§22.1): zero or more per-finding
-	// typed fields, alongside the verdict's own aggregate fields above. OPTIONAL --
+	// §8.2's own additive extension (§8.2/§17/§22.1): zero or more per-finding typed
+	// fields, alongside the verdict's own aggregate fields above. OPTIONAL --
 	// absent/empty means this verdict reports no individual findings, exactly like
 	// every verdict posted before this Step. See
 	// internal/domain/reviewpost/finding.go's own doc comment for why identityHash is
@@ -4216,7 +4203,7 @@ func (j *PostReviewVerdictRequestBlastRadiusElem) UnmarshalJSON(value []byte) er
 	return nil
 }
 
-// Step 69's own addition (§26.4, 'the deep path: adversarial counter-review'):
+// §26.4's own addition (§26.4, 'the deep path: adversarial counter-review'):
 // whether the primary reviewer's orchestration spawned and adjudicated the
 // counter-reviewer sub-task (§7.1's engine-native fan-out) before posting this
 // verdict. One of 'done'/'skipped' when present, matching
@@ -4231,7 +4218,7 @@ func (j *PostReviewVerdictRequestBlastRadiusElem) UnmarshalJSON(value []byte) er
 // (internal/domain/reviewpost.ValidateVerdictInput's own ErrInvalidCounterReview),
 // which this JSON Schema cannot express (review-depth lives on the turn, not on
 // this payload -- mirrors digest.archDecisions/stackRisks/unverifiedLimits' own
-// identical conditional-requirement shape, Step 68). 'skipped' raises the
+// identical conditional-requirement shape, §26.3. 'skipped' raises the
 // server-computed Shippable floor to needs_human (review.CounterReviewFloor) --
 // the deliberate, load-bearing difference from factCheck above, which never raises
 // anything.
@@ -4488,10 +4475,9 @@ func (j *PostReviewVerdictRequest) UnmarshalJSON(value []byte) error {
 // authoritative results the caller cannot itself derive, so a review agent can
 // log/confirm what actually happened.
 type PostReviewVerdictResponse struct {
-	// Step 48's own additive extension: the server-computed identityHash for each
-	// posted finding, in the SAME order as the request's own findings array -- so a
-	// caller can log/correlate them. Absent/empty when the request posted no
-	// findings.
+	// §8.2's own additive extension: the server-computed identityHash for each posted
+	// finding, in the SAME order as the request's own findings array -- so a caller
+	// can log/correlate them. Absent/empty when the request posted no findings.
 	FindingIdentityHashes []string `json:"findingIdentityHashes,omitempty,omitzero" yaml:"findingIdentityHashes,omitempty" mapstructure:"findingIdentityHashes,omitempty"`
 
 	// Which GitHub pull-request-review event this call submitted
@@ -4595,8 +4581,8 @@ func (j *PostReviewVerdictResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Request body for POST /sessions/:id/workflow/step-outcome (Step 55, 'workflow
-// execution engine', §25.6) -- the generic step-outcome-posting tool, mirroring
+// Request body for POST /sessions/:id/workflow/step-outcome ('workflow execution
+// engine', §25.6) -- the generic step-outcome-posting tool, mirroring
 // PostReviewVerdictRequest's own sandbox-bearer-authenticated-endpoint shape (see
 // reviewverdict.go's doc comment for the full 'why an HTTP endpoint, not a genuine
 // OpenCode/LLM tool-call' reasoning, which applies identically here) but
@@ -4685,8 +4671,8 @@ func (j *PostWorkflowStepOutcomeRequest) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// 201 response body for POST /sessions/:id/workflow/step-outcome (Step 55, §25.6)
-// -- confirms which attempt/run actually recorded the posted outcome.
+// 201 response body for POST /sessions/:id/workflow/step-outcome (§25.6) --
+// confirms which attempt/run actually recorded the posted outcome.
 type PostWorkflowStepOutcomeResponse struct {
 	// StepRunId corresponds to the JSON schema field "stepRunId".
 	StepRunId string `json:"stepRunId" yaml:"stepRunId" mapstructure:"stepRunId"`
@@ -4716,8 +4702,8 @@ func (j *PostWorkflowStepOutcomeResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// One finding's own typed fields, as posted by the verdict-posting tool call (Step
-// 48) -- NEVER carries an identity hash (server-computed,
+// One finding's own typed fields, as posted by the verdict-posting tool call (§8.2
+// -- NEVER carries an identity hash (server-computed,
 // internal/domain/reviewpost.ComputeFindingIdentity, never client-supplied -- the
 // same 'don't trust the model with anything authoritative' discipline as
 // PostReviewVerdictRequest.proposedShippable).
@@ -4833,7 +4819,7 @@ func (j *PostedFinding) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// One provider_credentials row's own REST wire shape (Step 53, §25.1/§25.3,
+// One provider_credentials row's own REST wire shape (§25.1/§25.3,
 // migrations/000056_provider_credentials.up.sql). Returned by the create/get/list
 // routes mounted at /api/repos/{owner}/{repo}/provider-credentials,
 // /api/environments/{environmentID}/provider-credentials, and
@@ -5078,8 +5064,8 @@ func (j *PutClusterBindingRequest) UnmarshalJSON(value []byte) error {
 // scope, maintainer+ -- the §13.3 row that owns environments/env secrets) /
 // authz.ActionManageGlobalSecrets (global scope, admin only -- the §13.3 row that
 // owns integrations/global secrets), reusing the SAME 2 already-reserved actions
-// rather than a new OpenCode-config-specific action (§27.1's 'Step 53's idioms
-// reused throughout' extended to §27.2).
+// rather than a new OpenCode-config-specific action (§27.1's ”s idioms reused
+// throughout' extended to §27.2).
 type PutOpenCodeConfigRequest struct {
 	// Same validation as OpenCodeConfig.document: must parse as a JSON object;
 	// nothing deeper is checked server-side.
@@ -5105,7 +5091,7 @@ func (j *PutOpenCodeConfigRequest) UnmarshalJSON(value []byte) error {
 }
 
 // Request body for POST /api/sessions/:id/review/findings/:identityHash/rebut
-// (Step 48, §22.1) -- maintainer+ only (authz.ActionEditReviewVerdict).
+// (§22.1) -- maintainer+ only (authz.ActionEditReviewVerdict).
 type RebutFindingRequest struct {
 	// The maintainer's own reason this finding is not a genuine issue.
 	RebuttalText string `json:"rebuttalText" yaml:"rebuttalText" mapstructure:"rebuttalText"`
@@ -5132,24 +5118,24 @@ func (j *RebutFindingRequest) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// GET/PUT /api/repos/{owner}/{repo}/settings response body (Step 47, §8.2/§21.2)
-// -- an admin, per-repo policy-flag row (migrations/000044_repo_settings.up.sql).
-// Deliberately a small, extensible shape: Step 62's auto-merge toggle, Step 65's
-// automatic-re-review opt-in (§24.5), and Step 67's description-autofix toggle
+// GET/PUT /api/repos/{owner}/{repo}/settings response body (§8.2/§21.2) -- an
+// admin, per-repo policy-flag row (migrations/000044_repo_settings.up.sql).
+// Deliberately a small, extensible shape: §21's auto-merge toggle, §24's
+// automatic-re-review opt-in (§24.5), and §26.2's description-autofix toggle
 // (§26.2) each added a further boolean property here, never a bespoke DTO of their
 // own -- future toggles are expected to follow the same pattern.
 type RepoSettings struct {
-	// Step 62, §21.2 stage 2: admin-only, per-repo, off by default -- once armed, an
+	// §21, §21.2 stage 2: admin-only, per-repo, off by default -- once armed, an
 	// auto-approved PR merges unattended (internal/app/automerge.Worker) instead of
 	// surfacing in the decision inbox for a human's 1-click confirm. Gated by
 	// authz.ActionToggleAutoMerge, the SAME admin-only row as sentinelAutofixEnabled,
 	// never maintainer-level ActionConfigureAutoApprove.
 	AutoMergeEnabled bool `json:"autoMergeEnabled" yaml:"autoMergeEnabled" mapstructure:"autoMergeEnabled"`
 
-	// Step 65, §24.5: admin-only, per-repo, off by default -- once armed, a new
-	// commit pushed to a PR with an existing review session automatically enqueues a
-	// fresh review turn (after a trailing-edge debounce quiet period, §24.2) instead
-	// of waiting for a human's manual re-trigger. Gated by
+	// §24, §24.5: admin-only, per-repo, off by default -- once armed, a new commit
+	// pushed to a PR with an existing review session automatically enqueues a fresh
+	// review turn (after a trailing-edge debounce quiet period, §24.2) instead of
+	// waiting for a human's manual re-trigger. Gated by
 	// authz.ActionToggleAutoRetriggerReview, the SAME admin-only row as
 	// sentinelAutofixEnabled/autoMergeEnabled -- this automation never auto-approves
 	// anything on its own, it only ever enqueues an ordinary review turn.
@@ -5162,7 +5148,7 @@ type RepoSettings struct {
 	// exact effect.
 	BlockOnHighRisk bool `json:"blockOnHighRisk" yaml:"blockOnHighRisk" mapstructure:"blockOnHighRisk"`
 
-	// Step 62, §21.2 stage 2: false means no auto-approval outcome (confirmed or
+	// §21, §21.2 stage 2: false means no auto-approval outcome (confirmed or
 	// overridden) has been recorded for this repo yet in the calibration window --
 	// distinct from a real, computed 0% rate (§21.1's own 'not yet computed' sentinel
 	// discipline, mirroring ListDecisionInboxResponse.decisionLatencyComputed's own
@@ -5178,7 +5164,7 @@ type RepoSettings struct {
 	// whenever contradictionRateComputed is false.
 	ContradictionSampleSize int `json:"contradictionSampleSize" yaml:"contradictionSampleSize" mapstructure:"contradictionSampleSize"`
 
-	// Step 67, §26.2: admin-only, per-repo, off by default -- once armed, a
+	// §26.2, §26.2: admin-only, per-repo, off by default -- once armed, a
 	// Narvi-authored PR's own description-adequacy floor firing (drift/misleading)
 	// may result in this repo's own PR bodies being automatically rewritten (original
 	// preserved in a collapsed block), delivered via the outbox. The drift/misleading
@@ -5197,33 +5183,32 @@ type RepoSettings struct {
 	// write.
 	DescriptionAutofixEnabled bool `json:"descriptionAutofixEnabled" yaml:"descriptionAutofixEnabled" mapstructure:"descriptionAutofixEnabled"`
 
-	// Step 62, §21.2 stage 1: this repo's own configured diff-size eligibility
-	// threshold. Null means 'not configured -- the auto-approval engine's own
-	// built-in default applies'
-	// (internal/domain/autoapproval.DefaultEligibilityConfig), never a magic sentinel
-	// number. Gated by authz.ActionConfigureAutoApprove (maintainer+).
+	// §21, §21.2 stage 1: this repo's own configured diff-size eligibility threshold.
+	// Null means 'not configured -- the auto-approval engine's own built-in default
+	// applies' (internal/domain/autoapproval.DefaultEligibilityConfig), never a magic
+	// sentinel number. Gated by authz.ActionConfigureAutoApprove (maintainer+).
 	MaxAutoApproveFilesChanged RepoSettingsMaxAutoApproveFilesChanged `json:"maxAutoApproveFilesChanged" yaml:"maxAutoApproveFilesChanged" mapstructure:"maxAutoApproveFilesChanged"`
 
 	// The natural 'owner/repo' key, matching github_pr_sessions.repo_full_name's own
 	// shape.
 	RepoFullName string `json:"repoFullName" yaml:"repoFullName" mapstructure:"repoFullName"`
 
-	// Step 69, §26.7: this repo's own deep-path per-review cost ceiling, in USD. Null
+	// §26.4, §26.7: this repo's own deep-path per-review cost ceiling, in USD. Null
 	// means 'not configured -- the engine's own built-in default applies'
 	// (internal/domain/reviewtriage.DefaultCostBudget, $5.00). Gated by
 	// authz.ActionConfigureReviewCostBudget, same row as reviewCostBudgetLightUsd --
-	// see that field's own description for how this ceiling is checked as of Step 70
-	// (a real GET to this sandbox's own loopback review-cost-budget endpoint,
-	// answered from a real running spend total, not a self-estimate).
+	// see that field's own description for how this ceiling is checked as of §26.5 (a
+	// real GET to this sandbox's own loopback review-cost-budget endpoint, answered
+	// from a real running spend total, not a self-estimate).
 	ReviewCostBudgetDeepUsd RepoSettingsReviewCostBudgetDeepUsd `json:"reviewCostBudgetDeepUsd" yaml:"reviewCostBudgetDeepUsd" mapstructure:"reviewCostBudgetDeepUsd"`
 
-	// Step 69, §26.7: this repo's own light-path per-review cost ceiling, in USD.
-	// Null means 'not configured -- the engine's own built-in default applies'
+	// §26.4, §26.7: this repo's own light-path per-review cost ceiling, in USD. Null
+	// means 'not configured -- the engine's own built-in default applies'
 	// (internal/domain/reviewtriage.DefaultCostBudget, $0.50), never a magic sentinel
 	// number. Gated by authz.ActionConfigureReviewCostBudget (admin only, §13.3 row
 	// 6, same row as reviewDepthMode) -- arming a non-default ceiling changes the
 	// dollar figure a review turn's own prompt renders as a query parameter on its
-	// GET to this sandbox's own loopback review-cost-budget endpoint (Step 70;
+	// GET to this sandbox's own loopback review-cost-budget endpoint (§26.5;
 	// internal/domain/review's own subAgentOrchestrationInstructions renders 'GET
 	// {{REVIEW_COST_BUDGET_TOOL_URL}}?ceilingUsd=<this value>'; cmd/sandbox-agent's
 	// reviewcostbudgetserver.go answers with a real
@@ -5232,20 +5217,20 @@ type RepoSettings struct {
 	// internal/adapters/outbound/opencode's turnState.spentUSD). The reviewing agent
 	// still has to make that GET and obey the answer -- this control plane has no
 	// channel to intervene inside an already-dispatched turn -- but the answer itself
-	// is a real, server-computed fact as of Step 70, not the agent's own
-	// self-estimate of spend it was asked for before. The same 'changes what an
-	// unattended review is TOLD, admin-gated' reasoning every sibling toggle in this
-	// row already carries.
+	// is a real, server-computed fact as of §26.5, not the agent's own self-estimate
+	// of spend it was asked for before. The same 'changes what an unattended review
+	// is TOLD, admin-gated' reasoning every sibling toggle in this row already
+	// carries.
 	ReviewCostBudgetLightUsd RepoSettingsReviewCostBudgetLightUsd `json:"reviewCostBudgetLightUsd" yaml:"reviewCostBudgetLightUsd" mapstructure:"reviewCostBudgetLightUsd"`
 
-	// Step 68, §26.3: this repo's own additional deep-routing glob patterns, layered
-	// on top of (never replacing) the engine's own fixed sensitive-glob set
+	// §26.3, §26.3: this repo's own additional deep-routing glob patterns, layered on
+	// top of (never replacing) the engine's own fixed sensitive-glob set
 	// (migrations/auth/infra-as-code/CI-workflow). Null means 'no repo-specific deep
 	// paths configured'. Gated by authz.ActionConfigureReviewDepth (admin only, same
 	// row as reviewDepthMode).
 	ReviewDepthDeepPaths *RepoSettingsReviewDepthDeepPaths `json:"reviewDepthDeepPaths" yaml:"reviewDepthDeepPaths" mapstructure:"reviewDepthDeepPaths"`
 
-	// Step 68, §26.3: this repo's own reviewDepth routing mode -- one of
+	// §26.3, §26.3: this repo's own reviewDepth routing mode -- one of
 	// "auto"/"always_light"/"always_deep" when set (validated application-side
 	// against internal/domain/reviewtriage.Mode's own closed vocabulary, never
 	// enforced at the schema level to avoid a nullable-enum's own awkward generated
@@ -5258,7 +5243,7 @@ type RepoSettings struct {
 	// already carries.
 	ReviewDepthMode RepoSettingsReviewDepthMode `json:"reviewDepthMode" yaml:"reviewDepthMode" mapstructure:"reviewDepthMode"`
 
-	// Step 62, §21.2 stage 1: this repo's own configured sensitive-path tag list
+	// §21, §21.2 stage 1: this repo's own configured sensitive-path tag list
 	// (internal/domain/review.Tag's own fixed vocabulary). Null means 'not configured
 	// -- the auto-approval engine's own default list applies (migrations, auth,
 	// contracts)', never an empty-list claim that this repo deliberately has zero
@@ -5277,29 +5262,28 @@ type RepoSettings struct {
 // decide whether to arm autoMergeEnabled.
 type RepoSettingsContradictionRatePercent *float64
 
-// Step 62, §21.2 stage 1: this repo's own configured diff-size eligibility
-// threshold. Null means 'not configured -- the auto-approval engine's own built-in
-// default applies' (internal/domain/autoapproval.DefaultEligibilityConfig), never
-// a magic sentinel number. Gated by authz.ActionConfigureAutoApprove
-// (maintainer+).
+// §21, §21.2 stage 1: this repo's own configured diff-size eligibility threshold.
+// Null means 'not configured -- the auto-approval engine's own built-in default
+// applies' (internal/domain/autoapproval.DefaultEligibilityConfig), never a magic
+// sentinel number. Gated by authz.ActionConfigureAutoApprove (maintainer+).
 type RepoSettingsMaxAutoApproveFilesChanged *int
 
-// Step 69, §26.7: this repo's own deep-path per-review cost ceiling, in USD. Null
+// §26.4, §26.7: this repo's own deep-path per-review cost ceiling, in USD. Null
 // means 'not configured -- the engine's own built-in default applies'
 // (internal/domain/reviewtriage.DefaultCostBudget, $5.00). Gated by
 // authz.ActionConfigureReviewCostBudget, same row as reviewCostBudgetLightUsd --
-// see that field's own description for how this ceiling is checked as of Step 70
-// (a real GET to this sandbox's own loopback review-cost-budget endpoint, answered
+// see that field's own description for how this ceiling is checked as of §26.5 (a
+// real GET to this sandbox's own loopback review-cost-budget endpoint, answered
 // from a real running spend total, not a self-estimate).
 type RepoSettingsReviewCostBudgetDeepUsd *float64
 
-// Step 69, §26.7: this repo's own light-path per-review cost ceiling, in USD. Null
+// §26.4, §26.7: this repo's own light-path per-review cost ceiling, in USD. Null
 // means 'not configured -- the engine's own built-in default applies'
 // (internal/domain/reviewtriage.DefaultCostBudget, $0.50), never a magic sentinel
 // number. Gated by authz.ActionConfigureReviewCostBudget (admin only, §13.3 row 6,
 // same row as reviewDepthMode) -- arming a non-default ceiling changes the dollar
 // figure a review turn's own prompt renders as a query parameter on its GET to
-// this sandbox's own loopback review-cost-budget endpoint (Step 70;
+// this sandbox's own loopback review-cost-budget endpoint (§26.5;
 // internal/domain/review's own subAgentOrchestrationInstructions renders 'GET
 // {{REVIEW_COST_BUDGET_TOOL_URL}}?ceilingUsd=<this value>'; cmd/sandbox-agent's
 // reviewcostbudgetserver.go answers with a real
@@ -5308,19 +5292,19 @@ type RepoSettingsReviewCostBudgetDeepUsd *float64
 // internal/adapters/outbound/opencode's turnState.spentUSD). The reviewing agent
 // still has to make that GET and obey the answer -- this control plane has no
 // channel to intervene inside an already-dispatched turn -- but the answer itself
-// is a real, server-computed fact as of Step 70, not the agent's own self-estimate
+// is a real, server-computed fact as of §26.5, not the agent's own self-estimate
 // of spend it was asked for before. The same 'changes what an unattended review is
 // TOLD, admin-gated' reasoning every sibling toggle in this row already carries.
 type RepoSettingsReviewCostBudgetLightUsd *float64
 
-// Step 68, §26.3: this repo's own additional deep-routing glob patterns, layered
-// on top of (never replacing) the engine's own fixed sensitive-glob set
+// §26.3, §26.3: this repo's own additional deep-routing glob patterns, layered on
+// top of (never replacing) the engine's own fixed sensitive-glob set
 // (migrations/auth/infra-as-code/CI-workflow). Null means 'no repo-specific deep
 // paths configured'. Gated by authz.ActionConfigureReviewDepth (admin only, same
 // row as reviewDepthMode).
 type RepoSettingsReviewDepthDeepPaths []string
 
-// Step 68, §26.3: this repo's own reviewDepth routing mode -- one of
+// §26.3, §26.3: this repo's own reviewDepth routing mode -- one of
 // "auto"/"always_light"/"always_deep" when set (validated application-side against
 // internal/domain/reviewtriage.Mode's own closed vocabulary, never enforced at the
 // schema level to avoid a nullable-enum's own awkward generated wrapper type).
@@ -5333,7 +5317,7 @@ type RepoSettingsReviewDepthDeepPaths []string
 // carries.
 type RepoSettingsReviewDepthMode *string
 
-// Step 62, §21.2 stage 1: this repo's own configured sensitive-path tag list
+// §21, §21.2 stage 1: this repo's own configured sensitive-path tag list
 // (internal/domain/review.Tag's own fixed vocabulary). Null means 'not configured
 // -- the auto-approval engine's own default list applies (migrations, auth,
 // contracts)', never an empty-list claim that this repo deliberately has zero
@@ -5442,18 +5426,17 @@ func (j *RepoSettings) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// GET /api/repos/{owner}/{repo}/review-analytics response body (Step 62, §21.1) --
-// the three analytics rollups named in that section's own scope, each bounded to
+// GET /api/repos/{owner}/{repo}/review-analytics response body (§21.1) -- the
+// three analytics rollups named in that section's own scope, each bounded to
 // platform.Timeouts.ReviewVerdictAnalyticsWindow (never an unbounded scan) and
 // carrying its OWN independent 'not yet computed' sentinel: 'a repo with a real 0%
 // dismiss rate and a repo with no data yet must never render identically' (§21.1).
-// Step 69, §26.5 adds a fourth rollup, digestContestationRatePercent -- the
-// 'digest precision (contestation rate)' KPI that section names, the SAME 'own
-// independent not-yet-computed sentinel' discipline as the original three. Gated
-// by the existing authz.ActionViewAnalytics (§13.3 row 1) -- every role including
-// viewer.
+// §26.4, §26.5 adds a fourth rollup, digestContestationRatePercent -- the 'digest
+// precision (contestation rate)' KPI that section names, the SAME 'own independent
+// not-yet-computed sentinel' discipline as the original three. Gated by the
+// existing authz.ActionViewAnalytics (§13.3 row 1) -- every role including viewer.
 type ReviewAnalytics struct {
-	// Step 69, §26.5: false means zero deep-path verdicts have been posted for this
+	// §26.4, §26.5: false means zero deep-path verdicts have been posted for this
 	// repo within the window (only a deep-path review ever produces an arch recap at
 	// all, §26.4/§26.9) -- distinct from a real, computed 0% rate, the SAME 'not yet
 	// computed' sentinel discipline as RepoSettings.contradictionRateComputed
@@ -5474,7 +5457,7 @@ type ReviewAnalytics struct {
 	FindingOutcomes *ReviewAnalyticsFindingOutcomes `json:"findingOutcomes" yaml:"findingOutcomes" mapstructure:"findingOutcomes"`
 
 	// False iff no review_findings row exists for this repo within the window --
-	// reads a DIFFERENT table than the two rollups above (review_findings, Step 48's
+	// reads a DIFFERENT table than the two rollups above (review_findings, §8.2's
 	// mutable per-finding status history, never review_verdicts' own append-only rows
 	// -- internal/domain/reviewverdict.FindingOutcomes' own doc comment).
 	FindingOutcomesComputed bool `json:"findingOutcomesComputed" yaml:"findingOutcomesComputed" mapstructure:"findingOutcomesComputed"`
@@ -5778,8 +5761,7 @@ func (j *ReviewAnalytics) UnmarshalJSON(value []byte) error {
 
 // One review_findings row's own REST wire shape
 // (migrations/000046_review_findings.up.sql) -- returned by the rebut and
-// apply-suggestion endpoints (Step 48) so a caller can confirm the resulting
-// state.
+// apply-suggestion endpoints (§8.2 so a caller can confirm the resulting state.
 type ReviewFinding struct {
 	// Description corresponds to the JSON schema field "description".
 	Description string `json:"description" yaml:"description" mapstructure:"description"`
@@ -5967,12 +5949,12 @@ func (j *RotateAutomationWebhookTokenResponse) UnmarshalJSON(value []byte) error
 	return nil
 }
 
-// 200 response body for POST /api/cloud-identity/signing-keys/rotate (Step 73a,
-// §27.3/§27.8: "manual, admin-triggered rotation with the overlap window is v1" --
-// this Step's own gap-2 resolution, internal/domain/oidckey's own doc comment).
-// Gated by authz.ActionManageCloudIdentityKeys (admin only). Never returns any key
-// MATERIAL (private or public) -- only kid/timestamp metadata, proving a rotation
-// happened and telling the caller exactly when the just-retired key (if any) stops
+// 200 response body for POST /api/cloud-identity/signing-keys/rotate (§27.3/§27.8:
+// "manual, admin-triggered rotation with the overlap window is v1" -- this Step's
+// own gap-2 resolution, internal/domain/oidckey's own doc comment). Gated by
+// authz.ActionManageCloudIdentityKeys (admin only). Never returns any key MATERIAL
+// (private or public) -- only kid/timestamp metadata, proving a rotation happened
+// and telling the caller exactly when the just-retired key (if any) stops
 // verifying.
 type RotateCloudIdentitySigningKeyResponse struct {
 	// ActiveCreatedAt corresponds to the JSON schema field "activeCreatedAt".
@@ -6032,7 +6014,7 @@ func (j *RotateCloudIdentitySigningKeyResponse) UnmarshalJSON(value []byte) erro
 	return nil
 }
 
-// One sandbox_secrets row's own REST wire shape (Step 72, §27.1,
+// One sandbox_secrets row's own REST wire shape (§27.1,
 // migrations/000090_sandbox_secrets.up.sql). Returned by the create/get/list
 // routes mounted at /api/repos/{owner}/{repo}/sandbox-secrets,
 // /api/environments/{environmentID}/sandbox-secrets, and /api/sandbox-secrets
@@ -6060,9 +6042,9 @@ type SandboxSecret struct {
 	Name string `json:"name" yaml:"name" mapstructure:"name"`
 
 	// Matches Postgres sandbox_secret_scope, EXCLUDING 'automation' -- that scope is
-	// schema-only as of Step 72 (§27.1: no CRUD endpoint reaches it yet, mirroring
-	// how ProviderCredentialScope's own DTO excludes 'user', a scope managed through
-	// a completely separate flow).
+	// schema-only as of §27.1 (§27.1: no CRUD endpoint reaches it yet, mirroring how
+	// ProviderCredentialScope's own DTO excludes 'user', a scope managed through a
+	// completely separate flow).
 	Scope SandboxSecretScope `json:"scope" yaml:"scope" mapstructure:"scope"`
 
 	// The repo_full_name ('owner/repo') for scope=repo, the environments.id
@@ -6335,13 +6317,13 @@ func (j *Session) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Response body for GET /api/admin/shadow-compare (Step 59's own
-// 'shadow-comparison tooling for review' deliverable, IMPLEMENTATION_PLAN.md Step
-// 59 row, reusing §9.4/§18.5's shadow-mode discipline: 'the same mechanism is used
-// again for every future model swap'). §29 has no dedicated design subsection for
-// this piece -- this is a deliberately minimal, from-scratch interpretation, named
-// as such: a READ-ONLY, side-effect-free comparison of two ALREADY-COMPLETED turns
-// (e.g. the same PR/prompt dispatched once on the active model and once on a
+// Response body for GET /api/admin/shadow-compare ('s own 'shadow-comparison
+// tooling for review' deliverable, IMPLEMENTATION_PLAN.md row, reusing
+// §9.4/§18.5's shadow-mode discipline: 'the same mechanism is used again for every
+// future model swap'). §29 has no dedicated design subsection for this piece --
+// this is a deliberately minimal, from-scratch interpretation, named as such: a
+// READ-ONLY, side-effect-free comparison of two ALREADY-COMPLETED turns (e.g. the
+// same PR/prompt dispatched once on the active model and once on a
 // shadow/candidate model or effort, or a session's own two differently-configured
 // re-runs), never a re-execution orchestrator -- 'shadow' here means 'never
 // affects either compared turn or its session', the same never-act-only-observe
@@ -6505,15 +6487,15 @@ func (j *ShadowComparisonTurn) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Request body for PUT /api/repos/{owner}/{repo}/auto-approval-settings (Step 62,
-// §21.2 stage 1) -- the auto-approval eligibility engine's own two
-// per-repo-tunable criteria. A SEPARATE endpoint from UpdateRepoSettingsRequest's
-// own PUT /settings, gated SOLELY by authz.ActionConfigureAutoApprove
-// (maintainer+, §13.3 row 5) -- see that DTO's own doc comment for why. Always the
-// full, current desired state for these two fields specifically (never a partial
-// patch) -- the handler read-modify-writes repo_settings.auto_merge_enabled (a
-// DIFFERENT row, gated by a DIFFERENT action) unchanged alongside whichever of
-// these two this call sets.
+// Request body for PUT /api/repos/{owner}/{repo}/auto-approval-settings (§21.2
+// stage 1) -- the auto-approval eligibility engine's own two per-repo-tunable
+// criteria. A SEPARATE endpoint from UpdateRepoSettingsRequest's own PUT
+// /settings, gated SOLELY by authz.ActionConfigureAutoApprove (maintainer+, §13.3
+// row 5) -- see that DTO's own doc comment for why. Always the full, current
+// desired state for these two fields specifically (never a partial patch) -- the
+// handler read-modify-writes repo_settings.auto_merge_enabled (a DIFFERENT row,
+// gated by a DIFFERENT action) unchanged alongside whichever of these two this
+// call sets.
 type UpdateAutoApprovalSettingsRequest struct {
 	// Null means 'use the auto-approval engine's own built-in default'.
 	MaxAutoApproveFilesChanged UpdateAutoApprovalSettingsRequestMaxAutoApproveFilesChanged `json:"maxAutoApproveFilesChanged" yaml:"maxAutoApproveFilesChanged" mapstructure:"maxAutoApproveFilesChanged"`
@@ -6593,9 +6575,9 @@ func (j *UpdateAutoApprovalSettingsRequest) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Request body for PUT /api/repos/{owner}/{repo}/auto-merge (Step 62, §21.2 stage
-// 2) -- arms/disarms the per-repo unattended-merge toggle. A SEPARATE endpoint,
-// gated SOLELY by authz.ActionToggleAutoMerge (admin only, §13.3 row 6) -- see
+// Request body for PUT /api/repos/{owner}/{repo}/auto-merge (§21.2 stage 2) --
+// arms/disarms the per-repo unattended-merge toggle. A SEPARATE endpoint, gated
+// SOLELY by authz.ActionToggleAutoMerge (admin only, §13.3 row 6) -- see
 // UpdateRepoSettingsRequest's own doc comment for why this is not folded into the
 // shared PUT /settings endpoint.
 type UpdateAutoMergeToggleRequest struct {
@@ -6621,11 +6603,11 @@ func (j *UpdateAutoMergeToggleRequest) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Request body for PUT /api/repos/{owner}/{repo}/auto-retrigger-review (Step 65,
-// §24.5) -- arms/disarms the per-repo automatic-re-review-on-new-commits opt-in. A
-// SEPARATE endpoint, gated SOLELY by authz.ActionToggleAutoRetriggerReview (admin
-// only, §13.3 row 6) -- see UpdateRepoSettingsRequest's own doc comment for why
-// this is not folded into the shared PUT /settings endpoint.
+// Request body for PUT /api/repos/{owner}/{repo}/auto-retrigger-review (§24.5) --
+// arms/disarms the per-repo automatic-re-review-on-new-commits opt-in. A SEPARATE
+// endpoint, gated SOLELY by authz.ActionToggleAutoRetriggerReview (admin only,
+// §13.3 row 6) -- see UpdateRepoSettingsRequest's own doc comment for why this is
+// not folded into the shared PUT /settings endpoint.
 type UpdateAutoRetriggerReviewToggleRequest struct {
 	// Enabled corresponds to the JSON schema field "enabled".
 	Enabled bool `json:"enabled" yaml:"enabled" mapstructure:"enabled"`
@@ -6685,12 +6667,11 @@ func (j *UpdateCloudIdentityBindingRequest) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Request body for PUT /api/repos/{owner}/{repo}/description-autofix (Step 67,
-// §26.2) -- arms/disarms the per-repo Narvi-authored-PR description-autofix
-// toggle. A SEPARATE endpoint, gated SOLELY by
-// authz.ActionToggleDescriptionAutofix (admin only, §13.3 row 6) -- see
-// UpdateRepoSettingsRequest's own doc comment for why this is not folded into the
-// shared PUT /settings endpoint.
+// Request body for PUT /api/repos/{owner}/{repo}/description-autofix (§26.2) --
+// arms/disarms the per-repo Narvi-authored-PR description-autofix toggle. A
+// SEPARATE endpoint, gated SOLELY by authz.ActionToggleDescriptionAutofix (admin
+// only, §13.3 row 6) -- see UpdateRepoSettingsRequest's own doc comment for why
+// this is not folded into the shared PUT /settings endpoint.
 type UpdateDescriptionAutofixToggleRequest struct {
 	// Enabled corresponds to the JSON schema field "enabled".
 	Enabled bool `json:"enabled" yaml:"enabled" mapstructure:"enabled"`
@@ -6781,13 +6762,13 @@ func (j *UpdateProviderCredentialRequest) UnmarshalJSON(value []byte) error {
 
 // Request body for PUT /api/repos/{owner}/{repo}/settings -- always the full,
 // current desired state (never a partial patch), matching RepoSettings' own shape.
-// sentinelAutofixEnabled (Step 48) is deliberately OPTIONAL, not required, exactly
+// sentinelAutofixEnabled (§8.2 is deliberately OPTIONAL, not required, exactly
 // like every other additive field this schema has ever grown (e.g.
 // CreateSessionRequest.buildModelId) -- an old caller that only ever knew about
 // blockOnHighRisk keeps compiling/working unchanged; PutRepoSettings' own 'always
 // the full desired state' semantics mean an old caller that omits this key simply
 // (re)sets it to its own safe default (false) alongside whatever it DOES specify,
-// never a partial-patch surprise. Step 62's own §21.2 fields
+// never a partial-patch surprise. §21's own §21.2 fields
 // (autoMergeEnabled/maxAutoApproveFilesChanged/sensitiveBlastRadiusTags) are
 // DELIBERATELY NOT on this shared request: this endpoint's own handler requires
 // EVERY permission its fields collectively need (PutRepoSettings' own doc comment,
@@ -6826,12 +6807,12 @@ func (j *UpdateRepoSettingsRequest) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Request body for PUT /api/repos/{owner}/{repo}/review-cost-budget (Step 69,
-// §26.7) -- (re)configures this repo's own per-path cost ceilings. A SEPARATE
-// endpoint, gated SOLELY by authz.ActionConfigureReviewCostBudget (admin only,
-// §13.3 row 6) -- see UpdateRepoSettingsRequest's own doc comment for why this is
-// not folded into the shared PUT /settings endpoint. Always the full, current
-// desired state for these two fields specifically (never a partial patch).
+// Request body for PUT /api/repos/{owner}/{repo}/review-cost-budget (§26.7) --
+// (re)configures this repo's own per-path cost ceilings. A SEPARATE endpoint,
+// gated SOLELY by authz.ActionConfigureReviewCostBudget (admin only, §13.3 row 6)
+// -- see UpdateRepoSettingsRequest's own doc comment for why this is not folded
+// into the shared PUT /settings endpoint. Always the full, current desired state
+// for these two fields specifically (never a partial patch).
 type UpdateReviewCostBudgetRequest struct {
 	// Null means 'use the engine's own built-in default ($5.00)'. Validated
 	// application-side as strictly positive, the SAME 'zero collides with the
@@ -6881,7 +6862,7 @@ func (j *UpdateReviewCostBudgetRequest) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Request body for PUT /api/repos/{owner}/{repo}/review-depth (Step 68, §26.3) --
+// Request body for PUT /api/repos/{owner}/{repo}/review-depth (§26.3) --
 // (re)configures this repo's own reviewDepth mode/deepPaths. A SEPARATE endpoint,
 // gated SOLELY by authz.ActionConfigureReviewDepth (admin only, §13.3 row 6) --
 // see UpdateRepoSettingsRequest's own doc comment for why this is not folded into
@@ -6994,17 +6975,16 @@ func (j *WSTokenResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// One workflow_bindings row (Step 54, §25.10): which definition, at which version,
-// a (lane, repoFullName) pair resolves to. repoFullName null is the GLOBAL binding
-// for that lane -- §25.4: exactly one per lane, seeded by migration 000057 to
-// point at the lane's system template, and from then on an ordinary,
-// independently-repointable setting that is NEVER absent (so resolution is repo
-// row if present, else the guaranteed global row -- never an 'absent row ->
-// default' branch). A non-null repoFullName ('owner/repo',
-// repo_settings.repo_full_name's exact shape) is a repo override shadowing the
-// global binding for that one repo only. Activation is admin-only
-// (authz.ActionActivateWorkflowBinding, §25.11) -- the same single action gates
-// both scopes.
+// One workflow_bindings row (§25.10): which definition, at which version, a (lane,
+// repoFullName) pair resolves to. repoFullName null is the GLOBAL binding for that
+// lane -- §25.4: exactly one per lane, seeded by migration 000057 to point at the
+// lane's system template, and from then on an ordinary, independently-repointable
+// setting that is NEVER absent (so resolution is repo row if present, else the
+// guaranteed global row -- never an 'absent row -> default' branch). A non-null
+// repoFullName ('owner/repo', repo_settings.repo_full_name's exact shape) is a
+// repo override shadowing the global binding for that one repo only. Activation is
+// admin-only (authz.ActionActivateWorkflowBinding, §25.11) -- the same single
+// action gates both scopes.
 type WorkflowBinding struct {
 	// CreatedAt corresponds to the JSON schema field "createdAt".
 	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
@@ -7104,15 +7084,15 @@ func (j *WorkflowBinding) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// One workflow_definitions row plus its ordered steps (Step 54, §25.10; mirrors
+// One workflow_definitions row plus its ordered steps (§25.10; mirrors
 // internal/domain/workflow.Definition). Doubles as the eventual editing surface's
 // PUT body -- always the full, current desired state (steps and edges included),
 // never a partial patch, matching UpdateRepoSettingsRequest's own convention --
-// but NO handler consumes it yet (Step 54 is dark). isBuiltIn marks one of the
-// three seeded system templates; a PUT/DELETE against an isBuiltIn=true definition
-// is refused unconditionally, even for an admin -- a structural invariant (§25.4),
-// not an RBAC row, enforced by the store/handler layer Steps 55-56 add. version is
-// a 1-based edit counter (provenance a binding/run pins), not a versioned-content
+// but NO handler consumes it yet (§25.4 is dark). isBuiltIn marks one of the three
+// seeded system templates; a PUT/DELETE against an isBuiltIn=true definition is
+// refused unconditionally, even for an admin -- a structural invariant (§25.4),
+// not an RBAC row, enforced by the store/handler layer §25.6-56 add. version is a
+// 1-based edit counter (provenance a binding/run pins), not a versioned-content
 // archive.
 type WorkflowDefinition struct {
 	// CreatedAt corresponds to the JSON schema field "createdAt".
@@ -7222,10 +7202,10 @@ func (j *WorkflowDefinition) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// One explicit (from step, outcome) -> to step routing rule (Step 54, §25.10's
-// 'Edges' entity; one workflow_edges row). Named WorkflowEdge rather than the
-// plan's bare 'Edges'/'Edge': restdtos is a flat namespace and an unprefixed
-// generated 'Edge' type would be needlessly generic -- AutomationReposElem's own
+// One explicit (from step, outcome) -> to step routing rule (§25.10's 'Edges'
+// entity; one workflow_edges row). Named WorkflowEdge rather than the plan's bare
+// 'Edges'/'Edge': restdtos is a flat namespace and an unprefixed generated 'Edge'
+// type would be needlessly generic -- AutomationReposElem's own
 // entity-prefixed-helper precedent. onStatus is the ONLY thing an edge may
 // condition on (§25.4): the closed 3-value step-outcome vocabulary, a DISTINCT
 // axis from review's Shippable (which is never routed through it). With no
@@ -7300,12 +7280,12 @@ func (j *WorkflowEdge) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// One workflow_runs row (Step 54, §25.10) -- READ-ONLY on the wire: runs are
-// created and advanced exclusively by the execution engine (Step 55, §25.6), never
-// via any request DTO. lane/workflowDefinitionId/definitionVersion are pinned at
-// start time as provenance. 'needs_review' is §25.9's escalation parking state
-// (circuit breaker tripped, or an unrouted needs_fix/blocked outcome):
-// non-terminal, one notice, waiting on a human decision.
+// One workflow_runs row (§25.10) -- READ-ONLY on the wire: runs are created and
+// advanced exclusively by the execution engine (§25.6), never via any request DTO.
+// lane/workflowDefinitionId/definitionVersion are pinned at start time as
+// provenance. 'needs_review' is §25.9's escalation parking state (circuit breaker
+// tripped, or an unrouted needs_fix/blocked outcome): non-terminal, one notice,
+// waiting on a human decision.
 type WorkflowRun struct {
 	// CreatedAt corresponds to the JSON schema field "createdAt".
 	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
@@ -7328,7 +7308,7 @@ type WorkflowRun struct {
 	SessionId string `json:"sessionId" yaml:"sessionId" mapstructure:"sessionId"`
 
 	// Matches Postgres workflow_run_status exactly. The owning transition table ships
-	// with Step 55's engine (§11: every state transition through the machine's table)
+	// with §25.6's engine (§11: every state transition through the machine's table)
 	// -- the vocabulary is fixed here so the wire contract never has to change under
 	// it.
 	Status WorkflowRunStatus `json:"status" yaml:"status" mapstructure:"status"`
@@ -7456,8 +7436,8 @@ func (j *WorkflowRun) UnmarshalJSON(value []byte) error {
 
 // Request body for POST /api/workflow-runs/:runId/steps/:stepRunId/decide
 // (§25.9/§25.10) -- the same shape discipline as decideplan.go's approve/reject.
-// NO handler is registered for this route yet: Step 54 ships the contract only
-// (dark); Step 56 mounts the endpoint, gated by authz.ActionDecideWorkflowStep
+// NO handler is registered for this route yet: §25.4 ships the contract only
+// (dark); §25.9 mounts the endpoint, gated by authz.ActionDecideWorkflowStep
 // (own/joined-aware, same row as plan approval, §25.11). verdict is a schema-level
 // enum (matching Postgres workflow_step_decision exactly) because the vocabulary
 // is a closed domain enum, the same modeling choice as
@@ -7465,8 +7445,8 @@ func (j *WorkflowRun) UnmarshalJSON(value []byte) error {
 // UpdateMemberRoleRequest.role shape.
 type WorkflowStepDecideRequest struct {
 	// The human's instruction. Required non-empty for verdict 'revise' (enforced at
-	// the application layer by Step 56's handler, which owns the specific 400
-	// message); optional context for 'reject'; ignored for 'approve'.
+	// the application layer by §25.9's handler, which owns the specific 400 message);
+	// optional context for 'reject'; ignored for 'approve'.
 	Text WorkflowStepDecideRequestText `json:"text" yaml:"text" mapstructure:"text"`
 
 	// approve continues the run; reject ends it; revise ALWAYS re-executes the same
@@ -7478,8 +7458,8 @@ type WorkflowStepDecideRequest struct {
 }
 
 // The human's instruction. Required non-empty for verdict 'revise' (enforced at
-// the application layer by Step 56's handler, which owns the specific 400
-// message); optional context for 'reject'; ignored for 'approve'.
+// the application layer by §25.9's handler, which owns the specific 400 message);
+// optional context for 'reject'; ignored for 'approve'.
 type WorkflowStepDecideRequestText *string
 
 type WorkflowStepDecideRequestVerdict string
@@ -7662,18 +7642,18 @@ func (j *WorkflowStepDecideResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// One workflow_step_definitions row plus its outgoing edges (Step 54, §25.10).
-// order is 1-based and unique per definition, not required contiguous. modelId
-// null means inherit exactly what the session would use today
+// One workflow_step_definitions row plus its outgoing edges (§25.10). order is
+// 1-based and unique per definition, not required contiguous. modelId null means
+// inherit exactly what the session would use today
 // (turns.model_id/sessions.build_model_id -- §25.8's zero-config proof); non-null
 // is the same opaque 'provider/model' passthrough convention modelId fields
-// already use (§25.1/§25.7, no Narvi-side allowlist). effort (Step 59, §29.8)
-// mirrors modelId's own shape and inherit-when-null semantics exactly, one field
-// over. promptTemplate uses the established '{{variable_name}}' placeholder syntax
+// already use (§25.1/§25.7, no Narvi-side allowlist). effort (§29.8) mirrors
+// modelId's own shape and inherit-when-null semantics exactly, one field over.
+// promptTemplate uses the established '{{variable_name}}' placeholder syntax
 // (§18.6); '{{prompt}}' is the caller's own text.
 type WorkflowStepDefinition struct {
 	// §25.10's optional canvas-layout attachment: this step's node position on the
-	// visual editor's canvas (Step 88, §25.12). OPAQUE server-side -- stored verbatim
+	// visual editor's canvas (§25.12). OPAQUE server-side -- stored verbatim
 	// (workflow_step_definitions.canvas_position JSONB), round-tripped, never
 	// interpreted for any behavior. Genuinely OPTIONAL (may be absent entirely, like
 	// CreateSessionRequest.pathScope) AND nullable: absent/null means no layout has
@@ -7689,7 +7669,7 @@ type WorkflowStepDefinition struct {
 	// (§25.4). At most one edge per onStatus value (workflow_edges_from_status_uniq).
 	Edges []WorkflowEdge `json:"edges" yaml:"edges" mapstructure:"edges"`
 
-	// Step 59, §29.8's 'workflow engine echo'. Null means inherit exactly what the
+	// §8.8, §29.8's 'workflow engine echo'. Null means inherit exactly what the
 	// session would use today (turns.effort/sessions.build_effort).
 	Effort WorkflowStepDefinitionEffort `json:"effort" yaml:"effort" mapstructure:"effort"`
 
@@ -7708,8 +7688,8 @@ type WorkflowStepDefinition struct {
 	Id string `json:"id" yaml:"id" mapstructure:"id"`
 
 	// Matches Postgres workflow_step_kind exactly -- a single-value closed enum as of
-	// Step 54 (every §25.8 shape is an ordinary agent turn); modeled as an enum, not
-	// a literal, so a later phase can add a kind without a shape change.
+	// §25.4 (every §25.8 shape is an ordinary agent turn); modeled as an enum, not a
+	// literal, so a later phase can add a kind without a shape change.
 	Kind WorkflowStepDefinitionKind `json:"kind" yaml:"kind" mapstructure:"kind"`
 
 	// ModelId corresponds to the JSON schema field "modelId".
@@ -7723,7 +7703,7 @@ type WorkflowStepDefinition struct {
 }
 
 // §25.10's optional canvas-layout attachment: this step's node position on the
-// visual editor's canvas (Step 88, §25.12). OPAQUE server-side -- stored verbatim
+// visual editor's canvas (§25.12). OPAQUE server-side -- stored verbatim
 // (workflow_step_definitions.canvas_position JSONB), round-tripped, never
 // interpreted for any behavior. Genuinely OPTIONAL (may be absent entirely, like
 // CreateSessionRequest.pathScope) AND nullable: absent/null means no layout has
@@ -7788,7 +7768,7 @@ func (j *WorkflowStepDefinitionConversationContinuity) UnmarshalJSON(value []byt
 	return nil
 }
 
-// Step 59, §29.8's 'workflow engine echo'. Null means inherit exactly what the
+// §8.8, §29.8's 'workflow engine echo'. Null means inherit exactly what the
 // session would use today (turns.effort/sessions.build_effort).
 type WorkflowStepDefinitionEffort *string
 
@@ -7906,8 +7886,8 @@ func (j *WorkflowStepDefinition) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// One workflow_step_runs row (Step 54, §25.10) -- READ-ONLY on the wire, one row
-// per ATTEMPT of one step within a run (a retry/revise re-execution is a NEW row,
+// One workflow_step_runs row (§25.10) -- READ-ONLY on the wire, one row per
+// ATTEMPT of one step within a run (a retry/revise re-execution is a NEW row,
 // never an update-in-place -- §25.5's COUNT(*) iteration read depends on exactly
 // that). Deliberately omits two persisted columns, mirroring Plan's own documented
 // omissions: outcome_payload (the §25.6 typed step-to-step handoff, internal
@@ -7947,7 +7927,7 @@ type WorkflowStepRun struct {
 	OutcomeSummary WorkflowStepRunOutcomeSummary `json:"outcomeSummary" yaml:"outcomeSummary" mapstructure:"outcomeSummary"`
 
 	// Matches Postgres workflow_step_run_status exactly. Same dark-vocabulary note as
-	// WorkflowRun.status: the owning transition table is Step 55's.
+	// WorkflowRun.status: the owning transition table is §25.6's.
 	Status WorkflowStepRunStatus `json:"status" yaml:"status" mapstructure:"status"`
 
 	// StepDefinitionId corresponds to the JSON schema field "stepDefinitionId".

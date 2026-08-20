@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for LinearAgentSessionStore.Claim (Step 34, "Linear
+// Integration tests for LinearAgentSessionStore.Claim ("Linear
 // ingress", §8.10) -- mirrors webhookdelivery_store_integration_test.go's
 // own structure/precedent exactly (a focused file per store), proving the
 // SAME "(xmax = 0) AS inserted" atomic-claim idiom against a real

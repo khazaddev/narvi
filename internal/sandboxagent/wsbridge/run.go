@@ -27,7 +27,7 @@ import (
 //
 // Returns nil when ctx is canceled (an OS signal, from main.go's own
 // signal.NotifyContext) -- deliberately nil, not ctx.Err(), so this reads
-// as an ordinary, successful shutdown trigger exactly like the pre-Step-16
+// as an ordinary, successful shutdown trigger exactly like the pre-existing
 // `<-ctx.Done()` it replaces. Returns ErrShutdownRequested when a
 // (non-stale-gen) "shutdown" command is received. Returns
 // *FatalConnectError when the handshake itself returns 401/403/404/410 --
@@ -183,7 +183,7 @@ func (b *Bridge) flushBuffer(ctx context.Context, conn *websocket.Conn) error {
 
 // sendHeartbeatNow builds and sends exactly one heartbeat frame directly
 // on conn -- pulled out of heartbeatLoop's own `case <-ticker.C:` arm
-// (Step 28, "turn recovery") so the new `case <-b.forceHeartbeat:` arm
+// (§3.3, "turn recovery") so the new `case <-b.forceHeartbeat:` arm
 // below can send the SAME shape out-of-band, without duplicating the
 // build-and-send logic.
 func (b *Bridge) sendHeartbeatNow(ctx context.Context, conn *websocket.Conn) error {
@@ -194,7 +194,7 @@ func (b *Bridge) sendHeartbeatNow(ctx context.Context, conn *websocket.Conn) err
 		Gen:       b.sessionGen,
 		// ConversationId reflects whatever SetConversationID last
 		// recorded -- nil until the first turn's own StartTurn call
-		// (internal/adapters/outbound/opencode.Adapter, Step 17)
+		// (internal/adapters/outbound/opencode.Adapter, §7)
 		// resolves a real OpenCode conversation id.
 		ConversationId: b.getConversationID(),
 		LastBootPhase:  b.getLastBootPhase(),
@@ -212,7 +212,7 @@ func (b *Bridge) sendHeartbeatNow(ctx context.Context, conn *websocket.Conn) err
 // a heartbeat is a point-in-time liveness signal, and a stale one replayed
 // after a reconnect would carry a stale timestamp with no informational
 // value a FRESH heartbeat (already due within one more interval) doesn't
-// already supersede. Step 28 ("turn recovery") adds a SECOND trigger
+// already supersede. §3.3 ("turn recovery") adds a SECOND trigger
 // alongside the regular ticker: b.forceHeartbeat, which SetConversationID
 // sends on (non-blocking) the first time it observes a genuinely new,
 // non-nil conversation id (§3.3: "at turn start... never lazily") -- both

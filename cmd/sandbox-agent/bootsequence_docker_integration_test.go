@@ -1,6 +1,6 @@
 //go:build integration
 
-// This file proves Step 74's own §27.5 in-sandbox wiring end to end,
+// This file proves §27.5's own §27.5 in-sandbox wiring end to end,
 // through the REAL runBootSequence (not internal/sandboxagent/boot.
 // RunDocker called in isolation, already covered directly by
 // internal/sandboxagent/boot/docker_test.go): a session whose

@@ -133,7 +133,7 @@ type ListRecentEventsForSessionParams struct {
 // oldest-first cursor page: returns up to $2 of session_id's own MOST
 // RECENT events, newest id first -- for a caller that needs only the TAIL
 // of a possibly-long event log (e.g. sessionactor.planContentText's own
-// best-effort plan-content extraction, Step 38) without scanning forward
+// best-effort plan-content extraction, §8.1) without scanning forward
 // from the very beginning of a session's entire history, which for a
 // long-lived session (many prior turns) could leave the CURRENT turn's
 // own events entirely outside a bounded oldest-first window. Same
@@ -224,7 +224,7 @@ type ListSubTaskStartEventsForTurnParams struct {
 	DispatchedEventID int64       `json:"dispatched_event_id"`
 }
 
-// Step 71 (§26.4/§7.1's own post-hoc sub-task corroboration): the two
+// (§26.4/§7.1's own post-hoc sub-task corroboration): the two
 // queries below are this codebase's FIRST use of a payload->>'gen' JSONB
 // extraction filter -- checked against the rest of this file and every
 // other file in this directory before writing these, since there is no

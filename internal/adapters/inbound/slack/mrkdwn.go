@@ -7,7 +7,7 @@
 // CreateSessionRequest.prompt schema (a plain `["string","null"]`, no
 // markdown-specific structure at all) before writing this converter,
 // rather than guessing the target format. The OUTBOUND half (Narvi's own
-// text -> Slack mrkdwn, for whatever Step 35's real Notifier eventually
+// text -> Slack mrkdwn, for whatever §5.1's real Notifier eventually
 // posts) is explicitly NOT this Step's job -- see doc.go's own scoping
 // note.
 //

@@ -3,7 +3,7 @@
 // (GET /sessions/{sessionID}/ws), discriminated by ?type=sandbox vs
 // ?type=client via handler.go's own NewHandler dispatcher.
 //
-// # The sandbox socket (Step 18)
+// # The sandbox socket (§3.2)
 //
 // NewSandboxHandler (sandbox.go) backs ?type=sandbox (§6.1) -- the
 // server-side mirror of internal/sandboxagent/wsbridge's client side. It
@@ -17,7 +17,7 @@
 // bearer-token verify side (HashSandboxToken + verifySandboxToken) against
 // sandboxes.token_hash (migrations/000015_sandbox_token_hash.up.sql).
 //
-// Outbound dispatch (Step 21, "e2e happy path"): commander.go's own
+// Outbound dispatch (§9.3, "e2e happy path"): commander.go's own
 // SandboxRegistry is the single-recipient (not fan-out) live-connection
 // registry that implements internal/app/ports.SandboxCommander --
 // NewSandboxHandler registers each connection with it right before
@@ -30,7 +30,7 @@
 // Read") -- verified directly via `go doc github.com/coder/websocket.Conn`
 // during this Step's own design phase, not merely cited.
 //
-// # The client socket (Step 19)
+// # The client socket (§6.2)
 //
 // NewClientHandler (client.go) backs ?type=client (§6.2) -- see that
 // file's own top comment for the complete handshake outcome table
@@ -80,7 +80,7 @@
 //     real value -- no Step yet wires a real provider-assigned
 //     sandbox-instance id into the sandbox's own environment (matching
 //     internal/sandboxagent/wsbridge/doc.go's own identical gap on the
-//     client side, and Step 13's NARVI_IMAGE_DIGEST gap).
+//     client side, and §6.4's NARVI_IMAGE_DIGEST gap).
 //   - ErrSessionActorElsewhere (this process doesn't hold the session's
 //     advisory lock) maps to 503, not one of wsbridge's own 4 "fatal"
 //     statuses (401/403/404/410) -- deliberately, so the sandbox-agent's
@@ -90,7 +90,7 @@
 //     limitation, not a permanent solution -- not scoped to any specific
 //     later Step by the plan.
 //   - Sandbox token MINTING (generating a fresh token + writing its hash
-//     at spawn time) now exists (Step 21's own tryPlanSpawn,
+//     at spawn time) now exists (§9.3's own tryPlanSpawn,
 //     internal/app/sessionactor/dispatch.go, calling platform.
 //     GenerateToken + UpsertSandboxForSpawn) -- HashSandboxToken was
 //     exported specifically so that caller could reuse this package's own
@@ -108,7 +108,7 @@
 //     live OAuth credential on success, a materially higher-stakes
 //     endpoint than gating a WS connection).
 //   - Suspect-state recovery-during-grace ("any liveness signal during
-//     grace returns to previous state", §3.2) is now real (Step 24,
+//     grace returns to previous state", §3.2) is now real (§3.2,
 //     "two-phase terminalization") -- a Suspect sandbox reconnecting
 //     through this package IS allowed (IsDeadSandboxStatus(Suspect) is
 //     false), and internal/app/sessionactor's own handleSandboxEvent now
@@ -118,7 +118,7 @@
 //     file's own top comment for the full mechanics. This package itself
 //     needed no change for that: it already let a Suspect reconnect
 //     through unmodified.
-//   - Real user auth/identity now exists (Step 20, "auth v1") -- REST
+//   - Real user auth/identity now exists (§13.1, "auth v1") -- REST
 //     ws-token minting (internal/adapters/inbound/httpapi's own
 //     MintWSToken) is gated behind internal/adapters/inbound/auth.
 //     Middleware and scopes ws_tokens.user_id to the real authenticated

@@ -1,4 +1,4 @@
-// Package falsepositive implements Step 63's own §22.2-§22.4 pure domain
+// Package falsepositive implements §22's own §22.2-§22.4 pure domain
 // logic (docs/TECHNICAL_PLAN.md §22): the deterministic `false positive:
 // <reason>` PR-thread command a maintainer+ uses to teach a repo-scoped
 // false-positive pattern (§22.2), and the advisory content block that
@@ -27,9 +27,9 @@
 // Deliberately its own package, not a further extension of internal/
 // domain/review or internal/domain/reviewpost: this is a third, distinct
 // concept from either -- review.Verdict is the structured verdict a
-// review session produces (Step 45), reviewpost.Finding is one verdict's
+// review session produces (§8.2), reviewpost.Finding is one verdict's
 // own per-finding content-anchored identity/position (§22.1/§22.1.1,
-// Step 48/63) -- a maintainer-taught PATTERN is neither; it is standing,
+// §8.2/§22) -- a maintainer-taught PATTERN is neither; it is standing,
 // repo-scoped guidance that exists independently of any single verdict or
 // finding, fed INTO every future review rather than produced BY one.
 package falsepositive

@@ -1,4 +1,4 @@
-// This file (pullrequestsynchronize.go) implements Step 65's ("review:
+// This file (pullrequestsynchronize.go) implements §24's ("review:
 // automatic re-review on new commits", §24.1) own new GitHub ingress
 // lane: `X-GitHub-Event: pull_request` with `action: "synchronize"` --
 // GitHub's own name for "new commits landed on this PR's head". This is a

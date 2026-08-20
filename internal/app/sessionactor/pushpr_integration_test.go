@@ -40,7 +40,7 @@ var testTokenEncryptionKey = []byte("0123456789abcdef0123456789abcdef")
 // CreatePR call it receives and returning a caller-configured (ref, err)
 // pair.
 //
-// Step 26 ("image builds") extends this same fake with an identical
+// §8.5 ("image builds") extends this same fake with an identical
 // recording shape for ResolveBranchSHA (shaCalls/nextSHA/nextSHAErr, plus
 // an optional per-repo shaFor map so a test can return DIFFERENT SHAs for
 // different repos in one multi-repo session) rather than introducing a
@@ -48,7 +48,7 @@ var testTokenEncryptionKey = []byte("0123456789abcdef0123456789abcdef")
 // exact same CreatePR-call-recording precedent, just for the other
 // SourceControl method dispatch.go's resolveAndSetImage now calls.
 //
-// Step 27 ("mocking + contract drift") extends this SAME fake again, the
+// §14.3 ("mocking + contract drift") extends this SAME fake again, the
 // identical way, for ResolveContractsFingerprint (fingerprintCalls/
 // nextFingerprint/nextFingerprintExists/nextFingerprintErr, plus an
 // optional per-repo fingerprintFor map) -- this package's own
@@ -96,7 +96,7 @@ type fakeSourceControl struct {
 	accessErr        error
 	accessErrFor     map[string]error // keyed by "owner/repo"; overrides accessErr if present
 
-	// registerStackCalls (Step 48, "sentinels + suggestions", §17.2/§17.6)
+	// registerStackCalls ("sentinels + suggestions", §17.2/§17.6)
 	// is this fake's own extension for RegisterPRStack -- recorded so a
 	// test can prove createSentinelFixPRBestEffort (pushpr.go) calls it
 	// exactly once, with the origin+fix PR numbers bottom-to-top, AFTER
@@ -104,7 +104,7 @@ type fakeSourceControl struct {
 	registerStackCalls []ports.RegisterPRStackSpec
 	registerStackErr   error
 
-	// diffCalls/nextDiff/nextDiffErr are Step 49's ("handoff-readiness
+	// diffCalls/nextDiff/nextDiffErr are §14.4's ("handoff-readiness
 	// sentinel", §14.4) own extension of this same fake for
 	// GetPullRequestDiff -- this fake ALSO satisfies PRDiffFetcher
 	// (handoffsentinel.go), mirroring how the real production adapter
@@ -245,7 +245,7 @@ func (f *fakeSourceControl) lastAccessCtxDeadline() (time.Time, bool) {
 	return f.accessCtxs[len(f.accessCtxs)-1].Deadline()
 }
 
-// GetFileContent/UpdateFileContent (Step 48, §12.2 item 2) are never
+// GetFileContent/UpdateFileContent (§12.2 item 2) are never
 // reached from this package (apply-suggestion is an httpapi-only surface)
 // -- clear "not implemented" errors, mirroring whiteboxFakeSourceControl's
 // own identical precedent (internal/app/imagebuild).
@@ -257,7 +257,7 @@ func (f *fakeSourceControl) UpdateFileContent(context.Context, ports.UpdateFileC
 	return "", errors.New("fakeSourceControl: UpdateFileContent not implemented")
 }
 
-// RegisterPRStack (Step 48, §17.2/§17.6) records every call this fake
+// RegisterPRStack (§17.2/§17.6) records every call this fake
 // receives and returns a caller-configured error -- registerStackErr
 // defaults to nil (registration "succeeds"), mirroring nextErr's own
 // default-success precedent for CreatePR above.
@@ -280,7 +280,7 @@ func (f *fakeSourceControl) lastRegisterStackSpec() ports.RegisterPRStackSpec {
 	return f.registerStackCalls[len(f.registerStackCalls)-1]
 }
 
-// CreateBranch (Step 48 confirmed-finding fix) is never reached from this
+// CreateBranch (a confirmed-finding fix) is never reached from this
 // package's own pushpr.go -- that call happens in internal/app/outboxworker
 // (sentinelautofix.go), BEFORE this package's own code ever runs for a
 // sentinel-auto-fix session -- clear "not implemented" mirrors
@@ -298,14 +298,14 @@ func (f *fakeSourceControl) UpdatePRBody(context.Context, ports.UpdatePRBodySpec
 	return errors.New("fakeSourceControl: UpdatePRBody not implemented")
 }
 
-// ListMergedBetween (Step 50, "release PR review", §15.2) is never
+// ListMergedBetween ("release PR review", §15.2) is never
 // reached from this package either -- same "not implemented" precedent
 // as CreateBranch above.
 func (f *fakeSourceControl) ListMergedBetween(context.Context, ports.ListMergedBetweenSpec) ([]ports.MergedPR, bool, error) {
 	return nil, false, errors.New("fakeSourceControl: ListMergedBetween not implemented")
 }
 
-// ListOpenPRsForUser/ResolveCodeOwners/MergePR (Step 60, "decision inbox:
+// ListOpenPRsForUser/ResolveCodeOwners/MergePR ("decision inbox:
 // read model + API", §16.2) are never reached from this package -- same
 // "not implemented" precedent as ListMergedBetween above.
 func (f *fakeSourceControl) ListOpenPRsForUser(context.Context, ports.ListOpenPRsForUserSpec) ([]ports.OpenPR, bool, error) {
@@ -901,7 +901,7 @@ func TestHandleSandboxEvent_PushComplete_NoCreatedBy_SkipsHonestly(t *testing.T)
 }
 
 // TestHandleSandboxEvent_PushComplete_ViewerCreator_SkipsPRCreation proves
-// Step 39's own viewer guard (§13.3: "viewers never gain PR-reviewer
+// §13.2's own viewer guard (§13.3: "viewers never gain PR-reviewer
 // attribution or git identity on session artifacts"): a session whose
 // creator has a REAL, usable, encrypted GitHub identity/token -- otherwise
 // an identical setup to TestHandleSandboxEvent_PushComplete_CreatesPRArtifact

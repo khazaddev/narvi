@@ -160,7 +160,7 @@ func TestResolveIssueCommentHead_NullHeadRepoKeepsBaseRepo(t *testing.T) {
 	}
 }
 
-// TestResolveIssueCommentHead_StackThreadedThrough proves Step 46's own
+// TestResolveIssueCommentHead_StackThreadedThrough proves §8.2's own
 // §17.6 amendment: a successful GetPullRequest response carrying a stack
 // object populates m.Stack -- the SAME already-made call this function's
 // own top doc comment describes, never a second one (this test's own
@@ -226,7 +226,7 @@ func TestResolveIssueCommentHead_UnsplittableRepoFullNameFallsBack(t *testing.T)
 
 // Owner/repo splitting itself (formerly this file's own splitOwnerRepo) now
 // lives at internal/domain/reposource.SplitFullName -- see that function's
-// own doc comment for why (Step 46, "review sessions", §8.2: a second
+// own doc comment for why ("review sessions", §8.2: a second
 // caller, in a different package, needed the identical split). Its own
 // table-driven test moved with it, to reposource_test.go's own
 // TestSplitFullName; TestResolveIssueCommentHead_UnsplittableRepoFullNameFallsBack

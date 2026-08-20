@@ -20,7 +20,7 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// This file proves Step 38's ("plan mode, cross-channel", §8.1/§13.3) own
+// This file proves §8.1's ("plan mode, cross-channel", §8.1/§13.3) own
 // central deliverables at the shared httpapi.DecidePlan level:
 //   - cross-channel notify: a decision on a plan with a stored Slack
 //     message ref enqueues (and, run through a real outboxworker.Builder,

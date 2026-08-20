@@ -1,9 +1,9 @@
-// This file (handoffsentinel.go) implements Step 49's own ("handoff-
+// This file (handoffsentinel.go) implements §14.4's own ("handoff-
 // readiness sentinel", §14.4/§14.5) app-layer orchestration: given a PR
 // createPRBestEffort (pushpr.go) just successfully created, decide whether
 // this session's provenance_tag marks it as coming from a scoped
 // Environment (§14.1) and, if so, whether there is anything worth telling
-// an engineer about -- reusing Step 27's already-merged contract-drift
+// an engineer about -- reusing §14.3's already-merged contract-drift
 // signal (internal/domain/contractdrift.HasDrifted, never a second
 // endpoint scanner) and this Step's own new backend-TODO diff scan
 // (internal/domain/handoff.ScanTODOs).
@@ -15,7 +15,7 @@
 // already has everything needed in hand (sessionRow.ProvenanceTag, the
 // creator's already-decrypted OAuth token, owner/repoName, and the just-
 // created PR's own number) with NO further plumbing. This deliberately
-// does NOT run via a GitHub `pull_request` webhook lane (the way Step 48's
+// does NOT run via a GitHub `pull_request` webhook lane (the way §8.2's
 // merge-gating half does, internal/adapters/inbound/github/
 // pullrequestevent.go): a scoped session creates its OWN PR (pushpr.go),
 // it is never a human pushing a branch and opening one by hand, so the
@@ -25,13 +25,13 @@
 // automation and the handoff sentinel can act on it without re-deriving
 // intent."
 //
-// # Why NOT the verdict-posting path (Step 47/48)
+// # Why NOT the verdict-posting path (§8.2)
 //
 // This sentinel never calls POST .../review/verdict (reviewverdict.go),
 // never builds a review.Verdict, and never writes review_findings.
 // §14.4's own text is explicit that this sentinel runs "alongside or
 // INSTEAD OF a normal risk verdict" -- a scoped-session PR is not
-// necessarily (and today, is never) also a review session (Step 46's
+// necessarily (and today, is never) also a review session (§8.2's
 // mention-triggered claim is a completely separate, independent trigger).
 // Piping handoff findings through the verdict-posting tool would also
 // require a SentinelKind value for them (reviewpost.Finding's own
@@ -92,7 +92,7 @@ type PRDiffFetcher interface {
 // decrypted a second time); owner/repoName describe the repo this PR was
 // just opened for; configuredBranch is that repo's own CONFIGURED base
 // branch (nil means "the repo's real default branch") -- the SAME value
-// Step 27's checkContractDriftForRepo reads, and deliberately NEVER the
+// §14.3's checkContractDriftForRepo reads, and deliberately NEVER the
 // session's own pushed branch (see checkHandoffContractDrift's own doc
 // comment for why that distinction is load-bearing). prNumber is the
 // just-created PR's own number. Every early return here is a plain,
@@ -163,13 +163,13 @@ func (a *Actor) runHandoffSentinelBestEffort(
 	}
 }
 
-// checkHandoffContractDrift reuses Step 27's own contract-drift machinery
+// checkHandoffContractDrift reuses §14.3's own contract-drift machinery
 // verbatim (internal/domain/contractdrift.HasDrifted, the SAME
 // contractDrift store checkContractDrift/contractdrift.go already reads)
 // -- never a second endpoint scanner (internal/domain/handoff/doc.go's
 // own design call #2 names why no finer-grained signal exists to reuse).
 // Only ever produces true for a MockConfigured Environment (the only kind
-// Step 27 ever persists a baseline snapshot for) -- a scoped-but-not-
+// §14.3 ever persists a baseline snapshot for) -- a scoped-but-not-
 // mock-configured Environment's PR simply never has anything to compare
 // against, and this returns false, exactly like a "first sighting" does
 // in checkContractDriftForRepo.

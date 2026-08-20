@@ -87,7 +87,7 @@ func seedSecret(ctx context.Context, deps Deps, s seedmanifest.Secret, dryRun bo
 	// the SAME function seedmanifest.Validate already called at load
 	// time, never a second/independent check (see sandboxsecret's own
 	// "one owning mechanism per env-var name" rule, referenced from this
-	// codebase's Step 72/73b work).
+	// codebase's §27.1/§27.3 work).
 	if err := sandboxsecret.ValidateName(s.Name); err != nil {
 		return Item{Kind: "secret", Key: key, Outcome: OutcomeError, Detail: "invalid secret name: " + err.Error()}
 	}

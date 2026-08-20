@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// This file implements §26.2/Step 67's own "graduated remediation"
+// This file implements §26.2's own "graduated remediation"
 // content: the ACTUAL new PR body text a Narvi-authored PR's description
 // gets rewritten to, when the per-repo descriptionAutofix flag is on
 // (internal/app/outboxworker's own description-autofix notifier is the
@@ -31,7 +31,7 @@ import (
 //
 //   - NOT IDEMPOTENT (item 3, HIGH): the outbox is at-least-once by
 //     construction (no dedupe on CreateOutboxEntry, no per-PR claim row),
-//     and re-review is the designed norm (Step 65 allows up to 10
+//     and re-review is the designed norm (§24 allows up to 10
 //     automatic re-reviews per PR). A second delivery -- whether a
 //     genuine second verdict proposing a new rewrite, or a plain retry of
 //     the SAME delivery after a lost PATCH response -- re-fetches the

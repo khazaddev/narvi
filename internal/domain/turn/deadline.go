@@ -3,7 +3,7 @@ package turn
 import "time"
 
 // DeadlineConfig configures EvaluateTurnDeadline. Populated by the caller
-// from platform.Timeouts.TurnDeadline (already defined at Step 02, unused
+// from platform.Timeouts.TurnDeadline (already defined at unused
 // until now — Chain A: ProviderHardCap > SupervisorTurnCap > TurnDeadline
 // > SSEInactivityTimeout, §5.4).
 type DeadlineConfig struct {

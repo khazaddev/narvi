@@ -1,4 +1,4 @@
-// This file (digestslacknotifier.go) implements Step 62's own
+// This file (digestslacknotifier.go) implements §21's own
 // (§21.3) Slack digest notifier: one small ports.Notifier handling
 // ports.NotificationKindSlackDigest rows -- a plain chat.postMessage of
 // internal/domain/digest.Render's own already-rendered, deterministic

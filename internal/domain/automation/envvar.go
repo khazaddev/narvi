@@ -9,7 +9,7 @@ import (
 // configuration threaded into every run this automation fans out (app/
 // automation's own fanout.go), NEVER a secret. See this package's own
 // doc.go for the explicit, documented decision to defer per-automation
-// SECRETS to Step 53 -- EnvVar is that decision's own opposite case: data
+// SECRETS to §25.1 -- EnvVar is that decision's own opposite case: data
 // this package DOES implement, precisely because it carries no
 // confidentiality requirement at all (a feature-flag name, a target
 // environment label, a non-sensitive tuning parameter).

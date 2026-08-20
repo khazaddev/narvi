@@ -13,7 +13,7 @@ import (
 )
 
 // AuthorizeResolvedActor closes the gap a confirmed security review found
-// in Step 39's own auto-linking wiring (Slack/Linear): resolving an inbound
+// in §13.2's own auto-linking wiring (Slack/Linear): resolving an inbound
 // event to a REAL, linked user_id/role is not enough by itself -- something
 // must ALSO run that resolved actor's role back through domain/authz.
 // Authorize before the caller's own state-changing effect, or a `viewer`

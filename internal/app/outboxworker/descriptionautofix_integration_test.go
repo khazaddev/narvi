@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration test for Step 67's ("review digest: description adequacy +
+// Integration test for §26.2's ("review digest: description adequacy +
 // graduated remediation", §26.2) own description-autofix notifier
 // (descriptionautofix.go), against a real Postgres instance -- gated
 // behind the "integration" build tag, reusing this package's own

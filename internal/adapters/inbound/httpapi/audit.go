@@ -6,7 +6,7 @@
 // CreateSessionOnTx, turn.go's CreateTurnCore, decideplan.go's
 // DecidePlanOnTx.
 //
-// Step 39's own second half ("identities + full RBAC", auto-linking)
+// §13.2's own second half ("identities + full RBAC", auto-linking)
 // moved the actual implementation to internal/app/auditlog.Record, so a
 // caller OUTSIDE this package (internal/app/identitylink.Resolve, which
 // needs to audit-log a brand-new auto-linked identity from inside its own

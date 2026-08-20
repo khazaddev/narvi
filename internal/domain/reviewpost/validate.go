@@ -12,7 +12,7 @@ import (
 )
 
 // VerdictInput is the shape of a review-verdict-posting-tool call's own
-// typed fields (§8.2/Step 47) BEFORE the server recomputes the
+// typed fields (§8.2) BEFORE the server recomputes the
 // authoritative Shippable -- one field per Verdict field EXCEPT Shippable
 // itself (never accepted from a caller, per review.Verdict's own CONTRACT)
 // plus Summary, the agent's own human-readable narrative body (review's
@@ -37,7 +37,7 @@ type VerdictInput struct {
 	// and never read again.
 	Summary string
 
-	// Findings is Step 48's own additive extension (§8.2/§17/§22.1): zero
+	// Findings is §8.2's own additive extension (§8.2/§17/§22.1): zero
 	// or more per-finding typed fields, alongside the verdict's own
 	// aggregate fields above -- restdtos.PostReviewVerdictRequest.findings
 	// is OPTIONAL, so an old caller posting no findings at all (every
@@ -47,20 +47,20 @@ type VerdictInput struct {
 	// here, in reviewpost, rather than as a new review.Verdict field.
 	Findings []FindingInput
 
-	// Digest is Step 66's own additive extension (§26.1): the merge-
+	// Digest is §26.1's own additive extension (§26.1): the merge-
 	// readout's typed content -- restdtos.PostReviewVerdictRequest.digest
 	// is REQUIRED (unlike Findings above), and Digest.Summary within it is
 	// unconditionally enforced by ValidateVerdictInput below; Digest.
 	// ArchDecisions/StackRisks/UnverifiedLimits are requested on every
 	// review (the review-turn prompt, review/context.go, asks the agent
-	// to fill them), and (Step 68, §26.3) become REQUIRED as well whenever
+	// to fill them), and (§26.3) become REQUIRED as well whenever
 	// this VerdictInput's own ReviewDepth is reviewtriage.DepthDeep -- see
 	// digest.go's own doc comment for the full "why", and this field's
 	// own struct type for why it lives here rather than as a new
 	// review.Verdict field.
 	Digest Digest
 
-	// ReviewDepth (Step 68, §26.3) is the posting turn's own resolved
+	// ReviewDepth (§26.3) is the posting turn's own resolved
 	// light/deep routing decision (turns.review_depth) -- threaded
 	// through by the caller (internal/adapters/inbound/httpapi/
 	// reviewverdict.go), never accepted from the agent's own POST body
@@ -72,7 +72,7 @@ type VerdictInput struct {
 	// recorded depth was never routed deep by construction.
 	ReviewDepth reviewtriage.ReviewDepth
 
-	// CounterReview (§26.4, Step 69) is the deep path's own structural-
+	// CounterReview (§26.4) is the deep path's own structural-
 	// enforcement signal: whether the primary reviewer's orchestration
 	// actually spawned and adjudicated the `counter-reviewer` sub-task
 	// (§7.1's engine-native fan-out) before posting this verdict.
@@ -83,7 +83,7 @@ type VerdictInput struct {
 	// BuildVerdict's own doc comment for the light-path substitution).
 	CounterReview review.CounterReviewStatus
 
-	// FactCheck (§26.6, Step 69) is the diff-only fact-check sub-task's
+	// FactCheck (§26.6) is the diff-only fact-check sub-task's
 	// own outcome -- whether the primary reviewer's orchestration spawned
 	// it at all before posting this verdict. SCHEMA-REQUIRED
 	// UNCONDITIONALLY (validate.go's own ErrInvalidFactCheck check, both
@@ -93,7 +93,7 @@ type VerdictInput struct {
 	// comment (factcheck.go) for why FactCheck:skipped, unlike
 	// CounterReview:skipped above, never raises Shippable.
 	FactCheck FactCheckStatus
-	// FactCheckKilled (§26.6, Step 69) is the count of findings the
+	// FactCheckKilled (§26.6) is the count of findings the
 	// fact-check pass actually removed as provably wrong from the diff
 	// alone -- 0 when FactCheck == FactCheckSkipped (a skipped pass, by
 	// construction, kills nothing), and always >= 0 otherwise
@@ -101,7 +101,7 @@ type VerdictInput struct {
 	// ErrFactCheckKilledOnSkip checks).
 	FactCheckKilled int
 
-	// CounterReviewCorroborated (§26.4, Step 71) is what makes §26.4's own
+	// CounterReviewCorroborated (§26.4) is what makes §26.4's own
 	// "structural enforcement" heading honestly so: whether the caller
 	// (internal/adapters/inbound/httpapi/reviewverdict.go) independently
 	// confirmed, against THIS turn's own already-persisted sandbox event
@@ -124,7 +124,7 @@ type VerdictInput struct {
 // MaxDigestSummaryBytes/MaxDigestAdequacyExplanationBytes/
 // MaxDigestStackRisksBytes/MaxDigestUnverifiedLimitsBytes/
 // MaxDigestProposedBodyBytes/MaxDigestContestedPointsBytes/
-// MaxArchDecisionFieldBytes (Step 62 hardening, G3) cap the byte length of
+// MaxArchDecisionFieldBytes (hardening, G3) cap the byte length of
 // every model-authored free-text digest field ValidateVerdictInput
 // enforces below -- mirroring internal/domain/upload's own MaxFilenameBytes/
 // MaxContentTypeBytes precedent (upload/validate.go) for the identical
@@ -197,13 +197,13 @@ var (
 	ErrInvalidBlastRadiusTag    = errors.New("reviewpost: blastRadius contains an unrecognized tag")
 	ErrNegativeFilesChanged     = errors.New("reviewpost: filesChanged must not be negative")
 	ErrEmptySummary             = errors.New("reviewpost: summary must not be empty")
-	// ErrEmptyDigestSummary is Step 66's own addition (§26.1): "Digest.Summary
-	// is required on every review from Step 66 on" -- mirrors ErrEmptySummary
+	// ErrEmptyDigestSummary is §26.1's own addition (§26.1): "Digest.Summary
+	// is required on every review from day one" -- mirrors ErrEmptySummary
 	// above exactly (same empty/whitespace-only check, same "missing and
 	// garbled are the identical failure" posture), for the digest's own
 	// "what this PR does" field rather than the verdict's overall narrative.
 	ErrEmptyDigestSummary = errors.New("reviewpost: digest.summary must not be empty")
-	// ErrInvalidDescriptionAdequacy is §26.2/Step 67's own addition:
+	// ErrInvalidDescriptionAdequacy is §26.2's own addition:
 	// digest.descriptionAdequacy must be one of review's own three closed
 	// DescriptionAdequacy values -- mirrors ErrInvalidPremise/
 	// ErrInvalidRiskLevel's own identical closed-enum check shape, applied
@@ -212,18 +212,18 @@ var (
 	// directly feeds review.ComputeShippable's own third floor, not free
 	// text.
 	ErrInvalidDescriptionAdequacy = errors.New("reviewpost: digest.descriptionAdequacy must be one of ok/drift/misleading")
-	// ErrEmptyAdequacyExplanation is §26.2/Step 67's own addition:
+	// ErrEmptyAdequacyExplanation is §26.2's own addition:
 	// digest.adequacyExplanation must not be empty/whitespace-only --
 	// mirrors ErrEmptySummary/ErrEmptyDigestSummary's own identical
 	// "missing and garbled are the identical failure" posture, for the
 	// tri-state's own required one-line explanation.
 	ErrEmptyAdequacyExplanation = errors.New("reviewpost: digest.adequacyExplanation must not be empty")
 	// ErrEmptyDigestArchDecisions/ErrEmptyDigestStackRisks/
-	// ErrEmptyDigestUnverifiedLimits are Step 68's own addition (§26.3,
+	// ErrEmptyDigestUnverifiedLimits are §26.3's own addition (§26.3,
 	// via §26.1's own forward reference: "the full digest ... becomes
 	// schema-required on the deep path once §26.3 defines it") -- the
-	// three digest fields §26.1/Step 66 requested but deliberately left
-	// unenforced ("explicit future work, §26.3/Step 68, once a 'deep
+	// three digest fields §26.1 requested but deliberately left
+	// unenforced ("explicit future work, §26.3, once a 'deep
 	// path' exists for it to attach to", reviewpost/digest.go's own doc
 	// comment) are now REQUIRED, but ONLY when in.ReviewDepth ==
 	// reviewtriage.DepthDeep -- see ValidateVerdictInput's own check
@@ -232,18 +232,18 @@ var (
 	ErrEmptyDigestArchDecisions    = errors.New("reviewpost: digest.archDecisions must not be empty on a deep-path review")
 	ErrEmptyDigestStackRisks       = errors.New("reviewpost: digest.stackRisks must not be empty on a deep-path review")
 	ErrEmptyDigestUnverifiedLimits = errors.New("reviewpost: digest.unverifiedLimits must not be empty on a deep-path review")
-	// ErrInvalidFactCheck is §26.6/Step 69's own addition: factCheck must
+	// ErrInvalidFactCheck is §26.6's own addition: factCheck must
 	// be one of review's own two closed FactCheckStatus values --
 	// SCHEMA-REQUIRED UNCONDITIONALLY (both paths, never gated behind
 	// ReviewDepth, unlike the deep-path-only digest checks above) since
 	// the fact-check pass itself runs on every review, light and deep
 	// alike (§26.6: "runs on the light path too").
 	ErrInvalidFactCheck = errors.New("reviewpost: factCheck must be one of done/skipped")
-	// ErrNegativeFactCheckKilled is §26.6/Step 69's own addition: mirrors
+	// ErrNegativeFactCheckKilled is §26.6's own addition: mirrors
 	// ErrNegativeFilesChanged's own identical "a count field must never be
 	// negative" check.
 	ErrNegativeFactCheckKilled = errors.New("reviewpost: factCheckKilled must not be negative")
-	// ErrFactCheckKilledOnSkip is §26.6/Step 69's own addition: a SKIPPED
+	// ErrFactCheckKilledOnSkip is §26.6's own addition: a SKIPPED
 	// fact-check pass, by construction, removed nothing -- "FactCheckKilled
 	// int (the count removed, 0 when skipped)" (§26.6, verbatim). A
 	// non-zero count paired with FactCheckSkipped is not a value this
@@ -254,7 +254,7 @@ var (
 	// combination in this function already gets, rather than silently
 	// clamped to 0 or silently trusted.
 	ErrFactCheckKilledOnSkip = errors.New("reviewpost: factCheckKilled must be 0 when factCheck is skipped")
-	// ErrInvalidCounterReview is §26.4/Step 69's own addition:
+	// ErrInvalidCounterReview is §26.4's own addition:
 	// counterReview must be one of review's own two closed
 	// CounterReviewStatus values -- SCHEMA-REQUIRED ONLY on the deep path
 	// (in.ReviewDepth == reviewtriage.DepthDeep), mirroring
@@ -266,7 +266,7 @@ var (
 	// ErrDigestSummaryTooLong/ErrDigestAdequacyExplanationTooLong/
 	// ErrDigestStackRisksTooLong/ErrDigestUnverifiedLimitsTooLong/
 	// ErrDigestProposedBodyTooLong/ErrDigestContestedPointsTooLong/
-	// ErrDigestArchDecisionFieldTooLong (Step 62 hardening, G3) -- the
+	// ErrDigestArchDecisionFieldTooLong (hardening, G3) -- the
 	// MaxDigest*Bytes/MaxArchDecisionFieldBytes caps' own rejection errors
 	// (see those consts' own doc comment, above the errors block, for the
 	// full "why" and how each limit was chosen). Checked LAST of all,
@@ -302,18 +302,18 @@ var (
 // fixed order (RiskLevel, Premise, TestsCoverage, DocsDrift,
 // ProposedShippable, BlastRadius, FilesChanged, Summary, Digest.Summary,
 // Digest.DescriptionAdequacy, Digest.AdequacyExplanation, FactCheck/
-// FactCheckKilled (§26.6/Step 69, unconditional), Digest.ArchDecisions/
-// StackRisks/UnverifiedLimits/CounterReview (§26.4/Step 69, ONLY when
-// in.ReviewDepth == reviewtriage.DepthDeep), Findings (Step 48), and --
-// Step 62 hardening, G3, LAST of all -- the seven digest length caps
+// FactCheckKilled (§26.6, unconditional), Digest.ArchDecisions/
+// StackRisks/UnverifiedLimits/CounterReview (§26.4, ONLY when
+// in.ReviewDepth == reviewtriage.DepthDeep), Findings (§8.2), and --
+// hardening, G3, LAST of all -- the seven digest length caps
 // (Digest.Summary/AdequacyExplanation/StackRisks/UnverifiedLimits/
 // ProposedBody/ContestedPoints/each ArchDecision field, unconditional on
 // path)) so a caller presenting more than one bad field always gets the
 // SAME, deterministic first error rather than one that depends on map
-// iteration order or similar. Digest.Summary is checked next (Step 66,
+// iteration order or similar. Digest.Summary is checked next (
 // §26.1's own new required field), Digest.DescriptionAdequacy/Digest.
-// AdequacyExplanation follow (§26.2/Step 67's own new required fields),
-// FactCheck/FactCheckKilled follow those (§26.6/Step 69's own new
+// AdequacyExplanation follow (§26.2's own new required fields),
+// FactCheck/FactCheckKilled follow those (§26.6's own new
 // UNCONDITIONAL fields -- checked before the deep-path-only block, never
 // inside it, since they apply regardless of depth), the deep-path-only
 // checks (three digest fields plus CounterReview) follow those, Findings
@@ -380,18 +380,18 @@ func ValidateVerdictInput(in VerdictInput) error {
 		return ErrEmptySummary
 	}
 
-	// Digest.Summary (Step 66, §26.1): "required on every review from
-	// Step 66 on" -- the ONE digest field required on EVERY review,
+	// Digest.Summary (§26.1): "required on every review from
+	// day one" -- the ONE digest field required on EVERY review,
 	// light and deep alike. ArchDecisions/StackRisks/UnverifiedLimits are
 	// NOT checked here -- they are requested via the prompt (review/
 	// context.go) on every review, and validation-enforced separately,
-	// below, but ONLY on the deep path (Step 68, §26.3) -- see that
+	// below, but ONLY on the deep path (§26.3) -- see that
 	// check's own doc comment further down for the full "why".
 	if strings.TrimSpace(in.Digest.Summary) == "" {
 		return ErrEmptyDigestSummary
 	}
 
-	// Digest.DescriptionAdequacy (§26.2/Step 67): a closed-enum check,
+	// Digest.DescriptionAdequacy (§26.2): a closed-enum check,
 	// mirroring RiskLevel/Premise/TestsCoverage/DocsDrift/ProposedShippable
 	// above rather than Digest.Summary's own weaker "just non-blank"
 	// check -- this field directly feeds review.ComputeShippable's own
@@ -400,14 +400,14 @@ func ValidateVerdictInput(in VerdictInput) error {
 	// that computation instead of being rejected up front. REQUIRED on
 	// EVERY review, light and deep alike -- unlike ArchDecisions/
 	// StackRisks/UnverifiedLimits below, this was never deferred behind
-	// the light/deep distinction Step 68 later added.
+	// the light/deep distinction §26.3 draws.
 	switch in.Digest.DescriptionAdequacy {
 	case review.DescriptionAdequacyOK, review.DescriptionAdequacyDrift, review.DescriptionAdequacyMisleading:
 	default:
 		return ErrInvalidDescriptionAdequacy
 	}
 
-	// Digest.AdequacyExplanation (§26.2/Step 67): "plus a one-line
+	// Digest.AdequacyExplanation (§26.2): "plus a one-line
 	// explanation" -- REQUIRED non-blank, mirroring Summary/Digest.
 	// Summary's own identical "missing and garbled are the identical
 	// failure" treatment for a free-text narrative field.
@@ -415,7 +415,7 @@ func ValidateVerdictInput(in VerdictInput) error {
 		return ErrEmptyAdequacyExplanation
 	}
 
-	// FactCheck/FactCheckKilled (§26.6/Step 69): a closed-enum check,
+	// FactCheck/FactCheckKilled (§26.6): a closed-enum check,
 	// mirroring Digest.DescriptionAdequacy's own treatment immediately
 	// above -- SCHEMA-REQUIRED UNCONDITIONALLY, both paths, since the
 	// fact-check pass itself runs on every review regardless of depth
@@ -436,10 +436,10 @@ func ValidateVerdictInput(in VerdictInput) error {
 		return ErrFactCheckKilledOnSkip
 	}
 
-	// Digest.ArchDecisions/StackRisks/UnverifiedLimits (Step 68, §26.3,
+	// Digest.ArchDecisions/StackRisks/UnverifiedLimits (§26.3,
 	// via §26.1's own forward reference): schema-required ONLY on the
 	// deep path -- checked LAST, after every field the light path already
-	// requires, so a light-path or pre-Step-68 (ReviewDepth == "") caller
+	// requires, so a light-path or pre-existing (ReviewDepth == "") caller
 	// keeps failing on exactly the SAME first error it always did (this
 	// function's own "fixed order" discipline, top doc comment). The
 	// posting endpoint's own reject-don't-repair posture (§26.1) means
@@ -467,7 +467,7 @@ func ValidateVerdictInput(in VerdictInput) error {
 		if strings.TrimSpace(in.Digest.UnverifiedLimits) == "" {
 			return ErrEmptyDigestUnverifiedLimits
 		}
-		// CounterReview (§26.4/Step 69): schema-required ONLY on the deep
+		// CounterReview (§26.4): schema-required ONLY on the deep
 		// path, appended LAST within this deep-path-only block (this
 		// function's own "each added at the end of the existing fixed
 		// order" discipline, top doc comment) -- rejected if absent or
@@ -487,7 +487,7 @@ func ValidateVerdictInput(in VerdictInput) error {
 		}
 	}
 
-	// Findings (Step 48, additive): each one validated by
+	// Findings (§8.2, additive): each one validated by
 	// ValidateFindingInput, in order -- first bad finding wins, mirroring
 	// this function's own fixed-order, first-error-wins discipline above.
 	// nil/empty Findings is not iterated at all, so an old caller posting
@@ -498,7 +498,7 @@ func ValidateVerdictInput(in VerdictInput) error {
 		}
 	}
 
-	// Digest field length caps (Step 62 hardening, G3) -- checked LAST of
+	// Digest field length caps (hardening, G3) -- checked LAST of
 	// all, after every other check above including the Findings loop; see
 	// the Max*Bytes consts' own doc comment and each Err*TooLong error's
 	// own doc comment (both above) for the full "why here, why
@@ -565,7 +565,7 @@ func hasNonBlankArchDecision(decisions []ArchDecision) bool {
 // Shippable's own computation, since ComputeShippable's signature does not
 // accept it at all).
 //
-// in.Digest.DescriptionAdequacy (§26.2/Step 67) is threaded through as
+// in.Digest.DescriptionAdequacy (§26.2) is threaded through as
 // ComputeShippable's own fourth argument, the THIRD raise-only floor --
 // composed via the SAME max(rank) as coverage/premise, never a special
 // case. RiskLevel below is set from in.RiskLevel VERBATIM, completely
@@ -576,7 +576,7 @@ func hasNonBlankArchDecision(decisions []ArchDecision) bool {
 // in.Digest.DescriptionAdequacy (or any other floor input) can reach that
 // assignment.
 //
-// counterReviewForFloor (§26.4/Step 69) is this function's own resolution
+// counterReviewForFloor (§26.4) is this function's own resolution
 // of ComputeShippable's fifth argument, the FOURTH raise-only floor --
 // NEVER in.CounterReview forwarded verbatim. On a deep-path verdict
 // (in.ReviewDepth == reviewtriage.DepthDeep), ValidateVerdictInput has
@@ -622,7 +622,7 @@ func hasNonBlankArchDecision(decisions []ArchDecision) bool {
 // TestBuildVerdict_ExplicitCounterReviewSkippedNeverOverwrittenOnLightPath
 // (validate_test.go).
 //
-// # Second substitution: post-hoc corroboration (§26.4, Step 71)
+// # Second substitution: post-hoc corroboration (§26.4)
 //
 // Immediately after the light-path substitution above, a SECOND
 // substitution closes §26.4's own named residual: a schema-required
@@ -695,7 +695,7 @@ func BuildVerdict(in VerdictInput) review.Verdict {
 	if in.ReviewDepth != reviewtriage.DepthDeep && in.CounterReview != review.CounterReviewSkipped {
 		counterReviewForFloor = review.CounterReviewDone
 	}
-	// Second substitution (§26.4, Step 71) -- see this function's own doc
+	// Second substitution (§26.4) -- see this function's own doc
 	// comment above ("Second substitution: post-hoc corroboration") for
 	// the full "why", especially why this gate is in.ReviewDepth ==
 	// reviewtriage.DepthDeep EXPLICITLY and not merely in.CounterReview ==
@@ -715,7 +715,7 @@ func BuildVerdict(in VerdictInput) review.Verdict {
 	}
 }
 
-// BuildFindings is BuildVerdict's own per-finding sibling (Step 48,
+// BuildFindings is BuildVerdict's own per-finding sibling (§8.2,
 // additive): turns an ALREADY-VALIDATED VerdictInput.Findings (every
 // element already passed ValidateFindingInput, via ValidateVerdictInput's
 // own loop above) into the []Finding a caller upserts into review_findings

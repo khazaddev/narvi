@@ -31,7 +31,7 @@ const testSessionID = "5b1c1e2e-6b1a-4b1a-9b1a-6b1a4b1a9b1a"
 const testSandboxID = "9b1a6b1a-4b1a-9b1a-6b1a-5b1c1e2e6b1a"
 
 // testUploadID is a syntactically valid UUID, distinct from both above,
-// reused across fixtures that need an upload artifact id (Step 58, §28.4/
+// reused across fixtures that need an upload artifact id (§28.4/
 // §28.5's own MintUploadResponse.uploadId / CreateTurnRequest.attachmentIds).
 const testUploadID = "6b1a4b1a-9b1a-5b1c-1e2e-6b1a9b1a4b1a"
 

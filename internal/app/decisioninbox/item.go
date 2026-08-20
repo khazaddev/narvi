@@ -29,8 +29,8 @@ type Item struct {
 	// not the instant it became assigned/eligible for THIS actor
 	// specifically -- see aggregate.go's buildPROpenItem for the full
 	// "why", including why this errs in the OPPOSITE direction from the
-	// outbox's own similarly-approximated timestamps (§60 review finding
-	// C3: this one can only ever UNDER-state how recently a PR became a
+	// outbox's own similarly-approximated timestamps (this one can only
+	// ever UNDER-state how recently a PR became a
 	// decision, which means the stale flag below can OVER-fire on an
 	// old-but-recently-assigned PR, not fail safely quiet the way the
 	// outbox's own approximation does).
@@ -52,8 +52,8 @@ type Item struct {
 	// value must NOT be trusted/rendered as a real count.
 	Findings int
 	// FindingsUnknown is true iff Findings above could not actually be
-	// determined (countOpenFindings itself errored) -- §60 review finding
-	// P3-3, second round: buildPROpenItem still fails the ELIGIBILITY
+	// determined (countOpenFindings itself errored) -- buildPROpenItem
+	// still fails the ELIGIBILITY
 	// computation closed in this case (substituting openFindingsUnknown
 	// FailClosed so a degraded read can never silently flip a PR eligible
 	// that a real, positive open-finding count would have blocked), but
@@ -72,17 +72,16 @@ type Item struct {
 	// HasChangesRequested's own doc comment immediately below for the one
 	// review-decision fact that DOES gate a merge). Populated
 	// unconditionally by buildPROpenItem, mirroring CIGreen/Findings/
-	// IsHandoff immediately above (§60 review finding A4: this field used
+	// IsHandoff immediately above (this field used
 	// to be fetched from GitHub and then read by nothing at all).
 	HasApprovingReview bool
 	// HasChangesRequested is the PR's own current review-decision fact
 	// (ports.OpenPR.HasChangesRequested), reduced to each reviewer's
-	// LATEST review (§60 review finding P1-1). UNLIKE HasApprovingReview
+	// LATEST review. UNLIKE HasApprovingReview
 	// above, this DOES gate an action -- RevalidateForMerge treats a true
-	// value as a hard merge block (§60 review finding A4) -- so
+	// value as a hard merge block -- so
 	// buildPROpenItem also consults it when classifying Kind (a PR with
-	// changes requested never classifies ready_to_merge, §60 review
-	// finding P1-4, second round: before this fix such a PR sat in the
+	// changes requested never classifies ready_to_merge: before this fix such a PR sat in the
 	// TOP ready_to_merge section with a Merge button that would
 	// unconditionally 409). Populated unconditionally, mirroring
 	// HasApprovingReview.

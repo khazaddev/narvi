@@ -15,7 +15,7 @@ import (
 // TestHandleSandboxEvent_GitSync_RepliesWithGitSyncComplete drives
 // handleSandboxEvent directly through Actor.Send (mirroring
 // TestHandleSandboxEvent_FullRoundTrip's own harness exactly) against a
-// REAL Postgres instance, proving Step 29's ("gitstate in-sandbox", §3.4
+// REAL Postgres instance, proving §3.4's ("gitstate in-sandbox", §3.4
 // design section 6) own CP-side wiring end to end: a real git_sync event
 // is (a) persisted generically like every other sandbox event, and (b)
 // answered with a real sandboxws.GitSyncComplete command via

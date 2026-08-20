@@ -46,13 +46,13 @@ type CredentialFetcher interface {
 // plane's own /sessions/{id}/scm-credentials endpoint (§5.2) to mint a
 // fresh git credential for one host.
 //
-// THE CP ENDPOINT THIS TALKS TO DOES NOT EXIST YET. docs/IMPLEMENTATION_
-// PLAN.md's Step 21 row ("e2e happy path") is what actually builds it.
-// Exactly like Step 12 invented a documented, tested-against-a-fake-server
-// wire contract for Modal, this Step invents a plausible, documented
+// THE CP ENDPOINT THIS TALKS TO DOES NOT EXIST YET. §9.3's own "e2e happy
+// path" work is what actually builds it.
+// Exactly like §4.1 invented a documented, tested-against-a-fake-server
+// wire contract for Modal, this file invents a plausible, documented
 // request/response shape here and tests CPClient against a fake
-// httptest.Server standing in for the real thing -- whoever implements
-// Step 21 reconciles the two sides then.
+// httptest.Server standing in for the real thing -- whoever builds the
+// real endpoint reconciles the two sides then.
 type CPClient struct {
 	baseURL    string
 	httpClient *http.Client

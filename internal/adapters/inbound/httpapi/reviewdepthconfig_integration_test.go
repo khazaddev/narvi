@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 68's own (§26.3) per-repo reviewDepth config
+// Integration tests for §26.3's own (§26.3) per-repo reviewDepth config
 // REST route (reposettings.go's own PutReviewDepthConfig), against a real
 // Postgres instance -- sharing this package's own testRig (httpapi_
 // integration_test.go), mirroring autoretriggerreviewtoggle_integration_
@@ -139,7 +139,7 @@ func TestPutReviewDepthConfig_InvalidMode_BadRequest(t *testing.T) {
 
 // TestPutReviewDepthConfig_PreservesAutoMergeToggle_ColumnScoped proves
 // the column-scoped write discipline this endpoint's own doc comment
-// describes (§62 review finding C5's pattern): arming auto-merge first,
+// describes: arming auto-merge first,
 // then separately configuring reviewDepth, must never silently disarm
 // auto-merge as a side effect -- and the reverse.
 func TestPutReviewDepthConfig_PreservesAutoMergeToggle_ColumnScoped(t *testing.T) {

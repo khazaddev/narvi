@@ -1,6 +1,6 @@
 package github
 
-// Step 47's ("server-side verdict", §8.2/§5.2) own load-bearing proof: the
+// §8.2's ("server-side verdict", §8.2/§5.2) own load-bearing proof: the
 // re-run phrasing internal/domain/reviewpost.RerunGuidance renders
 // server-side must actually be recognized by THIS package's own real
 // mention detector (compileMentionPattern, payload.go) -- §5.2's own

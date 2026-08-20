@@ -1,7 +1,7 @@
 package reviewpost
 
 // FactCheckStatus is the diff-only fact-check pass's own outcome (§26.6,
-// Step 69, "diff-only fact-check pass, both paths"): whether the primary
+// "diff-only fact-check pass, both paths"): whether the primary
 // reviewer's orchestration spawned the fact-check sub-task (§7.1's
 // engine-native fan-out, configured with NO tool access) before posting
 // this verdict.

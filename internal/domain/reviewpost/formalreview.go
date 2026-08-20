@@ -4,15 +4,15 @@ import "github.com/khazaddev/narvi/internal/domain/review"
 
 // FormalReviewEvent is the GitHub "create a pull request review" event
 // (POST /repos/{owner}/{repo}/pulls/{number}/reviews' own "event" field)
-// this Step's formal-review gate submits -- §8.2/Step 47's "submitting an
+// this Step's formal-review gate submits -- §8.2's "submitting an
 // actual GitHub PR review rather than a comment". Deliberately only two
 // of GitHub's three real event values are ever produced here: APPROVE is
 // never returned by ComputeFormalReviewEvent below, on purpose -- §21.2's
-// criteria-driven auto-approval eligibility engine (Step 58) is the
+// criteria-driven auto-approval eligibility engine (§8.6) is the
 // future, dedicated machinery for approving a PR; this Step never
-// approves anything itself (IMPLEMENTATION_PLAN.md's own Step 47 row:
+// approves anything itself (§8.2:
 // "auto-approval is criteria-driven, never label-triggered... the
-// eligibility engine itself ships in Step 58").
+// eligibility engine itself ships in §8.6").
 type FormalReviewEvent string
 
 const (
@@ -53,7 +53,7 @@ const (
 //     eligibility engine, gets that here.
 //   - anything else (shippable is auto or needs_human, and EITHER
 //     blockOnHighRisk is off OR risk is not high): FormalReviewEventComment
-//     -- a formal review is still submitted (§8.2/Step 47's own "rather
+//     -- a formal review is still submitted (§8.2's own "rather
 //     than a comment"), it simply does not block.
 //
 // shippable is expected to already be one of review's three legal

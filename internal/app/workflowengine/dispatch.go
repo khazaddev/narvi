@@ -57,7 +57,7 @@ type Resolution struct {
 	// proof: nil stays nil, inheriting turns.model_id/sessions.
 	// build_model_id exactly as today, no override).
 	ModelID *string
-	// Effort mirrors ModelID exactly, one field over (Step 59, §29.8's
+	// Effort mirrors ModelID exactly, one field over (§29.8's
 	// "workflow engine echo"): the resolved step's own Effort when
 	// non-nil, otherwise the caller's own effort UNCHANGED.
 	Effort *string
@@ -103,7 +103,7 @@ func passthrough(callerPrompt string, callerModelID, callerEffort *string) Resol
 //  2. A run IS running, and its own live (running/awaiting_decision)
 //     step-run's status is 'awaiting_decision': a HITLAfter-gated step
 //     waiting on a human. No BUILT-IN workflow reaches this case as of
-//     migration 000088_plan_builtin_passthrough (Step 56's own corrective
+//     migration 000088_plan_builtin_passthrough (§25.9's own corrective
 //     follow-up, §25.8/§25.9: the built-in plan workflow's original
 //     hitl_after step 1 + needs_fix self-loop, migration 000057's seed,
 //     was a genuine design incoherence -- it silently double-parked a
@@ -113,7 +113,7 @@ func passthrough(callerPrompt string, callerModelID, callerEffort *string) Resol
 //     passthrough, matching review/request) -- this case now exists
 //     purely for a CUSTOM (non-built-in) workflow definition's own
 //     hitl_after step, e.g. one authored via the Phase 7 canvas editor
-//     (§25.12). Step 56 owns the actual decision/re-execution machinery;
+//     (§25.12). §25.9 owns the actual decision/re-execution machinery;
 //     creating a new attempt here without it would half-reimplement it
 //     ahead of scope. Resolves that SAME live step's PromptTemplate/
 //     ModelID (inert for every built-in), Tracked=false.
@@ -237,7 +237,7 @@ func resolveWithinRunningRun(ctx context.Context, workflows *postgres.WorkflowSt
 // applyStep renders step's own PromptTemplate against callerPrompt and
 // resolves its own ModelID/Effort -- the one place both §25.6's
 // passthrough-template and §25.7's per-step-model-override logic (and its
-// Step 59 effort twin, §29.8) actually run, shared by every
+// §8.8 effort twin, §29.8) actually run, shared by every
 // ResolveStepForNewTurn branch above.
 func applyStep(ctx context.Context, step workflow.StepDefinition, callerPrompt string, callerModelID, callerEffort *string, tracked bool, stepRunID pgtype.UUID) Resolution {
 	rendered, err := intent.AssembleTemplate(step.PromptTemplate, map[string]string{"prompt": callerPrompt})

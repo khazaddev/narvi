@@ -12,7 +12,7 @@ type Status string
 
 const (
 	// StatusActive is an automation eligible to fire (subject to whatever
-	// trigger condition Step 52 evaluates -- out of this package's own
+	// trigger condition §8.4 evaluates -- out of this package's own
 	// scope). The initial state every automation is created in.
 	StatusActive Status = "active"
 	// StatusPaused is an automation that will not fire again until a
@@ -37,7 +37,7 @@ const (
 	// the decision this trigger is applied in response to.
 	TriggerAutoPause Trigger = iota
 	// TriggerResume is a maintainer/admin resuming a paused automation:
-	// Paused -> Active. No caller exists yet in this Step (Step 52/76 own
+	// Paused -> Active. No caller exists yet in this Step (§8.4/§10 own
 	// the actual resume surface, per this Step's own scope note) -- this
 	// edge is modeled now so a later Step's own resume endpoint needs no
 	// domain-layer change to use it, mirroring how ActionManageAutomations

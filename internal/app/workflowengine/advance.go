@@ -1,4 +1,4 @@
-// This file (advance.go) implements Step 56's ("workflow HITL gate +
+// This file (advance.go) implements §25.9's ("workflow HITL gate +
 // circuit breaker", §25.9) own central authority for what happens after a
 // workflow.NextStep verdict: ApplyStepOutcome is called from BOTH
 // OnTurnCompleted's own ordinary (agent-driven) advance path (completion.go)
@@ -30,9 +30,9 @@
 // signal that actually distinguishes a fresh advance from a re-fire,
 // regardless of which direction either edge happens to point.
 //
-// # Auto-dispatch closes Step 55's own documented gap
+// # Auto-dispatch closes §25.6's own documented gap
 //
-// Step 55's OnTurnCompleted shipped with NextAdvance creating the next
+// §25.6's OnTurnCompleted shipped with NextAdvance creating the next
 // attempt's bookkeeping row but never dispatching a turn for it ("ready for
 // whichever future Step ... adds the actual auto-continuation dispatch") --
 // this Step is that future Step. dispatchNextAttempt below creates the
@@ -232,7 +232,7 @@ func dispatchNextAttempt(ctx context.Context, deps Deps, runID pgtype.UUID, toSt
 	// BuildModelID/BuildEffort, never a Narvi-side default of their own).
 	res := applyStep(ctx, toStep, promptText, sessionRow.BuildModelID, sessionRow.BuildEffort, true, stepRun.ID)
 
-	// F6 (adversarial review, Step 61): the SAME shared gate createTurnLocked/
+	// F6 (adversarial review): the SAME shared gate createTurnLocked/
 	// CreateSessionOnTx/DecidePlanOnTx also route through
 	// (internal/domain/turn.MaybeInjectEpistemicPreamble) -- this call
 	// site used to bypass it entirely (this file's own top doc comment

@@ -80,7 +80,7 @@ func (f *whiteboxFakeSourceControl) CheckRepoAccess(context.Context, ports.Check
 	return false, errors.New("whiteboxFakeSourceControl: CheckRepoAccess not implemented")
 }
 
-// GetFileContent/UpdateFileContent/RegisterPRStack (Step 48, "sentinels +
+// GetFileContent/UpdateFileContent/RegisterPRStack (§8.2, "sentinels +
 // suggestions") are never reached from this package either -- same
 // "not implemented" precedent as CheckRepoAccess above.
 func (f *whiteboxFakeSourceControl) GetFileContent(context.Context, ports.GetFileContentSpec) (string, string, bool, error) {
@@ -95,7 +95,7 @@ func (f *whiteboxFakeSourceControl) RegisterPRStack(context.Context, ports.Regis
 	return errors.New("whiteboxFakeSourceControl: RegisterPRStack not implemented")
 }
 
-// CreateBranch (Step 48 confirmed-finding fix) is never reached from this
+// CreateBranch (a confirmed-finding fix) is never reached from this
 // package either -- same "not implemented" precedent as the methods above.
 func (f *whiteboxFakeSourceControl) CreateBranch(context.Context, ports.CreateBranchSpec) error {
 	return errors.New("whiteboxFakeSourceControl: CreateBranch not implemented")
@@ -110,14 +110,14 @@ func (f *whiteboxFakeSourceControl) UpdatePRBody(context.Context, ports.UpdatePR
 	return errors.New("whiteboxFakeSourceControl: UpdatePRBody not implemented")
 }
 
-// ListMergedBetween (Step 50, "release PR review", §15.2) is never
+// ListMergedBetween ("release PR review", §15.2) is never
 // reached from this package either -- same "not implemented" precedent
 // as the methods above.
 func (f *whiteboxFakeSourceControl) ListMergedBetween(context.Context, ports.ListMergedBetweenSpec) ([]ports.MergedPR, bool, error) {
 	return nil, false, errors.New("whiteboxFakeSourceControl: ListMergedBetween not implemented")
 }
 
-// ListOpenPRsForUser/ResolveCodeOwners/MergePR (Step 60, "decision inbox:
+// ListOpenPRsForUser/ResolveCodeOwners/MergePR ("decision inbox:
 // read model + API", §16.2) are never reached from this package -- same
 // "not implemented" precedent as the methods above.
 func (f *whiteboxFakeSourceControl) ListOpenPRsForUser(context.Context, ports.ListOpenPRsForUserSpec) ([]ports.OpenPR, bool, error) {

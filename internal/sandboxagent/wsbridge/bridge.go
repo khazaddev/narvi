@@ -83,7 +83,7 @@ type Bridge struct {
 	convMu         sync.Mutex
 	conversationID *string
 
-	// forceHeartbeat is Step 28's ("turn recovery") own out-of-band
+	// forceHeartbeat is §3.3's ("turn recovery") own out-of-band
 	// signal: SetConversationID sends on it (non-blocking) the first time
 	// it is called with a genuinely NEW, non-nil conversation id (§3.3:
 	// "at turn start... never lazily") -- heartbeatLoop's own select
@@ -98,7 +98,7 @@ type Bridge struct {
 }
 
 // New builds a Bridge for one session, from its full SessionConfig (dial
-// URL = sc.ControlPlaneWsUrl VERBATIM -- unlike Step 15's scm-credentials
+// URL = sc.ControlPlaneWsUrl VERBATIM -- unlike §6.4's scm-credentials
 // derivation, this field IS already the real WS connect target, no URL
 // surgery needed) and a CommandHandler for the 5 business commands.
 // sandboxID is this Step's own invented, HONEST-GAP value for the
@@ -162,7 +162,7 @@ func (b *Bridge) MarkBootComplete() {
 
 // SetConversationID updates what the NEXT heartbeat reports as
 // Heartbeat.ConversationId (§6.1: "heartbeat (30s, carries conversation id
-// + last_boot_phase)"). Step 16 hardcoded ConversationId: nil with an
+// + last_boot_phase)"). §6.1 hardcoded ConversationId: nil with an
 // explicit "no OpenCode adapter exists yet" comment (see run.go's
 // heartbeatLoop) -- this Step's OpenCode adapter
 // (internal/adapters/outbound/opencode) is that adapter, and
@@ -172,7 +172,7 @@ func (b *Bridge) MarkBootComplete() {
 // accepts it for the same reason SendBootProgress/heartbeat's own
 // LastBootPhase is nilable).
 //
-// Step 28 ("turn recovery") extends this: when id is a genuinely NEW,
+// §3.3 ("turn recovery") extends this: when id is a genuinely NEW,
 // non-nil value (different from whatever was recorded before -- a nil id,
 // or a different string), this ALSO triggers an immediate, out-of-band
 // heartbeat send via forceHeartbeat, rather than leaving the new

@@ -15,7 +15,7 @@ import (
 
 // This file (deliberately an INTERNAL test, package upload, exactly like
 // its sibling placeholders_internal_test.go) implements F1's own "go one
-// step further than the finding" mechanism (adversarial review, Step 61):
+// step further than the finding" mechanism (adversarial review):
 // TestPlaceholderTokensMatchReviewPackage/TestPlaceholderTokensMatchTurnPackage
 // (placeholders_internal_test.go) each require a maintainer to remember,
 // by hand, to add a new import-and-assert block whenever some FUTURE

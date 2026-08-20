@@ -39,8 +39,8 @@ const (
 
 // Decision is Decide's own output -- recorded verbatim on the §18.4-
 // precedent routing-decision record (internal/app/reviewtriage) and, via
-// its Depth field alone, persisted as review_verdicts.review_path (Step
-// 62).
+// its Depth field alone, persisted as review_verdicts.review_path
+// (§21).
 type Decision struct {
 	Depth ReviewDepth
 	// Reason is the FIRST rule that fired, in the fixed order Decide

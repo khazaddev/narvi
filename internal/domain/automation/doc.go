@@ -1,5 +1,5 @@
 // Package automation holds the automation → invocation → run(s) domain
-// model (Step 51, "automations: engine", §3.5): "automation → invocation →
+// model ("automations: engine", §3.5): "automation → invocation →
 // run(s) (one run per target, fan-out ≤10). At-most-one failure strike per
 // invocation via CAS (UPDATE ... WHERE failure_counted_at IS NULL).
 // Auto-pause after 3 consecutive failed invocations. Recovery sweeps:
@@ -104,7 +104,7 @@
 // been counted -- that is the CAS's job, entirely in app/automation's own
 // impure layer, per this package's own "no I/O" boundary (§11).
 //
-// # Step 52 ("automations: triggers & extras", §8.4): what this package adds
+// # §8.4 ("automations: triggers & extras", §8.4): what this package adds
 //
 // Five new files, each a small, independent, pure addition -- none of them
 // touch the three transition tables above, since none of this Step's own
@@ -168,16 +168,16 @@
 //     run at the end of every session) -- but an arbitrary automation's
 //     own turn has no equivalent tool call today, and building one
 //     (a new OpenCode-facing tool plus a server-side posting endpoint,
-//     mirroring Step 47/48's own review-verdict machinery) would be a
+//     mirroring §8.2's own review-verdict machinery) would be a
 //     materially larger, separate feature. Reusing already-persisted
 //     counts/names honestly closes mockups.html's own named gap ("the
 //     column exists in the UI but the backend never fills it") without
 //     inventing that larger mechanism here.
 //
-// # Per-automation secrets: deferred to Step 53, deliberately not built here
+// # Per-automation secrets: deferred to §25.1, deliberately not built here
 //
-// §8.4 also lists "per-automation secrets" -- NOT implemented in this
-// Step, by direct, explicit decision, and named here rather than silently
+// §8.4 also lists "per-automation secrets" -- NOT implemented here,
+// by direct, explicit decision, and named here rather than silently
 // dropped (mirroring this codebase's own established discipline of
 // documenting an accepted gap explicitly, e.g. app/imagebuild/doc.go's own
 // claimed-but-unbuilt sweep, and this package's sibling app/automation/
@@ -185,15 +185,15 @@
 // directly, twice, before writing this: no `CREATE TABLE ... secret`
 // anywhere under migrations/, and no `SecretStore` type anywhere under
 // internal/ -- generic secret storage does not exist ANYWHERE in this
-// codebase yet. docs/IMPLEMENTATION_PLAN.md's own Step 53 row ("provider
-// credential injection", §25.1/§25.3) is explicit that Step 53 is "the
-// first Step that actually builds" secret storage, scoped initially to
+// codebase yet. §25.1/§25.3 ("provider credential injection") is explicit
+// that this is the first work that actually builds secret storage, scoped
+// initially to
 // provider API keys mapped provider->env-var name. Building an ad-hoc,
 // one-off secrets mechanism here -- before that generic design lands --
 // would either conflict with it or be thrown away once it does. EnvVar
 // (envvar.go, immediately above) is the deliberate, honest contrast: PLAIN,
 // non-confidential per-automation configuration, which carries no such
-// risk and is fully implemented in this Step. Once Step 53 lands generic
+// risk and is fully implemented here. Once §25.1 lands generic
 // secret storage, a small, focused follow-up is expected to extend it to
 // automations, alongside the repo/environment/global scopes mockups.html's
 // own Settings view already shows resolving in that order ("automation →

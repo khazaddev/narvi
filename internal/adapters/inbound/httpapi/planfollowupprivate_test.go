@@ -11,7 +11,7 @@ package httpapi
 // expose classification itself to a caller.
 //
 // No pre-existing test enforced this for the FIRST classifier category
-// (review-vs-request/plan-vs-build, Step 36) at the time this Step was
+// (review-vs-request/plan-vs-build, §8.3) at the time this Step was
 // written -- confirmed by direct search of this codebase. This file is
 // therefore the first concrete, automated enforcement of §18.6's rule,
 // covering both categories at once (neither is ever routed), rather than

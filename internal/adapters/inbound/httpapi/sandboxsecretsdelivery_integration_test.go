@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 72's own ("sandbox secrets & opencode
+// Integration tests for §27.1's own ("sandbox secrets & opencode
 // config", §27.1) CP-side sandbox-facing delivery endpoint
 // (sandboxsecretsdelivery.go), against a real Postgres instance --
 // sharing this package's own testRig (httpapi_integration_test.go) and
@@ -294,7 +294,7 @@ func TestSandboxSecretsDelivery_OtherRepo_NotMatched(t *testing.T) {
 	}
 }
 
-// --- Decrypt-only-winners (Step 53's discipline, reused unchanged) ---
+// --- Decrypt-only-winners (§25.1's discipline, reused unchanged) ---
 
 // TestSandboxSecretsDelivery_CorruptedLoser_NeverBlocksWinner is the
 // direct behavioral proof of "decrypt-only-the-winner": a GLOBAL row's

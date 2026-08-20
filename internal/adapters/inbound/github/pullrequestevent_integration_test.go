@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 48's ("sentinels + suggestions", §17.4/§17.5)
+// Integration tests for §8.2's ("sentinels + suggestions", §17.4/§17.5)
 // own merge-gating `pull_request`/action=="closed" webhook lane
 // (pullrequestevent.go), against a real Postgres instance -- gated behind
 // the "integration" build tag, sharing this package's own test helpers

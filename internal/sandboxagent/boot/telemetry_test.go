@@ -141,7 +141,7 @@ func findHookRerunDurationDataPointForRepo(ctx context.Context, t *testing.T, re
 // proves the fix for the completeness-vs-plan finding: without boot_mode/
 // workspace_moved, a cold BootModeBuild setup.sh run and a warm
 // BootModeRepoImage+workspaceMoved rerun land in the SAME bucket set, making
-// §19.6/Step 43's own adoption trigger unanswerable from this histogram
+// §19.6's own adoption trigger unanswerable from this histogram
 // alone. Uses a repo name unique to this test (never used by any sibling
 // test in this file) so findHookRerunDurationDataPointForRepo's own
 // single-match assumption holds against this binary's shared, cumulative

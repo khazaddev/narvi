@@ -9,7 +9,7 @@ import (
 // Linear's real schema exposes a top-level `user(id: String!): User!`
 // Query field, and User.email is a required (non-null) String on Linear's
 // own real schema (both verified against Linear's current GraphQL schema/
-// developer docs during this Step's investigation). Used by Step 39's
+// developer docs during this Step's investigation). Used by §13.2's
 // ("identities + full RBAC", §13.2) own auto-link algorithm to resolve
 // the human actor behind an AgentSessionWebhookPayload.creatorId --
 // distinct from ViewerAndOrganization (installation.go), which resolves

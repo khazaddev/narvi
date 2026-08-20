@@ -1,18 +1,18 @@
 // This file (scmcredentials.go) implements POST /sessions/{sessionID}/
-// scm-credentials (Step 21, "e2e happy path", design decision 8) -- the
+// scm-credentials (§9.3, "e2e happy path", design decision 8) -- the
 // control-plane side of the wire contract internal/sandboxagent/
-// credentials.CPClient (Step 15) already built and tested the CLIENT side
+// credentials.CPClient (§6.4) already built and tested the CLIENT side
 // of. See that package's own cpclient.go doc comment: "THE CP ENDPOINT
-// THIS TALKS TO DOES NOT EXIST YET... whoever implements Step 21
+// THIS TALKS TO DOES NOT EXIST YET... whoever builds the real endpoint
 // reconciles the two sides then." This file is that reconciliation --
 // every field name/shape below matches CPClient's own
 // scmCredentialsRequest/scmCredentialsResponse exactly, deliberately, not
 // coincidentally.
 //
-// Deliberately mounted OUTSIDE auth.Middleware (Step 20's cookie-based,
+// Deliberately mounted OUTSIDE auth.Middleware (§13.1's cookie-based,
 // browser-user auth): this is a SANDBOX-bearer-token-authenticated
 // endpoint, matching internal/adapters/inbound/wshub/sandbox.go's own
-// header-bearer-token handshake precedent from Step 18 exactly, not a
+// header-bearer-token handshake precedent from §3.2 exactly, not a
 // browser-facing route at all -- see cmd/control-plane/main.go's own
 // mounting (outside the /api prefix, alongside the sandbox/client WS
 // route, not inside the /api/sessions auth-gated group).
@@ -85,13 +85,13 @@
 // check logged Warn and returned 403 unconditionally on ANY GetByID
 // failure, never distinguishing the two).
 //
-// Audit remediation (Step 47, "server-side verdict", §8.2/§5.2 confirmed
+// Audit remediation ("server-side verdict", §8.2/§5.2 confirmed
 // finding): a REVIEW session (one with a github_pr_sessions row,
 // reviewverdict.go's own identical reverse-lookup precedent) never pushes
 // or opens a PR -- it only clones a PR's head branch read-only, for inline
-// code-review context (§8.2/Step 46), and its own output reaches GitHub
-// exclusively through the verdict-posting tool (reviewverdict.go, Step
-// 47), which authenticates with cfg.GitHubBotToken, never a per-commenter
+// code-review context (§8.2), and its own output reaches GitHub
+// exclusively through the verdict-posting tool (reviewverdict.go,
+// §8.2), which authenticates with cfg.GitHubBotToken, never a per-commenter
 // OAuth token. Handing such a session's SANDBOX the session CREATOR's own
 // broadly `repo`-scoped personal GitHub OAuth token (steps 7-9 below) for
 // this exact purpose was itself a confirmed credential-exposure gap: an
@@ -161,7 +161,7 @@ type scmCredentialsResponse struct {
 // own (unexported) verifySandboxToken logic for the HASH COMPARISON half
 // only -- SHA-256 hash (wshub.HashSandboxToken, already exported for
 // exactly this reuse) + crypto/subtle.ConstantTimeCompare, never a bare
-// `==` (Step 18's own established constant-time-comparison discipline).
+// `==` (§3.2's own established constant-time-comparison discipline).
 //
 // Deliberately DOES NOT copy wshub's own nil-token_hash bypass (a sandbox
 // row with no token_hash yet minted is treated there as "accept any
@@ -193,7 +193,7 @@ func verifySandboxBearerToken(presented string, storedHash *string) bool {
 // handshake places its equivalent checks -- see that file's own doc
 // comment steps 7/8; step 9 below is the M8 audit finding's own addition,
 // calling internal/app/sessionactor's own CheckCreatorGuard; step 7 below
-// is the Step 47 audit remediation's own addition):
+// is this audit remediation's own addition):
 //
 //  1. sessionID does not parse as a UUID, or no sandbox row exists for it
 //     -> 404 (mirrors wshub/sandbox.go's own "malformed and nonexistent
@@ -233,8 +233,8 @@ func verifySandboxBearerToken(presented string, storedHash *string) bool {
 //     credential-helper protocol).
 //  7. This session has a github_pr_sessions row (prSessions.
 //     GetBySessionID succeeds) -> 200 with botToken, never the creator's
-//     own identity -- see this file's own top comment ("Audit remediation
-//     (Step 47...)") for the full rationale. Steps 8-10 below (the
+//     own identity -- see this file's own top comment ("Audit remediation")
+//     for the full rationale. steps 8-10 below (the
 //     creator-guard/identity/decrypt path) are skipped entirely for a
 //     review session: they exist to find and gate a PER-USER OAuth
 //     credential, which a review session has no legitimate use for at
@@ -277,7 +277,7 @@ func verifySandboxBearerToken(presented string, storedHash *string) bool {
 //     perspective, not a server malfunction, and mirrors auth.Middleware's
 //     own generic-rejection-body discipline (never distinguishing WHICH
 //     sub-case applied, in the response body -- an enumeration-hardening
-//     precedent this package already established at Step 20). Step 3's
+//     precedent this package already established at §13.1). §5.3's
 //     gen-mismatch reuses the SAME 403 status code but is logged
 //     separately server-side (see the handler body) so it stays
 //     observable without adding a caller-visible distinction.
@@ -536,7 +536,7 @@ func bearerTokenFromHeader(r *http.Request) (string, bool) {
 // A repo whose Url fails to parse, or parses with an empty Host, is
 // skipped rather than erroring the whole request: sessions.repos is
 // already-trusted, already-persisted data by the time this endpoint runs
-// (Step 21's CreateSession already accepted/persisted it) -- this is HOST
+// (§9.3's CreateSession already accepted/persisted it) -- this is HOST
 // COMPARISON against an already-trusted list, not input validation of a
 // new untrusted value, so one defensively-malformed entry should not fail
 // credential minting for every OTHER, well-formed repo host the session

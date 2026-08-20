@@ -421,7 +421,7 @@ func TestLinearNotifier_Deliver_Failure_RoutesToErrorActivity(t *testing.T) {
 }
 
 // TestLinearNotifier_Deliver_WorkflowDecision_RoutesToResponseActivity
-// proves Step 56's own addition ("workflow HITL gate + circuit breaker",
+// proves §25.9's own addition ("workflow HITL gate + circuit breaker",
 // §25.9): ports.NotificationKindLinearWorkflowDecision reuses deliverOutcome
 // verbatim (linearnotifier.go's own updated Deliver switch) -- a plain
 // linearapi.Payload with Success always true routes to a "response"-typed

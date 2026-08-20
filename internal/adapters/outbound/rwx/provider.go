@@ -92,7 +92,7 @@ func newWithRunner(cfg Config, runner cliRunner) (*Provider, error) {
 //   - ImageBuilds: false — `rwx image build|push|pull` exist, but no
 //     image DELETE is documented, and this flag covers BuildImage AND
 //     DeleteImage together.
-//   - Resume: false — THE flag Step 57 must settle empirically, as its
+//   - Resume: false — THE flag §4.1 must settle empirically, as its
 //     own first exit criterion (§4.1.3), and this codebase has no real
 //     RWX account reachable from its own tests/CI to settle it against
 //     (the deliberate, named scope gap this Step's own landing PR

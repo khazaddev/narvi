@@ -2,7 +2,7 @@
 // ports.LLM -- implemented in PR-50 (§8: "Models: Anthropic +
 // OpenAI/Codex (ChatGPT OAuth plugin)"). Mirrors internal/adapters/
 // outbound/rwx's and gitlabapi's own "second-adapter, not-yet-
-// implemented" house style exactly: this Step (36) ships exactly ONE
+// implemented" house style exactly: §8.3 ships exactly ONE
 // real, fully-working ports.LLM adapter (internal/adapters/outbound/llm,
 // Anthropic), with this package left as an untouched stub for the second.
 //

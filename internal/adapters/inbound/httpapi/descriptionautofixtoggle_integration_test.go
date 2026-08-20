@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 67's own (§26.2) description-autofix REST
+// Integration tests for §26.2's own (§26.2) description-autofix REST
 // route (reposettings.go's own PutDescriptionAutofixToggle), against a
 // real Postgres instance -- sharing this package's own testRig
 // (httpapi_integration_test.go), mirroring autoretriggerreviewtoggle_
@@ -102,8 +102,7 @@ func TestPutDescriptionAutofixToggle_MemberDenied(t *testing.T) {
 
 // TestPutDescriptionAutofixToggle_PreservesAutoMergeToggle_ColumnScoped
 // proves the column-scoped write discipline this endpoint's own doc
-// comment describes (§62 review finding C5's pattern, applied here from
-// the start): arming auto-merge first, then separately arming
+// comment describes: arming auto-merge first, then separately arming
 // description-autofix, must never silently disarm auto-merge as a side
 // effect -- and the reverse.
 func TestPutDescriptionAutofixToggle_PreservesAutoMergeToggle_ColumnScoped(t *testing.T) {

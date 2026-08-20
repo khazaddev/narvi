@@ -1,9 +1,9 @@
 package reviewtriage
 
-// EffortHigh is the fixed reasoning-effort variant string Step 68's own
+// EffortHigh is the fixed reasoning-effort variant string §26.3's own
 // deep path forces (§26.3: "deep = frontier tier + high effort") --
 // mirrors sandboxws.Prompt.Effort's own already-shipped, free-form
-// per-model "variant" string (Step 59, §29.8: "valid values owned per-
+// per-model "variant" string (§29.8: "valid values owned per-
 // model by OpenCode's catalog variants maps, no Narvi-side enum"); "high"
 // is the one variant present on every real model in this codebase's own
 // model catalog snapshot (internal/app/modelcatalog/snapshot.json),
@@ -13,13 +13,13 @@ const EffortHigh = "high"
 // ModelAndEffort resolves depth into the (modelID, effort) override pair
 // a review turn's own creation call threads onto turns.model_id/effort --
 // CreateTurnOptions.Effort/the modelID parameter every review-turn-creation
-// path already accepts, Step 59's own reasoning-effort threading, an
+// path already accepts, §8.8's own reasoning-effort threading, an
 // ALREADY-EXISTING, already-wired-end-to-end mechanism this Step reuses
 // rather than inventing a second one. "Dedicated review-model selection"
 // ITSELF is a separate claim -- §26.3 is explicit that no such mechanism
 // predates this Step at all (§8 item 2 names it only as a feature-set
-// line, never a built one, before now) -- Step 68 is what introduces it,
-// as an optional operator override layered on top of Step 59's own
+// line, never a built one, before now) -- §26.3 is what introduces it,
+// as an optional operator override layered on top of §8.8's own
 // pre-existing threading. Both return values
 // are nil for anything other than DepthDeep -- the light path leaves
 // BOTH completely unset, preserving §26.9's own invariant to the letter:

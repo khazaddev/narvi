@@ -19,7 +19,7 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// This file proves Step 49's ("handoff-readiness sentinel", §14.4) own
+// This file proves §14.4's ("handoff-readiness sentinel", §14.4) own
 // end-to-end wiring: pushpr.go's own createPRBestEffort, extended by
 // handoffsentinel.go's runHandoffSentinelBestEffort, against a REAL
 // Postgres instance -- mirroring contractdrift_integration_test.go's own
@@ -28,8 +28,8 @@ import (
 // own contractdrift_integration_test.go already defines TestMain for this
 // whole test binary -- nothing here defines a second one.
 
-// GetPullRequestDiff implements PRDiffFetcher for fakeSourceControl (Step
-// 49's own extension of this pre-existing fake, pushpr_integration_test.go).
+// GetPullRequestDiff implements PRDiffFetcher for fakeSourceControl (§14.4's
+// own extension of this pre-existing fake, pushpr_integration_test.go).
 func (f *fakeSourceControl) GetPullRequestDiff(_ context.Context, owner, repo string, number int32, _ string) (string, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -397,7 +397,7 @@ func TestHandoffSentinel_Idempotent_RunningTwiceDoesNotDuplicate(t *testing.T) {
 
 	// Second, duplicate delivery -- same repo/branch/sha, same fake
 	// (same nextRef.Number). CreatePR's own idempotency (githubapi/
-	// adapter.go, Step 49 confirmed-finding fix) means this "succeeds" by
+	// adapter.go, a confirmed-finding fix) means this "succeeds" by
 	// recovering the SAME PR rather than erroring, and recordPRArtifact's
 	// own companion dedup guard means this does NOT create a second "pr"
 	// artifact row for it -- both fixed together, not a pre-existing

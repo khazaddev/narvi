@@ -154,7 +154,7 @@ func TestRunBoot_MixedManifestAndHookFallback(t *testing.T) {
 
 // TestRunBoot_AbsentManifestFallsBackToHooks proves a single repo with no
 // .narvi/services.yml at all still runs its start.sh via the classic hook
-// path, unchanged from Step 13's own behavior.
+// path, unchanged from §6.4's own behavior.
 func TestRunBoot_AbsentManifestFallsBackToHooks(t *testing.T) {
 	t.Parallel()
 

@@ -1,4 +1,4 @@
-// This file (blockkit.go) implements Step 38's ("plan mode, cross-channel",
+// This file (blockkit.go) implements §8.1's ("plan mode, cross-channel",
 // §8.1/§13.3) own Slack-specific additions: real interactive Block Kit
 // messages for a plan awaiting approval, chat.update to reflect a rendered
 // decision on that same message (whichever channel actually decided), and
@@ -9,7 +9,7 @@
 // docs.slack.dev/reference/interaction-payloads/block_actions-payload) --
 // not invented from a summary, matching this codebase's own established
 // "verify against the real API" discipline (see client.go's own doc.go,
-// Step 33's ack.go).
+// §8.10's ack.go).
 //
 // # Button value encoding
 //
@@ -232,7 +232,7 @@ type PlanDecidedPayload struct {
 
 // DigestPayload is the JSON shape this package expects to find in an
 // outbox entry's own payload column for a ports.NotificationKindSlackDigest
-// row (Step 62, §21.3) -- enqueued by internal/app/digest.Pump. Text is
+// row (§21.3) -- enqueued by internal/app/digest.Pump. Text is
 // ALREADY fully rendered (internal/domain/digest.Render's own
 // deterministic output, Slack mrkdwn dialect) -- this package does no
 // further conversion/templating of it, unlike PlanApprovalPayload's own
@@ -339,7 +339,7 @@ func (c *Client) PostPlanApprovalMessage(ctx context.Context, payload PlanApprov
 }
 
 // PostMessage posts plain text (already fully rendered mrkdwn, e.g.
-// internal/domain/digest.Render's own deterministic output, Step 62,
+// internal/domain/digest.Render's own deterministic output,
 // §21.3) to channel -- no Block Kit, no interactive elements, exactly
 // the shape a compliance/status artifact needs and nothing more. Reuses
 // postMessageWithBlocksRequest with Blocks left nil (its own `omitempty`
@@ -493,7 +493,7 @@ type postEphemeralRequest struct {
 }
 
 // PostEphemeral posts text into channel via chat.postEphemeral, visible
-// ONLY to userID -- Step 39's own security-remediation addition
+// ONLY to userID -- §13.2's own security-remediation addition
 // ("identities + full RBAC", §13.2): a confirmed review finding proved
 // that appending the magic-link identity-link notice to this package's
 // own whole-channel-visible UpdateMessage/PostPlanApprovalMessage text let

@@ -1,6 +1,6 @@
 //go:build integration
 
-// This file (createcore_substrate_integration_test.go) proves Step 74's
+// This file (createcore_substrate_integration_test.go) proves §27.5's
 // own up-front half of the "fail-closed, twice" rule (§27.5/§27.6, brief
 // point A): CreateSessionCore refuses a docker-required or
 // enforced-egress session outright, BEFORE any Postgres write, when the
@@ -91,7 +91,7 @@ func dockerRequestFixture() restdtos.CreateSessionRequest {
 }
 
 // TestCreateSessionCore_RefusesDockerRequiredSessionWhenProviderUnsupported
-// is a MUTATION-TESTABLE guard (Step 74 brief: "remove the up-front
+// is a MUTATION-TESTABLE guard (§27.5 brief: "remove the up-front
 // session-creation refusal → a named test must fail"): a request with
 // docker=true against a provider reporting DockerInSandbox=false is
 // refused with 422, and -- critically -- NO environments row and NO

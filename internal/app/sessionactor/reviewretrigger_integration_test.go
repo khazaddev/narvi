@@ -385,7 +385,7 @@ func TestReviewRetriggerDebounceTimer_Enqueue_CreatesReviewTurn(t *testing.T) {
 }
 
 // TestReviewRetriggerDebounceTimer_FlooredDeep_PromptReflectsDeepPath is
-// Step 69's own regression test for a genuine, pre-existing defect this
+// §26.4's own regression test for a genuine, pre-existing defect this
 // Step's own restructuring of handleReviewRetriggerDebounceTimer fixed:
 // this handler used to call composeAutoRetriggerPrompt (the ONE place
 // this lane calls review.RenderTurnPrompt) BEFORE computing the floored

@@ -219,7 +219,7 @@ func baseVerdict() review.Verdict {
 }
 
 // TestRenderVerdictComment_DigestSummaryDistinctFromNarrativeSummary
-// proves Step 66's own central rendering property: Digest.Summary ("what
+// proves §26.1's own central rendering property: Digest.Summary ("what
 // this PR does") and the pre-existing free-text `summary` parameter (the
 // verdict's own narrative "why") are two INDEPENDENT pieces of rendered
 // text, never the same value rendered twice or one substituted for the
@@ -244,7 +244,7 @@ func TestRenderVerdictComment_DigestSummaryDistinctFromNarrativeSummary(t *testi
 		t.Fatalf("expected all three markers present, got %q", got)
 	}
 	// The narrative summary (header, unchanged) renders BEFORE "What this
-	// PR does" (Step 66's own new section), which in turn contains the
+	// PR does" (§26.1's own new section), which in turn contains the
 	// digest summary -- proving the two are ordered, distinct pieces of
 	// content, not a duplicate rendering of the same value.
 	if summaryIdx >= whatIdx || whatIdx >= digestIdx {
@@ -452,7 +452,7 @@ func TestRenderVerdictComment_DigestSectionsBeforeAppendix(t *testing.T) {
 }
 
 // TestRenderVerdictComment_DescriptionAdequacyHeaderBullet proves §26.2/
-// Step 67's own new header bullet renders BOTH digest.DescriptionAdequacy
+// §26.2's own new header bullet renders BOTH digest.DescriptionAdequacy
 // and digest.AdequacyExplanation, immediately after the Premise bullet
 // (the same structural position a closed-vocabulary, Shippable-flooring
 // assessment already occupies) and before the Shippable bullet.
@@ -484,7 +484,7 @@ func TestRenderVerdictComment_DescriptionAdequacyHeaderBullet(t *testing.T) {
 }
 
 // TestRenderVerdictComment_ProposedBodyRendersSuggestionSection proves
-// §26.2/Step 67's own "Suggested PR description" block renders when
+// §26.2's own "Suggested PR description" block renders when
 // digest.ProposedBody is non-blank, inside a collapsed <details> block, so
 // a long proposed rewrite does not dominate the rendered comment.
 func TestRenderVerdictComment_ProposedBodyRendersSuggestionSection(t *testing.T) {
@@ -526,8 +526,8 @@ func TestRenderVerdictComment_EmptyProposedBodyOmitsSuggestionSection(t *testing
 	}
 }
 
-// TestRenderVerdictComment_ContestedPointsRendersSection proves §26.4/Step
-// 69's own "Contested points" digest section renders, visibly, when
+// TestRenderVerdictComment_ContestedPointsRendersSection proves §26.4's
+// own "Contested points" digest section renders, visibly, when
 // digest.ContestedPoints is non-blank -- the deep path's inter-agent
 // disagreement narrative reaching the human it exists for, rather than
 // being captured and silently dropped at render time.

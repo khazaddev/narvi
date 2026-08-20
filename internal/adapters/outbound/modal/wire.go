@@ -16,7 +16,7 @@ import "github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 
 // createSandboxRequest is the body POSTed to /v1/sandboxes.
 //
-// # No privileged-mode field, deliberately, permanently (§27.5, Step 74)
+// # No privileged-mode field, deliberately, permanently (§27.5)
 //
 // This struct's field set is closed by construction: Runtime is a
 // two-value enum (runtimeGVisor's empty default, or runtimeVM — see
@@ -35,7 +35,7 @@ type createSandboxRequest struct {
 	SessionConfig sessionconfig.SessionConfig `json:"sessionConfig"`
 
 	// Runtime maps ports.CreateSpec.Docker onto Modal's own VM-runtime
-	// sandbox option (§27.5, Step 74, "Modal concretely": "default Modal
+	// sandbox option (§27.5, "Modal concretely": "default Modal
 	// sandboxes run on gVisor, where dockerd's overlay2/bridge-networking
 	// stack does not run cleanly; Modal's VM runtime option gives the
 	// sandbox a real kernel"). Empty (omitted from the wire entirely)
@@ -45,7 +45,7 @@ type createSandboxRequest struct {
 	Runtime string `json:"runtime,omitempty"`
 
 	// NetworkPolicy maps ports.CreateSpec.EgressPolicy onto Modal's own
-	// sandbox network controls (§27.6, Step 74). Nil (omitted from the
+	// sandbox network controls (§27.6). Nil (omitted from the
 	// wire entirely) means no egress restriction requested — Modal's own
 	// default open egress. See networkPolicyFromSpec.
 	NetworkPolicy *networkPolicyWire `json:"networkPolicy,omitempty"`
@@ -74,7 +74,7 @@ type restoreSandboxRequest struct {
 }
 
 // imageBuildRequest is the body POSTed to /v1/images. §19.1 ("warm boot:
-// shared fingerprint", Step 41): repos now carries BOTH the clone url and
+// shared fingerprint", §19.1): repos now carries BOTH the clone url and
 // the concrete sha per repo (imageBuildRequestRepo below), not a bare
 // name->sha map — this is what lets the (external, opaque-to-this-repo)
 // build service do a real, full clone from the real origin (§19.1: "build
@@ -86,7 +86,7 @@ type imageBuildRequest struct {
 	RuntimeVersion string                           `json:"runtimeVersion,omitempty"`
 
 	// CacheVolume, when present, requests the build-time dependency cache
-	// (§19.1's closing paragraph, Step 43(c); ports.ImageSpec.CacheMount's
+	// (§19.1's closing paragraph(c); ports.ImageSpec.CacheMount's
 	// own doc comment has the full contract). omitempty: a spec with no
 	// CacheMount produces a request byte-for-byte identical to what this
 	// adapter sent before this field existed — no behavior change for a
@@ -109,7 +109,7 @@ type imageBuildRequestRepo struct {
 // Paths} field-for-field — same "invented, tested against a fake
 // httptest.Server, not real Modal API docs" posture as every other shape
 // in this file (see this file's own top doc comment). MountVersion/
-// PublishVersion are Step 43(c)'s third iteration (immutable versioned
+// PublishVersion are §19.1(c)'s third iteration (immutable versioned
 // cache snapshots, ports.CacheMount's own doc comment): MountVersion names
 // the one already-published, immutable version to mount read-only (empty =
 // nothing to mount yet, this cache key's first build); PublishVersion

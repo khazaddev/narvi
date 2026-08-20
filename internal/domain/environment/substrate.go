@@ -1,6 +1,6 @@
 // This file (substrate.go) implements the ONE decision §27.5/§27.6's
 // "fail-closed, twice" rule shares between its two independent call sites
-// (Step 74 brief, point A): refused up-front at session-creation time
+// (§27.5 brief, point A): refused up-front at session-creation time
 // (internal/adapters/inbound/httpapi.CreateSessionCore, before any
 // Postgres write) when the configured provider reports no support, and
 // re-checked again at dispatch time (internal/app/sessionactor.

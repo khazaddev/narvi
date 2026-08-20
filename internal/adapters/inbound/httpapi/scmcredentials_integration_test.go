@@ -55,7 +55,7 @@ func createSandboxWithToken(ctx context.Context, t *testing.T, r testRig, sessio
 
 // createSessionWithGitHubIdentity creates a session whose created_by user
 // has a real, encrypted GitHub access token -- the SAME real
-// EncryptToken flow Step 20's own OAuth callback uses, not a shortcut --
+// EncryptToken flow §13.1's own OAuth callback uses, not a shortcut --
 // and whose sessions.repos names a single repo on host "github.com" (the
 // SAME host postScmCredentials' own default request body names), matching
 // the audit remediation's own host-scoping check (design decision 1) so
@@ -198,7 +198,7 @@ func postScmCredentialsFull(t *testing.T, r testRig, sessionID, bearer, gen, hos
 // TestScmCredentials_Success proves the full real flow: a valid sandbox
 // bearer token + a session whose user has a real, encrypted GitHub access
 // token -> 200 with a credential whose password decrypts to the SAME
-// plaintext a real Step-20 OAuth flow would have encrypted.
+// plaintext a real §13.1 OAuth flow would have encrypted.
 func TestScmCredentials_Success(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()

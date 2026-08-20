@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 56's ("workflow HITL gate + circuit breaker",
+// Integration tests for §25.9's ("workflow HITL gate + circuit breaker",
 // §25.9/§25.10/§25.11) own decide endpoint -- POST /api/workflow-runs/
 // :runId/steps/:stepRunId/decide -- against a real Postgres instance,
 // mirroring planapprove_integration_test.go's own house style exactly
@@ -233,7 +233,7 @@ func TestDecideWorkflowStep_Approve_SingleStep_CompletesRun(t *testing.T) {
 // proves the same verdict's OTHER consequence: a two-step definition's own
 // step 1 (HITLAfter, no explicit edge) approved with an 'ok' outcome
 // advances to step 2 by Order -- and a REAL new turn is dispatched for it
-// (Step 56 closing Step 55's own documented auto-dispatch gap), not just a
+// (§25.9 closing §25.6's own documented auto-dispatch gap), not just a
 // bookkeeping row.
 func TestDecideWorkflowStep_Approve_MultiStep_AdvancesAndDispatchesNewTurn(t *testing.T) {
 	rig := newTestRig(t)

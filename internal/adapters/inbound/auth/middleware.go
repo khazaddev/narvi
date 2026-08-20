@@ -18,7 +18,7 @@ import (
 // gating at the ROUTE level (that stays a coarse "authenticated or not"
 // check, exactly per §13.3's own "HTTP middleware handles the coarse
 // route-level gate"). platform.AuthenticatedUser.Role IS now real,
-// load-bearing data, though: Step 39 ("identities + full RBAC") reads it
+// load-bearing data, though: §13.2 ("identities + full RBAC") reads it
 // straight out of context (platform.UserFromContext) in every
 // state-changing REST handler downstream (internal/adapters/inbound/
 // httpapi) to build a domain/authz.Actor and render the real §13.3
@@ -51,7 +51,7 @@ func Middleware(userSessions *postgres.UserSessionStore, users *postgres.UserSto
 // Authenticate resolves r's own narvi_auth_session cookie into a real,
 // non-disabled platform.AuthenticatedUser -- the exact same 4-step check
 // Middleware above already performed inline (cookie present -> hash found
-// -> not expired -> user not disabled), extracted here (Step 39,
+// -> not expired -> user not disabled), extracted here (
 // "identities + full RBAC", §13.2) so a SECOND caller can reuse the
 // identical check without going through chi middleware at all: internal/
 // adapters/inbound/identitylink's magic-link consume handler needs to

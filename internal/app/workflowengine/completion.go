@@ -19,12 +19,12 @@
 // dispatch.go's own ResolveStepForNewTurn: it only ever starts a new run
 // when none is currently running).
 //
-// # loopguard, HITL notifications, and real auto-dispatch (Step 56, §25.9)
+// # loopguard, HITL notifications, and real auto-dispatch (§25.9)
 //
-// Step 55 shipped this file with loopguard deliberately unconsulted (no
+// §25.6 shipped this file with loopguard deliberately unconsulted (no
 // built-in workflow could ever reach a needs_fix re-fire through this
 // path) and NextAdvance creating a step-run's own bookkeeping row without
-// ever dispatching a turn for it. Step 56 is "whichever future Step ...
+// ever dispatching a turn for it. §25.9 is "whichever future Step ...
 // adds the actual auto-continuation dispatch" that gap's own doc comment
 // named: the non-HITLAfter tail of this function now calls
 // ApplyStepOutcome (advance.go), the SAME shared authority the HITL decide
@@ -153,7 +153,7 @@ func OnTurnCompleted(ctx context.Context, deps Deps, sessionRow sqlcgen.Session,
 			logger.Error("workflowengine: mark step run awaiting decision failed", "step_run_id", stepRun.ID.String(), "error", err)
 			return
 		}
-		// Step 56's own addition (§25.9): notify a human that this step
+		// §25.9's own addition (§25.9): notify a human that this step
 		// now needs a decision -- best-effort, logged, never allowed to
 		// undo the awaiting_decision transition that just committed.
 		if err := enqueueWorkflowNotice(ctx, deps, sessionRow, awaitingDecisionNoticeText(runRow.ID, markedRun.ID)); err != nil {
@@ -203,7 +203,7 @@ func OnTurnCompleted(ctx context.Context, deps Deps, sessionRow sqlcgen.Session,
 		outcome = authoritative
 	}
 
-	// Step 56 (§25.9): ApplyStepOutcome (advance.go) is the SAME shared
+	// (§25.9): ApplyStepOutcome (advance.go) is the SAME shared
 	// authority the HITL decide endpoint's own approve verdict calls --
 	// consults workflow.NextStep, wires loopguard.Evaluate on a genuine
 	// needs_fix re-fire, and actually dispatches the next attempt's turn on

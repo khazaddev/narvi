@@ -11,7 +11,7 @@ import (
 )
 
 // SentinelFixStore is a thin, pass-through wrapper around the
-// sqlc-generated sentinel_fixes queries (Step 48, "sentinels +
+// sqlc-generated sentinel_fixes queries ("sentinels +
 // suggestions", §17) -- see migrations/000047_sentinel_fixes.up.sql's own
 // doc comment for the table's full design and its two-step claim idiom
 // (mirroring github_pr_sessions' own established precedent).
@@ -161,7 +161,7 @@ func (s *SentinelFixStore) MarkAbandoned(ctx context.Context, id pgtype.UUID) (s
 }
 
 // ExistsByFixPRNumber reports whether (repoFullName, fixPRNumber) is a
-// registered sentinel-auto-fix follow-up PR -- Step 60's own §17
+// registered sentinel-auto-fix follow-up PR -- §16's own §17
 // structural exclusion (see ExistsSentinelFixByFixPRNumber's own generated
 // doc comment for why this is the correct, specific marker rather than
 // sessions.parent_session_id/spawn_depth).

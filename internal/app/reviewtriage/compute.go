@@ -12,7 +12,7 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// ComputeDecision is Step 68's own "never-throw" entry point (§26.3: "ANY
+// ComputeDecision is §26.3's own "never-throw" entry point (§26.3: "ANY
 // triage error fails open to light -- a review must never be blocked by
 // its own router"), mirroring internal/app/intentclassifier.Service.
 // ClassifyAndRecord's own identical "the caller never sees an error, only
@@ -42,8 +42,8 @@ import (
 // read of its own for exactly this purpose -- can apply §24's re-review
 // floor (reviewtriage.Floor(decision.Depth, priorReviewDepth)) without a
 // second, redundant Postgres query. Empty ("") when no verdict has ever
-// been posted for this PR, or when the latest one predates Step 68 (its
-// own turn never resolved a depth) -- both degrade identically to
+// been posted for this PR, or when the latest one has no recorded depth at
+// all (its own turn never resolved one) -- both degrade identically to
 // "nothing to floor against" (reviewtriage.Floor's own doc comment: an
 // empty/unrecognized prior ranks with DepthLight, the least conservative
 // reading), exactly like a brand-new review session with no prior turn at
@@ -110,7 +110,7 @@ func decideWithSignals(prCtx review.PreFetchedContext, cfg reviewtriage.Config, 
 }
 
 // hasNeedsHumanLabel reports whether labels contains reviewpost.
-// LabelNeedsHuman (Step 47's own maintainer escape hatch) -- see
+// LabelNeedsHuman (§8.2's own maintainer escape hatch) -- see
 // internal/domain/reviewtriage/doc.go's own "v1 rules -- five, not
 // three" section for why this is one of Decide's triggers.
 func hasNeedsHumanLabel(labels []string) bool {

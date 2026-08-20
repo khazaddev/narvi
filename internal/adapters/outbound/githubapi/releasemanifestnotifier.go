@@ -11,7 +11,7 @@ import (
 // ReleaseManifestPayload is the JSON shape internal/app/outboxworker
 // expects to find in an outbox entry's own payload column for a
 // ports.NotificationKindReleaseManifest row -- enqueued by
-// internal/app/releasereview (Step 50, "release PR review", §15.2) once
+// internal/app/releasereview ("release PR review", §15.2) once
 // a detected release PR's manifest check has been computed. Owner/Repo/
 // PRNumber are the release PR's own identity; Body is the ALREADY-
 // RENDERED comment (internal/domain/reviewpost.RenderManifestComment's

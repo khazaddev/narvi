@@ -1,5 +1,5 @@
 // Package snapshotclient implements sandbox-agent's own client for the
-// control plane's snapshot-mint endpoint (Step 22, "snapshots & restore",
+// control plane's snapshot-mint endpoint (§3.2, "snapshots & restore",
 // design decision 2: POST /sessions/{id}/snapshot). Mirrors internal/
 // sandboxagent/credentials.CPClient's own base-URL-derivation pattern
 // exactly (that package's own cpclient.go) -- a small, analogous client,

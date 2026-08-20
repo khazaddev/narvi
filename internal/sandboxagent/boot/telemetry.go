@@ -20,7 +20,7 @@ const meterName = "narvi/sandboxagent-boot"
 // wall-clock duration metric, joining the boot-phase-duration OTel
 // metrics §5.3 already lists ("boot phase durations") -- this is the
 // concrete measurement §19.4's own "expected to be fast" claim needs.
-// §19.6's graduated setup-rerun ladder (Step 43) ships UNGATED on this
+// §19.6's graduated setup-rerun ladder (§19.1) ships UNGATED on this
 // metric (§19.9 records why: it removes provably unnecessary work rather
 // than accelerating slow work) -- this histogram instead becomes the
 // post-ship confirmation that the ladder's own tiers actually help, and
@@ -95,7 +95,7 @@ func newHookRerunDurationHistogram() metric.Float64Histogram {
 // BootModeBuild/BootModeFresh setup.sh run (expected to take minutes,
 // against an empty cache) lands in the exact same bucket set as a
 // BootModeRepoImage+workspaceMoved rerun (expected to be fast, against an
-// already-warm cache) -- the one distinction §19.6/Step 43's own adoption
+// already-warm cache) -- the one distinction §19.6's own adoption
 // trigger ("full reruns eroding warm-boot latency") needs to query on.
 func recordHookRerunDuration(ctx context.Context, repoName string, hook string, bootMode string, workspaceMoved bool, seconds float64, failed bool) {
 	h := hookRerunDurationHistogram()

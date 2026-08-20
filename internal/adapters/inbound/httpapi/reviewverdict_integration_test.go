@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 47's ("server-side verdict", §8.2/§5.2/§21.2)
+// Integration tests for §8.2's ("server-side verdict", §8.2/§5.2/§21.2)
 // own verdict-posting tool (reviewverdict.go), against a real Postgres
 // instance -- gated behind the "integration" build tag, sharing this
 // package's own testRig (httpapi_integration_test.go).
@@ -31,8 +31,8 @@ import (
 // this file starts from, mutating only the ONE field a given test cares
 // about -- RiskLevel low, Premise ok, empty BlastRadius (legal), adequate
 // coverage, no docs drift, the model proposing "auto" (irrelevant to what
-// the server actually computes), a real, non-blank Summary, and (§26.2,
-// Step 67) an "ok" descriptionAdequacy with its own required explanation.
+// the server actually computes), a real, non-blank Summary, and (§26.2)
+// an "ok" descriptionAdequacy with its own required explanation.
 func validVerdictRequestJSON() string {
 	return `{
 		"riskLevel": "low",
@@ -227,17 +227,17 @@ func TestPostReviewVerdict_MalformedPartialPayload(t *testing.T) {
 		{name: "negative filesChanged", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":-1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x"}`},
 		{name: "whitespace-only summary (caught by ValidateVerdictInput, not schema decode)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"   "}`},
 		{name: "malformed JSON", body: `{not json`},
-		// Step 66 (§26.1): "digest" is REQUIRED, and "digest.summary" is
+		// (§26.1): "digest" is REQUIRED, and "digest.summary" is
 		// the one field within it this Step actually validates.
-		{name: "missing digest entirely (Step 66, partial payload)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x"}`},
-		{name: "digest present but missing digest.summary entirely (Step 66, partial payload)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{}}`},
+		{name: "missing digest entirely (§26.1, partial payload)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x"}`},
+		{name: "digest present but missing digest.summary entirely (§26.1, partial payload)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{}}`},
 		{name: "whitespace-only digest.summary (caught by ValidateVerdictInput, not schema decode)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{"summary":"   ","descriptionAdequacy":"ok","adequacyExplanation":"x"}}`},
-		// §26.2/Step 67: "descriptionAdequacy"/"adequacyExplanation" are
+		// §26.2: "descriptionAdequacy"/"adequacyExplanation" are
 		// REQUIRED on every review from this Step on, the SAME treatment
 		// as digest.summary above.
-		{name: "digest present but missing digest.descriptionAdequacy entirely (Step 67, partial payload)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{"summary":"x","adequacyExplanation":"x"}}`},
+		{name: "digest present but missing digest.descriptionAdequacy entirely (§26.2, partial payload)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{"summary":"x","adequacyExplanation":"x"}}`},
 		{name: "garbled digest.descriptionAdequacy enum value", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{"summary":"x","descriptionAdequacy":"somewhat","adequacyExplanation":"x"}}`},
-		{name: "digest present but missing digest.adequacyExplanation entirely (Step 67, partial payload)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{"summary":"x","descriptionAdequacy":"ok"}}`},
+		{name: "digest present but missing digest.adequacyExplanation entirely (§26.2, partial payload)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{"summary":"x","descriptionAdequacy":"ok"}}`},
 		{name: "whitespace-only digest.adequacyExplanation (caught by ValidateVerdictInput, not schema decode)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{"summary":"x","descriptionAdequacy":"ok","adequacyExplanation":"   "}}`},
 	}
 
@@ -323,7 +323,7 @@ func TestPostReviewVerdict_Success_EnqueuesGitHubVerdictOutboxRow(t *testing.T) 
 }
 
 // TestPostReviewVerdict_PersistsReviewVerdictRow_WhenReviewHeadSHAKnown
-// is Step 62's own (§21.1, updated for §62 review finding C2) end-to-end
+// is §21's own (§21.1, updated for) end-to-end
 // persistence test: when the session's own CURRENTLY-PROCESSING turn
 // carries a review_head_sha (set here exactly the way turn-creation
 // itself sets it in production -- turns.Create's own ReviewHeadSha
@@ -337,7 +337,7 @@ func TestPostReviewVerdict_PersistsReviewVerdictRow_WhenReviewHeadSHAKnown(t *te
 	ctx := context.Background()
 	session := setupReviewSessionWithSandbox(ctx, t, rig, "acme/verdict-persist", 55)
 
-	// §62 review finding C2: the head sha now lives on the session's own
+	// the head sha now lives on the session's own
 	// CURRENTLY-PROCESSING turn (turns.review_head_sha), resolved via
 	// TurnStore.GetProcessingTurnForSession -- mirrors how a real review
 	// turn is dispatched (status='processing') by the time its own agent
@@ -380,11 +380,11 @@ func TestPostReviewVerdict_PersistsReviewVerdictRow_WhenReviewHeadSHAKnown(t *te
 	}
 }
 
-// TestPostReviewVerdict_PersistsDigestColumns is Step 66's own (§26.1)
+// TestPostReviewVerdict_PersistsDigestColumns is §26.1's own (§26.1)
 // persistence proof: digest_summary/digest_arch_decisions/
 // digest_stack_risks/digest_unverified_limits (migrations/
 // 000077_review_verdicts_digest.up.sql) are all populated from the
-// posted digest, verbatim, on the SAME review_verdicts row Step 62
+// posted digest, verbatim, on the SAME review_verdicts row §21
 // already writes -- "digest quality measurable from day one". It ALSO
 // closes the one end-to-end gap on this Step's actual deliverable -- the
 // rendered merge readout -- by asserting the SAME posted digest reaches
@@ -469,8 +469,8 @@ func TestPostReviewVerdict_PersistsDigestColumns(t *testing.T) {
 	// rendered comment body -- the text that actually gets posted to the
 	// PR. Queried the same way TestPostReviewVerdict_
 	// Success_EnqueuesGitHubVerdictOutboxRow already does -- scoped to
-	// kind = github_verdict specifically (Step 67 own no
-	// descriptionAutofix candidate this request has no proposedBody, so
+	// kind = github_verdict specifically (§26.2's own no
+	// descriptionAutofix candidate: this request has no proposedBody, so
 	// only this ONE outbox row is ever enqueued for this session; the
 	// explicit kind filter keeps this query correct regardless).
 	var row sqlcgen.Outbox
@@ -511,7 +511,7 @@ func TestPostReviewVerdict_PersistsDigestColumns(t *testing.T) {
 // review_verdicts persistence is best-effort enrichment, never a
 // precondition for this tool call to succeed (see reviewverdict.go's own
 // doc comment on this exact point). A real processing turn IS seeded
-// here (updated for §62 review finding C2 -- a verdict POST in
+// here (updated for a verdict POST in
 // production always corresponds to some real, currently-processing
 // turn), just with review_head_sha left nil.
 func TestPostReviewVerdict_SkipsReviewVerdictInsert_WhenNoReviewHeadSHA(t *testing.T) {
@@ -539,8 +539,8 @@ func TestPostReviewVerdict_SkipsReviewVerdictInsert_WhenNoReviewHeadSHA(t *testi
 
 // TestPostReviewVerdict_SkipsReviewVerdictInsert_WhenNoProcessingTurnAtAll
 // is TestPostReviewVerdict_SkipsReviewVerdictInsert_WhenNoReviewHeadSHA's
-// own sibling for the OTHER degraded case §62 review finding C2's fix
-// must also handle gracefully: no processing turn can be resolved for
+// own sibling for the OTHER degraded case this handler must also handle
+// gracefully: no processing turn can be resolved for
 // this session AT ALL (a genuine race -- the turn already completed/
 // failed/was cancelled between the agent's own HTTP call landing and
 // this handler's own GetProcessingTurnForSession read) -- still posts
@@ -1236,8 +1236,8 @@ func TestPostReviewVerdict_FilesChangedDriftCanary_DiffEmpty_NeverFires(t *testi
 }
 
 // deepPathVerdictRequestJSON is validVerdictRequestJSON's own deep-path
-// sibling (Step 71, §26.4/§7.1): the three deep-path-only digest fields
-// (Step 68, §26.3 -- archDecisions/stackRisks/unverifiedLimits, all
+// sibling (§26.4/§7.1): the three deep-path-only digest fields
+// (§26.3 -- archDecisions/stackRisks/unverifiedLimits, all
 // application-level required whenever this session's own resolved
 // review-depth is deep) are populated, and counterReview is set to
 // whatever the caller passes -- the minimal legal deep-path body every
@@ -1266,8 +1266,8 @@ func deepPathVerdictRequestJSON(counterReview string) string {
 	}`
 }
 
-// seedProcessingDeepPathTurn (Step 71, §26.4/§7.1) creates a processing
-// turn on sessionID with review_depth "deep" (Step 68) and
+// seedProcessingDeepPathTurn (§26.4/§7.1) creates a processing
+// turn on sessionID with review_depth "deep" (§26.3) and
 // dispatched_sandbox_gen/dispatched_at stamped -- the SAME gen a real
 // sandbox row created by createSandboxWithToken starts at (1, matching
 // every other test in this file that posts X-Sandbox-Gen: "1"). This is
@@ -1370,7 +1370,7 @@ func dbDispatchedAt(ctx context.Context, t *testing.T, r testRig) time.Time {
 	return dbNow.Add(-seedDispatchBackdate)
 }
 
-// seedSubTaskStart/seedSubTaskFinish (Step 71, §26.4/§7.1) persist a REAL
+// seedSubTaskStart/seedSubTaskFinish (§26.4/§7.1) persist a REAL
 // sub_task_start/sub_task_finish event row via r.events -- the SAME
 // EventStore.Create path sessionactor's own appendRawEvent uses in
 // production (sandboxevent.go) to persist every recognized sandbox event
@@ -1421,7 +1421,7 @@ func seedSubTaskFinish(ctx context.Context, t *testing.T, r testRig, sessionID p
 	}
 }
 
-// TestPostReviewVerdict_CounterReviewCorroborated_NotFloored (Step 71,
+// TestPostReviewVerdict_CounterReviewCorroborated_NotFloored (
 // §26.4/§7.1) is this Step's own primary positive case, exercising the
 // FULL path end to end against real Postgres: a real sub_task_start
 // (subAgentType "counter-reviewer") + sub_task_finish (outcome
@@ -1448,7 +1448,7 @@ func TestPostReviewVerdict_CounterReviewCorroborated_NotFloored(t *testing.T) {
 }
 
 // TestPostReviewVerdict_CounterReviewUncorroborated_NoFinishEvent_
-// FloorsToNeedsHuman (Step 71) is the central negative case: a
+// FloorsToNeedsHuman (§26.4) is the central negative case: a
 // counter-reviewer sub_task_start was persisted, but no matching
 // sub_task_finish at all -- the sub-task never (verifiably) completed.
 // The self-report still claims counterReview: done, but with nothing in
@@ -1472,7 +1472,7 @@ func TestPostReviewVerdict_CounterReviewUncorroborated_NoFinishEvent_FloorsToNee
 }
 
 // TestPostReviewVerdict_CounterReviewUncorroborated_OnlyDifferentSubAgent
-// Type_FloorsToNeedsHuman (Step 71) is the false-positive guard: the ONLY
+// Type_FloorsToNeedsHuman (§26.4) is the false-positive guard: the ONLY
 // sub-task this session's own trace shows is a DIFFERENT named sub-agent
 // (fact-check, §26.6) that genuinely started and completed -- proving
 // corroborateCounterReview/reviewverdict.CounterReviewCorroborated find
@@ -1497,7 +1497,7 @@ func TestPostReviewVerdict_CounterReviewUncorroborated_OnlyDifferentSubAgentType
 }
 
 // TestPostReviewVerdict_CounterReviewCorroborated_MultipleSubAgentTypes_
-// NotFloored (Step 71, §26.4/§7.1; adversarial-review LOW finding) closes
+// NotFloored (§26.4/§7.1; adversarial-review LOW finding) closes
 // an integration-level gap: before this test, only reviewverdict.
 // CounterReviewCorroborated's own pure-function test (corroboration_test.
 // go, "multiple unrelated sub-tasks alongside the real counter-reviewer
@@ -1529,7 +1529,7 @@ func TestPostReviewVerdict_CounterReviewCorroborated_MultipleSubAgentTypes_NotFl
 	}
 }
 
-// TestSeedProcessingDeepPathTurn_StampsWatermarkBelowItsOwnEvents (Step 71,
+// TestSeedProcessingDeepPathTurn_StampsWatermarkBelowItsOwnEvents (
 // §26.4/§7.1) guards the fixture invariant the corroboration queries now
 // depend on: a seeded turn's dispatched_event_id must sit strictly BELOW
 // every event that turn goes on to seed, so those events are in its own
@@ -1599,7 +1599,7 @@ func TestSeedProcessingDeepPathTurn_StampsWatermarkBelowItsOwnEvents(t *testing.
 }
 
 // TestPostReviewVerdict_CounterReviewCorroborated_EarlierTurnSameGenDoesNot
-// Corroborate (Step 71, §26.4/§7.1) reproduces the EXACT bug an
+// Corroborate (§26.4/§7.1) reproduces the EXACT bug an
 // adversarial review of this PR found, and this same commit fixes: gen-
 // scoping ALONE cannot distinguish two DIFFERENT turns on the SAME
 // session dispatched to the SAME still-live sandbox incarnation, because

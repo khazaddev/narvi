@@ -1,7 +1,7 @@
 //go:build integration
 
 // Integration test proving the GENERIC (not per-handler) broadcast wiring
-// (Step 19 design decision) against a REAL Postgres instance -- gated
+// (§6.2 design decision) against a REAL Postgres instance -- gated
 // behind the "integration" build tag, matching this package's own
 // testcontainers-Postgres conventions exactly. Run via `make
 // test-integration`.

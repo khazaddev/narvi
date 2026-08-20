@@ -8,19 +8,19 @@ import (
 )
 
 // counterReviewerProviderPreference is the fixed, deterministic order this
-// function walks Step 59's own model catalog in when picking the counter-
+// function walks §8.8's own model catalog in when picking the counter-
 // reviewer sub-task's own opposing-model-family override (§26.4: "family
 // opposed to the PR's authoring model... via the engine's own per-sub-
-// agent model selection, using Step 53's credential injection + Step 59's
-// model catalog"). Exactly the three providers Step 53 already wires
+// agent model selection, using §25.1's credential injection + §8.8's
+// model catalog"). Exactly the three providers §25.1 already wires
 // credential injection for (internal/app/modelcatalog/doc.go: "the 3
-// providers Step 53 already wires credential injection for
+// providers §25.1 already wires credential injection for
 // (google/anthropic/openai)") -- there is no fourth provider this
 // function could ever select, by construction.
 var counterReviewerProviderPreference = []string{"anthropic", "openai", "google"}
 
 // ResolveCounterReviewerModel picks the counter-reviewer sub-task's own
-// opposing-model-family override (§26.4, Step 69) -- the "provider/model"
+// opposing-model-family override (§26.4) -- the "provider/model"
 // string internal/adapters/outbound/opencode.MergeReviewSubAgentsConfig
 // writes into the counter-reviewer custom OpenCode agent's own "model"
 // field (opencode.json), pinning that ONE sub-task to a model family
@@ -51,14 +51,14 @@ var counterReviewerProviderPreference = []string{"anthropic", "openai", "google"
 // credentialedProviders (B2 fix) is the set of lowercase provider IDs this
 // SESSION actually has a resolvable credential for (internal/app/
 // reviewtriage.CredentialedProviders' own reduction of ProviderCredentialStore.
-// ListForResolution -- "would Step 53's own delivery endpoint produce
+// ListForResolution -- "would §25.1's own delivery endpoint produce
 // anything for this provider at all", never a decrypted value). A
 // candidate provider absent from this set (including every provider when
 // credentialedProviders is nil -- a Go nil-map read is always false, no
 // special-casing needed) is skipped exactly like an excluded authoring-
 // family match above, falling through to the next preference-order
-// candidate, or to "" if none remain. This function never GUESSES: Step
-// 53's own credential injection is best-effort and per-(repo/environment/
+// candidate, or to "" if none remain. This function never GUESSES:
+// §25.1's own credential injection is best-effort and per-(repo/environment/
 // global) configured, so counterReviewerProviderPreference's fixed 3-
 // provider list is only a statement of which providers the MECHANISM
 // supports, never a promise that all 3 (or even one) are actually usable
@@ -78,7 +78,7 @@ var counterReviewerProviderPreference = []string{"anthropic", "openai", "google"
 // Within the opposing provider's own model list, this function prefers a
 // Reasoning-capable model (modelcatalog.Model.Reasoning) -- the closest
 // proxy this catalog exposes to "frontier tier" (§29's own doc comment:
-// no dedicated review-model-selection/tiering mechanism predates Step 68,
+// no dedicated review-model-selection/tiering mechanism predates
 // which itself is "an optional operator override rather than a catalog-
 // driven tiering system" -- there is no richer tier signal to consult),
 // falling back to every model in that provider's own list when none is

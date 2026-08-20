@@ -6,7 +6,7 @@ import "context"
 // mutation (verified against Linear's real GraphQL schema -- schema.
 // graphql's own Mutation.agentActivityCreate(input: AgentActivityCreateInput!):
 // AgentActivityPayload! -- and its own developer docs' worked example
-// during Step 34's investigation). content is passed as a raw JSONObject,
+// during §8.10's investigation). content is passed as a raw JSONObject,
 // matching AgentActivityCreateInput.content's own schema type exactly
 // ("This object is not strictly typed. See ... for typing details.").
 const createAgentActivityMutation = `
@@ -58,7 +58,7 @@ func (c *Client) CreateThoughtActivity(ctx context.Context, accessToken, agentSe
 // real docs: `{"content": {"type": "response"|"error", "body": "..."}}"`) --
 // two of the five allowed activity content types (thought/elicitation/
 // action/response/error), verified against Linear's own current developer
-// documentation during Step 35's ("outbox delivery") own investigation:
+// documentation during §5.1's ("outbox delivery") own investigation:
 // emit "response" when "work has been completed or a final result is
 // available", emit "error" to "report an error or failure". This Step's
 // own scope only ever emits one of these two (a completed turn's
@@ -80,7 +80,7 @@ const (
 )
 
 // CreateResponseActivity posts a single `response` Agent Activity to
-// agentSessionID -- Step 35's ("outbox delivery") own async notification
+// agentSessionID -- §5.1's ("outbox delivery") own async notification
 // for a turn that completed SUCCESSFULLY (turn.TriggerComplete), delivered
 // via the outbox (internal/app/outboxworker), never synchronously from an
 // inbound webhook handler the way CreateThoughtActivity above is.
@@ -89,7 +89,7 @@ func (c *Client) CreateResponseActivity(ctx context.Context, accessToken, agentS
 }
 
 // CreateErrorActivity posts a single `error` Agent Activity to
-// agentSessionID -- Step 35's own async notification for a turn that
+// agentSessionID -- §5.1's own async notification for a turn that
 // FAILED (turn.TriggerFail) or was cancelled (turn.TriggerCancel), the
 // symmetric counterpart to CreateResponseActivity above.
 func (c *Client) CreateErrorActivity(ctx context.Context, accessToken, agentSessionID, body string) error {

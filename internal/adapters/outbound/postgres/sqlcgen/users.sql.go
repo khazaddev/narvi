@@ -31,7 +31,7 @@ type CreateUserParams struct {
 // own initial-admin logic. GetUserByID backs both the callback handler and
 // the auth middleware's own per-request lookup.
 //
-// Step 39 ("identities + full RBAC", §13.2/§13.3) additions --
+// §13.2 ("identities + full RBAC", §13.2/§13.3) additions --
 // ListUsersOrderedByCreatedAt/UpdateUserRole/GetUserByPrimaryEmail back the
 // members API (internal/adapters/inbound/httpapi/members.go) and the
 // auto-link algorithm's own email-match step

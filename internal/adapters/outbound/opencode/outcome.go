@@ -29,7 +29,7 @@ type turnOutcome struct {
 //     error-name-derived reason. The raw provider error body is NEVER
 //     embedded here (even though err only carries a Name, never a raw
 //     body, by construction — see openCodeTaggedError's own doc comment)
-//     — mirroring the Step 12/15 "never leak a raw response body" lesson
+//     — mirroring the §4.1/§6.4 "never leak a raw response body" lesson
 //     defensively.
 //   - err == nil && (hasText || hasToolCall) -> "completed".
 //   - err == nil && !hasText && !hasToolCall -> "failed" (§7's own

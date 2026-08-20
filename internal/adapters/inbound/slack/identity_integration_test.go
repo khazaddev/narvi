@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests proving Step 39's ("identities + full RBAC", §13.2)
+// Integration tests proving §13.2's ("identities + full RBAC", §13.2)
 // own auto-linking wiring actually fires from a REAL POST
 // /webhooks/slack/interactive request -- mirrors
 // interactive_integration_test.go's own conventions (testcontainers
@@ -579,7 +579,7 @@ func newSlackHandlerRigForIdentityTests(t *testing.T, pool *pgxpool.Pool, record
 		Deliveries:   deliveries,
 		Threads:      threads,
 		AuditLog:     auditLog,
-		// Participants (Step 39's own SECOND fix-pass addition, "identities
+		// Participants (§13.2's own SECOND fix-pass addition, "identities
 		// + full RBAC", §13.2/§13.3): authorizeSessionAction (identity.go)
 		// needs this to resolve a `member` actor's own "own/joined"
 		// carve-out on a reply to an already-mapped thread -- the SAME

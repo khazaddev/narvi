@@ -135,9 +135,9 @@ func TestMergeReviewSubAgentsConfig_PreservesExistingKeys(t *testing.T) {
 }
 
 // TestMergeReviewSubAgentsConfig_CoexistsWithSentinelFixAgent proves this
-// mechanism and Step 48's own sentinel-fix agent config can both apply to
+// mechanism and §8.2's own sentinel-fix agent config can both apply to
 // the SAME workspace without clobbering each other -- a sentinel-auto-fix
-// child session that ALSO happens to be reviewed (e.g. Step 48's own fix
+// child session that ALSO happens to be reviewed (e.g. §8.2's own fix
 // PR getting its own review session, a genuinely reachable case since
 // every PR gets reviewed) must retain both.
 func TestMergeReviewSubAgentsConfig_CoexistsWithSentinelFixAgent(t *testing.T) {

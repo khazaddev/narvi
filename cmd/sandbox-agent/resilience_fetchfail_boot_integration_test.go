@@ -1,7 +1,7 @@
 //go:build integration
 
-// New §9.3-class resilience scenario (Step 42, §19.3/§19.9's own "fetch-fail
-// boot" addition): Step 40's fetch-aware SyncAll degrade policy, exercised
+// New §9.3-class resilience scenario (§19.3/§19.9's own "fetch-fail
+// boot" addition): §19.3's fetch-aware SyncAll degrade policy, exercised
 // through a REAL, FULL boot sequence (runBootSequence -> gitclone.SyncAll ->
 // boot.RunBoot -> hooks) -- not just gitclone's own unit tests (internal/
 // sandboxagent/gitclone/sync_test.go's own TestSyncAll_FetchFails_* table),
@@ -116,7 +116,7 @@ func runBootSequenceRepoImage(t *testing.T, workspaceDir string, branch *string)
 }
 
 // TestResilienceScenario_FetchFailBoot_InventedBranch_DegradesAndBootSucceeds
-// proves the non-fatal half of Step 40's own degrade policy through a REAL,
+// proves the non-fatal half of §19.3's own degrade policy through a REAL,
 // FULL boot sequence: the session names no explicit branch (repos[].branch
 // == nil, so SyncAll invents "narvi/<sessionID>" -- "acceptable from HEAD"
 // per §19.3), the workspace's own origin is unreachable, so the boot-time

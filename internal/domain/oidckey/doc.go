@@ -1,4 +1,4 @@
-// Package oidckey implements the pure vocabulary around Step 73a's own
+// Package oidckey implements the pure vocabulary around §27.3's own
 // ("cloud identity: OIDC issuer, bindings, minting", §27.3) OIDC
 // signing-key rotation: which of a set of already-fetched
 // oidc_signing_keys rows is the one new tokens should be signed with, and

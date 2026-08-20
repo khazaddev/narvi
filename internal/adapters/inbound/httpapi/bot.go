@@ -16,15 +16,15 @@ import (
 )
 
 // CreateSessionForBot and CreateTurnForBot (below) are the two small,
-// EXPORTED entry points create.go's own Step 31 doc comment anticipated:
-// "a future webhook ingress handler (Steps 32-34) calls createSessionCore
+// EXPORTED entry points create.go's own §5.1 doc comment anticipated:
+// "a future webhook ingress handler (§8.2/§8.10) calls createSessionCore
 // directly with its own already-decoded request and a NULL createdBy --
 // never [CreateSession]." That anticipated caller living in the SAME
-// package (since createSessionCore stays unexported). Step 32 ("GitHub
+// package (since createSessionCore stays unexported). §8.2 ("GitHub
 // ingress") instead places its handler in its own package,
 // internal/adapters/inbound/github, mirroring
 // internal/adapters/inbound/httpapi/doc.go's own alternative it left
-// open ("or Steps 32-34 decide createSessionCore should be exported
+// open ("or §8.2/§8.10 decide createSessionCore should be exported
 // instead") -- a full export of createSessionCore was judged the wrong
 // shape (it would hand a webhook adapter direct access to every REST-only
 // concern: repo/pathScope/mockConfig validation error *shapes*, HTTP
@@ -37,7 +37,7 @@ import (
 // createcore_integration_test.go's own TestCreateSessionCore_NilCreator_*
 // tests already establish and cover.
 //
-// epistemicCheckDefault (F6, adversarial review, Step 61) mirrors
+// epistemicCheckDefault (F6, adversarial review) mirrors
 // CreateSessionCore's own identical required parameter -- see that
 // function's own doc comment. This function has no real production caller
 // today (coalesce.go's own doc comment explains why GitHub's own ingress
@@ -53,7 +53,7 @@ func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *post
 }
 
 // CreateTurnForBot enqueues a new Pending turn on an EXISTING session for
-// a non-browser ingress caller (Steps 32/33/34) living in its own
+// a non-browser ingress caller (§8.2/§8.10) living in its own
 // package. Reuses createTurnLocked (turn.go) -- the SAME shared core
 // CreateTurnCore itself calls -- with its own fixed AlwaysQueue policy,
 // so the lock-then-insert-then-dispatch sequencing (a session-row FOR
@@ -77,7 +77,7 @@ func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *post
 // -- it is not a general domain invariant. domain/turn.NextToDispatch
 // already supports an arbitrary backlog of Pending turns on one session,
 // dispatching the oldest one only once nothing is Dispatched/Processing --
-// exactly the backlog Step 32's own per-PR @mention coalescing is meant to
+// exactly the backlog §8.2's own per-PR @mention coalescing is meant to
 // produce when N concurrent mentions land on a PR that already has a
 // review session (internal/adapters/inbound/github/coalesce.go is this
 // function's own caller for that case).
@@ -92,12 +92,12 @@ func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *post
 // carries no authorization meaning here, exactly like every other
 // createTurnLocked caller.
 //
-// plans (Step 37/38 follow-up fix, §8.1) is threaded through to
+// plans (a follow-up fix, §8.1) is threaded through to
 // createTurnLocked's own awaiting-plan gate exactly like every other
 // caller -- see that function's own doc comment (turn.go) for the nil-safe
 // "skips the gate" contract this shares with them.
 //
-// intentSvc (Step 64, §23.1/§23.2) is threaded through exactly like plans
+// intentSvc (§23.1/§23.2) is threaded through exactly like plans
 // immediately above -- github/coalesce.go's own REUSE-path caller passes
 // the SAME real *intentclassifier.Service every other createTurnLocked
 // caller does, so a GitHub-bot mention reply arriving while a plan is
@@ -105,7 +105,7 @@ func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *post
 // other ingress channel's ordinary reply now does (see createTurnLocked's
 // own doc comment, turn.go).
 //
-// epistemicCheckDefault (Step 61, §20.4) is threaded through to
+// epistemicCheckDefault (§20.4) is threaded through to
 // createTurnLocked exactly like planMode immediately before it -- a
 // REQUIRED parameter, not one left at a zero-value default, so a
 // GitHub-bot-created build turn honors the SAME platform-wide
@@ -113,7 +113,7 @@ func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *post
 // own doc comment, turn.go, for why this is required rather than bundled
 // into a variadic options slot).
 //
-// reviewHeadSHA (§62 review finding C2, CRITICAL, fixed) is non-nil ONLY
+// reviewHeadSHA is non-nil ONLY
 // for github/coalesce.go's own REUSE-path caller (an @mention or label
 // re-trigger enqueuing a new turn on an ALREADY-EXISTING review session)
 // -- the commit SHA THIS turn's own pre-fetched review diff was anchored
@@ -126,7 +126,7 @@ func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *post
 // "every other caller safely ignores this" population the way those two
 // REST-only fields have.
 //
-// classifyText (F1, Step 64 follow-up fix, review Finding 1) mirrors
+// classifyText (F1, §23 follow-up fix, review Finding 1) mirrors
 // reviewHeadSHA's own "this function's one real caller always has a real
 // value to supply" shape -- github/coalesce.go's REUSE-path caller always
 // has its own already-captured, raw, un-enriched mention text in scope
@@ -137,7 +137,7 @@ func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *post
 // itself, by the time it reaches this function, already carries
 // review.RenderTurnPrompt's own folded-in diff/stack/verdict-tool text,
 // which must never reach the plan_followup classifier.
-// effort/reviewDepth/reviewDepthDecision (Step 68, §26.3) mirror
+// effort/reviewDepth/reviewDepthDecision (§26.3) mirror
 // reviewHeadSHA's own identical "non-nil ONLY for github/coalesce.go's
 // own REUSE-path caller" shape, one field further -- see
 // CreateTurnOptions.Effort/ReviewDepth/ReviewDepthDecision's own doc
@@ -145,7 +145,7 @@ func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *post
 func CreateTurnForBot(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, intentSvc *intentclassifier.Service, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, epistemicCheckDefault bool, actorUserID pgtype.UUID, reviewHeadSHA *string, classifyText *string, effort *string, reviewDepth *string, reviewDepthDecision []byte) (sqlcgen.Turn, error) {
 	created, _, cerr := createTurnLocked(ctx, pool, sessions, turns, plans, intentSvc, auditLog, registry, sessionID, prompt, modelID, planMode, epistemicCheckDefault, actorUserID, AlwaysQueue, CreateTurnOptions{ReviewHeadSHA: reviewHeadSHA, ClassifyText: classifyText, Effort: effort, ReviewDepth: reviewDepth, ReviewDepthDecision: reviewDepthDecision})
 	if cerr != nil {
-		// %w, NOT %s (Step 37/38 follow-up fix, Finding 1): cerr's own
+		// %w, NOT %s (a follow-up fix, Finding 1): cerr's own
 		// Error() method returns exactly cerr.Message, so this produces the
 		// IDENTICAL string as the old fmt.Errorf("...: %s", cerr.Message) --
 		// but %w additionally preserves the error CHAIN, so a caller

@@ -10,7 +10,7 @@ import (
 	"github.com/khazaddev/narvi/internal/domain/review"
 )
 
-// This file implements Step 48's own resolution of the tension named at
+// This file implements §8.2's own resolution of the tension named at
 // internal/domain/review/doc.go's design call #4: that package deliberately
 // ships NO Finding type ("a Finding type is left for whichever Step actually
 // needs it"). Finding lives HERE, in reviewpost -- a sibling package, never
@@ -22,7 +22,7 @@ import (
 // from a sibling package, the established precedent this package's own
 // VerdictInput/BuildVerdict already set) would silently break an invariant
 // its own maintainers documented on purpose. review.Verdict itself
-// (verdict.go) stays exactly Step 45's seven-field shape, untouched.
+// (verdict.go) stays exactly §8.2's seven-field shape, untouched.
 
 // SentinelKind names which sentinel produced a Finding -- "coverage" or
 // "docs_drift" (the only two sentinels §17.1 says can ever trigger the
@@ -44,7 +44,7 @@ const (
 // FindingStatus is a review_findings row's own mutable lifecycle state
 // (migrations/000046_review_findings.up.sql) -- persists ACROSS re-posted
 // verdicts (the whole reason review_findings is its own table rather than
-// a column on the append-only review_verdicts history, §21.1, that Step 58
+// a column on the append-only review_verdicts history, §21.1, that §8.6
 // will add later: see that migration's own doc comment).
 type FindingStatus string
 
@@ -56,7 +56,7 @@ const (
 	// FindingStatusRebutted is a finding a maintainer+ has explicitly
 	// dismissed (§22.1's content-based rebuttal identity, scoped down to
 	// what THIS Step needs -- the learned-false-positive-pattern table
-	// itself is Step 59, out of this Step's scope).
+	// itself is out of this Step's scope).
 	FindingStatusRebutted FindingStatus = "rebutted"
 	// FindingStatusFixPending is a finding a sentinel-auto-fix child
 	// session has been spawned for, fix PR not yet open. Suppresses the
@@ -78,10 +78,10 @@ const (
 )
 
 // FindingInput is a review-verdict-posting-tool call's own typed
-// per-finding fields (§8.2/Step 47's VerdictInput, extended -- restdtos.
+// per-finding fields (§8.2's VerdictInput, extended -- restdtos.
 // PostReviewVerdictRequest.findings, additive and optional, so an old
-// caller posting no findings at all keeps posting exactly as before Step
-// 48) -- everything BuildFinding needs BEFORE IdentityHash is
+// caller posting no findings at all keeps posting exactly as before)
+// -- everything BuildFinding needs BEFORE IdentityHash is
 // server-computed (never accepted from a caller, matching review.Verdict.
 // Shippable's own "never client-supplied" CONTRACT for the identical
 // reason: an agent-supplied identity would let a model launder a stale

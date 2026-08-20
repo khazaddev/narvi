@@ -1,6 +1,6 @@
 package intent
 
-// This file (planfollowup.go) implements Step 64's own plan_followup
+// This file (planfollowup.go) implements §23's own plan_followup
 // classification category (§23.1: "amend-vs-answer... a new surface on
 // the existing unified intent classifier ... alongside the classifier's
 // other categories (review-vs-request, plan-vs-build, release-vs-feature,
@@ -37,7 +37,7 @@ const (
 	TargetAnswer = "answer"
 )
 
-// ResolveAnswerOnly derives Step 64's own persisted turns.answer_only flag
+// ResolveAnswerOnly derives §23's own persisted turns.answer_only flag
 // (§23.2) from ONE plan_followup classification's raw source/target/
 // confidence -- pure, so this fail-open policy (§23.3) is a single,
 // versionable, unit-testable decision function, mirroring

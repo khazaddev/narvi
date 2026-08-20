@@ -18,7 +18,7 @@ import (
 // BootMode); the rest are this Step's own invented plumbing, since no
 // other SESSION_CONFIG delivery mechanism is pinned yet.
 //
-// SessionConfigEnvVar (NARVI_SESSION_CONFIG) is Step 15's own answer to
+// SessionConfigEnvVar (NARVI_SESSION_CONFIG) is §6.4's own answer to
 // that gap: an OPTIONAL env var carrying the full SESSION_CONFIG document
 // as JSON. Its absence remains a fully valid, correct state (see Config.
 // SessionConfig's own doc comment) -- dev/CI environments have no live
@@ -49,10 +49,10 @@ const (
 	defaultAgentVersion = "dev"
 
 	// defaultImageDigest is used when NARVI_IMAGE_DIGEST is unset. HONEST
-	// GAP: as of Step 12, ports.CreateSpec/the Modal adapter have no
+	// GAP: ports.CreateSpec/the Modal adapter have no
 	// mechanism to inject an arbitrary env var like this one into a
 	// spawned sandbox, so in practice this will always default to
-	// "unknown" until some later Step closes that gap.
+	// "unknown" until some later change closes that gap.
 	defaultImageDigest = "unknown"
 
 	// defaultWorkspaceDir is used when NARVI_WORKSPACE_DIR is unset (§6.4:

@@ -1,4 +1,4 @@
-// Package loopguard is Step 54's own ("domain/workflow + loopguard +
+// Package loopguard is §25.4's own ("domain/workflow + loopguard +
 // schema", §25.5) generic, pure circuit breaker for bounded retry loops:
 // Evaluate(State{AttemptCount}, Config{MaxAttempts}) Decision
 // {ShouldProceed, ShouldEscalate}. No I/O, no time.Now(), no randomness
@@ -19,9 +19,9 @@
 // already applies). This package just renders the verdict on the count
 // it is handed.
 //
-// Consulted by the engine (Step 56, §25.9) only when a needs_fix edge is
+// Consulted by the engine (§25.9) only when a needs_fix edge is
 // about to RE-fire -- never inside workflow.NextStep itself, and never
 // for human-revision loops, which are exempt (§25.9, mirroring §24.6's
-// own manual-retrigger exemption). Dark as of Step 54: no caller exists
+// own manual-retrigger exemption). Dark: no caller exists
 // yet.
 package loopguard

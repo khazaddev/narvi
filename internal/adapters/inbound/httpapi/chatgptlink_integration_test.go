@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for /api/me/chatgpt-link (Step 59, "models: Codex via
+// Integration tests for /api/me/chatgpt-link ("models: Codex via
 // ChatGPT-account OAuth", §29.3/§29.9) against a real Postgres instance,
 // proving the REST route wiring (auth, RBAC, request/response shape) on
 // top of internal/app/chatgptlink's own already-thoroughly-tested service

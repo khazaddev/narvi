@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for internal/app/automerge.Worker (Step 62, §21.2
+// Integration tests for internal/app/automerge.Worker (§21.2
 // stage 2) against a real Postgres instance.
 package automerge_test
 
@@ -211,7 +211,7 @@ func (rs *automergeTestRig) seedEligiblePR(ctx context.Context, t *testing.T, re
 	return htmlURL
 }
 
-// TestPumpOnce_OffByDefault_NoMerge is Step 62's own explicitly-pinned
+// TestPumpOnce_OffByDefault_NoMerge is §21's own explicitly-pinned
 // mutation test: "auto-merge-off-by-default". A repo with a genuinely
 // eligible, auto-approved candidate PR on record, but NO repo_settings
 // row at all (the table's own established "absence means every flag
@@ -384,7 +384,7 @@ func TestPumpOnce_CandidateNoLongerOpen_NeverErrors(t *testing.T) {
 }
 
 // TestPumpOnce_Armed_GetOpenPRErrors_NeverMergesNeverPanics is the T2
-// regression test (§62 review, fixed) for fakeAutoMergeSourceControl.
+// regression test for fakeAutoMergeSourceControl.
 // getErr: before this fix, that field was wired into the fake but set by
 // NO test in this file, leaving RevalidateForAutoMerge's own genuine-
 // error branch (mergeCandidate's `if err != nil { logger.Error(...);

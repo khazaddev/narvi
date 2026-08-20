@@ -1,7 +1,7 @@
 //go:build integration
 
 // Integration test for OIDCSigningKeyStore.Rotate's own concurrent-
-// rotation safety (Step 73a, "cloud identity: OIDC issuer, bindings,
+// rotation safety ("cloud identity: OIDC issuer, bindings,
 // minting", §27.3) -- gated behind the "integration" build tag, matching
 // this package's own conventions (testcontainers Postgres, embedded
 // migrations).

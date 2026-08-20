@@ -118,7 +118,7 @@ func NewCallbackHandler(
 		// so it can never be replayed.
 		http.SetCookie(w, expiredCookie(oauthStateCookieName, secureCookies))
 
-		// Step 39 ("identities + full RBAC", §13.2) update: read and clear
+		// §13.2 ("identities + full RBAC", §13.2) update: read and clear
 		// the optional next-redirect cookie (login.go's own doc comment)
 		// the SAME way, right alongside the state cookie -- read ONCE,
 		// here, before any of this handler's own early-rejection paths
@@ -273,7 +273,7 @@ func NewCallbackHandler(
 		// redirectTarget is "/" (there is no SPA to land on yet -- Phase 6
 		// is what makes "/" a meaningful landing page; an intentional,
 		// forward-compatible interim behavior, not a bug) UNLESS a caller
-		// arrived via a real ?next= redirect (Step 39's own addition,
+		// arrived via a real ?next= redirect (§13.2's own addition,
 		// this func's own top -- e.g. internal/adapters/inbound/
 		// identitylink's magic-link consume handler sending a signed-out
 		// visitor through this same flow).
@@ -349,9 +349,9 @@ func createUserAndIdentity(ctx context.Context, pool *pgxpool.Pool, users *postg
 	// identity_linked_via enum values for "no real linking algorithm ran,
 	// this identity was simply created": auto_email specifically means
 	// "matched an ALREADY-existing user's OTHER identity by email" (§13.2's
-	// own auto-linking algorithm, Step 39's job, not built yet); prompt
-	// means a human was asked to confirm a link (also Step 39). This is a
-	// deliberate, documented Step 39 hand-off note, not a silent choice.
+	// own auto-linking algorithm, not built yet); prompt
+	// means a human was asked to confirm a link (the same job). This is a
+	// deliberate, documented hand-off note, not a silent choice.
 	if _, err := identities.WithTx(tx).Create(ctx, sqlcgen.CreateIdentityParams{
 		UserID:               createdUser.ID,
 		Provider:             sqlcgen.IdentityProviderGithub,

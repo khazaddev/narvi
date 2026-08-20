@@ -9,7 +9,7 @@ import (
 )
 
 // ClusterBindingStore is a thin, pass-through wrapper around the
-// sqlc-generated cluster_bindings queries (Step 73b, "cloud identity:
+// sqlc-generated cluster_bindings queries ("cloud identity:
 // sandbox-side consumption + kubeconfig injection", §27.4,
 // migrations/000094_cluster_bindings.up.sql). No caching, no retries, no
 // business rules -- name/authKind/serverURL/caBundle/params validation

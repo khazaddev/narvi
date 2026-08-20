@@ -234,7 +234,7 @@ func (s *Service) Classify(ctx context.Context, input ports.IntentClassifierInpu
 
 // fallbackDecision builds the fixed fallback shape (§18.1) for reason.
 //
-// deterministicTarget (Step 47, §5.2/§18.2 audit fix) is threaded through
+// deterministicTarget (§5.2/§18.2 audit fix) is threaded through
 // to the returned decision's own Target field -- BEFORE this fix,
 // fallbackDecision unconditionally left Target empty on every fallback
 // path, discarding a caller-supplied deterministic signal (a regex/label

@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 46's ("review sessions", §8.2) own manual
+// Integration tests for §8.2's ("review sessions", §8.2) own manual
 // re-trigger-via-BUTTON REST endpoint (reviewretrigger.go), against a real
 // Postgres instance -- gated behind the "integration" build tag, sharing
 // this package's own testRig (httpapi_integration_test.go).
@@ -25,7 +25,7 @@ import (
 // HTTP round trip, mirroring internal/adapters/inbound/github's own
 // identically-named fixture (handler_integration_test.go) exactly.
 // diffOwner/diffRepo/diffBase/diffHead/diffToken (audit fix, test-coverage
-// finding, updated for §62 review finding C2) record GetCompareDiff's own
+// finding, updated for) record GetCompareDiff's own
 // last call args: this endpoint's own diffFetcher call site
 // (reviewretrigger.go) previously had NO integration coverage at all with
 // a non-nil diffFetcher wired in (this rig's own default leaves it nil)
@@ -213,7 +213,7 @@ func TestRetriggerReview_Success(t *testing.T) {
 func TestRetriggerReview_PreFetchesReviewContext_CorrectOwnerRepoArgs(t *testing.T) {
 	fetcher := &fakeReviewContextFetcher{
 		diff: "diff --git a/x b/x\n+hello\n",
-		// §62 review finding C2: HeadSHA/BaseRef are what GetCompareDiff
+		// HeadSHA/BaseRef are what GetCompareDiff
 		// must be pinned to -- a zero-value fixture would only prove the
 		// degenerate empty-base/empty-head case.
 		pr: githubapi.PullRequest{HeadSHA: "resolved-head-sha", BaseRef: "main"},
@@ -243,7 +243,7 @@ func TestRetriggerReview_PreFetchesReviewContext_CorrectOwnerRepoArgs(t *testing
 			fetcher.diffOwner, fetcher.diffRepo, fetcher.diffBase, fetcher.diffHead, fetcher.diffToken, "acme", "prefetch-retrigger-repo", "main", "resolved-head-sha", "test-bot-token")
 	}
 
-	// §62 review finding C2: the turn's own persisted review_head_sha
+	// the turn's own persisted review_head_sha
 	// must equal exactly the SHA the diff above was pinned to.
 	var reviewHeadSHA *string
 	if err := rig.pool.QueryRow(ctx, `SELECT review_head_sha FROM turns WHERE session_id = $1 ORDER BY created_at DESC LIMIT 1`, session.ID).Scan(&reviewHeadSHA); err != nil {
@@ -360,7 +360,7 @@ func TestRetriggerReview_ConcurrentClicks_AllSucceedNoDeadlock(t *testing.T) {
 }
 
 // TestRetriggerReview_AlreadyAnsweredFacts_PrependedNeverReplacingProse is
-// Step 48's own explicitly required test (§22.1): an already-open
+// §8.2's own explicitly required test (§22.1): an already-open
 // review_findings row for this PR renders as a deterministic "already
 // answered" fact block PREPENDED to -- never replacing -- the manual
 // re-trigger's own fixed prose text (manualRetriggerPromptText,
@@ -505,14 +505,14 @@ func TestRetriggerReview_AlreadyAnsweredFacts_RetiresFindingWhoseFileLeftTheDiff
 }
 
 // TestRetriggerReview_AwaitingPlanAlwaysDeclines_NeverClassifies is F1's
-// own regression test (Step 64 follow-up fix, review Finding 1) for this
+// own regression test (§23 follow-up fix, review Finding 1) for this
 // endpoint: a manual re-review click carries no human reply for the
 // plan_followup classifier (ClassifyPlanFollowup) to legitimately read --
 // reviewretrigger.go no longer even accepts an *intentclassifier.Service
 // parameter at all (removed by this fix), so CreateTurnCore is always
 // called with a literal nil intentSvc here, which -- per createTurnLocked's
 // own nil-safe "skip classification entirely" contract (turn.go) --
-// degrades this endpoint to the SAME safe, deterministic pre-Step-64
+// degrades this endpoint to the SAME safe, deterministic pre-existing
 // "always decline while a plan is awaiting approval" outcome, structurally
 // incapable of ever promoting a re-trigger into a plan-revision turn based
 // on a misread of manualRetriggerPromptText or the pre-fetched diff. This

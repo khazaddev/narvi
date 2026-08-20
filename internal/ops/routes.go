@@ -13,7 +13,7 @@ import (
 )
 
 // RegisteredRoute records where one HTTP route was registered on this
-// binary's chi.Router — Step 78's own sibling of instruments.go's
+// binary's chi.Router — §10's own sibling of instruments.go's
 // RegisteredInstrument, over a different source (this repo's own route
 // wiring instead of its OTel instrument registrations), kept for the same
 // reason: self-describing even if extracted from the map CheckGuideDrift

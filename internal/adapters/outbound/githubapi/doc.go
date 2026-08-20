@@ -1,5 +1,5 @@
 // Package githubapi holds the GitHub SourceControl port implementation
-// (createPR, credential minting, push specs) — implemented at Step 21
+// (createPR, credential minting, push specs) — implemented at §9.3
 // ("e2e happy path", §4.3). Credential minting and push specs are handled
 // elsewhere (internal/adapters/inbound/httpapi's own scm-credentials
 // endpoint mints the git-over-https credential; cmd/sandbox-agent's own
@@ -7,7 +7,7 @@
 // exactly ports.SourceControl.CreatePR: a real POST https://api.github.com/
 // repos/{owner}/{repo}/pulls call.
 //
-// Step 26 ("image builds", §8.5-note/§10-P2) adds ResolveBranchSHA: a real
+// §8.5 ("image builds", §8.5-note/§10-P2) adds ResolveBranchSHA: a real
 // GET https://api.github.com/repos/{owner}/{repo}/commits/{branch} call
 // (first resolving the repo's own real default_branch via GET
 // https://api.github.com/repos/{owner}/{repo} when no explicit branch is
@@ -33,7 +33,7 @@
 // HandlePush): these are two distinct, correct conventions built on the
 // SAME underlying OAuth token, never conflated here.
 //
-// Step 35 ("outbox delivery", §5.1) adds PostIssueComment (a real POST
+// §5.1 ("outbox delivery", §5.1) adds PostIssueComment (a real POST
 // https://api.github.com/repos/{owner}/{repo}/issues/{pr_number}/comments
 // call -- GitHub's Issues API, which a pull request is itself always
 // addressable through) plus BotNotifier, a small sibling type (notifier.go)

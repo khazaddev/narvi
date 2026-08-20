@@ -223,7 +223,7 @@ func newSlackTestRigWithEpistemicCheckDefault(t *testing.T, pool *pgxpool.Pool, 
 		Threads:      threads,
 		Plans:        plans,
 		AuditLog:     auditLog,
-		// Participants (Step 39's own SECOND fix-pass addition, "identities
+		// Participants (§13.2's own SECOND fix-pass addition, "identities
 		// + full RBAC", §13.2/§13.3): authorizeSessionAction (identity.go)
 		// needs this even though this rig's own fixture users never
 		// auto-link (see this func's own doc comment) -- mirrors every
@@ -236,7 +236,7 @@ func newSlackTestRigWithEpistemicCheckDefault(t *testing.T, pool *pgxpool.Pool, 
 		TimestampWindow: 5 * time.Minute,
 		SlackAPIBaseURL: ackServer.URL,
 		AckTimeout:      platform.DefaultTimeouts().SlackAckTimeout,
-		// IdentityLink/SlackClient/Timeouts (Step 39, "identities + full
+		// IdentityLink/SlackClient/Timeouts ("identities + full
 		// RBAC", §13.2): ackServer above answers EVERY path (including
 		// /users.info) with a bare {"ok":true}, so GetUserEmail resolves
 		// to (email="", ok=false) for every fixture event's own "user" id

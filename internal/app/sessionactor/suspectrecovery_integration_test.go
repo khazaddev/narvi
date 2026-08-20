@@ -19,7 +19,7 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// This file proves Step 24's ("two-phase terminalization") own recovery
+// This file proves §3.2's ("two-phase terminalization") own recovery
 // half: §3.2's "any liveness signal during grace returns to previous
 // state" rule, wired into handleSandboxEvent (sandboxevent.go) -- see that
 // file's own top comment for the full mechanics this exercises.
@@ -57,7 +57,7 @@ func heartbeatRaw(messageID string) json.RawMessage {
 }
 
 // TestHandleSandboxEvent_SuspectRecovery_ReturnsToPreSuspectStatus proves
-// the core Step 24 mechanism in isolation: a Suspect sandbox seeded with a
+// the core §3.2 mechanism in isolation: a Suspect sandbox seeded with a
 // real pre_suspect_status (Ready) receiving ANY recognized inbound event
 // (a plain heartbeat) recovers to that exact pre-suspect status,
 // pre_suspect_status is cleared back to NULL, TimerTerminalGrace is
@@ -216,7 +216,7 @@ func TestHandleSandboxEvent_SuspectRecovery_RearmsLivenessAndInactivityWatchdogs
 }
 
 // TestHandleSandboxEvent_LateExecutionComplete_RecoversSandboxTurnAndSession
-// is THE scenario Step 24 ("two-phase terminalization") exists for,
+// is THE scenario §3.2 ("two-phase terminalization") exists for,
 // matching §9.3 scenario #4's own literal description ("execution_complete
 // arrives AFTER terminalization -> state reconciled"): a Processing turn +
 // a sandbox already driven to Suspect (directly seeded with a real
@@ -234,7 +234,7 @@ func TestHandleSandboxEvent_SuspectRecovery_RearmsLivenessAndInactivityWatchdogs
 // TestHandleSandboxEvent_SuspectRecovery_ReturnsToPreSuspectStatus above,
 // using a plain heartbeat. Using Ready HERE, combined with a REAL
 // execution_complete, would ALSO satisfy triggerSnapshotBestEffort's own
-// (Step 22, "snapshots & restore") independent "status == Ready" post-
+// (§3.2, "snapshots & restore") independent "status == Ready" post-
 // turn-snapshot precondition -- a real, correct, but entirely SEPARATE
 // feature this test is not about -- and its own asynchronous follow-up
 // writes to the same sandboxes row (fired from handleSandboxEvent's own
@@ -243,8 +243,8 @@ func TestHandleSandboxEvent_SuspectRecovery_RearmsLivenessAndInactivityWatchdogs
 // ordering) would then race this test's own post-send assertions on that
 // same row. Choosing a non-Ready pre-suspect status keeps
 // triggerSnapshotBestEffort's own guard a deterministic no-op regardless
-// of timing, isolating Step 24's own recovery+reconciliation behavior from
-// Step 22's.
+// of timing, isolating §3.2's own recovery+reconciliation behavior from
+// §3.2's.
 func TestHandleSandboxEvent_LateExecutionComplete_RecoversSandboxTurnAndSession(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
@@ -356,7 +356,7 @@ func TestHandleSandboxEvent_SuspectNoPreSuspectStatus_NoRecoveryAttempted(t *tes
 	}
 	// The plain, unmodified UpdateStatus query (not UpdateStatusToSuspect)
 	// -- deliberately leaves pre_suspect_status NULL, exactly like every
-	// pre-Step-24 caller of it always has.
+	// pre-existing caller of it always has.
 	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
 		SessionID: sessionID,
 		Status:    sqlcgen.SandboxStatusSuspect,

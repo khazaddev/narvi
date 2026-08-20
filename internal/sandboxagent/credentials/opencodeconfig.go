@@ -1,4 +1,4 @@
-// This file (opencodeconfig.go) implements Step 72's own ("sandbox
+// This file (opencodeconfig.go) implements §27.1's own ("sandbox
 // secrets & opencode config", §27.2) sandbox-agent-side client half of
 // CP's POST /sessions/{id}/opencode-config delivery endpoint
 // (internal/adapters/inbound/httpapi/opencodeconfigdelivery.go) --

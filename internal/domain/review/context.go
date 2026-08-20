@@ -2,7 +2,7 @@ package review
 
 // StackContext is the GitHub-native-stack information a review session's
 // pre-fetched context carries WHEN the PR under review happens to belong to
-// a GitHub stack (§17.6's amendment to Step 46, §21.1's own stacked-PR
+// a GitHub stack (§17.6's amendment to §21.1's own stacked-PR
 // review-scope decision) -- today, in practice, only ever the origin+
 // sentinel-fix pair §17 registers, since nothing else in this plan produces
 // a chain of more than two dependent pull requests (§17.6: "the one pair,
@@ -38,7 +38,7 @@ type StackContext struct {
 }
 
 // PreFetchedContext is a review turn's own inline pre-fetched context
-// (§8.2/Step 46: "inline diff pre-fetched into context (agent must not need
+// (§8.2: "inline diff pre-fetched into context (agent must not need
 // to run `gh pr diff` repeatedly)") -- built once, outside any domain
 // package (a real outbound GitHub API call, §11: no I/O in /internal/domain),
 // by whichever ingress/retrigger path is creating or reusing a review
@@ -65,7 +65,7 @@ type PreFetchedContext struct {
 	// itself failed/degraded, indistinguishable to this struct by design:
 	// either way there is nothing stack-shaped to add to the context).
 	Stack *StackContext
-	// HeadSHA (§21.1, Step 62) is the commit this context's own Diff was
+	// HeadSHA (§21.1) is the commit this context's own Diff was
 	// fetched against -- server-side bookkeeping ONLY, never rendered
 	// into the prompt text by RenderTurnPrompt below (an agent has no
 	// legitimate use for this value, and §21.2's stale-verdict guard
@@ -80,7 +80,7 @@ type PreFetchedContext struct {
 	// could not determine a head SHA (a degraded, best-effort outcome,
 	// exactly like Diff itself being empty on a failed fetch).
 	HeadSHA string
-	// Title/Body (adversarial-review fix, §26.2/Step 67's own follow-up)
+	// Title/Body (adversarial-review fix, §26.2's own follow-up)
 	// are the PR's own CURRENT title/body, fetched server-side by the SAME
 	// GetPullRequest call this struct's one real producer
 	// (internal/app/reviewcontext.Fetch) already makes unconditionally,
@@ -114,7 +114,7 @@ type PreFetchedContext struct {
 	Title string
 	Body  string
 
-	// Additions/Deletions/ChangedFilesCount (§26.3, Step 68) are this
+	// Additions/Deletions/ChangedFilesCount (§26.3) are this
 	// PR's own server-reported diff-size facts -- GitHub's "Get a pull
 	// request" response (the SAME GetPullRequest call this struct's one
 	// producer, internal/app/reviewcontext.Fetch, already makes to
@@ -123,7 +123,7 @@ type PreFetchedContext struct {
 	// that SAME response -- server-side bookkeeping ONLY, mirroring
 	// HeadSHA's own "never rendered into the prompt text" contract: an
 	// agent has no legitimate use for these as instructions, they exist
-	// purely to feed internal/domain/reviewtriage.Decide (Step 68's own
+	// purely to feed internal/domain/reviewtriage.Decide (§26.3's own
 	// light/deep routing decision). All three are 0 for a failed
 	// GetPullRequest fetch, indistinguishable from a genuinely empty
 	// diff -- reviewtriage's own "any triage error fails open to light"
@@ -133,7 +133,7 @@ type PreFetchedContext struct {
 	Additions         int
 	Deletions         int
 	ChangedFilesCount int
-	// ChangedPaths (§26.3, Step 68) is Diff's own changed-file-path
+	// ChangedPaths (§26.3) is Diff's own changed-file-path
 	// listing, parsed deterministically by reviewtriage.
 	// ExtractChangedPaths -- never rendered into the prompt (mirrors
 	// HeadSHA), computed once by this struct's one producer so every
@@ -141,10 +141,10 @@ type PreFetchedContext struct {
 	// re-parsing Diff at its own call site. nil when Diff itself is
 	// empty (a failed or never-attempted fetch).
 	ChangedPaths []string
-	// Labels (§26.3, Step 68) is this PR's own current GitHub label set
+	// Labels (§26.3) is this PR's own current GitHub label set
 	// -- bookkeeping only, mirrors HeadSHA -- sourced from the SAME
 	// GetPullRequest call (githubapi.PullRequest.Labels, already
-	// resolved for Step 50's release detection) rather than a new fetch.
+	// resolved for §15's release detection) rather than a new fetch.
 	// Feeds reviewtriage's own "existing risk labels" signal
 	// (specifically, reviewpost.LabelNeedsHuman's presence).
 	Labels []string
@@ -181,7 +181,7 @@ type PreFetchedContext struct {
 	// never two independently-computed values that could disagree.
 	DeepPath bool
 
-	// ReviewCostBudgetUSD (§26.7, Step 69) is this review's own per-path
+	// ReviewCostBudgetUSD (§26.7) is this review's own per-path
 	// cost ceiling (repo_settings.review_cost_budget_light_usd/
 	// review_cost_budget_deep_usd -- internal/domain/reviewtriage.
 	// Config.CostBudget, resolved server-side alongside ctx.DeepPath
@@ -239,7 +239,7 @@ const defaultCostBudgetSafetyMarginPercent = 80
 // choose its own delimiter, which is exactly the class of injection
 // ("close my own block early, then inject a fake instruction outside it")
 // a caller-controlled delimiter would open. descriptionContentDelimiter
-// (adversarial-review fix, §26.2/Step 67's own follow-up) wraps the PR's
+// (adversarial-review fix, §26.2's own follow-up) wraps the PR's
 // own title+body -- model-authored-or-human-authored, either way untrusted
 // -- exactly like diffContentDelimiter already wraps the PR's own diff.
 const (
@@ -252,12 +252,12 @@ const (
 // VerdictToolGenPlaceholder are the fixed tokens RenderTurnPrompt's own
 // verdict-tool-calling instructions (below) carry in place of this turn's
 // REAL POST /sessions/{sessionID}/review/verdict URL, sandbox bearer
-// token, and X-Sandbox-Gen value (reviewverdict.go, Step 47) -- this
+// token, and X-Sandbox-Gen value (reviewverdict.go, §8.2) -- this
 // package (§11: no I/O, no time.Now(), no randomness, zero external
 // imports) runs at TURN-CREATION time, in the control plane, before any
 // sandbox even exists for a brand-new review session, and before ANY
 // respawn (a NEW gen, and per §5.2 a NEW rotated token) of an EXISTING
-// one -- Step 46's own per-PR session-reuse means the SAME persisted turn
+// one -- §8.2's own per-PR session-reuse means the SAME persisted turn
 // text built here can later be dispatched to any number of different
 // gens, each with its own distinct token, over that session's lifetime.
 // There is therefore no live secret this package could ever legitimately
@@ -287,7 +287,7 @@ const (
 	VerdictToolGenPlaceholder    = "{{REVIEW_VERDICT_TOOL_GEN}}"
 )
 
-// ReviewCostBudgetToolURLPlaceholder (§26.7/§26.9, Step 70) is the fixed
+// ReviewCostBudgetToolURLPlaceholder (§26.7/§26.9) is the fixed
 // token subAgentOrchestrationInstructions (below) carries in place of this
 // turn's real, live GET review-cost-budget URL -- mirrors
 // VerdictToolURLPlaceholder's own doc comment exactly, for the identical
@@ -316,9 +316,9 @@ const (
 const ReviewCostBudgetToolURLPlaceholder = "{{REVIEW_COST_BUDGET_TOOL_URL}}"
 
 // ArchitectureScribeAgentName, CounterReviewerAgentName, and
-// FactCheckAgentName (§26.4/§26.6, Step 69) are the literal OpenCode
-// custom-agent names (opencode.json's own "agent" object, mirroring Step
-// 48's "sentinel-fix" custom agent, internal/adapters/outbound/opencode/
+// FactCheckAgentName (§26.4/§26.6) are the literal OpenCode
+// custom-agent names (opencode.json's own "agent" object, mirroring
+// §8.2's "sentinel-fix" custom agent, internal/adapters/outbound/opencode/
 // sentinelfixagent.go) the primary reviewer's own orchestration is
 // instructed, below, to pass as the "task" tool's own "subagent_type"
 // input field (translate.go's own VERIFIED-LIVE "task" tool input shape:
@@ -338,8 +338,8 @@ const (
 )
 
 // verdictToolInstructions is RenderTurnPrompt's own fixed, deterministic
-// block instructing the review agent how to post its verdict (§8.2/Step
-// 47, reviewverdict.go's own doc comment: "the review turn's own prompt
+// block instructing the review agent how to post its verdict (§8.2,
+// reviewverdict.go's own doc comment: "the review turn's own prompt
 // ... is the natural place to instruct the agent HOW to call this
 // endpoint (URL, bearer token, gen header, JSON shape)"). Trusted,
 // first-party instructional text (unlike the diff/stack blocks above), so
@@ -358,7 +358,7 @@ const (
 // hand-written copy fails a test instead of silently misinforming every
 // future review agent.
 //
-// Confirmed-finding fix (Step 48 own re-review): the "findings" array
+// A confirmed-finding fix: the "findings" array
 // (restdtos.PostReviewVerdictRequest.Findings/PostedFinding, added by this
 // SAME Step for sentinel/apply-suggestion/rebuttal reconciliation) was
 // never mentioned anywhere in this hand-written template -- this is the
@@ -375,12 +375,12 @@ const (
 // precedent) -- an agent that reports no findings at all keeps posting
 // exactly the same body it always did.
 //
-// Step 66 (§26.1) adds the "digest" object below: the merge readout's own
+// (§26.1) adds the "digest" object below: the merge readout's own
 // typed content. "digest" itself is REQUIRED (unlike "findings"), and
 // within it "summary" is the one field this Step actually validates
 // (reviewpost.ValidateVerdictInput's own ErrEmptyDigestSummary) --
 // "archDecisions"/"stackRisks"/"unverifiedLimits" are REQUESTED, and
-// (Step 68, §26.3, below) become REQUIRED instead whenever this turn was
+// (§26.3, below) become REQUIRED instead whenever this turn was
 // routed to the deep path (ctx.DeepPath true -- see verdictToolInstructions'
 // own doc comment for the full "why" and PreFetchedContext.DeepPath's own
 // doc comment for where that fact comes from). digest.summary is
@@ -392,10 +392,10 @@ const (
 // archDecisions' own conventionConformance field points the agent at the
 // target repo's own conventions file (CLAUDE.md/AGENTS.md) -- already
 // present in its own sandbox's checked-out working directory (the SAME
-// session/sandbox machinery any other turn uses, Step 46), so this
+// session/sandbox machinery any other turn uses), so this
 // package fetches or injects nothing new for it either.
 //
-// Step 67 (§26.2) adds "descriptionAdequacy"/"adequacyExplanation"
+// (§26.2) adds "descriptionAdequacy"/"adequacyExplanation"
 // (REQUIRED, alongside "summary" -- the SAME hard-required treatment,
 // reviewpost.ValidateVerdictInput's own ErrInvalidDescriptionAdequacy/
 // ErrEmptyAdequacyExplanation) and "proposedBody" (REQUESTED, not
@@ -404,16 +404,16 @@ const (
 //
 // # Adversarial-review fix: the PR's title/body are now PRE-FETCHED, never agent-fetched
 //
-// Step 67, as originally shipped, instructed the agent to look at the PR's
+// §26.2, as originally shipped, instructed the agent to look at the PR's
 // own title+body ITSELF via its own tool use ("e.g. `gh pr view`") -- an
-// adversarial review (post-Step-67) found this data source unreachable in
+// adversarial review found this data source unreachable in
 // practice: no GitHub credential reaches the sandbox an agent runs in (the
 // sandbox bearer token is deliberately stripped before an agent process
 // starts, opencodeproc/spawn.go; the git credential helper is passed
 // per-invocation to git itself, never persisted anywhere `gh` could
 // inherit it from), so `gh pr view` had no credential to run with on any
 // of this system's three real trigger lanes -- and two of those three
-// (a label retrigger, and Step 65's own automatic re-review) hand the
+// (a label retrigger, and §24's own automatic re-review) hand the
 // agent a FIXED prompt that does not even name the PR, leaving no way for
 // the agent to know what to fetch even with a working credential. The
 // floor this Step builds (review.AdequacyFloor) was consequently dead on
@@ -422,7 +422,7 @@ const (
 //
 // The fix: internal/app/reviewcontext.Fetch already calls GetPullRequest
 // with the bot's own credential on EVERY review turn (to resolve
-// HeadSHA/BaseRef/Stack, §62/§17.6) -- the exact endpoint that already
+// HeadSHA/BaseRef/Stack, §17.6) -- the exact endpoint that already
 // returns "title"/"body" too (githubapi.PullRequest.Title/Body). Fetch
 // carries those onto PreFetchedContext.Title/Body (this file, above), and
 // RenderTurnPrompt below renders them into their own delimited,
@@ -441,7 +441,7 @@ const (
 // PINNED to the exact commit this review verdict is about, never a
 // separately-timed re-fetch that could observe a PR mutated in the gap.
 //
-// # Step 68 (§26.3): deep-path digest fields become REQUIRED, not merely requested
+// # (§26.3): deep-path digest fields become REQUIRED, not merely requested
 //
 // verdictToolInstructions used to be a plain const -- the SAME text for
 // every review turn, regardless of depth. Adversarial-review finding D2:
@@ -459,7 +459,7 @@ const (
 // check to the letter. "proposedBody" and the top-level "findings" stay
 // optional on every path; nothing else about this text changes.
 //
-// # Step 69 (§26.4/§26.6/§26.7): counter-review, fact-check, and the cost
+// # (§26.4/§26.6/§26.7): counter-review, fact-check, and the cost
 // budget
 //
 // costBudgetUSD is threaded through from ctx.ReviewCostBudgetUSD
@@ -560,9 +560,9 @@ func verdictToolInstructions(deep bool, costBudgetUSD float64, costBudgetSafetyM
 		"A 201 response confirms the verdict was recorded and posted; the server -- never you -- computes the authoritative shippable classification, the formal GitHub review event, the synced review:*-risk label, and (when \"findings\" names a sentinelKind and this repo's own sentinel-auto-fix toggle is on) whether an automated fix session is triggered, from these fields."
 }
 
-// subAgentOrchestrationInstructions is Step 69's own addition (§26.4/
+// subAgentOrchestrationInstructions is §26.4's own addition (§26.4/
 // §26.6/§26.7): the primary reviewer's own orchestration guidance for the
-// engine-native sub-task fan-out (§7.1, already shipped Step 17) --
+// engine-native sub-task fan-out (§7.1) --
 // spawned via OpenCode's own "task" tool (VERIFIED LIVE input shape:
 // {"description","prompt","subagent_type"}, translate.go), naming
 // ArchitectureScribeAgentName/CounterReviewerAgentName/FactCheckAgentName
@@ -589,7 +589,7 @@ func verdictToolInstructions(deep bool, costBudgetUSD float64, costBudgetSafetyM
 // findings list this funnel prunes) -- dispatched whenever convenient,
 // before/after/interleaved with the funnel above.
 //
-// # The cost budget (§26.7, Step 70): a real, checkable fact, not
+// # The cost budget (§26.7): a real, checkable fact, not
 // self-estimation -- but still not a server-ENFORCED gate
 //
 // §26.7 specifies a look-ahead check performed by "the primary reviewer's
@@ -600,7 +600,7 @@ func verdictToolInstructions(deep bool, costBudgetUSD float64, costBudgetSafetyM
 // injects further instructions mid-turn) -- so the actual mechanism
 // putting §26.7's policy into effect is still, necessarily, the review
 // agent's OWN cooperation: nothing outside the turn can force it to check
-// or to obey what it learns. What Step 70 changes is WHAT that cooperation
+// or to obey what it learns. What §26.5 changes is WHAT that cooperation
 // consists of. Before this Step, the text below asked the agent to "use
 // your own best judgment of how much of that ceiling this review has
 // likely already consumed" -- a self-ESTIMATION, with no real spend figure
@@ -620,7 +620,7 @@ func verdictToolInstructions(deep bool, costBudgetUSD float64, costBudgetSafetyM
 // exactly this Step's own reason for existing.
 //
 // This is still a considered, explicitly-named design call, not an
-// oversight, in the SAME sense the pre-Step-70 text already was: unlike
+// oversight, in the SAME sense the pre-existing text already was: unlike
 // Shippable, which the server always recomputes because a model's
 // self-report could be gamed toward an UNSAFE outcome, a self-reported
 // budget-driven skip can NEVER be gamed unsafely here -- CounterReview:
@@ -651,7 +651,7 @@ func subAgentOrchestrationInstructions(deep bool, costBudgetUSD float64, costBud
 			"3. Counter-review (subagent_type \"" + CounterReviewerAgentName + "\", deep path only, AFTER fact-check has already pruned your findings): spawn this sub-task with your own SURVIVING findings (post-fact-check) and your digest, and ask it to try to REFUTE each one and to surface anything you missed. It has read/tool access to the repo (it may need to verify a claim against real files) but must not edit anything. It may itself surface genuinely NEW findings -- these are NOT re-run through fact-check (a tool-equipped, full-context adversarial pass is by construction at least as rigorous as a diff-only check). Publish only the findings that SURVIVE this adjudication -- drop anything it convincingly refutes. Where it disagreed with you and you did not simply defer to it, name that disagreement in \"digest.contestedPoints\" -- agent disagreement is precisely the signal a human should weigh in on. Report \"counterReview\": \"done\". If this sub-task errors, times out, or returns something you cannot parse, publish your findings exactly as they stood after fact-check, and report \"counterReview\": \"skipped\" -- this alone raises your verdict's own shippable classification to needs_human, so do not treat a skip as routine.\n"
 	}
 	if costBudgetUSD > 0 {
-		// B5 fix (kept by Step 70): costBudgetSafetyMarginPercent
+		// B5 fix (kept by §26.5): costBudgetSafetyMarginPercent
 		// (PreFetchedContext's own doc comment) is reviewtriage.
 		// CostBudgetSafetyMargin threaded in as a whole percentage by this
 		// function's own caller -- rendered here rather than a hand-typed
@@ -661,7 +661,7 @@ func subAgentOrchestrationInstructions(deep bool, costBudgetUSD float64, costBud
 		// endpoint below. Falls back to defaultCostBudgetSafetyMarginPercent
 		// (this Step's own proposed 80) for a caller that left the field
 		// unset, rather than rendering a nonsensical "0%". Purely
-		// explanatory now (Step 70): the agent no longer has to APPLY this
+		// explanatory now (§26.5): the agent no longer has to APPLY this
 		// figure itself, only understand roughly what the endpoint's own
 		// "shouldSkip" answer already accounts for.
 		marginPercent := costBudgetSafetyMarginPercent
@@ -687,7 +687,7 @@ func subAgentOrchestrationInstructions(deep bool, costBudgetUSD float64, costBud
 			out += "/\"counterReview\""
 		}
 		out += ") as \"skipped\" with the reason noted in your own free-text summary. If the request itself fails for ANY reason -- your own tool use erroring, a timeout, a non-2xx response, a malformed or unparseable body -- treat that IDENTICALLY to \"shouldSkip\": true: skip the sub-task rather than proceeding as though under budget, matching this system's own consistent fail-safe-toward-caution posture on cost.\n"
-		// B6 fix (kept by Step 70): the fact-check-vs-counter-review
+		// B6 fix (kept by §26.5): the fact-check-vs-counter-review
 		// tradeoff sentence below only makes sense when BOTH exist to
 		// choose between -- light has no counter-review sub-task at all
 		// (§26.9), so it would be nonsense there (there is nothing to
@@ -724,7 +724,7 @@ func twoDigits(n int) string {
 // RenderTurnPrompt assembles a review turn's final prompt text from
 // basePrompt (the human-authored or deterministically-synthesized command
 // text that triggered this turn -- a mention comment's own body, or a fixed
-// string for a label/button-triggered manual retrigger, §8.2/Step 46) plus
+// string for a label/button-triggered manual retrigger, §8.2) plus
 // ctx's own pre-fetched diff/stack context, in that order: the human's own
 // words come first, the fetched context follows, clearly delimited and
 // labeled as data.
@@ -765,18 +765,18 @@ func twoDigits(n int) string {
 //     only thing to verdict over, never the cumulative stack diff.
 //
 // A FIFTH piece, unconditional and always last: verdictToolInstructions
-// (above), instructing the agent how to post its verdict via Step 47's
+// (above), instructing the agent how to post its verdict via §8.2's
 // own verdict-posting tool -- unconditional because all THREE of this
 // function's own real callers (internal/adapters/inbound/github's own
 // handler.go, internal/adapters/inbound/httpapi's own reviewretrigger.go,
-// and internal/app/sessionactor's own reviewretrigger.go, added by Step
-// 65's automatic re-review lane) build a review turn's prompt ONLY by
+// and internal/app/sessionactor's own reviewretrigger.go, added by
+// §24's automatic re-review lane) build a review turn's prompt ONLY by
 // calling this function; there is no OTHER kind of turn this function is
 // ever asked to render text for. The URL/bearer/gen this block names are
 // placeholder tokens (VerdictToolURLPlaceholder et al.), never live
 // secrets -- see their own doc comment for why this package cannot fill
 // them in itself, and where they actually get resolved. This fifth piece
-// is now (Step 68, §26.3, extended by Step 69, §26.4/§26.6/§26.7) the ONE
+// is now (§26.3, extended by §26.4/§26.6/§26.7) the ONE
 // piece that is not textually identical across every call --
 // verdictToolInstructions(ctx.DeepPath, ctx.ReviewCostBudgetUSD, ctx.CostBudgetSafetyMarginPercent) renders
 // the deep-path digest fields as REQUIRED rather than merely requested,

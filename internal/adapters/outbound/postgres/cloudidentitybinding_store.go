@@ -11,7 +11,7 @@ import (
 )
 
 // CloudIdentityBindingStore is a thin, pass-through wrapper around the
-// sqlc-generated cloud_identity_bindings queries (Step 73a, "cloud
+// sqlc-generated cloud_identity_bindings queries ("cloud
 // identity: OIDC issuer, bindings, minting", §27.3,
 // migrations/000093_cloud_identity_bindings.up.sql). No caching, no
 // retries, no business rules -- kind/scope validation (including the
@@ -104,7 +104,7 @@ func (s *CloudIdentityBindingStore) ListForResolution(ctx context.Context, reque
 
 // ListForSession fetches EVERY candidate binding (global, plus this
 // session's own environment if it has one) regardless of audience --
-// Step 73b's own sandbox-facing cloud-identity-config delivery endpoint's
+// §27.4's own sandbox-facing cloud-identity-config delivery endpoint's
 // single read (see queries/cloudidentitybindings.sql's own
 // ListCloudIdentityBindingsForSession doc comment for the full "why this
 // differs from ListForResolution"). environmentID nil means "this

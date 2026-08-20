@@ -1,4 +1,4 @@
-// Package reviewpost implements the pure computation behind Step 47's
+// Package reviewpost implements the pure computation behind §8.2's
 // server-side verdict-posting tool (§8.2, §5.2, §21.2): given a review
 // session's own typed tool-call fields (VerdictInput), it validates them,
 // builds the authoritative internal/domain/review.Verdict (Shippable
@@ -33,7 +33,7 @@
 // export surface. review/tag.go's own doc comment anticipates exactly
 // this split: "Validating a caller-supplied tag list against this
 // vocabulary... is the job of whichever Step accepts that external input
-// (§8.2/Step 47), not this package" -- ValidateVerdictInput (validate.go)
+// (§8.2), not this package" -- ValidateVerdictInput (validate.go)
 // is that validation, deliberately NOT added to review itself.
 //
 // # File layout
@@ -43,7 +43,7 @@
 //     validated VerdictInput into a review.Verdict, populating Shippable
 //     via review.ComputeShippable exactly per that package's CONTRACT).
 //   - formalreview.go: FormalReviewEvent, ComputeFormalReviewEvent -- the
-//     formal-review gate's own event decision (§8.2/Step 47's "submitting
+//     formal-review gate's own event decision (§8.2's "submitting
 //     an actual GitHub PR review rather than a comment"), and the
 //     blockOnHighRisk policy flag's own effect on it (§21.2: "reuses the
 //     SAME formal-review submission path and carries no independent
@@ -66,17 +66,17 @@
 //     body, folding in the verdict's own typed fields, the agent-supplied
 //     narrative Summary (never re-parsed back out of it afterward -- it is
 //     accepted, rendered, and never read again as structured data), the
-//     synced label, RerunGuidance, and (Step 66) the digest sections that
+//     synced label, RerunGuidance, and (§26.1) the digest sections that
 //     now front the appendix findings/coverage/docs-drift content.
-//   - digest.go: Digest, ArchDecision -- Step 66's own merge-readout
+//   - digest.go: Digest, ArchDecision -- §26.1's own merge-readout
 //     content (§26.1): "what this PR does", architecture choices, and
 //     risks to the stack, carried on VerdictInput alongside its
 //     pre-existing fields, rendered (never re-parsed) by
-//     RenderVerdictComment above. Extended by Step 67 (§26.2) with
+//     RenderVerdictComment above. Extended by (§26.2) with
 //     Digest.DescriptionAdequacy/AdequacyExplanation/ProposedBody --
 //     description-adequacy tri-state, its required explanation, and the
 //     agent's own optional PR-body rewrite proposal.
-//   - autofixbody.go: RenderAutofixBody -- Step 67's own (§26.2) graduated-
+//   - autofixbody.go: RenderAutofixBody -- §26.2's own (§26.2) graduated-
 //     remediation content: the ACTUAL new PR body text a Narvi-authored
 //     PR's description gets rewritten to (proposed body + the original
 //     preserved in a collapsed block), distinct from the read-only

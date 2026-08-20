@@ -10,7 +10,7 @@ type SessionConfig struct {
 	// §6.4. Delivered to the sandbox as the NARVI_BOOT_MODE env var.
 	BootMode SessionConfigBootMode `json:"bootMode" yaml:"bootMode" mapstructure:"bootMode"`
 
-	// Step 48 (§17.2): true exactly for a sentinel-auto-fix child session
+	// §8.2 (§17.2): true exactly for a sentinel-auto-fix child session
 	// (sessions.provenance_tag == 'sentinel_auto_fix') -- sandbox-agent writes a
 	// glob-restricted 'sentinel-fix' OpenCode custom agent config (edit permission
 	// allowed only for test/doc path patterns) into the workspace BEFORE spawning
@@ -32,7 +32,7 @@ type SessionConfig struct {
 	// created without an ingress webhook).
 	CorrelationId SessionConfigCorrelationId `json:"correlationId" yaml:"correlationId" mapstructure:"correlationId"`
 
-	// Step 74 (§27.5): this session's own Environment.docker_required. Carried here
+	// §27.5 (§27.5): this session's own Environment.docker_required. Carried here
 	// AND, deliberately, as a top-level ports.CreateSpec field (the SAME
 	// 'duplicate-with-Validate' discipline Gen already documents on that type) -- the
 	// provider must act on this flag without ever parsing this opaque document. When
@@ -43,7 +43,7 @@ type SessionConfig struct {
 	// existed.
 	Docker bool `json:"docker,omitempty,omitzero" yaml:"docker,omitempty" mapstructure:"docker,omitempty"`
 
-	// Step 74 (§27.6): this session's own Environment.egress_policy, enforced at the
+	// §27.5 (§27.6): this session's own Environment.egress_policy, enforced at the
 	// provider substrate (Modal's own sandbox network controls). Carried here AND,
 	// like docker above, also as a top-level ports.CreateSpec field. When mode is
 	// "allowlist", allowlist ALWAYS already includes the non-negotiable,
@@ -75,7 +75,7 @@ type SessionConfig struct {
 	// mirror.
 	Repos []SessionConfigReposElem `json:"repos" yaml:"repos" mapstructure:"repos"`
 
-	// Step 69 (§26.4): the counter-review sub-task's own opposing-model-family
+	// §26.4 (§26.4): the counter-review sub-task's own opposing-model-family
 	// override, a "provider/model" string
 	// (internal/app/reviewtriage.ResolveCounterReviewerModel), resolved server-side
 	// ONCE per spawn/restore/resume from this session's own GitHub PR association's
@@ -148,7 +148,7 @@ func (j *SessionConfigBootMode) UnmarshalJSON(value []byte) error {
 // created without an ingress webhook).
 type SessionConfigCorrelationId *string
 
-// Step 74 (§27.6): this session's own Environment.egress_policy, enforced at the
+// §27.5 (§27.6): this session's own Environment.egress_policy, enforced at the
 // provider substrate (Modal's own sandbox network controls). Carried here AND,
 // like docker above, also as a top-level ports.CreateSpec field. When mode is
 // "allowlist", allowlist ALWAYS already includes the non-negotiable,
@@ -267,8 +267,8 @@ func (j *SessionConfigReposElem) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Step 69 (§26.4): the counter-review sub-task's own opposing-model-family
-// override, a "provider/model" string
+// §26.4 (§26.4): the counter-review sub-task's own opposing-model-family override,
+// a "provider/model" string
 // (internal/app/reviewtriage.ResolveCounterReviewerModel), resolved server-side
 // ONCE per spawn/restore/resume from this session's own GitHub PR association's
 // authoring-model provenance, when one exists. Null/absent means no override at

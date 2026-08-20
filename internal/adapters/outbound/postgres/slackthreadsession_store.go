@@ -13,7 +13,7 @@ import (
 
 // SlackThreadSessionStore is a thin, pass-through wrapper around the
 // sqlc-generated slack_thread_sessions queries (§8.10's thread↔session
-// mapping, Step 33 "Slack ingress"). No caching, no retries, no business
+// mapping "Slack ingress"). No caching, no retries, no business
 // rules -- see migrations/000029_slack_thread_sessions.up.sql's own doc
 // comment for the atomic-claim design this wraps.
 type SlackThreadSessionStore struct {
@@ -68,7 +68,7 @@ func (s *SlackThreadSessionStore) Get(ctx context.Context, channelID, threadTS s
 	})
 }
 
-// GetBySessionID is the REVERSE lookup Step 35 ("outbox delivery") needs:
+// GetBySessionID is the REVERSE lookup §5.1 ("outbox delivery") needs:
 // given a session_id, which (channel_id, thread_ts) thread does it back?
 // Returns pgx.ErrNoRows (unwrapped) when sessionID was never created via a
 // Slack thread.

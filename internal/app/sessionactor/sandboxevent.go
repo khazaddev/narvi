@@ -1,5 +1,5 @@
 // This file (sandboxevent.go) implements handling a SandboxEvent command
-// (command.go) -- the sandbox-WS-hub half of Step 18 (§3.2 liveness, §6.1
+// (command.go) -- the sandbox-WS-hub half of (§3.2 liveness, §6.1
 // ack receipt / event persistence, §9.3 scenario #6 stale-gen rejection).
 // internal/adapters/inbound/wshub (this same Step) is the ONLY caller: its
 // read loop delivers one SandboxEvent per inbound wire frame, once that
@@ -8,13 +8,13 @@
 // per-message half of §3.2's gen-fencing rule ("stale-gen inputs are
 // rejected and logged"), persists every recognized event (append-only),
 // always bumps liveness (last_seen_at = max of all signals), and fires
-// the state transitions this Step's plan row (and Step 22's, "snapshots &
+// the state transitions this Step's plan row (and §3.2's, "snapshots &
 // restore") scope: "ready"/Connecting, "heartbeat"-nil-phase/Booting
-// (both Step 18), "snapshot_ready"/Snapshotting (Step 22, design decision
+// (both §3.2), "snapshot_ready"/Snapshotting (§3.2, design decision
 // 3 -- see handleSnapshotReadyEvent below), and now Suspect-recovery
-// (Step 24, "two-phase terminalization" -- see the section right below).
+// (§3.2, "two-phase terminalization" -- see the section right below).
 //
-// # Suspect-state recovery-during-grace (Step 24, "two-phase terminalization")
+// # Suspect-state recovery-during-grace (§3.2, "two-phase terminalization")
 //
 // §3.2: "Any liveness signal during grace returns to previous state." A
 // Suspect sandbox reconnecting through this handler is correctly ALLOWED
@@ -69,7 +69,7 @@
 // A Suspect row with no pre_suspect_status set is a defensive,
 // practically-unreachable case (transitionSandboxToSuspect always sets it
 // in the SAME write that enters Suspect) -- handled as a safe no-op,
-// falling through to the pre-Step-24 behavior (persisted, liveness
+// falling through to the pre-existing behavior (persisted, liveness
 // bumped, left Suspect, no recovery transition attempted). Likewise, a
 // pre_suspect_status naming an illegal recovery target (should never
 // happen: it is only ever written from a state TriggerSuspect's own
@@ -223,12 +223,12 @@ func (a *Actor) armReadyWatchdogs(ctx context.Context, tx pgx.Tx, now time.Time)
 func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error {
 	var outcome SandboxEventOutcome
 	// pushAfterCommit is non-nil only when THIS event just completed a
-	// turn successfully (Step 21, "e2e happy path", pushpr.go) -- acted on
+	// turn successfully (§9.3, "e2e happy path", pushpr.go) -- acted on
 	// (a real SandboxCommander.SendCommand call) only AFTER this
 	// function's own transact below has committed, never inside it (see
 	// pushpr.go's own top comment for why).
 	var pushAfterCommit *pushSignal
-	// gitSyncReceived is set true by the "git_sync" case below (Step 29,
+	// gitSyncReceived is set true by the "git_sync" case below (
 	// "gitstate in-sandbox", §3.4 design section 6) -- acted on (a real
 	// SandboxCommander.SendCommand call replying with GitSyncComplete)
 	// only AFTER this function's own transact below has committed, never
@@ -271,7 +271,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 		}
 
 		// Persist ALWAYS, for every recognized event type -- this is the
-		// append-only per-session event log Step 19's client hub will
+		// append-only per-session event log §6.2's client hub will
 		// replay from, not limited to the 6 critical types. inserted (an
 		// audit-fix batch's own addition, finding M16) is reused a few
 		// lines down, in the cmd.Type == "tool_call" case, to gate the new
@@ -288,7 +288,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 		}
 		eventInserted = inserted
 
-		// Step 24 ("two-phase terminalization"): Suspect-recovery-during-
+		// §3.2 ("two-phase terminalization"): Suspect-recovery-during-
 		// grace -- see this file's own top comment for the full reasoning.
 		// row is reassigned to the freshly-recovered row on success, so
 		// every line below sees the NOW-RECOVERED status rather than the
@@ -418,7 +418,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 		// §3.3: "reported on every heartbeat" -- a heartbeat is a
 		// sandbox-level liveness signal, not a turn-scoped one (it carries
 		// no turn id), so this is a session-level write, independent of
-		// whatever transition (if any) target computed above (Step 21,
+		// whatever transition (if any) target computed above (§9.3,
 		// "e2e happy path", design decision 6).
 		if cmd.Type == "heartbeat" && cmd.ConversationID != nil {
 			if _, err := a.stores.session.WithTx(tx).UpdateConversationID(ctx, sqlcgen.UpdateSessionConversationIDParams{
@@ -429,7 +429,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 			}
 		}
 
-		// Step 21 ("e2e happy path")/Step 22 ("snapshots & restore"): per-
+		// §9.3 ("e2e happy path")/§3.2 ("snapshots & restore"): per-
 		// type post-persist handling. A tagged switch, not an if/else-if
 		// chain (staticcheck QF1003), since this is a genuine dispatch on
 		// cmd.Type's own value, not a chain of unrelated conditions.
@@ -453,7 +453,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 			}
 			pushAfterCommit = sig
 		case "snapshot_ready":
-			// Step 22, design decision 3: a real snapshot_ready event
+			// §3.2, design decision 3: a real snapshot_ready event
 			// finalizes the Snapshotting->Ready transition
 			// triggerSnapshotBestEffort (below) started, and persists the
 			// sandbox's own confirmed snapshotId. Runs INSIDE this SAME
@@ -464,7 +464,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 				return err
 			}
 		case "git_sync":
-			// Step 29 ("gitstate in-sandbox", §3.4 design section 6): a
+			// §3.4 ("gitstate in-sandbox", §3.4 design section 6): a
 			// git_sync event needs no DB-side mutation of its own at all --
 			// the generic appendRawEvent persist+broadcast above already
 			// covers "CP durably stores it and the browser UI can show it
@@ -518,7 +518,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 	}
 
 	if err == nil {
-		// Step 22 ("snapshots & restore"), design decision 1 -- CORRECTED
+		// §3.2 ("snapshots & restore"), design decision 1 -- CORRECTED
 		// per independent review: §3.3's own governing rule is "On
 		// terminal event: complete turn, trigger snapshot, re-derive
 		// session status, dispatch next pending" -- i.e. the snapshot
@@ -591,7 +591,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 			a.logger.Warn("sessionactor: ensure-dispatched after sandbox event failed", "error", dispatchErr)
 		}
 
-		// Step 21 ("e2e happy path"): the two remaining best-effort side
+		// §9.3 ("e2e happy path"): the two remaining best-effort side
 		// effects this event may trigger, both deliberately run OUTSIDE
 		// (i.e. after) the transact above committed, never inside it --
 		// see pushpr.go's own top comment for why. Neither failure alters
@@ -630,7 +630,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 			a.createPRBestEffort(ctx, cmd.Raw)
 		}
 
-		// Step 29 ("gitstate in-sandbox"): reply to a just-committed
+		// §3.4 ("gitstate in-sandbox"): reply to a just-committed
 		// git_sync event with GitSyncComplete -- same "outside the
 		// transact, log-only on failure" shape as the two side effects
 		// just above.
@@ -643,7 +643,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 }
 
 // handleSnapshotReadyEvent implements design decision 3's own
-// snapshot_ready handling (Step 22, "snapshots & restore"): transitions
+// snapshot_ready handling (§3.2, "snapshots & restore"): transitions
 // Snapshotting -> Ready via sandbox.SnapshotCompleteTrigger() and persists
 // the sandbox's own reported snapshotId onto sandboxes.snapshot_id.
 // Called from INSIDE handleSandboxEvent's own transact, the SAME transact
@@ -816,7 +816,7 @@ type snapshotPlan struct {
 }
 
 // triggerSnapshotBestEffort implements design decision 1's own post-turn
-// snapshot trigger (Step 22, "snapshots & restore", docs/IMPLEMENTATION_
+// snapshot trigger ("snapshots & restore", docs/IMPLEMENTATION_
 // PLAN.md row 22's own "post-turn snapshot" bullet, and §3.3's own "On
 // terminal event: complete turn, trigger snapshot..."). Called from
 // handleSandboxEvent's own post-commit block ONLY when cmd.Type ==
@@ -840,7 +840,7 @@ type snapshotPlan struct {
 //     minted MessageId onto sandboxes.pending_snapshot_message_id, in this
 //     SAME transact (message-id correlation fix, below), commit.
 //  3. OUTSIDE that transact: send a real sandboxws.Snapshot command via
-//     ports.SandboxCommander.SendCommand (the SAME port Step 21 built for
+//     ports.SandboxCommander.SendCommand (the SAME port used for
 //     Prompt commands -- reused, not a second sandbox-command channel),
 //     carrying the SAME MessageId just persisted.
 //  4. If SendCommand fails (including ports.ErrNoLiveSandboxConnection):
@@ -906,7 +906,7 @@ func (a *Actor) triggerSnapshotBestEffort(ctx context.Context) {
 			return fmt.Errorf("sessionactor: get session for snapshot eligibility: %w", err)
 		}
 
-		// §27.8's own genuinely-unresolved point, resolved here (Step 74
+		// §27.8's own genuinely-unresolved point, resolved here (§27.5
 		// brief, point D): "Capabilities() is a flat, provider-level
 		// report; a provider whose snapshot support differs by runtime
 		// (Modal gVisor vs VM runtime) cannot express that today." There
@@ -919,8 +919,8 @@ func (a *Actor) triggerSnapshotBestEffort(ctx context.Context) {
 		// required Environment's sandbox degrades to resume-only recovery
 		// (§3.2) until a real §9.3-class restore-with-docker scenario
 		// (test/resilience) proves parity against a provider's actual
-		// behavior — exactly the escape hatch §27.8 itself names ("Step
-		// 74 implementation time... not guessed here"). Concretely: this
+		// behavior — exactly the escape hatch §27.8 itself names ("decided at
+		// implementation time... not guessed here"). Concretely: this
 		// sandbox's own snapshot_id column simply never gets populated,
 		// so dispatch.go's EvaluateSpawnDecision Restore branch (which
 		// requires SnapshotImageID != "") can never fire for it either —
@@ -935,7 +935,7 @@ func (a *Actor) triggerSnapshotBestEffort(ctx context.Context) {
 			return fmt.Errorf("sessionactor: resolve docker_required for snapshot eligibility: %w", err)
 		}
 		if dockerRequired {
-			a.logger.Info("sessionactor: skipping snapshot trigger for a Docker-required session (§27.8 unresolved VM-runtime snapshot-parity point, Step 74; resume-only recovery until proven safe)",
+			a.logger.Info("sessionactor: skipping snapshot trigger for a Docker-required session (§27.8 unresolved VM-runtime snapshot-parity point; resume-only recovery until proven safe)",
 				"session_id", a.sessionID.String())
 			return nil
 		}
@@ -1034,7 +1034,7 @@ func (a *Actor) revertSnapshotBestEffort(ctx context.Context) {
 }
 
 // sendGitSyncCompleteBestEffort implements handleSandboxEvent's own
-// git_sync reply (Step 29, "gitstate in-sandbox", §3.4 design section 6):
+// git_sync reply ("gitstate in-sandbox", §3.4 design section 6):
 // a real sandboxws.GitSyncComplete command, a pure acknowledgment carrying
 // no fields beyond the envelope (commands.schema.json's own
 // GitSyncComplete def) -- mirrors sendPushBestEffort/triggerSnapshotBestEffort's

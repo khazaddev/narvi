@@ -12,7 +12,7 @@ import (
 // TimerStore is a thin, pass-through wrapper around the sqlc-generated
 // session_timers queries (§4.3 TimerScheduler, §2 named persistent
 // timers). No caching, no retries, no business rules — the timer pump
-// lands in Step 11.
+// lands in §2.
 type TimerStore struct {
 	q *sqlcgen.Queries
 }

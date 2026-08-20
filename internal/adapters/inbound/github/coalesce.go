@@ -41,7 +41,7 @@ var ErrActorNotAuthorized = errors.New("github: actor not authorized")
 
 // ErrRolloutNotEnrolled is CreateOrJoin's own sentinel for "the WINNER
 // path's own httpapi.CreateSessionOnTx call refused because a named repo
-// is not enrolled in Step 76's cohort rollout" (§10 Phase 6, §32:
+// is not enrolled in §10's cohort rollout" (§10 Phase 6, §32:
 // CreateSessionError.RolloutRefusal, checked structurally, never by
 // string-matching cerr.Message). Deliberately DISTINCT from every other
 // CreateOrJoin error, mirroring ErrActorNotAuthorized's own identical
@@ -73,7 +73,7 @@ var ErrRolloutNotEnrolled = errors.New("github: repo not enrolled in cohort roll
 // this package ever hands it; Environments is simply threaded through
 // unused on this path.
 //
-// IntentClassifier is Step 36's own wiring point (§8.3/§18): classify+
+// IntentClassifier is §8.3's own wiring point (§8.3/§18): classify+
 // record runs ONCE, on the WINNER (brand-new session) path only -- see
 // CreateOrJoin's own doc comment below for why the REUSE path never
 // re-classifies. Optional (nil-safe): a nil IntentClassifier simply skips
@@ -88,14 +88,14 @@ type SessionCoalescer struct {
 	Registry         *sessionactor.Registry
 	IntentClassifier *intentclassifier.Service
 
-	// Plans (Step 37/38 follow-up fix, §8.1) is threaded through to the
+	// Plans (a follow-up fix, §8.1) is threaded through to the
 	// REUSE path's own httpapi.CreateTurnForBot call below, exactly like
 	// every other createTurnLocked caller now gets -- see that function's
 	// own doc comment (httpapi/turn.go) for the nil-safe "skips the
 	// awaiting-plan gate" contract a nil value here keeps.
 	Plans *postgres.PlanStore
 
-	// AuditLog is Step 39's own addition (§13.3): threaded through to the
+	// AuditLog is §13.2's own addition (§13.3): threaded through to the
 	// WINNER path's own httpapi.CreateSessionOnTx call below, exactly like
 	// Environments already is, so a GitHub-originated session creation
 	// gets the SAME audit_log row every other CreateSessionOnTx caller now
@@ -108,7 +108,7 @@ type SessionCoalescer struct {
 	// Identities/Users/Participants are batch fix/audit-github-actor-rbac's
 	// own additions, closing the H4 audit finding that GitHub ingress never
 	// gated session/turn creation behind domain/authz.Authorize at all
-	// (Slack/Linear ingress already do, since Step 39). Identities backs
+	// (Slack/Linear ingress already do). Identities backs
 	// handler.go's own resolveCommenterActor (identity.go) -- a direct
 	// (provider, external_id) lookup, no auto-linking algorithm needed (see
 	// that file's own doc comment for why). Users/Participants are exactly
@@ -123,7 +123,7 @@ type SessionCoalescer struct {
 	Users        *postgres.UserStore
 	Participants *postgres.ParticipantStore
 
-	// F7 correction (adversarial review, Step 61): this struct used to
+	// F7 correction (adversarial review): this struct used to
 	// carry its own EpistemicCheckDefault bool field, threaded through to
 	// the REUSE path's own httpapi.CreateTurnForBot call below, with a doc
 	// comment claiming that matched "every other createTurnLocked-reaching
@@ -154,7 +154,7 @@ type SessionCoalescer struct {
 	// entirely rather than left unread; cmd/control-plane/main.go no
 	// longer sets it either.
 
-	// ReviewTriage (Step 68, §26.3) bundles the two stores internal/app/
+	// ReviewTriage (§26.3) bundles the two stores internal/app/
 	// reviewtriage.ComputeDecision needs (repo_settings, for the
 	// per-repo reviewDepth config; review_verdicts, for the "prior high
 	// verdict" signal) -- constructed once at wiring time (cmd/control-
@@ -164,13 +164,13 @@ type SessionCoalescer struct {
 	// review turn gets its own fresh depth decision, not just a
 	// session's first one.
 	ReviewTriage appreviewtriage.Deps
-	// ReviewModelDeep (Step 68, §26.3) is platform.Config.ReviewModelDeep,
+	// ReviewModelDeep (§26.3) is platform.Config.ReviewModelDeep,
 	// threaded through for domainreviewtriage.ModelAndEffort -- empty
 	// means "not configured", see that function's own doc comment
 	// (internal/domain/reviewtriage/modeleffort.go).
 	ReviewModelDeep string
 
-	// RolloutMode/RepoSettings (Step 76, §10 Phase 6, §32) are threaded
+	// RolloutMode/RepoSettings (§10 Phase 6, §32) are threaded
 	// through to the WINNER path's own httpapi.CreateSessionOnTx call
 	// below, exactly like AuditLog/Environments already are -- both are
 	// REQUIRED parameters of that function (its own doc comment), so a
@@ -187,7 +187,7 @@ type SessionCoalescer struct {
 	RepoSettings *postgres.RepoSettingsStore
 }
 
-// CreateOrJoin is Step 32's own per-PR coalescing entry point -- see
+// CreateOrJoin is §8.2's own per-PR coalescing entry point -- see
 // doc.go's own "Per-PR coalescing design" section for the full two-step
 // atomic-claim sequencing this implements. isNewSession reports which
 // branch was taken (true: req was used to create a brand-new review
@@ -243,7 +243,7 @@ type SessionCoalescer struct {
 // The REUSE branch below is reached by TWO structurally different
 // triggers landing on an already-tracked PR: an ordinary second @mention
 // (just prompting the existing review session -- "what did you mean by
-// X") and Step 46's own manual re-trigger-via-LABEL lane (payload.go's
+// X") and §8.2's own manual re-trigger-via-LABEL lane (payload.go's
 // parsePullRequestLabeled). Both used to render the identical
 // authz.ActionPromptSession verdict (member allowed on own/joined), which
 // let a member re-trigger a review on any session they created/joined --
@@ -302,12 +302,12 @@ type SessionCoalescer struct {
 // label event creating a brand-new session is still a create, never a
 // re-trigger of an existing review).
 //
-// classifyText is the text Step 36's own intent classifier call (WINNER
+// classifyText is the text §8.3's own intent classifier call (WINNER
 // path only, further down) classifies -- the mention's own ORIGINAL,
 // un-enriched comment/command text (handler.go captures this BEFORE
 // folding the pre-fetched diff/stack context into req.Prompt via
 // review.RenderTurnPrompt). Audit fix: this used to be *req.Prompt
-// directly, which by the time CreateOrJoin ran already had Step 46's own
+// directly, which by the time CreateOrJoin ran already had §8.2's own
 // inline pre-fetched diff (up to several MB) appended -- feeding the
 // classifier's LLM call the entire PR diff instead of just the triggering
 // comment/label text, inflating cost/latency by orders of magnitude and
@@ -318,17 +318,17 @@ type SessionCoalescer struct {
 // matching IntentClassifierInput.Text's own documented contract ("a
 // session's initial prompt, a Slack message, a GitHub comment body").
 //
-// F1 (Step 64 follow-up fix, review Finding 1): this SAME raw text is now
+// F1 (§23 follow-up fix, review Finding 1): this SAME raw text is now
 // ALSO threaded through to the REUSE branch's own httpapi.CreateTurnForBot
 // call below (its classifyText parameter), for the identical reason --
 // that call's own `prompt` local is built from req.Prompt too, so without
 // this it would classify the SAME diff-enriched text against the
 // plan_followup category (ClassifyPlanFollowup, gated on an
-// awaiting-approval plan) that Step 36's classifier was already fixed to
+// awaiting-approval plan) that §8.3's classifier was already fixed to
 // avoid. Reused verbatim, never recaptured: both categories classify the
 // EXACT same raw mention text.
 //
-// reviewHeadSHA (§62 review finding C2, CRITICAL, fixed) is the commit
+// reviewHeadSHA is the commit
 // SHA handler.go's own reviewcontext.Fetch call just anchored req.Prompt's
 // own pre-fetched diff to (empty when that fetch failed/never ran) --
 // threaded through to whichever of the two branches below actually
@@ -338,7 +338,7 @@ type SessionCoalescer struct {
 // (turns.review_head_sha) at creation time -- see that column's own
 // migration doc comment for the full "why".
 //
-// reviewDepth/triageModelID/triageEffort/triageRecordJSON (Step 68,
+// reviewDepth/triageModelID/triageEffort/triageRecordJSON (
 // §26.3) are the ALREADY-RESOLVED light/deep routing outcome -- computed
 // by THIS function's own caller, handler.go, via appreviewtriage.
 // ComputeDecision (plus domainreviewtriage.Floor/ModelAndEffort/
@@ -502,14 +502,14 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 		// prepend the builder-only devil's-advocate preamble in front of
 		// review.RenderTurnPrompt's own verdict-tool block.
 		//
-		// classifyText (F1, Step 64 follow-up fix): &classifyText, the SAME
+		// classifyText (F1, §23 follow-up fix): &classifyText, the SAME
 		// raw, un-enriched mention text the WINNER path's own
 		// ClassifyAndRecord call below uses -- see this function's own doc
 		// comment on the classifyText parameter for the full "why" this
 		// must never be `prompt` (which, unlike here, already carries
 		// review.RenderTurnPrompt's own folded-in diff/stack/verdict-tool
 		// text once cfg.DiffFetcher is wired).
-		// triageModelID/triageEffort (Step 68, §26.3): a GitHub-sourced
+		// triageModelID/triageEffort (§26.3): a GitHub-sourced
 		// req never sets ModelId itself (this package's own request-
 		// building code, handler.go, never populates it), so the
 		// triage-computed override is the only model/effort signal this
@@ -570,7 +570,7 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 	// intentdomain.TargetReview below confirms it deterministically), so
 	// this is never a build turn either, for the identical reason the
 	// REUSE branch's own CreateTurnForBot call (below) hardcodes false.
-	// triageModelID/triageEffort (Step 68, §26.3): a GitHub-sourced req
+	// triageModelID/triageEffort (§26.3): a GitHub-sourced req
 	// never sets ModelId/Effort itself (this package's own request-
 	// building code, handler.go, never populates either) -- overwriting
 	// them here, on this function's own local copy of req, is therefore
@@ -644,7 +644,7 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 		httpapi.TriggerDispatch(ctx, c.Registry, created.ID)
 	}
 
-	// Step 36 ("intent classifier", §8.3/§18): classify + record ONCE, on
+	// §8.3 ("intent classifier", §8.3/§18): classify + record ONCE, on
 	// this winner (brand-new session) path only -- IntentDecisionRecord
 	// is a per-SESSION record (§18.4), and every GitHub-originated session
 	// is created exactly here, so there is no gap left by never
@@ -671,7 +671,7 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 		// Text is classifyText, deliberately NOT *req.Prompt (audit fix,
 		// §5.2/§18.5) -- see this function's own doc comment on the
 		// classifyText parameter, above, for the full "why": req.Prompt is
-		// this SAME mention text with Step 46's own inline pre-fetched
+		// this SAME mention text with §8.2's own inline pre-fetched
 		// diff/stack context already folded in (handler.go, BEFORE
 		// CreateOrJoin is ever called), which for a real PR can run to
 		// several MB -- feeding that whole diff into the classifier's LLM

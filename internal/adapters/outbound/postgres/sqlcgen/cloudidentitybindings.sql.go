@@ -26,7 +26,7 @@ type CreateCloudIdentityBindingParams struct {
 	ScopeTargetID *string                   `json:"scope_target_id"`
 }
 
-// Queries backing CloudIdentityBindingStore (Step 73a, "cloud identity:
+// Queries backing CloudIdentityBindingStore ("cloud identity:
 // OIDC issuer, bindings, minting", §27.3) --
 // migrations/000093_cloud_identity_bindings.up.sql. params travels as
 // opaque JSONB bytes end to end here -- identifiers, never secrets (this
@@ -209,7 +209,7 @@ WHERE scope = 'global'
 ORDER BY kind
 `
 
-// Step 73b's own ("cloud identity: sandbox-side consumption + kubeconfig
+// §27.4's own ("cloud identity: sandbox-side consumption + kubeconfig
 // injection", §27.3) sandbox-facing delivery endpoint's own single,
 // session-scoped read: EVERY candidate binding (global, plus this
 // session's own environment_id if it has one) regardless of audience --

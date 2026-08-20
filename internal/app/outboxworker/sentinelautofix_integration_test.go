@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration test for Step 48's ("sentinels + suggestions", §17.2) own
+// Integration test for §8.2's ("sentinels + suggestions", §17.2) own
 // sentinel-auto-fix notifier (sentinelautofix.go), against a real Postgres
 // instance -- gated behind the "integration" build tag, reusing this
 // package's own newTestPool helper (builder_integration_test.go).
@@ -88,7 +88,7 @@ func (f *fakeSentinelAutoFixSourceControl) RegisterPRStack(context.Context, port
 	return errors.New("fakeSentinelAutoFixSourceControl: RegisterPRStack not implemented")
 }
 
-// ListMergedBetween (Step 50, "release PR review", §15.2) is never
+// ListMergedBetween ("release PR review", §15.2) is never
 // reached from this package -- same "not implemented" precedent as
 // RegisterPRStack above.
 func (f *fakeSentinelAutoFixSourceControl) ListMergedBetween(context.Context, ports.ListMergedBetweenSpec) ([]ports.MergedPR, bool, error) {
@@ -123,7 +123,7 @@ func (f *fakeSentinelAutoFixSourceControl) lastCreateBranchSpec() ports.CreateBr
 	return f.createBranchCalls[len(f.createBranchCalls)-1]
 }
 
-// ListOpenPRsForUser/ResolveCodeOwners/MergePR (Step 60, "decision inbox:
+// ListOpenPRsForUser/ResolveCodeOwners/MergePR ("decision inbox:
 // read model + API", §16.2) are never reached from this package -- same
 // "not implemented" precedent as RegisterPRStack/ListMergedBetween above.
 func (f *fakeSentinelAutoFixSourceControl) ListOpenPRsForUser(context.Context, ports.ListOpenPRsForUserSpec) ([]ports.OpenPR, bool, error) {

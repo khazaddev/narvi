@@ -1,4 +1,4 @@
-// Package rollout implements Step 76's own ("feature-flagged cohort
+// Package rollout implements §10's own ("feature-flagged cohort
 // rollout of sessions, with documented rollback", §10 Phase 6, §32) ONE
 // pure admission decision -- shared, byte-for-byte identically, between
 // BOTH of §32's two independent gates: the primary, session-creation-time
@@ -6,7 +6,7 @@
 // create, inside the same transaction that is about to insert the
 // session) and the dispatch-time re-check (internal/app/sessionactor's
 // own tryPlanSpawn, run fresh on every Spawn/Restore/Resume attempt for
-// the session's entire lifetime) -- mirroring Step 74's own identical
+// the session's entire lifetime) -- mirroring §27.5's own identical
 // "one pure function, two independent call sites" shape exactly
 // (internal/domain/environment.CheckSubstrateCapabilities is that Step's
 // own twin of this package).
@@ -21,7 +21,7 @@
 // resolved booleans a caller decided from them.
 package rollout
 
-// Mode is platform.Config's own master switch for Step 76 (NARVI_ROLLOUT_MODE,
+// Mode is platform.Config's own master switch for §10 (NARVI_ROLLOUT_MODE,
 // §32) -- exactly two values. platform.Config.RolloutMode is typed as
 // THIS package's own Mode (not a parallel, independently-defined enum in
 // internal/platform) specifically so there is exactly one place in this

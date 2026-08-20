@@ -266,8 +266,8 @@ type commitResponse struct {
 // mirrors CreatePRError exactly (a plain, structured error; see
 // ports.SourceControl's own doc comment for why neither method invents a
 // transient/permanent classification). Originally named
-// ResolveBranchSHAError (Step 26, "image builds") back when ResolveBranchSHA
-// was doGet's only caller; generalized here (Step 27, "mocking + contract
+// ResolveBranchSHAError (§8.5, "image builds") back when ResolveBranchSHA
+// was doGet's only caller; generalized here (§14.3, "mocking + contract
 // drift") once ResolveContractsFingerprint became doGet's second caller --
 // a small, mechanical, internal-only rename (this type is never part of any
 // wire contract), preferred over adding a second, near-duplicate error
@@ -384,7 +384,7 @@ func (a *Adapter) doGet(ctx context.Context, path, token string) ([]byte, error)
 	return body, nil
 }
 
-// ResolveBranchSHA implements ports.SourceControl (Step 26, "image
+// ResolveBranchSHA implements ports.SourceControl (§8.5, "image
 // builds"): resolves spec.Branch's current commit SHA via a real GET
 // https://api.github.com/repos/{owner}/{repo}/commits/{branch} call. When
 // spec.Branch is empty ("the repo's own default branch" -- ports.
@@ -566,7 +566,7 @@ func (a *Adapter) doPost(ctx context.Context, path, token string, reqBody []byte
 // head.ref/head.repo shape verbatim -- internal/adapters/inbound/github/
 // payload.go's own pullRequestReviewCommentPayload).
 //
-// Title/Body (adversarial-review fix, §26.2/Step 67's own follow-up: the
+// Title/Body (adversarial-review fix, §26.2's own follow-up: the
 // review-digest "descriptionAdequacy" comparison needs the PR's real
 // title/body as INPUT, and this endpoint already returns both -- see
 // PullRequest.Title/Body's own doc comment below for the full "why" this
@@ -583,7 +583,7 @@ type pullRequestResponse struct {
 
 	Head struct {
 		Ref string `json:"ref"`
-		// SHA (Step 62, §21.1) is this PR's own CURRENT head commit --
+		// SHA (§21.1) is this PR's own CURRENT head commit --
 		// review_verdicts.head_sha's own ultimate source when this
 		// response is the fallback fetch internal/app/reviewcontext.Fetch
 		// makes for a trigger path with no head SHA already in hand (see
@@ -600,7 +600,7 @@ type pullRequestResponse struct {
 		} `json:"repo"`
 	} `json:"head"`
 
-	// Base (Step 50, "release PR review", §15.1) is this PR's own real
+	// Base ("release PR review", §15.1) is this PR's own real
 	// base branch name -- release detection's own "originates from/
 	// targets a release/* branch" check needs this alongside Head.Ref,
 	// which this response already decoded for an entirely different
@@ -611,13 +611,13 @@ type pullRequestResponse struct {
 		Ref string `json:"ref"`
 	} `json:"base"`
 
-	// Labels (Step 50, §15.1) is this PR's own CURRENT label set --
+	// Labels (§15.1) is this PR's own CURRENT label set --
 	// release detection's own "carries a release label" check.
 	Labels []struct {
 		Name string `json:"name"`
 	} `json:"labels"`
 
-	// Stack is GitHub's own "stack" object (§17.6's amendment, Step 46,
+	// Stack is GitHub's own "stack" object (§17.6's amendment,
 	// "review sessions"), riding on this SAME PR resource -- confirmed
 	// present via live schema introspection during that amendment's own
 	// design phase. A POINTER, mirroring Head.Repo's own nullable-pointer
@@ -627,7 +627,7 @@ type pullRequestResponse struct {
 	// zero-valued, misleadingly-present struct.
 	Stack *stackResponse `json:"stack"`
 
-	// Additions/Deletions/ChangedFiles (§26.3, Step 68) are GitHub's own
+	// Additions/Deletions/ChangedFiles (§26.3) are GitHub's own
 	// top-level "additions"/"deletions"/"changed_files" integers on this
 	// SAME "Get a pull request" response -- already arriving on the wire
 	// alongside every other field this response already decodes, simply
@@ -653,12 +653,12 @@ type stackResponse struct {
 }
 
 // PullRequest is GetPullRequest's own return shape: enough to resolve a
-// PR's TRUE head branch/repo (H5 audit fix), plus (Step 46, "review
+// PR's TRUE head branch/repo (H5 audit fix), plus ("review
 // sessions", §8.2/§17.6) its GitHub-native stack context, when present.
 type PullRequest struct {
 	// Title/Body are this PR's own CURRENT title/body (GitHub's own top-
 	// level "title"/"body" string fields) -- adversarial-review fix
-	// (§26.2/Step 67's own follow-up): the review-digest
+	// (§26.2's own follow-up): the review-digest
 	// "descriptionAdequacy" comparison (internal/domain/review.
 	// AdequacyFloor's own input) needs the PR's real title/body as
 	// UNTRUSTED INPUT (§5.2), and this endpoint already returns both on
@@ -690,7 +690,7 @@ type PullRequest struct {
 	// HeadRef is the PR's real head branch name (GitHub's own
 	// "head.ref") -- never empty for a real, open GitHub pull request.
 	HeadRef string
-	// HeadSHA (Step 62, §21.1) is the PR's CURRENT head commit SHA
+	// HeadSHA (§21.1) is the PR's CURRENT head commit SHA
 	// (GitHub's own "head.sha") -- internal/app/reviewcontext.Fetch's own
 	// fallback source for review_verdicts.head_sha when the caller has
 	// no head SHA already in hand from its own trigger payload (see that
@@ -704,9 +704,9 @@ type PullRequest struct {
 	// repo spec.
 	HeadRepoName     string
 	HeadRepoCloneURL string
-	// BaseRef (Step 50, §15.1) is this PR's own real base branch name.
+	// BaseRef (§15.1) is this PR's own real base branch name.
 	BaseRef string
-	// Labels (Step 50, §15.1) is this PR's own current label names.
+	// Labels (§15.1) is this PR's own current label names.
 	Labels []string
 	// Stack is non-nil exactly when this PR belongs to a GitHub-native
 	// stack (§17.6) -- nil is the ordinary, ungrouped case. Callers building
@@ -716,13 +716,13 @@ type PullRequest struct {
 	// internal/adapters/inbound/github's own mention type.
 	Stack *StackInfo
 
-	// Additions/Deletions/ChangedFiles (§26.3, Step 68) are this PR's own
+	// Additions/Deletions/ChangedFiles (§26.3) are this PR's own
 	// server-reported diff-size facts, forwarded verbatim from GitHub's
 	// own "Get a pull request" response (pullRequestResponse.Additions/
 	// Deletions/ChangedFiles above) -- internal/app/reviewcontext.Fetch's
 	// own one real consumer, carrying these onto review.
-	// PreFetchedContext.Additions/Deletions/ChangedFilesCount for Step
-	// 68's own light/deep triage decision (internal/domain/reviewtriage).
+	// PreFetchedContext.Additions/Deletions/ChangedFilesCount for §26.3's
+	// own light/deep triage decision (internal/domain/reviewtriage).
 	Additions    int
 	Deletions    int
 	ChangedFiles int
@@ -834,7 +834,7 @@ const diffAcceptHeader = "application/vnd.github.diff"
 const maxPRDiffResponseBytes = 4 << 20 // 4 MiB
 
 // GetPullRequestDiff fetches pull request number's own current unified diff
-// (Step 46, "review sessions", §8.2: "inline diff pre-fetched into
+// ("review sessions", §8.2: "inline diff pre-fetched into
 // context") via the SAME GET https://api.github.com/repos/{owner}/{repo}/
 // pulls/{number} call GetPullRequest makes, content-negotiated for GitHub's
 // raw diff media type instead of its default JSON resource shape --
@@ -916,7 +916,7 @@ func (a *Adapter) GetPullRequestDiff(ctx context.Context, owner, repo string, nu
 // -- this method is the SAME URL family, content-negotiated for raw diff
 // text instead.
 //
-// §62 review finding C2 (CRITICAL, fixed): UNLIKE GetPullRequestDiff
+// UNLIKE GetPullRequestDiff
 // (which always reflects the PR's CURRENT head, a moving target a slow
 // caller can race against), this PINS the diff to an EXACT head commit:
 // two calls a second apart against the identical (base, head) pair
@@ -980,7 +980,7 @@ func (a *Adapter) GetCompareDiff(ctx context.Context, owner, repo, base, head, t
 }
 
 // PostIssueComment posts body as a new comment on repo owner/repo's
-// issue/PR prNumber, authenticated with token as a Bearer token (Step 35,
+// issue/PR prNumber, authenticated with token as a Bearer token (
 // "outbox delivery", §5.1). Unlike CreatePR/ResolveBranchSHA above, token
 // here is typically a single, statically-configured bot credential
 // (platform.Config.GitHubBotToken via BotNotifier, notifier.go) rather
@@ -1013,7 +1013,7 @@ type createCommitStatusRequest struct {
 	Context     string `json:"context,omitempty"`
 }
 
-// CreateCommitStatus posts a commit status on owner/repo at sha (Step 57,
+// CreateCommitStatus posts a commit status on owner/repo at sha (
 // "RWX provider + previews", §4.1.2 point 3): a real POST
 // https://api.github.com/repos/{owner}/{repo}/statuses/{sha} call,
 // authenticated with token as a Bearer token -- like PostIssueComment
@@ -1051,7 +1051,7 @@ func (a *Adapter) CreateCommitStatus(ctx context.Context, owner, repo, sha, stat
 	return nil
 }
 
-// ResolveContractsFingerprint implements ports.SourceControl (Step 27,
+// ResolveContractsFingerprint implements ports.SourceControl (
 // "mocking + contract drift", §14.3): fingerprints spec.Path's directory
 // listing at spec.Ref via a real GET
 // https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={ref}
@@ -1127,7 +1127,7 @@ type getFileContentResponse struct {
 	Sha     string `json:"sha"`
 }
 
-// GetFileContent implements ports.SourceControl (Step 48, "sentinels +
+// GetFileContent implements ports.SourceControl ("sentinels +
 // suggestions", §12.2 item 2): a real GET https://api.github.com/repos/
 // {owner}/{repo}/contents/{path}?ref={ref} call, authenticated with
 // spec.Token. exists=false, err=nil on a 404 -- mirrors
@@ -1144,10 +1144,10 @@ func (a *Adapter) GetFileContent(ctx context.Context, spec ports.GetFileContentS
 
 // fetchFileContent is GetFileContent's own real implementation, factored
 // out so a SECOND caller can reuse it without duplicating the base64-
-// decode step: resolvecodeowners.go's own CODEOWNERS-file fetch (Step 60,
+// decode step: resolvecodeowners.go's own CODEOWNERS-file fetch (
 // §16.2) needs the IDENTICAL "GET the Contents API, 404 is a legitimate
 // non-error exists=false, base64-decode on success" sequence this method
-// already established for GetFileContent (Step 48), just for a
+// already established for GetFileContent (§8.2), just for a
 // candidate-location loop instead of one caller-supplied path.
 func (a *Adapter) fetchFileContent(ctx context.Context, owner, repo, path, ref, token string) (content, sha string, exists bool, err error) {
 	contentsPath := fmt.Sprintf("%s/repos/%s/%s/contents/%s?ref=%s",
@@ -1192,7 +1192,7 @@ type updateFileContentResponse struct {
 	} `json:"commit"`
 }
 
-// UpdateFileContent implements ports.SourceControl (Step 48, §12.2 item
+// UpdateFileContent implements ports.SourceControl (§12.2 item
 // 2): a real PUT https://api.github.com/repos/{owner}/{repo}/contents/
 // {path} call, authenticated with spec.Token AS THE ACTING MAINTAINER
 // (never the original session creator's token -- see
@@ -1232,7 +1232,7 @@ type registerPRStackRequest struct {
 	PullRequests []int `json:"pull_requests"`
 }
 
-// RegisterPRStack implements ports.SourceControl (Step 48, §17.2/§17.6).
+// RegisterPRStack implements ports.SourceControl (§17.2/§17.6).
 // Per that section's own design, a failure here is the CALLER's own
 // policy to log-and-ignore (pushpr.go's createSentinelFixPRBestEffort) --
 // this method itself still reports the plain error either way, never
@@ -1251,7 +1251,7 @@ func (a *Adapter) RegisterPRStack(ctx context.Context, spec ports.RegisterPRStac
 }
 
 // createRefRequest is the body POSTed to /repos/{owner}/{repo}/git/refs
-// (Step 48 confirmed-finding fix, §17.2 -- "Git References" API:
+// (a confirmed-finding fix, §17.2 -- "Git References" API:
 // https://docs.github.com/rest/git/refs#create-a-reference).
 type createRefRequest struct {
 	Ref string `json:"ref"`
@@ -1271,7 +1271,7 @@ type createRefRequest struct {
 // exact substring, case-insensitively, as their own already-exists signal.
 const alreadyExistsMarker = "already exists"
 
-// CreateBranch implements ports.SourceControl (Step 48 confirmed-finding
+// CreateBranch implements ports.SourceControl (§8.2 confirmed-finding
 // fix, §17.2): a real POST /repos/{owner}/{repo}/git/refs call. Idempotent
 // per ports.SourceControl.CreateBranch's own doc comment: a 422 whose
 // message names the ref as already existing is treated as success, never
@@ -1337,7 +1337,7 @@ func (a *Adapter) doPut(ctx context.Context, path, token string, reqBody []byte)
 }
 
 // doPatch performs one authenticated PATCH against a.apiBaseURL+path with
-// reqBody as the JSON request body -- the doPut-analog Step 67 (§26.2)
+// reqBody as the JSON request body -- the doPut-analog (§26.2)
 // needs, since GitHub's own "update a pull request" endpoint (the ONE
 // real caller, prbody.go's own UpdatePRBody) is specifically a PATCH,
 // never a PUT or POST. Otherwise byte-for-byte the same bounded-read/

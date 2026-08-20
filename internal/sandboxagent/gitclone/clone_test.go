@@ -520,7 +520,7 @@ func TestWriteAgentsManifest(t *testing.T) {
 	}
 }
 
-// TestWriteAgentsManifest_DegradeNotes proves Step 72's own adversarial-
+// TestWriteAgentsManifest_DegradeNotes proves §27.1's own adversarial-
 // review LOW fix (§27.1: "recorded in the boot log and AGENTS.md"): a
 // non-empty degradeNotes slice produces an additive section in the
 // generated manifest, alongside (never instead of) the ordinary repo

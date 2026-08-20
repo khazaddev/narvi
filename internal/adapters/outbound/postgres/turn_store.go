@@ -12,7 +12,7 @@ import (
 
 // TurnStore is a thin, pass-through wrapper around the sqlc-generated turn
 // queries (§4.3 TurnStore). No caching, no retries, no business rules —
-// that lives in domain/turn (Step 08) and app/sessionactor (Step 11+).
+// that lives in domain/turn (§3.1) and app/sessionactor (§2).
 type TurnStore struct {
 	q *sqlcgen.Queries
 }
@@ -69,7 +69,7 @@ func (s *TurnStore) MarkProgressNotified(ctx context.Context, id pgtype.UUID, no
 }
 
 // GetProcessingTurnForSession fetches sessionID's own currently-live
-// (status='processing') turn, if any (§20.2, Step 61) -- mirrors
+// (status='processing') turn, if any (§20.2) -- mirrors
 // WorkflowStore.GetRunningRunForSession's identical "resolve the caller's
 // own live attempt from a session id alone" role, one layer down (a turn,
 // not a workflow run). turns_one_processing_per_session (migrations/
@@ -81,7 +81,7 @@ func (s *TurnStore) GetProcessingTurnForSession(ctx context.Context, sessionID p
 }
 
 // SetEpistemicOutcome is the guarded write backing the epistemic-outcome-
-// posting endpoint (§20.2, Step 61) -- mirrors WorkflowStore.
+// posting endpoint (§20.2) -- mirrors WorkflowStore.
 // SetStepRunOutcome's own "guarded UPDATE, observed via :execrows" idiom
 // exactly, one status value over (turns.status = 'processing' rather than
 // workflow_step_runs.status = 'running'). Returns the number of rows

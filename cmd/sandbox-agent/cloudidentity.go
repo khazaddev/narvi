@@ -1,16 +1,16 @@
-// This file (cloudidentity.go) implements Step 73b's own ("cloud
+// This file (cloudidentity.go) implements §27.4's own ("cloud
 // identity: sandbox-side consumption + kubeconfig injection", §27.3) IN-
-// SANDBOX consumption half of Step 73a's control-plane OIDC issuer:
+// SANDBOX consumption half of §27.3's control-plane OIDC issuer:
 // discovering which cloud_identity_bindings apply to this session (via
 // the new POST /sessions/{id}/cloud-identity-config delivery endpoint,
 // internal/sandboxagent/credentials/cloudidentityconfig.go), minting a
 // short-lived token per binding (POST /sessions/{id}/cloud-identity-token,
-// Step 73a's own endpoint, credentials/cloudidentitytoken.go), writing
+// §27.3's own endpoint, credentials/cloudidentitytoken.go), writing
 // each to its own file under cloudIdentityDir, and returning the standard,
 // cloud-SDK-documented env vars (internal/domain/cloudidentity.
 // ReservedEnvVarNames' own exact names) ready to thread into every
 // spawned process -- Spawn/RunBoot/RunHooks' own secretEnv/sandboxSecretEnv
-// parameters (Step 72's threading mechanism, extended here, never a new,
+// parameters (§27.1's threading mechanism, extended here, never a new,
 // parallel one -- see sandboxsecrets.go's own top doc comment for the
 // full "why threading, never os.Setenv" reasoning, which applies to every
 // value this file builds identically).
@@ -67,10 +67,10 @@
 // fresh/repo_image boot, a restored sandbox's own disk can already
 // contain token files (and a kubeconfig, kubeconfig.go) from whatever
 // boot last wrote them, potentially minutes, hours, or days stale. Unlike
-// Step 72's own OpenCode-config precedent (opencodeconfig.go's own
+// §27.1's own OpenCode-config precedent (opencodeconfig.go's own
 // applyOpenCodeConfig, which keeps the last-known-good document on a
 // FAILED fetch -- a deliberate, reasoned choice for a config document,
-// documented on that function), Step 72's own precedent does NOT apply
+// documented on that function), §27.1's own precedent does NOT apply
 // here unmodified: a config document degrades gracefully when stale (it
 // is still SOME working configuration); a stale cloud-identity token is
 // SHARPER, per this Step's own brief -- it is short-lived, security-
@@ -79,7 +79,7 @@
 // if technically still unexpired, tied to a PRIOR sandbox generation/
 // session context a customer's cloud-side trust policy has no reason to
 // keep honoring one moment longer than Narvi's own contract promises.
-// This codebase resolves this the same way Step 72 resolved its OWN
+// This codebase resolves this the same way §27.1 resolved its OWN
 // version of this class of problem -- "application must be authoritative"
 // -- taken further here: resetCloudIdentityDir wipes cloudIdentityDir
 // ENTIRELY (not merely the individual files a fresh fetch happens to
@@ -216,8 +216,8 @@ func fetchCloudIdentityConfig(ctx context.Context, cfg boot.Config, timeouts pla
 	return delivery, true
 }
 
-// mintCloudIdentityToken mints one token for audience via CP's own Step
-// 73a minting endpoint, retrying a transport error, a 5xx OTHER than 503,
+// mintCloudIdentityToken mints one token for audience via CP's own §27.3
+// minting endpoint, retrying a transport error, a 5xx OTHER than 503,
 // or any other classifyMintTokenError-retryable outcome up to
 // timeouts.CloudIdentityTokenMintMaxAttempts times -- see
 // deliveryretry.go's own classifyMintTokenError for the full

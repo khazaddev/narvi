@@ -15,7 +15,7 @@
 // enforce that at the type-system level... Verdict below carries exactly
 // the seven named fields... and nothing else"). Adding HeadSHA/
 // RepoFullName/PRNumber/CreatedAt directly onto that struct would breach
-// a contract Step 45 deliberately drew a hard line around, for a concern
+// a contract this design deliberately draws a hard line around (§8.2), for a concern
 // (durable persistence) that package explicitly declines to own -- its
 // own doc.go states plainly that a Finding/persistence shape is "left for
 // whichever Step actually needs it." Record is that shape for THIS Step:

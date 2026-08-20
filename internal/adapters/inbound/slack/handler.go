@@ -96,7 +96,7 @@ const (
 	ackBusyText          = "Still working on the previous message in this thread — this one wasn't queued, please try again once it's done."
 	ackNotConfiguredText = "Slack ingress isn't configured with a default repo yet, so I can't start new work from a mention. A reply on an existing thread still works."
 
-	// ackNotAuthorizedText is Step 39's own addition ("identities + full
+	// ackNotAuthorizedText is §13.2's own addition ("identities + full
 	// RBAC", §13.2/§13.3): posted instead of ackNewSessionText when the
 	// acting user isn't authorized to create a session -- mirrors the REST
 	// API's own 403 semantics ("not authorized to perform this action",
@@ -127,7 +127,7 @@ const (
 	// handlePrompted).
 	ackNotAuthorizedReplyText = "You're not authorized to prompt this session."
 
-	// ackNotEnrolledText (Step 76, §10 Phase 6, §32) is posted instead of
+	// ackNotEnrolledText (§10 Phase 6, §32) is posted instead of
 	// ackNewSessionText when checkRolloutGate refuses because this
 	// deployment's own default repo is not enrolled in the cohort
 	// rollout -- mirrors ackNotAuthorizedText's own terminal-in-thread-ack
@@ -138,7 +138,7 @@ const (
 	ackNotEnrolledText = "This repository is not yet enrolled in Narvi's session rollout."
 )
 
-// ackPlanAwaitingText is this batch's own honest reply (Step 37/38
+// ackPlanAwaitingText is this batch's own honest reply (§8.1
 // follow-up fix, §8.1), posted instead of enqueuing a build turn when a
 // plain-text thread reply matches neither a plan verdict (plandomain.
 // MatchVerdict -- see this batch's own follow-up addition, "honour a typed
@@ -193,7 +193,7 @@ type Deps struct {
 	Deliveries   *postgres.WebhookDeliveryStore
 	Threads      *postgres.SlackThreadSessionStore
 
-	// Plans (Step 37/38 follow-up fix, §8.1) -- handleEvent's own
+	// Plans (a follow-up fix, §8.1) -- handleEvent's own
 	// awaiting-plan gate/verdict/revise-prefix check (below) needs this to
 	// find a mapped session's own awaiting_approval plan, if any, mirroring
 	// Linear's identical Deps.Plans (webhook.go). nil-safe: a nil Plans
@@ -218,7 +218,7 @@ type Deps struct {
 	Outbox              *postgres.OutboxStore
 	LinearAgentSessions *postgres.LinearAgentSessionStore
 
-	// AuditLog is Step 39's own addition (§13.3) -- threaded through to
+	// AuditLog is §13.2's own addition (§13.3) -- threaded through to
 	// httpapi.CreateSessionCore below exactly like Environments already
 	// is, so a Slack-originated session creation gets the SAME audit_log
 	// row every other CreateSessionCore caller now gets. actor_user_id is
@@ -239,7 +239,7 @@ type Deps struct {
 	// second, independently-constructed copy.
 	Participants *postgres.ParticipantStore
 
-	// IdentityLink/SlackClient are Step 39's own auto-linking wiring
+	// IdentityLink/SlackClient are §13.2's own auto-linking wiring
 	// (§13.2): resolveSlackActor (identity.go) uses SlackClient.
 	// GetUserEmail to fetch ev.User's own profile email (with retry, via
 	// Timeouts.IdentityEmailFetch*), then IdentityLink.Resolve to
@@ -253,13 +253,13 @@ type Deps struct {
 	// than building a third one.
 	IdentityLink identitylink.Deps
 	SlackClient  *slackapi.Client
-	// Timeouts is Step 39's own addition, read for its
+	// Timeouts is §13.2's own addition, read for its
 	// IdentityEmailFetch* fields only (identity.go) -- every OTHER
 	// timeout this package needs is still an existing discrete field
 	// below (TimestampWindow, AckTimeout), left untouched.
 	Timeouts platform.Timeouts
 
-	// IntentClassifier is Step 36's own wiring point (§8.3/§18): classify
+	// IntentClassifier is §8.3's own wiring point (§8.3/§18): classify
 	// + record runs ONCE, on the brand-new-thread's own first real turn
 	// (decided_at_stage="first_prompt" -- a bare session is created with
 	// no prompt at all, see resolveOrClaimSession; the real text only
@@ -267,14 +267,14 @@ type Deps struct {
 	// safe): a nil IntentClassifier simply skips classification entirely.
 	IntentClassifier *intentclassifier.Service
 
-	// EpistemicCheckDefault (Step 61, "builder epistemic pre-action
+	// EpistemicCheckDefault ("builder epistemic pre-action
 	// check", §20.4) is threaded through to addTurn's own createTurnLocked
 	// call (turn.go) exactly like every other caller now gets --
 	// production wiring (cmd/control-plane/main.go) passes the SAME
 	// platform.Config.EpistemicCheckDefault value every other caller does.
 	EpistemicCheckDefault bool
 
-	// RolloutMode/RepoSettings (Step 76, §10 Phase 6, §32) are threaded
+	// RolloutMode/RepoSettings (§10 Phase 6, §32) are threaded
 	// through to resolveOrClaimSession's own httpapi.CreateSessionCore
 	// call below exactly like EpistemicCheckDefault already is -- both
 	// are REQUIRED parameters of that function now (its own doc
@@ -301,7 +301,7 @@ type Deps struct {
 	AckTimeout time.Duration
 }
 
-// NewHandler builds the POST /webhooks/slack handler (§8.10, Step 33 --
+// NewHandler builds the POST /webhooks/slack handler (§8.10 --
 // see doc.go's own full request-handling writeup).
 func NewHandler(deps Deps) http.HandlerFunc {
 	ack := newAckClient(deps.SlackHTTPClient, deps.SlackAPIBaseURL, deps.BotToken)
@@ -582,7 +582,7 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	key := ev.threadKey()
 	prompt := normalizeMrkdwn(ev.Text)
 
-	// Step 39 ("identities + full RBAC", §13.2) update: resolve the REAL
+	// §13.2 ("identities + full RBAC", §13.2) update: resolve the REAL
 	// actor behind ev.User ONCE, regardless of whether this event ends up
 	// starting a brand-new thread or replying to an existing one --
 	// resolveSlackActor itself is called on every event (session-creating
@@ -606,7 +606,7 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 
 	res, ok := resolveOrClaimSession(ctx, deps, ack, logger, ev, channel, key, actorUserID, prompt)
 
-	// Security-remediation addition (Step 39, "identities + full RBAC",
+	// Security-remediation addition ("identities + full RBAC",
 	// §13.2): notice (the "connected your account" confirmation, or --
 	// far more sensitive -- the magic-link URL itself) is posted via
 	// chat.postEphemeral, visible ONLY to ev.User, NEVER appended to the
@@ -661,7 +661,7 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	// never merely a prompt that also happens to fall through into an
 	// ordinary turn.
 	//
-	// Step 37/38 follow-up fix (§8.1), unchanged by this batch: a plain-text
+	// a follow-up fix (§8.1), unchanged by this batch: a plain-text
 	// reply matching plandomain.RevisePrefix instead is a deterministic
 	// "request changes" reply -- route it through as a REAL plan_mode=true
 	// turn (the prompt becomes the stripped feedback) instead of an ordinary
@@ -775,7 +775,7 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 			// createdTurn.PlanMode (not the local planMode variable computed
 			// above addTurn's own call) -- F2 audit fix: planMode is captured
 			// BEFORE addTurn/createTurnLocked ever runs, so it never reflects
-			// createTurnLocked's own Step 64 promotion of planMode=true when
+			// createTurnLocked's own §23 promotion of planMode=true when
 			// the plan_followup classifier returns a confident "amend" (see
 			// that function's own doc comment, turn.go). Logging the stale
 			// local variable here would silently misreport a promoted turn
@@ -786,7 +786,7 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 		}
 	}
 
-	// Step 36 ("intent classifier", §8.3/§18): classify + record ONCE, on
+	// §8.3 ("intent classifier", §8.3/§18): classify + record ONCE, on
 	// the brand-new thread's own first real turn only -- IntentDecisionRecord
 	// is a per-SESSION record (§18.4), and every Slack-originated session
 	// gets its first (and, per this thread's own res.IsNewThread gate,
@@ -830,7 +830,7 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	}
 	// notice is no longer appended here -- see this function's own top
 	// doc comment for why it is now posted separately, ephemerally,
-	// scoped to ev.User (Step 39's own security-remediation addition).
+	// scoped to ev.User (§13.2's own security-remediation addition).
 	if err := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, ackText); err != nil {
 		logger.Warn("slack: post in-thread ack failed", "error", err)
 	}
@@ -930,7 +930,7 @@ func (deps Deps) handlePlanVerdict(ctx context.Context, ack *ackClient, logger *
 // session, races to claim the mapping, and falls back to the winner's
 // session id on a lost claim. ok reports whether the caller should
 // continue at all (false on a genuine error, already logged). creator is
-// handleEvent's own already-resolved actor (Step 39, "identities + full
+// handleEvent's own already-resolved actor ("identities + full
 // RBAC", §13.2) -- Valid iff the mentioning Slack user is already linked,
 // or was just auto-linked this call; invalid (bot attribution) otherwise,
 // exactly matching this function's own PREVIOUS unconditional-bot-
@@ -991,7 +991,7 @@ func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logge
 		return sessionResolution{Skip: true}, true
 	}
 
-	// Step 39 ("identities + full RBAC", §13.2/§13.3) update: creator is
+	// §13.2 ("identities + full RBAC", §13.2/§13.3) update: creator is
 	// no longer trusted unconditionally just because it resolved to a
 	// REAL, linked user_id -- that user's own role must still pass
 	// domain/authz.Authorize(ActionCreateSession), exactly like the REST
@@ -1022,7 +1022,7 @@ func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logge
 		},
 	}, creator, deps.EpistemicCheckDefault, deps.RolloutMode, deps.RepoSettings)
 	if cerr != nil {
-		// Step 76 (§10 Phase 6, §32): a RolloutRefusal is a PERMANENT
+		// (§10 Phase 6, §32): a RolloutRefusal is a PERMANENT
 		// policy refusal, never a transient failure -- checked
 		// structurally (CreateSessionError.RolloutRefusal), never by
 		// string-matching cerr.Message. Returning (sessionResolution{},

@@ -1,5 +1,5 @@
 // Package codeowners parses a CODEOWNERS file and matches repo-relative
-// paths against it (Step 60, "decision inbox: read model + API", §16.2:
+// paths against it ("decision inbox: read model + API", §16.2:
 // "CODEOWNERS teams resolve to persons through the identity graph
 // (§13.2)"). Pure, no I/O (CLAUDE.md/§11) -- fetching the file's own
 // content and resolving an @user/@org/team mention to a real GitHub
@@ -280,7 +280,7 @@ func (m *Matcher) Match(path string) (Rule, bool) {
 // "^docs/[^/]*(?:/.*)?$", which matches "docs/build-app/troubleshooting.md"
 // by letting "[^/]*" consume the "build-app" DIRECTORY NAME and the
 // suffix consume the rest -- GitHub's own documentation gives this exact
-// path as the canonical NON-match for "docs/*" (§60 review finding C2):
+// path as the canonical NON-match for "docs/*":
 // a bare trailing "*" stays within the one path segment it is written in,
 // exactly like plain gitignore's own "never crosses a /" rule for "*",
 // with no implicit "everything beneath" extension layered on top merely

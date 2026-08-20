@@ -5,7 +5,7 @@
 // written in the same transaction as the change").
 //
 // This started life as internal/adapters/inbound/httpapi's own
-// unexported recordAuditLog (Step 39's first half); it moved here,
+// unexported recordAuditLog (§13.2's first half); it moved here,
 // unchanged in behavior, so a caller OUTSIDE httpapi -- specifically
 // internal/app/identitylink.Resolve, which needs to audit-log a brand-new
 // auto-linked identity from inside its own transaction -- can call the

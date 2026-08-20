@@ -363,7 +363,7 @@ func TestProvider_CreateSandbox_NoCorrelationIDWhenAbsent(t *testing.T) {
 	}
 }
 
-// --- CreateSandbox: §27.5/§27.6 Docker/EgressPolicy substrate mapping (Step 74) ---
+// --- CreateSandbox: §27.5/§27.6 Docker/EgressPolicy substrate mapping (§27.5) ---
 
 // captureRequestBody starts an httptest.Server that decodes every request
 // body into a generic map (for top-level key presence/absence checks) and
@@ -961,7 +961,7 @@ func TestProvider_BuildImage(t *testing.T) {
 }
 
 // --- BuildImage: CacheMount wiring + pure-accelerator fallback (§19.1's
-// closing paragraph, Step 43(c)) ---
+// closing paragraph(c)) ---
 
 // TestProvider_BuildImage_CacheMount_SentOnWire proves a spec carrying
 // CacheMount produces a request whose cacheVolume field mirrors

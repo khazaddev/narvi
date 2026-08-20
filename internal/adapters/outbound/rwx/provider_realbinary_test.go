@@ -18,8 +18,8 @@ import "testing"
 // PATH and no RWX_ACCESS_TOKEN is configured anywhere reachable from this
 // repo's own tests or CI (verified directly during this Step's own
 // implementation: `which rwx` finds nothing, no RWX_* env var exists).
-// This is a deliberate, named, user-approved scope decision for Step 57,
-// not a defect — see this Step's own landing PR description for the full
+// This is a deliberate, named, user-approved scope decision,
+// not a defect — see this feature's own landing PR description for the full
 // "what's built vs. what's deferred" accounting.
 //
 // Every OTHER test in this package (provider_test.go, errors_test.go,
@@ -51,7 +51,7 @@ import "testing"
 //     pinned.
 //  3. `rwx sandbox stop` then `rwx sandbox start` against the SAME
 //     identity actually preserves (or does not preserve) working-tree
-//     state — Step 57's own FIRST exit criterion (§4.1.1/§4.1.3), settled
+//     state — §4.1's own FIRST exit criterion (§4.1.1/§4.1.3), settled
 //     empirically, deciding whether Capabilities().Resume ever flips to
 //     true (see Provider.Capabilities' own doc comment).
 //  4. `rwx sandbox list --format json` actually reports org-wide truth
@@ -63,7 +63,7 @@ import "testing"
 //     account.
 func TestRWXAdapter_RealBinaryContractTest(t *testing.T) {
 	t.Skip("no real rwx CLI binary or RWX_ACCESS_TOKEN is available in this environment/CI yet " +
-		"(deliberate, user-approved Step 57 scope decision — see this file's own top comment for exactly " +
+		"(deliberate, user-approved §4.1 scope decision — see this file's own top comment for exactly " +
 		"what this test would verify: real start/stop/list JSON+exit-code shapes, the real CLI error " +
 		"taxonomy, empirical stop→start state-preservation for the Resume capability flag, List's real " +
 		"org-wide scope, and whether the CLI subprocess actually honors HTTPS_PROXY). Provision a pinned " +

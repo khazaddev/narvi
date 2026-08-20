@@ -58,18 +58,18 @@ func (b *Bridge) SendBestEffort(ctx context.Context, msg any) error {
 // (best-effort, not critical -- boot_progress is not one of the 6 critical
 // types). events.schema.json's own "phase" field is a free-form string
 // with no enum -- this Step's own invented, documented convention for
-// reporting Step 14's PER-SERVICE phase over a wire event that only
+// reporting §14.2's PER-SERVICE phase over a wire event that only
 // carries ONE session-wide phase string is "<serviceName>:<phase>" (e.g.
 // "web:starting", "mock-api:ready"). Also updates the internally-tracked
 // lastBootPhase the next heartbeat carries.
 //
 // event.ServiceName is url.QueryEscape'd before joining: servicemanifest's
-// own Service.Name validation (Step 14) only requires non-empty/unique, no
+// own Service.Name validation (§14.2) only requires non-empty/unique, no
 // charset restriction, so a service literally named e.g. "web:ready" would
 // otherwise produce a phase string indistinguishable from service "web" in
 // phase "ready" -- percent-encoding the name specifically closes that
 // ambiguity (a normal name with no special characters round-trips
-// unchanged) without needing to touch Step 14's own validation rules.
+// unchanged) without needing to touch §14.2's own validation rules.
 func (b *Bridge) SendBootProgress(ctx context.Context, event services.BootProgressEvent) error {
 	phase := url.QueryEscape(event.ServiceName) + ":" + string(event.Phase)
 	b.setLastBootPhase(&phase)

@@ -12,7 +12,7 @@ import (
 )
 
 // HandoffSentinelStore is a thin, pass-through wrapper around the
-// sqlc-generated handoff_sentinel_runs queries (Step 49, "handoff-readiness
+// sqlc-generated handoff_sentinel_runs queries ("handoff-readiness
 // sentinel", §14.4) -- see migrations/000049_handoff_sentinel_runs.up.sql's
 // own doc comment for the table's full design and its single-step claim
 // idiom.

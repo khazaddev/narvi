@@ -89,7 +89,7 @@ func TestCheckGuideDrift(t *testing.T) {
 	})
 }
 
-// TestNoGuideDrift is Step 78's own CI-enforcing structural guard,
+// TestNoGuideDrift is §10's own CI-enforcing structural guard,
 // TestNoMetricDrift's own direct sibling (drift_test.go): scans this
 // repo's REAL cmd/control-plane route wiring and REAL internal/domain/
 // intent + sqlcgen vocabulary, loads the REAL docs/guides/*.md files, and

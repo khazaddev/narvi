@@ -1,13 +1,13 @@
-// This file (pullrequestevent.go) implements Step 48's own ("sentinels +
+// This file (pullrequestevent.go) implements §8.2's own ("sentinels +
 // suggestions") merge-gating half (§17.4/§17.5): the new GitHub
 // `pull_request` webhook lane that reacts to the ORIGIN pull request
 // closing. §24.1 already documents (independently of this Step) that
 // "nothing in this codebase today parses GitHub's pull_request event at
 // all" -- eventTypePullRequest (payload.go) is used ONLY for the
-// action=="labeled" manual re-trigger lane (Step 46) before this Step;
+// action=="labeled" manual re-trigger lane (§8.2) before this Step;
 // this file adds the SAME event type's action=="closed" case, exactly
 // the "one generic pull_request handler, switching on action" shape this
-// Step's own design recommends so a later Step (61, action=="synchronize")
+// Step's own design recommends so §20 (action=="synchronize")
 // extends the same lane rather than reinventing the parsing/claim/dedupe
 // plumbing independently.
 //
@@ -122,8 +122,8 @@ func (notImplementedFixMerger) CherryPickAndMerge(context.Context, string, strin
 // its OWN small interface (mirroring PullRequestResolver's own identical
 // "small interface over a real outbound call" precedent this file already
 // cites) rather than continuing to reuse reviewcontext.Fetcher for
-// convenience: §62 review finding C2 narrowed THAT interface to exactly
-// what review-turn-context assembly needs (GetPullRequest/GetCompareDiff),
+// convenience: that interface was narrowed to exactly what review-turn-context
+// assembly needs (GetPullRequest/GetCompareDiff),
 // which no longer includes GetPullRequestDiff at all -- this call site's
 // own need was always genuinely different, and borrowing a neighboring
 // interface only worked by coincidence until that interface's own shape
@@ -225,7 +225,7 @@ func (d *githubMergeGateDataSource) StackRegistered(ctx context.Context, owner, 
 // parseChangedFilesFromDiff extracts every file path this diff touches,
 // from TWO distinct signal shapes in a unified diff (GitHub's own raw-diff
 // format, the SAME shape GetPullRequestDiff already returns for the
-// ordinary pre-fetched-context feature, §8.2/Step 46):
+// ordinary pre-fetched-context feature, §8.2):
 //
 //   - "+++ b/<path>" headers (deliberately reuses "+++", the NEW-side
 //     header, rather than "---", so a file DELETED by the fix session

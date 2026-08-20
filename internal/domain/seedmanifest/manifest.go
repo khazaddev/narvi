@@ -1,5 +1,5 @@
 // Package seedmanifest is the pure, no-I/O schema and structural validator
-// for Step 75's ("config/data seeding", §10-P6, §13.4) operator-authored
+// for §10's ("config/data seeding", §10-P6, §13.4) operator-authored
 // seed file. This package never reads a file, never touches the network
 // or a database, and never calls time.Now()/crypto/rand (§11) -- it only
 // ever converts already-in-memory bytes/structs into a Manifest and
@@ -169,7 +169,7 @@ type RepoSetting struct {
 	AutoMergeEnabled       *bool  `yaml:"autoMergeEnabled,omitempty"`
 	AutoRetriggerReview    *bool  `yaml:"autoRetriggerReviewEnabled,omitempty"`
 	DescriptionAutofix     *bool  `yaml:"descriptionAutofixEnabled,omitempty"`
-	// SessionsEnabled (Step 76, §10 Phase 6, §32) is the cohort-rollout
+	// SessionsEnabled (§10 Phase 6, §32) is the cohort-rollout
 	// enrollment gate -- repo_settings.sessions_enabled, migrations/
 	// 000096_repo_settings_sessions_enabled.up.sql. Nil (the default) is
 	// left completely untouched, exactly like every sibling field on this
@@ -184,8 +184,8 @@ type RepoSetting struct {
 }
 
 // RWXPreview is one repo's RWX preview integration config (repo_settings.
-// rwx_preview_* columns, Step 57, §4.1.2) -- this tool's concrete answer
-// to Step 75's "integrations" checklist item. See internal/app/seed/
+// rwx_preview_* columns, §4.1.2) -- this tool's concrete answer
+// to §10's "integrations" checklist item. See internal/app/seed/
 // doc.go for why the OTHER kind of "integration" this codebase names
 // (authz.ActionManageIntegrations: Slack/Linear WORKSPACE OAuth
 // connections) is deliberately NOT seedable data at all, by any tool --

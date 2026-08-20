@@ -1,10 +1,10 @@
-// Package authz implements Step 39's ("identities + full RBAC", §13.3)
+// Package authz implements §13.2's ("identities + full RBAC", §13.3)
 // own central deliverable: a table-driven Authorize(actor, action,
 // resource) error the matrix below lives in as DATA, with exhaustive
 // tests over every (role, action) pair — no I/O, no time.Now(), no
 // randomness (§11), so this package is safe to call from anywhere
 // (an HTTP handler, a session actor mailbox command, a future Slack/
-// Linear entry point once Step 39's own auto-linking resolves a real
+// Linear entry point once §13.2's own auto-linking resolves a real
 // user_id for those channels) without dragging in any adapter dependency.
 //
 // # The matrix (§13.3, verbatim)
@@ -13,14 +13,14 @@
 //	|------------------------------------------------------------|-------|------------|--------|--------|
 //	| View sessions / analytics                                  |  ✓    |     ✓      |   ✓    | ✓ (ro) |
 //	| Create sessions, prompt, approve plans, decide workflow     |  ✓    |     ✓      |   ✓    |   —    |
-//	  steps (§25.11/Step 54) on own/joined
+//	  steps (§25.11) on own/joined
 //	| Stop/resume ANY session; approve ANY plan                   |  ✓    |     ✓      |   —    |   —    |
 //	| Manage automations, environments, repo/env secrets,          |  ✓    |     ✓      |   —    |   —    |
-//	  workflow definitions (§25.11/Step 54)
+//	  workflow definitions (§25.11)
 //	| Edit review verdicts; re-trigger reviews; auto-approve cfg   |  ✓    |     ✓      |   —    |   —    |
 //	| Integrations, global secrets, template activation, members  |  ✓    |     —      |   —    |   —    |
-//	  & roles, sentinel auto-fix toggle, blockOnHighRisk (§8.2/Step 47),
-//	  workflow binding activation (§25.11/Step 54)
+//	  & roles, sentinel auto-fix toggle, blockOnHighRisk (§8.2),
+//	  workflow binding activation (§25.11)
 //
 // # Design: one map, not two parallel checks
 //
@@ -59,14 +59,14 @@
 //     UnlinkMemberIdentity, ListAuditLog — every one of the members API's
 //     own endpoints (§13.2/§13.3's own "members API" deliverable).
 //   - internal/adapters/inbound/httpapi's reposettings.go
-//     (ActionConfigureBlockOnHighRisk, §8.2/Step 47): GetRepoSettings/
+//     (ActionConfigureBlockOnHighRisk, §8.2): GetRepoSettings/
 //     PutRepoSettings, gating admin-only read/write of a repo's own
 //     blockOnHighRisk formal-review-gate policy flag.
 //   - internal/adapters/inbound/httpapi's cloudidentitybindings.go
-//     (ActionManageCloudIdentityBindings, Step 73a, §27.3): binding
+//     (ActionManageCloudIdentityBindingsa, §27.3): binding
 //     create/list/update/delete, both environment and global scope.
 //   - internal/adapters/inbound/httpapi's cloudidentitykeys.go
-//     (ActionManageCloudIdentityKeys, Step 73a, §27.3): the admin-only
+//     (ActionManageCloudIdentityKeysa, §27.3): the admin-only
 //     signing-key rotation trigger.
 //   - Every other Action below (automations, environments, secrets,
 //     review verdicts, integrations, sentinel auto-fix) has NO caller
@@ -76,10 +76,10 @@
 //     so this package's own shape never has to change out from under
 //     them: a future Step calls Authorize with the right
 //     Action constant and gets the exact matrix row §13.3 already
-//     specifies, with zero changes to this package. The three Step 54
+//     specifies, with zero changes to this package. The three §25.4
 //     workflow actions (ActionManageWorkflowDefinitions,
 //     ActionActivateWorkflowBinding, ActionDecideWorkflowStep — §25.11)
-//     follow the same reserved-name discipline deliberately: Step 54 is
-//     dark (schema/contracts/RBAC only), and Steps 55-56 mount the
+//     follow the same reserved-name discipline deliberately: §25.4 is
+//     dark (schema/contracts/RBAC only), and §25.6/§25.9 mount the
 //     first handlers that call Authorize with them.
 package authz

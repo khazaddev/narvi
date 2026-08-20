@@ -38,13 +38,13 @@
 //
 // CP client (cpclient.go): CPClient.Fetch POSTs to CP's future
 // /sessions/{id}/scm-credentials endpoint. THAT ENDPOINT DOES NOT EXIST
-// YET -- docs/IMPLEMENTATION_PLAN.md's Step 21 row ("e2e happy path") is
-// what actually builds it. Exactly like Step 12 invented a documented,
+// YET -- §9.3's own "e2e happy path" work is
+// what actually builds it. Exactly like §4.1 invented a documented,
 // tested-against-a-fake-server wire contract for Modal (a real external
-// API this codebase can't reach in CI), this Step invents a plausible,
+// API this codebase can't reach in CI), this file invents a plausible,
 // documented request/response shape here and tests CPClient's CP-calling
 // logic against a fake httptest.Server standing in for it -- whoever
-// implements Step 21 reconciles the two sides then, an accepted, explicit
+// implements §9.3 reconciles the two sides then, an accepted, explicit
 // future reconciliation point. NewCPClient derives its REST base URL from
 // SessionConfig.ControlPlaneWsUrl (swap wss/ws for https/http, keep only
 // the host) since SESSION_CONFIG has no separate REST base URL field and

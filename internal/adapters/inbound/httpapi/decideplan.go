@@ -1,4 +1,4 @@
-// This file (decideplan.go) implements Step 38's ("plan mode,
+// This file (decideplan.go) implements §8.1's ("plan mode,
 // cross-channel", §8.1/§13.3) own central deliverable: the shared,
 // transport-agnostic "decide a plan" function every entry point (the
 // existing REST approve/reject endpoints, planapprove.go; the new Slack
@@ -36,7 +36,7 @@
 // planapprove.go's own REST handlers (authorizePlanAction -> canActOnPlan,
 // planauthz.go) always have.
 //
-// # Step 39 ("identities + full RBAC") correction: Slack/Linear verdicts
+// # §13.2 ("identities + full RBAC") correction: Slack/Linear verdicts
 // NOW go through the same matrix too
 //
 // An EARLIER version of this doc comment claimed Slack/Linear verdicts
@@ -47,7 +47,7 @@
 // security review caught the contradiction: Slack's interactive.go
 // (decideAndUpdateMessage) and Linear's webhook.go (handlePlanVerdict)
 // were both already resolving a REAL, auto-linked decidedBy by this point
-// in Step 39's own work, yet neither called Authorize on it before
+// in §13.2's own work, yet neither called Authorize on it before
 // reaching this function -- letting a linked `viewer` (or an unowned
 // `member`) decide a plan via Slack/Linear when the identical REST call
 // would have been rejected, directly contradicting §13.3's own
@@ -184,7 +184,7 @@ func planDecisionOutcomeText(verdict PlanVerdict) string {
 // cross-channel-notify outbox rows (enqueuePlanDecisionNotifications
 // below), inside this SAME transaction, so they are visible if and only if
 // the whole decision itself commits.
-// epistemicCheckDefault (F6, adversarial review, Step 61) is a REQUIRED
+// epistemicCheckDefault (F6, adversarial review) is a REQUIRED
 // parameter, exactly mirroring createTurnLocked's own identical parameter
 // (turn.go's own doc comment on why) -- closes F6's own verified gap: the
 // Approve verdict's own implementation-turn insert below used to bypass
@@ -319,7 +319,7 @@ func DecidePlanOnTx(
 	}
 
 	if verdict == PlanVerdictApprove {
-		// F6 (adversarial review, Step 61): the SAME shared gate
+		// F6 (adversarial review): the SAME shared gate
 		// createTurnLocked/CreateSessionOnTx/dispatchNextAttempt also route
 		// through (internal/domain/turn.MaybeInjectEpistemicPreamble).
 		// planMode is passed literally false, matching CreateTurnParams.
@@ -400,8 +400,8 @@ func DecidePlanOnTx(
 // self is a harmless, no-op-shaped confirmation; update-to-a-different-
 // channel is the real "notify" case -- this function does not need to know
 // which). Likewise, if sessionRow is Linear-origin, ALWAYS enqueue a plain
-// ports.NotificationKindLinear row (reusing the EXISTING kind/payload Step
-// 35 already built -- no new Linear-specific kind needed, see this Step's
+// ports.NotificationKindLinear row (reusing the EXISTING kind/payload
+// §5.1 already built -- no new Linear-specific kind needed, see this Step's
 // own design note) describing the same outcome as a follow-up
 // AgentActivity. A session can only ever be Slack-origin XOR Linear-origin
 // (or web/GitHub) -- sessions.spawn_source is a single value -- so in

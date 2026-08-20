@@ -1,6 +1,6 @@
 // This file (shadowcompare.go) implements GET /api/admin/shadow-compare
-// -- Step 59's own "shadow-comparison tooling for review" deliverable
-// (IMPLEMENTATION_PLAN.md Step 59 row, reusing §9.4/§18.5's shadow-mode
+// -- §8.8's own "shadow-comparison tooling for review" deliverable
+// (§8.8, reusing §9.4/§18.5's shadow-mode
 // discipline). See internal/domain/shadowcompare's own doc.go for the
 // full "why a read-only two-turn comparison, not a re-execution
 // orchestrator" structural decision.

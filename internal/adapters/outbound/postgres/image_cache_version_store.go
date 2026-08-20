@@ -10,7 +10,7 @@ import (
 
 // ImageCacheVersionStore is a thin, pass-through wrapper around the
 // sqlc-generated image_cache_version_counters/image_cache_versions queries
-// (Step 43(c), third iteration: immutable versioned cache snapshots --
+// (third iteration: immutable versioned cache snapshots --
 // §19.1's closing paragraph). No caching, no retries, no business rules --
 // retention policy lives in domain/imagebuild (RetainedCacheVersions,
 // PruneCacheVersions), the mint-before-build/publish-after-success sequence

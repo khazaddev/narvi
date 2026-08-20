@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 48's ("sentinels + suggestions", §12.2 item
+// Integration tests for §8.2's ("sentinels + suggestions", §12.2 item
 // 2, §17, §22.1) own findings-upsert extension to the verdict-posting
 // tool, the rebut endpoint, the apply-suggestion endpoint, and the
 // sentinel-auto-fix trigger -- against a real Postgres instance, sharing
@@ -98,7 +98,7 @@ func TestPostReviewVerdict_UpsertsFindingsWithServerComputedIdentity(t *testing.
 }
 
 // TestPostReviewVerdict_FindingReReportedAtShiftedLine_SameIdentity is
-// Step 48's own explicitly required test at the HTTP layer (finding.go's
+// §8.2's own explicitly required test at the HTTP layer (finding.go's
 // own unit tests already prove the pure function; this proves the whole
 // posting path preserves it end to end): posting the SAME finding twice,
 // at two DIFFERENT line numbers, upserts the SAME review_findings row
@@ -247,7 +247,7 @@ func TestPostReviewVerdict_SentinelAutoFix_TriggersWhenToggleOn(t *testing.T) {
 }
 
 // TestPostReviewVerdict_SentinelAutoFix_NeverTriggersWhenToggleOff proves
-// Step 48's own explicitly required test: the admin toggle DEFAULTS OFF,
+// §8.2's own explicitly required test: the admin toggle DEFAULTS OFF,
 // and while off, a coverage finding never claims a sentinel_fixes row or
 // enqueues a trigger, even on a repo that otherwise qualifies.
 func TestPostReviewVerdict_SentinelAutoFix_NeverTriggersWhenToggleOff(t *testing.T) {
@@ -372,7 +372,7 @@ func (f *applySuggestionFakeSourceControl) ListMergedBetween(context.Context, po
 	return nil, false, errors.New("not implemented")
 }
 
-// ListOpenPRsForUser/ResolveCodeOwners/MergePR (Step 60, "decision inbox:
+// ListOpenPRsForUser/ResolveCodeOwners/MergePR ("decision inbox:
 // read model + API", §16.2) are never reached from this test -- same
 // "not implemented" precedent as every other unused method above.
 func (f *applySuggestionFakeSourceControl) ListOpenPRsForUser(context.Context, ports.ListOpenPRsForUserSpec) ([]ports.OpenPR, bool, error) {
@@ -479,7 +479,7 @@ func TestApplySuggestion_Success_CommitsUsingActingMaintainerToken(t *testing.T)
 	}
 }
 
-// TestApplySuggestion_StalePatch_Conflict proves Step 48's own explicitly
+// TestApplySuggestion_StalePatch_Conflict proves §8.2's own explicitly
 // required test at the HTTP layer: a SuggestedFix that no longer applies
 // against the PR's CURRENT head is rejected with 409, and never commits
 // anything.

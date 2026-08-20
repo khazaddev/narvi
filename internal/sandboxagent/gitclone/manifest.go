@@ -18,11 +18,11 @@ const agentsManifestFilename = "AGENTS.md"
 // primary/secondary.
 //
 // This exact markdown shape is this Step's own invented, documented
-// convention: no contracts/ schema governs it, exactly like Step 14
+// convention: no contracts/ schema governs it, exactly like §14.2
 // documented its own invented Readiness.Health shape. A later Step is free
 // to change the rendering without needing to touch any wire contract.
 //
-// degradeNotes (Step 72, §27.1, adversarial-review LOW fix) is zero or
+// degradeNotes (§27.1, adversarial-review LOW fix) is zero or
 // more human-readable notes about a boot-time feature that degraded via
 // the "warn and continue" policy (§27.1's own explicit words: a fetch
 // failure is "recorded in the boot log and AGENTS.md, never a boot
@@ -35,7 +35,7 @@ const agentsManifestFilename = "AGENTS.md"
 // says so plainly, rather than leaving the agent to silently misbehave as
 // if a normally-injected mechanism simply never existed. nil/empty (the
 // overwhelming common case: every boot-time fetch succeeded, or this
-// session has none of Step 72's own fetches to begin with) omits this
+// session has none of §27.1's own fetches to begin with) omits this
 // section entirely -- this is an ADDITIVE section, never a replacement
 // for the repo table above.
 func WriteAgentsManifest(workspaceDir string, results []CloneResult, degradeNotes []string) error {

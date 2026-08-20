@@ -15,7 +15,7 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// This file implements Step 67's own ("review digest: description
+// This file implements §26.2's own ("review digest: description
 // adequacy + graduated remediation", §26.2) description-autofix notifier:
 // ports.NotificationKindGitHubDescriptionAutofix's own real Deliver.
 // Lives in internal/app/outboxworker, mirroring sentinelAutoFixNotifier's
@@ -138,7 +138,7 @@ func isPlatformAuthored(ctx context.Context, artifacts *postgres.ArtifactStore, 
 // PLUS re-asserts the payload's own carried DescriptionAdequacy (a fact
 // fixed at verdict time, never re-derivable from live state, so this
 // third check re-checks the CARRIED value rather than looking anything up
-// -- adversarial-review fix, §26.2/Step 67's own follow-up) -- then, only
+// -- adversarial-review fix, §26.2's own follow-up) -- then, only
 // if all three pass, re-fetches the PR's own CURRENT body, composes the
 // new body (internal/domain/reviewpost.RenderAutofixBody), and writes it.
 // See this file's own top doc comment for the full fail-safe direction

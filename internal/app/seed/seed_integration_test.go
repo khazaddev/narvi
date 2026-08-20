@@ -6,7 +6,7 @@
 // Postgres, embedded migrations via golang-migrate's iofs source
 // driver). Run via `make test-integration`.
 //
-// This is the primary evidence file for Step 75's own load-bearing
+// This is the primary evidence file for §10's own load-bearing
 // guards: participants map by GitHub id only and never touch an
 // existing user's role (TestRun_Participant*), secrets are create-if-
 // absent so an out-of-band rotation survives a re-run

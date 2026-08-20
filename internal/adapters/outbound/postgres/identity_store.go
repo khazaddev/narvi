@@ -15,7 +15,7 @@ import (
 // up.sql + migrations/000017_auth_v1.up.sql's own access_token_encrypted
 // column). No caching, no retries, no business rules -- the OAuth
 // returning-vs-first-time-sign-in branch and the encrypt-before-store step
-// are internal/adapters/inbound/auth's job (Step 20).
+// are internal/adapters/inbound/auth's job (§13.1).
 type IdentityStore struct {
 	q *sqlcgen.Queries
 }
@@ -49,7 +49,7 @@ func (s *IdentityStore) GetByProviderAndExternalID(ctx context.Context, provider
 	})
 }
 
-// GetByUserAndProvider fetches a user's identity for one provider (Step 21
+// GetByUserAndProvider fetches a user's identity for one provider (§9.3
 // "e2e happy path"'s own scm-credentials endpoint uses this to find a
 // session's created_by user's GitHub identity).
 func (s *IdentityStore) GetByUserAndProvider(ctx context.Context, userID pgtype.UUID, provider sqlcgen.IdentityProvider) (sqlcgen.Identity, error) {
@@ -81,7 +81,7 @@ func (s *IdentityStore) ListVerifiedUserIDsByEmail(ctx context.Context, email st
 
 // ListForUser returns every identity linked to userID, oldest-first --
 // backs the members API's own "linked identities" listing per member
-// (Step 39, "identities + full RBAC", §13.2/§13.3).
+// ("identities + full RBAC", §13.2/§13.3).
 func (s *IdentityStore) ListForUser(ctx context.Context, userID pgtype.UUID) ([]sqlcgen.Identity, error) {
 	return s.q.ListIdentitiesForUser(ctx, userID)
 }

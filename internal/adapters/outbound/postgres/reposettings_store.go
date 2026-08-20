@@ -12,7 +12,7 @@ import (
 )
 
 // Float64ToNumeric converts v into a pgtype.Numeric suitable for a
-// NUMERIC column write (Step 69, §26.7's own review_cost_budget_light_usd/
+// NUMERIC column write (§26.7's own review_cost_budget_light_usd/
 // review_cost_budget_deep_usd -- migrations/
 // 000085_repo_settings_review_cost_budget.up.sql's own doc comment: "pgx's
 // own NUMERIC mapping ... converted to/from a plain float64"). v == nil
@@ -42,7 +42,7 @@ func Float64ToNumeric(v *float64) pgtype.Numeric {
 }
 
 // RepoSettingsStore is a thin, pass-through wrapper around the
-// sqlc-generated repo_settings queries (§8.2/Step 47, §21.2) -- see
+// sqlc-generated repo_settings queries (§8.2, §21.2) -- see
 // migrations/000044_repo_settings.up.sql's own doc comment for the "one
 // shared table, not one bespoke table per toggle" design this store's own
 // narrow surface (today: BlockOnHighRisk alone) is expected to grow
@@ -64,9 +64,9 @@ func NewRepoSettingsStore(pool *pgxpool.Pool) *RepoSettingsStore {
 // WithTx returns a RepoSettingsStore whose queries run on tx instead of the
 // pool this store was built with -- mirrors GitHubPRSessionStore.WithTx/
 // TurnStore.WithTx exactly (every other multi-column-write store in this
-// package already has this). §62 review findings C3/C5 are this store's
-// first real callers: C5's column-scoped upserts (PutAutoApprovalSettings/
-// PutAutoMergeToggle, httpapi/reposettings.go) don't themselves need a
+// package already has this). This store's first real callers are the
+// column-scoped upserts below (PutAutoApprovalSettings/
+// PutAutoMergeToggle, httpapi/reposettings.go); those don't themselves need a
 // shared transaction (each is already a single atomic UPDATE), but this
 // package's own established integration-test fault-injection idiom (an
 // already-rolled-back tx standing in for a genuine store outage, see
@@ -87,7 +87,7 @@ func (s *RepoSettingsStore) Get(ctx context.Context, repoFullName string) (sqlcg
 // Upsert idempotently creates-or-updates repoFullName's settings row with
 // blockOnHighRisk/sentinelAutofixEnabled as the new, full current values
 // (never a delta/patch -- see UpsertRepoSettings' own generated doc
-// comment). sentinelAutofixEnabled (Step 48, §17.1) is this same table's
+// comment). sentinelAutofixEnabled (§17.1) is this same table's
 // own further admin-only, per-repo boolean -- migrations/000048's own doc
 // comment.
 func (s *RepoSettingsStore) Upsert(ctx context.Context, repoFullName string, blockOnHighRisk, sentinelAutofixEnabled bool) (sqlcgen.RepoSetting, error) {
@@ -99,8 +99,7 @@ func (s *RepoSettingsStore) Upsert(ctx context.Context, repoFullName string, blo
 }
 
 // UpsertAutoMergeToggle idempotently creates-or-updates repoFullName's
-// §21.2 stage-2 auto-merge toggle -- §62 review finding C5 (MEDIUM but a
-// privilege boundary, fixed): touches ONLY auto_merge_enabled, leaving
+// §21.2 stage-2 auto-merge toggle -- touches ONLY auto_merge_enabled, leaving
 // max_auto_approve_files_changed/sensitive_blast_radius_tags completely
 // untouched (see UpsertAutoMergeToggle's own generated doc comment for
 // the full "why" this replaces the previous, combined
@@ -115,8 +114,8 @@ func (s *RepoSettingsStore) UpsertAutoMergeToggle(ctx context.Context, repoFullN
 }
 
 // UpsertAutoApprovalEligibility idempotently creates-or-updates
-// repoFullName's §21.2 stage-1 eligibility config -- §62 review finding
-// C5's own column-scoped sibling: touches ONLY
+// repoFullName's §21.2 stage-1 eligibility config -- the column-scoped
+// sibling of UpsertAutoMergeToggle above: touches ONLY
 // max_auto_approve_files_changed/sensitive_blast_radius_tags, leaving
 // auto_merge_enabled completely untouched (see
 // UpsertAutoApprovalEligibility's own generated doc comment). nil
@@ -138,7 +137,7 @@ func (s *RepoSettingsStore) UpsertAutoApprovalEligibility(ctx context.Context, r
 
 // UpsertAutoRetriggerReviewToggle idempotently creates-or-updates
 // repoFullName's §24.5 per-repo opt-in -- COLUMN-SCOPED (mirrors
-// UpsertAutoMergeToggle's own identical shape, §62 review finding C5's
+// UpsertAutoMergeToggle's own identical shape
 // pattern generalized to this further, independently-gated toggle):
 // touches ONLY auto_retrigger_review_enabled, leaving every other
 // repo_settings column completely untouched.
@@ -152,7 +151,7 @@ func (s *RepoSettingsStore) UpsertAutoRetriggerReviewToggle(ctx context.Context,
 // UpsertDescriptionAutofixToggle idempotently creates-or-updates
 // repoFullName's §26.2 per-repo opt-in -- COLUMN-SCOPED (mirrors
 // UpsertAutoMergeToggle/UpsertAutoRetriggerReviewToggle's own identical
-// shape, §62 review finding C5's pattern generalized to this further,
+// shape pattern generalized to this further,
 // independently-gated toggle): touches ONLY description_autofix_enabled,
 // leaving every other repo_settings column completely untouched.
 func (s *RepoSettingsStore) UpsertDescriptionAutofixToggle(ctx context.Context, repoFullName string, enabled bool) (sqlcgen.RepoSetting, error) {
@@ -165,9 +164,8 @@ func (s *RepoSettingsStore) UpsertDescriptionAutofixToggle(ctx context.Context, 
 // UpsertReviewDepthConfig idempotently creates-or-updates repoFullName's
 // §26.3 reviewDepth config -- COLUMN-SCOPED (mirrors
 // UpsertAutoMergeToggle/UpsertAutoRetriggerReviewToggle/
-// UpsertDescriptionAutofixToggle's own identical shape, §62 review
-// finding C5's pattern generalized to this further, independently-gated
-// config): touches ONLY review_depth_mode/review_depth_deep_paths,
+// UpsertDescriptionAutofixToggle's own identical shape, the same
+// independently-gated-config pattern): touches ONLY review_depth_mode/review_depth_deep_paths,
 // leaving every other repo_settings column completely untouched.
 // deepPathsJSON is pre-marshaled JSON bytes (a JSON array of glob-pattern
 // strings) -- this store does no JSON encoding of its own, mirroring
@@ -182,7 +180,7 @@ func (s *RepoSettingsStore) UpsertReviewDepthConfig(ctx context.Context, repoFul
 }
 
 // UpsertReviewCostBudget writes this repo's own §26.7 cost-ceiling config
-// (Step 69) -- lightUSD/deepUSD nil means "use the engine's own built-in
+// (§26.4) -- lightUSD/deepUSD nil means "use the engine's own built-in
 // default", persisted as a genuine SQL NULL (Float64ToNumeric below),
 // mirroring UpsertReviewDepthConfig's own identical nil-means-default
 // convention immediately above.
@@ -195,7 +193,7 @@ func (s *RepoSettingsStore) UpsertReviewCostBudget(ctx context.Context, repoFull
 }
 
 // UpsertSessionsEnabled idempotently creates-or-updates repoFullName's
-// Step 76 cohort-rollout enrollment gate (§10 Phase 6, §32) --
+// §10 cohort-rollout enrollment gate (§10 Phase 6, §32) --
 // COLUMN-SCOPED (mirrors UpsertAutoMergeToggle/
 // UpsertAutoRetriggerReviewToggle/UpsertDescriptionAutofixToggle's own
 // identical shape): touches ONLY sessions_enabled, leaving every other
@@ -220,11 +218,11 @@ func (s *RepoSettingsStore) ListAutoMergeEnabled(ctx context.Context) ([]sqlcgen
 }
 
 // UpsertPreviewSettings idempotently creates-or-updates repoFullName's RWX
-// preview configuration (Step 57, §4.1.2 point 1) -- dispatchKey/
+// preview configuration (§4.1.2 point 1) -- dispatchKey/
 // endpointTemplate/orgSlug as the new, full current values for those THREE
 // columns only, leaving block_on_high_risk/sentinel_autofix_enabled
 // completely untouched (UpsertRWXPreviewSettings' own generated doc
-// comment). No admin-facing REST route calls this yet (Step 57's own
+// comment). No admin-facing REST route calls this yet (§4.1's own
 // scope is the dispatch/notifier mechanism, not a settings UI) -- today's
 // one real caller is this package's own integration tests, exercising the
 // exact write path a future settings endpoint would use.

@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 52's ("automations: triggers & extras", §8.4)
+// Integration tests for §8.4's ("automations: triggers & extras", §8.4)
 // own REST CRUD surface over automations (automations.go), against a real
 // Postgres instance -- gated behind the "integration" build tag, sharing
 // this package's own testRig (httpapi_integration_test.go).

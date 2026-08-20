@@ -26,11 +26,11 @@
 //     partial unique index).
 //   - EvaluateTurnDeadline (deadline.go): the turn_deadline named
 //     persistent timer (§2, §5.4 Chain A), using
-//     platform.Timeouts.TurnDeadline (already defined at Step 02).
+//     platform.Timeouts.TurnDeadline (already defined at §5.4).
 //   - Summary (summary.go): the minimal per-turn view internal/domain/
 //     session's status derivation needs.
 //   - EpistemicOutcome (epistemicoutcome.go) and the devil's-advocate
-//     preamble rendering/gating (epistemicpreamble.go): Step 61's own
+//     preamble rendering/gating (epistemicpreamble.go): §20's own
 //     ("domain/turn: builder epistemic pre-action check", §20) closed
 //     3-value outcome vocabulary (none/minor/strong), the fixed preamble
 //     text a non-plan-mode build turn's prompt is preceded by when the

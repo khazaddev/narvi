@@ -245,7 +245,7 @@ func TestFetchSandboxSecrets_NilSessionConfigPanics(t *testing.T) {
 // INSERT, a control plane rolled back to a build predating the
 // reservation -- sandbox-agent drops it at the trust boundary rather than
 // injecting it. Without this, the whole OPENCODE_* hijack (its inline
-// config slot outranks the capability restriction Step 48 writes into the
+// config slot outranks the capability restriction §8.2 writes into the
 // project slot) would rest on every future writer remembering a rule.
 //
 // The legitimate sibling name in the same response must survive: this is

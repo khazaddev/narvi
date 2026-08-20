@@ -1,5 +1,5 @@
 // This file (snapshotmint.go) implements POST /sessions/{sessionID}/
-// snapshot (Step 22, "snapshots & restore", design decision 2) -- the
+// snapshot (§3.2, "snapshots & restore", design decision 2) -- the
 // control-plane side of the round trip design decision 2 reasons through
 // in full: TakeSnapshot's real network call can only be made by the
 // control plane (it needs the provider's own credentials/base URL, which
@@ -7,12 +7,12 @@
 // having), while the ack'd "snapshot_ready" wire event is the sandbox's
 // own authoritative report of the real snapshotId this endpoint mints.
 //
-// Deliberately mounted OUTSIDE auth.Middleware (Step 20's cookie-based,
+// Deliberately mounted OUTSIDE auth.Middleware (§13.1's cookie-based,
 // browser-user auth) and outside /api/sessions -- mirrors
 // scmcredentials.go's own precedent exactly (see that file's own doc
 // comment): this is a SANDBOX-bearer-token-authenticated route, not a
 // browser-facing one, matching internal/adapters/inbound/wshub/sandbox.go's
-// own header-bearer-token handshake precedent from Step 18. See
+// own header-bearer-token handshake precedent from §3.2. See
 // cmd/control-plane/main.go's own mounting.
 //
 // Audit remediation (security-crosscutting lens): this endpoint originally

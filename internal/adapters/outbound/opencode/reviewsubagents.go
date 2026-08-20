@@ -6,13 +6,13 @@ import (
 	"github.com/khazaddev/narvi/internal/domain/review"
 )
 
-// This file implements Step 69's own (§26.4/§26.6, "review deep path:
+// This file implements §26.4's own (§26.4/§26.6, "review deep path:
 // adversarial counter-review + readout measurement") sub-agent
 // registration: three custom OpenCode agents -- review.ArchitectureScribeAgentName,
 // review.CounterReviewerAgentName, review.FactCheckAgentName -- the
 // primary reviewer's own orchestration is instructed (internal/domain/
 // review/context.go's own subAgentOrchestrationInstructions) to spawn via
-// the engine's own "task" tool, exactly mirroring Step 48's own
+// the engine's own "task" tool, exactly mirroring §8.2's own
 // "sentinel-fix" custom agent (sentinelfixagent.go, this file's own
 // direct precedent, generalized here from ONE agent to three).
 //
@@ -138,7 +138,7 @@ var noToolAccess = map[string]bool{
 func architectureScribeAgentEntry() reviewSubAgentEntry {
 	return reviewSubAgentEntry{
 		Mode:        "subagent",
-		Description: "Deep-path review: virgin-context architecture-decision recap from the diff + repo conventions (Step 69, §26.4). Read-only.",
+		Description: "Deep-path review: virgin-context architecture-decision recap from the diff + repo conventions (§26.4). Read-only.",
 		Permission:  readOnlyEditPermission,
 	}
 }
@@ -155,7 +155,7 @@ func architectureScribeAgentEntry() reviewSubAgentEntry {
 func counterReviewerAgentEntry(counterReviewerModel string) reviewSubAgentEntry {
 	return reviewSubAgentEntry{
 		Mode:        "subagent",
-		Description: "Deep-path review: adversarial counter-review of the primary reviewer's own findings (Step 69, §26.4). Read-only, tool-equipped.",
+		Description: "Deep-path review: adversarial counter-review of the primary reviewer's own findings (§26.4). Read-only, tool-equipped.",
 		Permission:  readOnlyEditPermission,
 		Model:       counterReviewerModel,
 	}
@@ -166,13 +166,13 @@ func counterReviewerAgentEntry(counterReviewerModel string) reviewSubAgentEntry 
 // deep paths (§26.6: "the light path's own single review turn spawns
 // exactly one fact-check sub-task"). Deliberately NOT §22.1.1's own `LLM`
 // port -- see review/context.go's own subAgentOrchestrationInstructions
-// doc comment, and IMPLEMENTATION_PLAN.md's own Step 69 row, for why this
+// doc comment, and §26.4, for why this
 // is mechanically an in-sandbox sub-task like the other two, never a
 // CP-side call.
 func factCheckAgentEntry() reviewSubAgentEntry {
 	return reviewSubAgentEntry{
 		Mode:        "subagent",
-		Description: "Both review paths: diff-only fact-check that kills a finding only when provably wrong from the diff text alone (Step 69, §26.6). No tool access.",
+		Description: "Both review paths: diff-only fact-check that kills a finding only when provably wrong from the diff text alone (§26.6). No tool access.",
 		Permission:  readOnlyEditPermission,
 		Tools:       noToolAccess,
 	}

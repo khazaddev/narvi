@@ -1,4 +1,4 @@
-// Package upload holds Step 58's ("uploads, blob storage & the in-sandbox
+// Package upload holds §8.6's ("uploads, blob storage & the in-sandbox
 // download_file tool", §28) pure business rules: the object-storage key
 // convention (§28.3), the shared size/quota evaluation both mint and
 // confirm re-run (§28.4), and the deterministic turn-prompt rendering for

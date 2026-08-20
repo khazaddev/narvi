@@ -1,4 +1,4 @@
-// This file (rolloutgate.go) implements Step 76's own ("feature-flagged
+// This file (rolloutgate.go) implements §10's own ("feature-flagged
 // cohort rollout of sessions, with documented rollback", §10 Phase 6,
 // §32) primary, session-creation-time gate: checkRolloutGate, called from
 // CreateSessionOnTx (create.go) after validateCreateSessionRequest and
@@ -67,7 +67,7 @@ func newSessionRolloutRefusedTotalCounter() metric.Int64Counter {
 		// instrument name across meters, so this is genuinely the same
 		// counter from an operator's own point of view) -- see
 		// opsmetrics.go's own rolloutRefused doc comment there for why.
-		metric.WithDescription("Count of every session-creation attempt, spawn/restore/resume attempt, or turn dispatch refused by Step 76's cohort-rollout gate (§32) because a named repo was not enrolled (repo_settings.sessions_enabled) -- httpapi.checkRolloutGate's own session-creation-time refusals here, PLUS internal/app/sessionactor's own dispatch-time re-check refusals (registered under the SAME name there). Tagged by the \"spawn_source\" attribute -- see checkRolloutGate's own doc comment."),
+		metric.WithDescription("Count of every session-creation attempt, spawn/restore/resume attempt, or turn dispatch refused by §10's cohort-rollout gate (§32) because a named repo was not enrolled (repo_settings.sessions_enabled) -- httpapi.checkRolloutGate's own session-creation-time refusals here, PLUS internal/app/sessionactor's own dispatch-time re-check refusals (registered under the SAME name there). Tagged by the \"spawn_source\" attribute -- see checkRolloutGate's own doc comment."),
 		metric.WithUnit("{refusal}"),
 	)
 	if err != nil {
@@ -201,7 +201,7 @@ func checkRolloutGate(ctx context.Context, tx pgx.Tx, repoSettings *postgres.Rep
 			// A genuine read error -- including a context-canceled or
 			// timed-out query, which surfaces here identically, never as
 			// some other classification -- on the transaction about to
-			// insert this very session -- fail-closed (§32, §62 finding
+			// insert this very session -- fail-closed (§32 finding
 			// C3's own precedent: widening policy on a degraded read is
 			// backwards), never treated as "no row, so unenrolled"
 			// without comment: logged distinctly so an operator can tell

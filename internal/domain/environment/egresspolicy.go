@@ -1,9 +1,9 @@
 // This file (egresspolicy.go) implements §27.6's per-Environment
-// egress_policy {mode: open|allowlist, allowlist} (Step 74) -- the
+// egress_policy {mode: open|allowlist, allowlist} (§27.5) -- the
 // enforced half of §27.6's egress design. The cooperative half
 // (HTTP_PROXY/HTTPS_PROXY/NO_PROXY, §27.1's own sandbox_secrets
 // mechanism) has no domain type of its own here: it is pure env-var
-// plumbing, named in the Step 74 brief precisely so nobody builds a
+// plumbing, named in the §27.5 brief precisely so nobody builds a
 // parallel mechanism for it, and is explicitly NOT enforcement (any
 // process can ignore an env var) -- see cmd/sandbox-agent's own
 // sandboxsecrets.go, unmodified by this Step.
@@ -152,7 +152,7 @@ func ValidateEgressPolicy(p EgressPolicy) error {
 }
 
 // AppendAllowlistFloor is §27.6's own non-negotiable allowlist floor,
-// made structural rather than merely validated at input (Step 74 brief,
+// made structural rather than merely validated at input (§27.5 brief,
 // point B): "a sandbox that cannot reach the control plane or clone its
 // repos is not a security posture, it is a boot failure." floor is the
 // caller's own already-resolved set of must-have hosts -- the CP's own

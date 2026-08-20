@@ -21,8 +21,8 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// This file proves Step 26's ("image builds", §8.5-note/§10-P2) own
-// end-to-end wiring, as rewritten by Step 41 ("warm boot: shared
+// This file proves §8.5's ("image builds", §8.5-note/§10-P2) own
+// end-to-end wiring, as rewritten by §19.1 ("warm boot: shared
 // fingerprint + spawn-path simplification", §19.1): dispatch.go/
 // imageresolve.go's resolveAndSetImage on the spawn side, and internal/
 // app/imagebuild.Builder on the background side, against a REAL Postgres
@@ -30,7 +30,7 @@ import (
 // comment on dispatch_integration_test.go's fakeSpawnProvider for how
 // BuildImage is faked.
 //
-// # Step 41/42 boundary this file's own tests are written against
+// # §19.1/§19.2 boundary this file's own tests are written against
 //
 // resolveAndSetImage no longer calls ResolveBranchSHA, CheckCreatorGuard,
 // or decryptCreatorGitHubToken at all (imageresolve.go's own top comment)
@@ -40,9 +40,9 @@ import (
 // sourceControl.shaCallCount() == 0 for exactly this reason: there is no
 // code path left in this Step that could ever make that count anything
 // else. Separately, app/imagebuild.Builder's own attempt has no
-// claim-time SHA resolution mechanism yet (that's Step 42, §19.2/§19.9),
+// claim-time SHA resolution mechanism yet (that's §19.2/§19.9),
 // so a background builder can only ever turn a REPO-LESS pending row into
-// a real 'ready' one in Step 41 -- a repo-bearing pending row this file's
+// a real 'ready' one (§19.1) -- a repo-bearing pending row this file's
 // own MISS tests create stays unresolved (see
 // TestImageBuildPipeline_MissCreatesPendingRow_BuilderCannotYetBuildIt_
 // SpawnStillBaseImage below, and internal/app/imagebuild/
@@ -50,7 +50,7 @@ import (
 // in isolation). The WARM-HIT test below therefore seeds a 'ready' row
 // directly (via ImageBuildStore, bypassing the background builder
 // entirely) rather than relying on the builder to produce one for a
-// repo-bearing fingerprint -- simulating what Step 42's own claim-time
+// repo-bearing fingerprint -- simulating what §19.2's own claim-time
 // resolution will eventually produce for real, so this Step's own exit
 // criterion ("existing spawn-path behavior, the warm-hit case, must work
 // end-to-end") has real, direct coverage today.
@@ -61,10 +61,10 @@ import (
 // computed against a real config by accident.
 const testRuntimeVersion = "1.0.0-test"
 
-// newImageBuildTestRegistry builds a Registry wired with everything Step
-// 26's own image-resolution path reads: provider (for CreateSandbox/
+// newImageBuildTestRegistry builds a Registry wired with everything §8.5's
+// own image-resolution path reads: provider (for CreateSandbox/
 // BuildImage), sourceControl (kept for signature parity / other Actor
-// functionality -- imageresolve.go itself never calls it as of Step 41,
+// functionality -- imageresolve.go itself never calls it,
 // see this file's own top comment), testTokenEncryptionKey
 // (pushpr_integration_test.go's own fixed test key), and testRuntimeVersion.
 func newImageBuildTestRegistry(t *testing.T, ctx context.Context, pool *pgxpool.Pool, provider ports.SandboxProvider, sourceControl ports.SourceControl) *Registry {
@@ -157,7 +157,7 @@ func TestResolveAndSetImage_NoCachedImage_FallsBackToBaseAndCreatesPendingRow(t 
 	}
 
 	if got := sourceControl.shaCallCount(); got != 0 {
-		t.Fatalf("ResolveBranchSHA call count = %d, want 0 (Step 41: the fingerprint is url-keyed and network-free)", got)
+		t.Fatalf("ResolveBranchSHA call count = %d, want 0 (§19.1: the fingerprint is url-keyed and network-free)", got)
 	}
 
 	// The fingerprint is computed from the repo's clone URL directly --
@@ -203,7 +203,7 @@ func TestResolveAndSetImage_NoCachedImage_FallsBackToBaseAndCreatesPendingRow(t 
 }
 
 // TestResolveAndSetImage_CreatorContextIrrelevant_ZeroNetworkCallsRegardless
-// (Step 41's own test proving creator context -- no account, disabled,
+// (§19.1's own test proving creator context -- no account, disabled,
 // viewer -- never changed resolveAndSetImage's outcome) has been REMOVED
 // by the audit fix ("warm-boot image access control", HIGH): that was
 // exactly the vulnerability this batch closes -- see the finding this
@@ -219,12 +219,12 @@ func TestResolveAndSetImage_NoCachedImage_FallsBackToBaseAndCreatesPendingRow(t 
 // TestResolveAndSetImage_WarmHit_UsesReadyImageZeroNetworkCalls proves this
 // Step's own exit criterion: existing spawn-path behavior for the
 // warm-HIT case (a fingerprint that already has a 'ready' image_builds
-// row) works end to end, with ZERO network calls, exactly like before
-// Step 41 -- only how the fingerprint itself got computed changed. The
+// row) works end to end, with ZERO network calls, exactly like
+// previously -- only how the fingerprint itself got computed changed. The
 // 'ready' row is seeded directly here (Claim + RecordSuccess against a
-// pending row this test creates), simulating what Step 42's own
+// pending row this test creates), simulating what §19.2's own
 // claim-time resolution will eventually produce for a repo-bearing
-// fingerprint for real -- Step 41's own background builder cannot produce
+// fingerprint for real -- §19.1's own background builder cannot produce
 // one for a repo-bearing row itself yet (see this file's own top comment).
 func TestResolveAndSetImage_WarmHit_UsesReadyImageZeroNetworkCalls(t *testing.T) {
 	ctx := context.Background()
@@ -274,7 +274,7 @@ func TestResolveAndSetImage_WarmHit_UsesReadyImageZeroNetworkCalls(t *testing.T)
 // build leaves behind -- used by tests that need a warm-HIT row to
 // already exist without depending on app/imagebuild.Builder actually
 // being able to produce one for a repo-bearing fingerprint (which it
-// cannot yet, in Step 41 -- see this file's own top comment).
+// cannot yet do -- see this file's own top comment).
 func seedReadyImageBuild(ctx context.Context, t *testing.T, store *narvipg.ImageBuildStore, fingerprint, imageRef string) {
 	t.Helper()
 
@@ -308,7 +308,7 @@ func seedReadyImageBuild(ctx context.Context, t *testing.T, store *narvipg.Image
 }
 
 // TestImageBuildPipeline_MissCreatesPendingRow_NoCredentialConfigured_SpawnStillBaseImage
-// proves end to end, from the spawn side, Step 42's own degrade path when
+// proves end to end, from the spawn side, §19.2's own degrade path when
 // the new platform-level GitHub credential (platform.Config.
 // GitHubImageBuildToken) is NOT configured: a cache MISS creates a pending
 // row (scenario (a), re-proved here as part of the full pipeline), the

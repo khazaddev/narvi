@@ -159,7 +159,7 @@ func TestSandboxEventsRoundTrip(t *testing.T) {
 	})
 
 	// TestSandboxEventsGitSyncRepoRequired is this batch's own schema change
-	// (Step 29, "gitstate in-sandbox", §3.4/§14.1 design section 6): GitSync
+	// ("gitstate in-sandbox", §3.4/§14.1 design section 6): GitSync
 	// now REQUIRES a "repo" field disambiguating which of a session's
 	// (always-a-list, §3.4) repos a given stash/checkout/pop phase is
 	// about. Omitting it must fail validation.
@@ -484,7 +484,7 @@ func TestSandboxEventsSubTaskId(t *testing.T) {
 	})
 }
 
-// TestSandboxEventsArtifactStatus is the round-trip test for Step 58's
+// TestSandboxEventsArtifactStatus is the round-trip test for §8.6's
 // ("uploads, blob storage & the in-sandbox download_file tool", §28.6)
 // own additive schema change: the artifact event gains an OPTIONAL status
 // (absent = "ready") and a nullable failureReason. Absent (every existing

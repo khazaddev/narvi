@@ -1,6 +1,6 @@
-// Package reviewtriage implements Step 68's own light/deep review-depth
+// Package reviewtriage implements §26.3's own light/deep review-depth
 // routing decision (§26.3): "the depth decision is made in the single
-// funnel (Step 46's creation/dispatch path), deterministic-first -- the
+// funnel (§8.2's creation/dispatch path), deterministic-first -- the
 // same posture as everywhere else in this system (the server does not
 // trust agent judgment for routing; deterministic fallbacks throughout,
 // §18)." Every function here is pure per CLAUDE.md/§11: no I/O, no
@@ -32,10 +32,10 @@
 // # Do not invent a second BlastRadius vocabulary
 //
 // internal/domain/autoapproval/blastradius.go's own top doc comment
-// explicitly anticipates this Step: "§26.3's own 'sensitive globs ...
-// mapped deterministically onto the same BlastRadius tags' is Step 68 ...
-// A straightforward, additive rewrite once Step 68 actually lands, never
-// a migration this Step needs to anticipate." This package follows that
+// explicitly anticipates this: "§26.3's own 'sensitive globs ...
+// mapped deterministically onto the same BlastRadius tags' is a LATER,
+// broader design ... A straightforward, additive rewrite once §26.3
+// actually lands, never a migration this file needs to anticipate." This package follows that
 // note literally: sensitiveGlobHit (decide.go) calls
 // autoapproval.ClassifyChangedPaths directly -- the SAME eight-value
 // review.Tag vocabulary, the SAME path-classification heuristics
@@ -50,20 +50,20 @@
 // distinct top-level path roots -> deep; otherwise light"), worded with
 // a seemingly-exhaustive "otherwise". But the SAME section's own,
 // fuller "Signals" paragraph, one paragraph earlier, states a fourth
-// rule explicitly and unambiguously: "the PR's own verdict history (Step
-// 62 -- a prior high verdict routes deep)". This package treats that
+// rule explicitly and unambiguously: "the PR's own verdict history (a
+// prior high verdict routes deep)". This package treats that
 // clause as binding (ignoring an explicit "routes deep" statement would
 // be a worse plan-fidelity failure than the recap sentence's own
 // "otherwise" wording tension) and additionally treats the PR's existing
 // review:needs-human label (internal/domain/reviewpost.LabelNeedsHuman,
-// Step 47's own maintainer escape hatch) as a fifth trigger: routing an
+// §8.2's own maintainer escape hatch) as a fifth trigger: routing an
 // already-flagged-needs-human PR through the MORE rigorous deep path is
 // strictly the safer direction, consistent with §26.9's own invariant
 // ("the router may only ever add depth, never subtract rigor"). This
 // inconsistency between §26.3's own recap sentence and its fuller prose
 // is flagged in this Step's own PR description, not silently resolved.
 //
-// review:low-risk/review:medium-risk/review:high-risk (Step 47's own
+// review:low-risk/review:medium-risk/review:high-risk (§8.2's own
 // bot-synced risk labels, reviewpost.RiskLabel) are deliberately NOT
 // used as an independent sixth trigger here: they are themselves derived
 // from the SAME verdict history the fourth rule above already consults

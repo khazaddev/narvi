@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 61's ("domain/turn: builder epistemic
+// Integration tests for §20's ("domain/turn: builder epistemic
 // pre-action check", §20.2) own structured-signal-reporting tool
 // (epistemicoutcome.go), against a real Postgres instance -- sharing this
 // package's own testRig (httpapi_integration_test.go), mirroring
@@ -120,7 +120,7 @@ func TestPostEpistemicOutcome_GenMismatch_Forbidden(t *testing.T) {
 }
 
 // TestPostEpistemicOutcome_DeadSandbox_Gone is F2's own addition
-// (adversarial review, Step 61): proves a terminalized sandbox (status
+// (adversarial review): proves a terminalized sandbox (status
 // stopped/failed/stale) can never post an epistemic outcome -- mirrors
 // TestPostReviewVerdict_DeadSandbox_Gone (reviewverdict_integration_test.go)
 // exactly, the sibling this endpoint's own doc comment already names as

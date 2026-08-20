@@ -1,4 +1,4 @@
-// This file (cloudidentitymetrics.go) implements Step 73a's own ("cloud
+// This file (cloudidentitymetrics.go) implements §27.3's own ("cloud
 // identity: OIDC issuer, bindings, minting", §27.3) minting metric:
 // "Minting is logged with correlation_id (§5.3) and counted as a metric."
 // correlation_id is already carried by every log line cloudidentitytoken.

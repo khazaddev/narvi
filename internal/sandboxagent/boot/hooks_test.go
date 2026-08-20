@@ -174,7 +174,7 @@ func TestRunHooks_EnvExcludesSessionConfig(t *testing.T) {
 }
 
 // TestRunHooks_SecretEnvReachesRealSpawnedHook is the direct, end-to-end
-// proof of Step 72's own injection mechanism (§27.1) AFTER the
+// proof of §27.1's own injection mechanism (§27.1) AFTER the
 // adversarial-review HIGH fix: RunHooks' own new secretEnv parameter --
 // NOT a value os.Setenv'd onto sandbox-agent's own process environment (the
 // PRE-fix mechanism this test used to exercise; see git history for the

@@ -13,11 +13,11 @@ import (
 // ArtifactStore is a thin, pass-through wrapper around the sqlc-generated
 // artifacts queries (§4.3, §6.3 GET /api/sessions/:id/artifacts and the
 // client WS hub's own SubscribedPayload.artifacts, §6.2). No caching, no
-// retries, no business rules. Create is Step 21's ("e2e happy path") own
+// retries, no business rules. Create is §9.3's ("e2e happy path") own
 // addition -- app/sessionactor's own createPRBestEffort (pushpr.go) is its
 // first real caller, recording a "pr"-typed artifact once
-// ports.SourceControl.CreatePR succeeds; previews (Step 48) and uploads
-// (Step 49) still have no Create caller.
+// ports.SourceControl.CreatePR succeeds; previews (§8.2) and uploads
+// (§14.4) still have no Create caller.
 type ArtifactStore struct {
 	q *sqlcgen.Queries
 }
@@ -48,7 +48,7 @@ func (s *ArtifactStore) ListForSession(ctx context.Context, sessionID pgtype.UUI
 }
 
 // CreateUpload inserts a new 'upload'-typed artifact row in status
-// 'pending' (Step 58's own mint, §28.4) and returns it.
+// 'pending' (§8.6's own mint, §28.4) and returns it.
 func (s *ArtifactStore) CreateUpload(ctx context.Context, arg sqlcgen.CreateUploadArtifactParams) (sqlcgen.Artifact, error) {
 	return s.q.CreateUploadArtifact(ctx, arg)
 }
@@ -105,7 +105,7 @@ func (s *ArtifactStore) MarkUploadFailedIfPending(ctx context.Context, id, sessi
 }
 
 // GetPRArtifactByURL reports whether SOME session pushed and opened the
-// pull request at url (Step 60's own "authored by a platform session"
+// pull request at url (§16's own "authored by a platform session"
 // signal for ready_to_merge -- see GetPRArtifactByURL's own generated doc
 // comment). Returns pgx.ErrNoRows (via errors.Is) when no such artifact
 // exists -- callers must never treat that as an error, only as "not

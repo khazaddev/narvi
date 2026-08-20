@@ -30,7 +30,7 @@ import (
 // all, rather than existing with a value the auto-approval eligibility
 // engine's own stale-verdict guard could never honestly evaluate.
 //
-// digest (Step 66, §26.1, extended by Step 67, §26.2) is forwarded
+// digest (§26.1, extended by §26.2) is forwarded
 // verbatim onto the SAME row's own seven digest_* columns (migrations/
 // 000077_review_verdicts_digest.up.sql,
 // 000078_review_verdicts_description_adequacy.up.sql) -- digest.Summary/
@@ -44,7 +44,7 @@ import (
 // (httpapi.PostReviewVerdict) to have already done so.
 //
 // digest is NOT, however, forwarded byte-for-byte: reviewpost.
-// SanitizeDigest (Step 62 hardening, hardening the write path against the
+// SanitizeDigest (hardening the write path against the
 // class PR #188 closed on the read path) runs FIRST, over a local copy --
 // see that function's own doc comment (reviewpost/sanitize.go) for the
 // full "why the write path too" reasoning. Every model-authored free-text
@@ -62,14 +62,14 @@ import (
 // local sanitized copy is never visible to that already-completed
 // rendering. See reviewpost.SanitizeDigest's own doc comment for the full
 // "no double-escaping, verified not assumed" argument.
-// reviewPath (Step 68, §26.3) is the posting turn's own turns.
+// reviewPath (§26.3) is the posting turn's own turns.
 // review_depth, forwarded verbatim -- empty ("", reviewtriage.ReviewDepth
 // zero value) is a legitimate, common value (a verdict whose own turn
 // never resolved a depth, or a caller that predates this Step), persisted
 // as a genuine SQL NULL, never the literal string "" (nonEmptyStringPtr
 // below).
 //
-// counterReview/factCheck/factCheckKilled (Step 69, §26.4/§26.6) are
+// counterReview/factCheck/factCheckKilled (§26.4/§26.6) are
 // forwarded verbatim from the SAME already-validated VerdictInput this
 // verdict/digest were themselves built from -- counterReview's own empty
 // value (light path, §26.9) persists as NULL via nonEmptyStringPtr
@@ -87,7 +87,7 @@ func Insert(ctx context.Context, store *postgres.ReviewVerdictStore, repoFullNam
 		return reviewverdict.Record{}, fmt.Errorf("reviewverdict: insert: refusing to persist a verdict with no known head sha for %s#%d", repoFullName, prNumber)
 	}
 
-	// Step 62 hardening: sanitize a LOCAL copy of digest before anything
+	// hardening: sanitize a LOCAL copy of digest before anything
 	// below marshals or persists it -- see this function's own doc comment
 	// (above) and reviewpost.SanitizeDigest's own doc comment for the full
 	// "why" and the "no double-escaping" argument. digest (the parameter)
@@ -160,7 +160,7 @@ func nonEmptyStringPtr(s string) *string {
 // therefore always means "a real INSERT recorded zero kills" (fact_check
 // == 'skipped', or a 'done' pass that happened to remove nothing), never
 // "no value was ever recorded" -- that latter case is what a genuine SQL
-// NULL (a pre-Step-69 row, this column simply not existing yet) means
+// NULL (a pre-existing row, this column simply not existing yet) means
 // instead.
 func factCheckKilledPtr(n int) *int32 {
 	v := int32(n)

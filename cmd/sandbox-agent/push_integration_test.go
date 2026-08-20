@@ -1,6 +1,6 @@
 //go:build integration
 
-// Real, subprocess-based integration test for HandlePush (Step 21, "e2e
+// Real, subprocess-based integration test for HandlePush (§9.3, "e2e
 // happy path", design decision 7). This deliberately spawns the REAL,
 // compiled sandbox-agent binary as a separate OS process (rather than
 // calling commandHandler.HandlePush directly, in-process, from this test

@@ -36,7 +36,7 @@ import (
 // reason a session ever carries a provenance tag at all (a non-empty
 // pathScope).
 //
-// Step 49 (§14.4, "handoff-readiness sentinel") promotes the underlying
+// (§14.4, "handoff-readiness sentinel") promotes the underlying
 // string into internal/domain/provenance.ScopedEnvironment (that
 // package's own doc comment explains why: a fourth caller,
 // internal/app/sessionactor, needs to read this exact value and cannot
@@ -47,7 +47,7 @@ import (
 const scopedEnvironmentProvenanceTag = provenance.ScopedEnvironment
 
 // ChildSessionOptions is CreateSessionOnTx's own additive, OPTIONAL extra
-// parameter (Step 48, "sentinels + suggestions", §17.2) -- a variadic
+// parameter ("sentinels + suggestions", §17.2) -- a variadic
 // trailing parameter (see CreateSessionOnTx's own signature) so every
 // EXISTING call site (every caller before this Step, including internal/
 // adapters/inbound/github's own coalesce.go, which imports this function
@@ -85,7 +85,7 @@ type ChildSessionOptions struct {
 	// access -- never a scoped prototyping environment").
 	ProvenanceTag *string
 
-	// ReviewHeadSHA (§62 review finding C2, CRITICAL, fixed) is
+	// ReviewHeadSHA is
 	// unrelated to every other field on this struct (none of which this
 	// function's OWN doc comment's "parent/child" framing describes) --
 	// bundled into this SAME trailing-variadic options struct anyway,
@@ -104,7 +104,7 @@ type ChildSessionOptions struct {
 	// (turn.go) for the full "why".
 	ReviewHeadSHA *string
 
-	// ReviewDepth/ReviewDepthDecision (Step 68, §26.3) mirror
+	// ReviewDepth/ReviewDepthDecision (§26.3) mirror
 	// ReviewHeadSHA's own identical shape immediately above -- see
 	// CreateTurnOptions.ReviewDepth/ReviewDepthDecision's own doc comment
 	// (turn.go) for the full "why".
@@ -130,7 +130,7 @@ func childSessionOptionsFrom(opts []ChildSessionOptions) ChildSessionOptions {
 // spec" example path exactly.
 const defaultContractsPath = "contracts/api"
 
-// CreateSession backs POST /api/sessions (§6.3), mounted (Step 20, "auth
+// CreateSession backs POST /api/sessions (§6.3), mounted (§13.1, "auth
 // v1") behind internal/adapters/inbound/auth.Middleware -- see doc.go's own
 // updated writeup. Decodes restdtos.CreateSessionRequest from a body
 // bounded by http.MaxBytesReader(maxRequestBodyBytes) -- an oversized body
@@ -158,7 +158,7 @@ const defaultContractsPath = "contracts/api"
 // left completely unchanged -- sandbox-agent must never trust what it
 // receives, even from a layer that validates first.
 //
-// Step 21 ("e2e happy path") update: req.Repos is now actually PERSISTED
+// §9.3 ("e2e happy path") update: req.Repos is now actually PERSISTED
 // (marshaled to the sessions.repos JSONB column -- design decision 1,
 // migrations/000018_session_repos.up.sql). When req.Prompt is non-nil, a
 // Turn row is ALSO inserted, in the SAME Postgres transaction as the
@@ -236,23 +236,23 @@ const defaultContractsPath = "contracts/api"
 // themselves are UNCHANGED by this fix, so the bot-ingress callers above
 // keep passing their own genuine spawnSource exactly as before.
 //
-// Step 31 ("webhook toolkit") update: everything this func used to do
+// §5.1 ("webhook toolkit") update: everything this func used to do
 // AFTER decoding the request body is now CreateSessionCore below -- a
 // pure extraction, not a behavior change (every case this func's own doc
 // comment above describes, and every existing test in this package's own
 // _test.go files, is unchanged). The only two things that stay HERE,
 // specific to the browser/REST path, are decoding the body off an actual
 // *http.Request and requiring a real authenticated human caller via
-// authenticatedUserID -- a webhook ingress handler (Steps 32-34) calls
+// authenticatedUserID -- a webhook ingress handler (§8.2/§8.10) calls
 // CreateSessionCore directly with its own already-decoded request and a
 // NULL createdBy (no cookie, no human), never this func.
 //
-// Step 33 ("Slack ingress") update: CreateSessionCore (and
-// CreateSessionError, alongside it) is now EXPORTED -- doc.go's own Step
-// 31 writeup left the unexported-vs-exported question deliberately open
-// for Steps 32-34 to decide ("Whether that turns out to be ... or Steps
-// 32-34 decide createSessionCore should be exported instead, is left to
-// those Steps"). internal/adapters/inbound/slack lives in its own
+// §8.10 ("Slack ingress") update: CreateSessionCore (and
+// CreateSessionError, alongside it) is now EXPORTED -- doc.go's own §5.1
+// writeup left the unexported-vs-exported question deliberately open
+// for §8.2/§8.10 to decide ("Whether that turns out to be ... or
+// §8.2/§8.10 decide createSessionCore should be exported instead, is left
+// to that work"). internal/adapters/inbound/slack lives in its own
 // package (mirroring httpapi/linear/github's own one-package-per-ingress-
 // surface shape, not folded into this one), so it needs the exported
 // form to reach this function at all -- an unexported identifier is not
@@ -271,11 +271,11 @@ const defaultContractsPath = "contracts/api"
 // it still calls CreateSessionCore exactly as before, and every existing
 // test in this package's own _test.go files passes unchanged. Likewise,
 // CreateSessionCore's own external signature/behavior -- the two things
-// Step 33's Slack ingress (above) actually depends on -- is unchanged by
+// §8.10's Slack ingress (above) actually depends on -- is unchanged by
 // this split: same params, same (sqlcgen.Session, *CreateSessionError)
 // return, same validate -> insert -> commit -> dispatch sequencing.
 // intentSvc is nil-safe (see recordExplicitIntentDecision's own doc
-// comment) so every existing call site that doesn't care about Step 36
+// comment) so every existing call site that doesn't care about §8.3
 // can keep passing nil unchanged.
 func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, intentSvc *intentclassifier.Service, epistemicCheckDefault bool, rolloutMode platform.RolloutMode, repoSettings *postgres.RepoSettingsStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -337,7 +337,7 @@ func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *p
 			return
 		}
 
-		// rolloutMode/repoSettings (Step 76, §32): a 403 with an explicit
+		// rolloutMode/repoSettings (§32): a 403 with an explicit
 		// "repository not enrolled" message (checkRolloutGate's own
 		// Message) is exactly what the generic writeError(w, cerr.Status,
 		// cerr.Message) branch immediately below already produces for
@@ -353,7 +353,7 @@ func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *p
 			return
 		}
 
-		// Step 36 ("intent classifier", §8.3/§18): this is the ONE
+		// §8.3 ("intent classifier", §8.3/§18): this is the ONE
 		// surface that ever supplies its own decision rather than calling
 		// Classify -- a human's own explicit plan/build toggle on the web
 		// UI, known the moment the session is created (§18.4's own
@@ -390,15 +390,15 @@ func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *p
 // failure -- a distinct type (rather than a plain error) so CreateSession's
 // own writeError call sites, and every message they produce, stay
 // byte-for-byte identical to what this codebase's existing tests already
-// assert, before and after this Step 31 extraction. Exported (alongside
+// assert. Exported (alongside
 // CreateSessionCore/CreateSessionOnTx) so a caller outside this package
 // can inspect Status/Message directly -- including internal/adapters/
-// inbound/slack (Step 33), which reads cerr.Status/cerr.Message directly.
+// inbound/slack (§8.10), which reads cerr.Status/cerr.Message directly.
 type CreateSessionError struct {
 	Status  int
 	Message string
 
-	// RolloutRefusal (Step 76, §10 Phase 6, §32) is true iff this error
+	// RolloutRefusal (§10 Phase 6, §32) is true iff this error
 	// came from checkRolloutGate (rolloutgate.go) -- a PERMANENT policy
 	// refusal ("this repo is not enrolled in the cohort rollout"), never a
 	// transient failure. §32's own "machine-checkable refusal marker"
@@ -427,7 +427,7 @@ type validatedCreateSessionInput struct {
 	hasMockConfig bool
 	contractsPath string
 
-	// docker/hasDocker (Step 74, §27.5) mirror pathScope/hasPathScope's own
+	// docker/hasDocker (§27.5) mirror pathScope/hasPathScope's own
 	// shape: docker is req.Docker itself (a plain bool, no tri-state
 	// needed -- absent and explicit-false are behaviorally identical), and
 	// hasDocker is docker's own value, kept as a separate field purely for
@@ -437,7 +437,7 @@ type validatedCreateSessionInput struct {
 	docker    bool
 	hasDocker bool
 
-	// egressPolicy/hasEgressPolicy (Step 74, §27.6) mirror mockConfig's own
+	// egressPolicy/hasEgressPolicy (§27.6) mirror mockConfig's own
 	// shape: hasEgressPolicy is true whenever the request body carried an
 	// "egressPolicy" key at all (req.EgressPolicy != nil); egressPolicy is
 	// the already-validated (environment.ValidateEgressPolicy) domain
@@ -540,7 +540,7 @@ func validateCreateSessionRequest(req restdtos.CreateSessionRequest) (validatedC
 		}
 	}
 
-	// docker (Step 74, §27.5) is a plain, always-present bool (unlike
+	// docker (§27.5) is a plain, always-present bool (unlike
 	// pathScope/mockConfig's own genuinely-optional-key shape) -- see
 	// validatedCreateSessionInput.docker's own doc comment for why no
 	// tri-state is needed. Nothing to validate here: every bool value is
@@ -580,7 +580,7 @@ func validateCreateSessionRequest(req restdtos.CreateSessionRequest) (validatedC
 	}, nil
 }
 
-// checkSubstrateCapabilitiesUpFront is Step 74's own up-front half of the
+// checkSubstrateCapabilitiesUpFront is §27.5's own up-front half of the
 // "fail-closed, twice" rule (§27.5/§27.6, brief point A) -- the clearest-
 // possible-UX refusal at session-creation time, BEFORE any Postgres
 // write, when this request's own docker/egressPolicy asks for a substrate
@@ -669,20 +669,20 @@ func checkSubstrateCapabilitiesUpFront(registry *sessionactor.Registry, req rest
 // direct human user"). CreateSession (the HTTP handler above, via
 // CreateSessionCore) always passes a Valid one today, since it still
 // hard-requires authenticatedUserID -- but this function itself never
-// assumes that: a webhook ingress caller (Steps 32-34) with no
+// assumes that: a webhook ingress caller (§8.2/§8.10) with no
 // cookie-authenticated human passes an explicitly invalid pgtype.UUID{}
 // here instead.
 //
-// auditLog is Step 39's own addition (§13.3: "written in the same
+// auditLog is §13.2's own addition (§13.3: "written in the same
 // transaction as the change"): an audit_log row is inserted on this SAME
 // tx, right after the session row itself, for EVERY caller of this
 // function -- the browser REST path (CreateSession, a real authenticated
-// createdBy) and every webhook-ingress path (Steps 32-34's own GitHub/
+// createdBy) and every webhook-ingress path (§8.2/§8.10's own GitHub/
 // Slack/Linear session creation, createdBy left invalid) alike, mirroring
 // sessions.created_by's own existing NULL-for-bot convention: actor_user_id
 // is NULL on a bot-attributed row, never a fabricated "system user".
 //
-// epistemicCheckDefault (F6, adversarial review, Step 61) is a REQUIRED
+// epistemicCheckDefault (F6, adversarial review) is a REQUIRED
 // parameter, exactly mirroring createTurnLocked's own identical parameter
 // (turn.go's own doc comment on why: every call site must compile-time-
 // decide what to pass, never a silently-defaulted zero value) -- this
@@ -704,7 +704,7 @@ func checkSubstrateCapabilitiesUpFront(registry *sessionactor.Registry, req rest
 // why (F7: a review session must never get the builder-only preamble,
 // mirroring reviewretrigger.go's identical REUSE-branch precedent).
 //
-// rolloutMode/repoSettings (Step 76, §10 Phase 6, §32) are REQUIRED
+// rolloutMode/repoSettings (§10 Phase 6, §32) are REQUIRED
 // parameters, not a variadic/optional trailing slot -- deliberately
 // mirroring epistemicCheckDefault's own "every call site must
 // compile-time-decide what to pass, never a silently-defaulted zero
@@ -738,7 +738,7 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 	egressPolicy := validated.egressPolicy
 	hasEgressPolicy := validated.hasEgressPolicy
 
-	// Step 76's own primary gate (§10 Phase 6, §32): checked AFTER
+	// §10's own primary gate (§10 Phase 6, §32): checked AFTER
 	// validation, BEFORE the environment/session inserts below, on this
 	// SAME tx -- see checkRolloutGate's own doc comment (rolloutgate.go)
 	// for the full "why here" reasoning, including the no-op short-circuit
@@ -752,7 +752,7 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 	// the session row itself, so the session insert below can set
 	// environment_id to it directly, whenever ANY of pathScope/mockConfig/
 	// docker/egressPolicy was supplied -- matching CreateSession's own doc
-	// comment (row 27's "either" gate, extended by Step 74, §27.5/§27.6,
+	// comment (row 27's "either" gate, extended by §27.5/§27.6,
 	// to the two new independent attributes). environment_id/
 	// provenanceTag both stay their pgtype/Go zero values (NULL) when NONE
 	// is present, identical to every session created before this batch.
@@ -774,7 +774,7 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 			contractsPathCol = &contractsPath
 		}
 
-		// egress_policy_mode/egress_policy_allowlist (Step 74, §27.6)
+		// egress_policy_mode/egress_policy_allowlist (§27.6)
 		// store the CUSTOMER's own configured policy ONLY -- the
 		// server-appended allowlist floor is never persisted here; it is
 		// computed fresh every time a SessionConfig is assembled from
@@ -828,7 +828,7 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 		}
 	}
 
-	// Step 48 (§17.2): an explicit ChildSessionOptions.ProvenanceTag
+	// (§17.2): an explicit ChildSessionOptions.ProvenanceTag
 	// OVERRIDES whatever was just computed from pathScope/mockConfig above
 	// -- see ChildSessionOptions' own doc comment for why a
 	// sentinel-auto-fix child session is never ALSO a scoped-Environment
@@ -844,21 +844,21 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 		Repos:         reposJSON,
 		EnvironmentID: environmentID,
 		ProvenanceTag: provenanceTag,
-		// Step 37 ("plan mode, web", §12.2 item 3): only meaningful when
+		// §8.1 ("plan mode, web", §12.2 item 3): only meaningful when
 		// req.PlanMode is true, but stored unconditionally either way --
 		// mirrors modelId's own "always stored, only meaningful in
 		// context" convention (a non-plan-mode session simply never reads
 		// it back).
 		BuildModelID: (*string)(req.BuildModelId),
-		// Step 59 (§29.8): build_effort mirrors build_model_id's own
+		// (§29.8): build_effort mirrors build_model_id's own
 		// shape/storage convention exactly, one field over.
 		BuildEffort: (*string)(req.BuildEffort),
-		// ParentSessionID/SpawnDepth (Step 48, §17.2, migrations/000045):
+		// ParentSessionID/SpawnDepth (§17.2, migrations/000045):
 		// zero values (pgtype.UUID{}, int32(0)) for every ordinary
 		// session -- see ChildSessionOptions' own doc comment.
 		ParentSessionID: opts.ParentSessionID,
 		SpawnDepth:      opts.SpawnDepth,
-		// EpistemicCheckEnabled (Step 61, "builder epistemic pre-action
+		// EpistemicCheckEnabled ("builder epistemic pre-action
 		// check", §20.4) mirrors BuildModelID's own "always stored,
 		// nil/absent means no session-level override" convention exactly
 		// -- consulted later by turn.ResolveEpistemicCheckEnabled
@@ -879,7 +879,7 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 
 	hasPrompt = req.Prompt != nil
 	if hasPrompt {
-		// F6 (adversarial review, Step 61): the SAME shared gate
+		// F6 (adversarial review): the SAME shared gate
 		// createTurnLocked/dispatchNextAttempt/DecidePlanOnTx now all
 		// route through (internal/domain/turn.MaybeInjectEpistemicPreamble)
 		// -- created.EpistemicCheckEnabled is THIS SAME session's own
@@ -960,7 +960,7 @@ func TriggerDispatch(ctx context.Context, registry *sessionactor.Registry, sessi
 // already-open tx, and call TriggerDispatch itself once its own outer
 // transaction has committed and hasPrompt is true.
 //
-// rolloutMode/repoSettings (Step 76, §32) are threaded straight through to
+// rolloutMode/repoSettings (§32) are threaded straight through to
 // CreateSessionOnTx below, unchanged -- see that function's own doc
 // comment for why both are required, not optional.
 func CreateSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, req restdtos.CreateSessionRequest, createdBy pgtype.UUID, epistemicCheckDefault bool, rolloutMode platform.RolloutMode, repoSettings *postgres.RepoSettingsStore) (sqlcgen.Session, *CreateSessionError) {
@@ -975,7 +975,7 @@ func CreateSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgr
 		return sqlcgen.Session{}, verr
 	}
 
-	// Step 74's own up-front half of the "fail-closed, twice" rule
+	// §27.5's own up-front half of the "fail-closed, twice" rule
 	// (§27.5/§27.6, brief point A): refused HERE, before any Postgres
 	// write, when this request asks for a docker/enforced-egress
 	// requirement the CONFIGURED provider does not report supporting --

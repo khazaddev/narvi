@@ -28,7 +28,7 @@ func TestIsSentinelAutoFix_TableDriven(t *testing.T) {
 	}
 }
 
-// TestIsScopedEnvironment_TableDriven pins Step 49's own central gate
+// TestIsScopedEnvironment_TableDriven pins §14.4's own central gate
 // (handoffsentinel.go's "an ordinary PR is completely untouched" check):
 // only an EXACT "scoped_environment" tag counts, never a nil tag, a
 // different known tag (SentinelAutoFix), or an empty string.

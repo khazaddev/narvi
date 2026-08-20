@@ -1,4 +1,4 @@
-// This file (workflowstepoutcome.go) implements Step 55's ("workflow
+// This file (workflowstepoutcome.go) implements §25.6's ("workflow
 // execution engine", §25.6) own GENERIC step-outcome-posting tool: POST
 // /sessions/{sessionID}/workflow/step-outcome. Structurally mirrors
 // internal/domain/reviewpost's existing verdict-posting shape

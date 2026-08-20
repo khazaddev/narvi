@@ -7,14 +7,14 @@
 //
 // # The real, merged contract now has 6 critical types
 //
-// Step 16 (which first implemented this package) documented a then-real gap:
+// This package's own early implementation documented a then-real gap:
 // technical plan §6.1's own prose already listed `sub_task_finish` as a 6th
 // critical/ackable event type, but contracts/sandbox-ws/v1/events.schema.json
 // had not yet been extended to match -- there was no
 // contracts/gen/go/sandboxws.SubTaskStart or SubTaskFinish type to even
-// construct. §7.1's own "Phasing" note assigned closing that gap to Step 17
+// construct. §7.1's own "Phasing" note assigned closing that gap to §7
 // (the OpenCode adapter, this package's own sibling in
-// internal/adapters/outbound/opencode) -- THIS Step is what extends
+// internal/adapters/outbound/opencode) -- this work is what extends
 // events.schema.json for real (SubTaskStart, SubTaskFinish, both added to
 // the top-level `oneOf`) and updates the schema's own top-level description
 // to correctly name all 6. This package's own ack protocol needed ZERO code
@@ -109,9 +109,9 @@
 // the real one, not always empty; deeper server-side verification of that
 // value is a separate, deliberately unaddressed hardening step.
 //
-// Heartbeat.ConversationId was always nil as of Step 16 (no OpenCode
-// adapter existed yet); Step 17 adds SetConversationID (bridge.go) so
-// cmd/sandbox-agent's own commandHandler can record a real OpenCode
+// Heartbeat.ConversationId was always nil before an OpenCode
+// adapter existed; SetConversationID (bridge.go) lets
+// cmd/sandbox-agent's own commandHandler record a real OpenCode
 // conversation id once StartTurn returns one, which the heartbeat loop
 // (run.go) now reports on every subsequent tick.
 package wsbridge

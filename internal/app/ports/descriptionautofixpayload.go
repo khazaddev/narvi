@@ -3,7 +3,7 @@ package ports
 import "github.com/khazaddev/narvi/internal/domain/review"
 
 // DescriptionAutofixPayload is NotificationKindGitHubDescriptionAutofix's
-// own outbox payload shape (Step 67, "review digest: description
+// own outbox payload shape ("review digest: description
 // adequacy + graduated remediation", §26.2) -- constructed by
 // internal/adapters/inbound/httpapi/reviewverdict.go (the only writer,
 // inside the SAME transaction as the triggering verdict's own
@@ -30,7 +30,7 @@ import "github.com/khazaddev/narvi/internal/domain/review"
 // delivery time" doc comment, one layer further: here, even the
 // eligibility decision itself is deferred, not merely the network call).
 //
-// DescriptionAdequacy (adversarial-review fix, §26.2/Step 67's own
+// DescriptionAdequacy (adversarial-review fix, §26.2's own
 // follow-up), by contrast, DOES travel here, carried rather than
 // re-derived -- a deliberately different treatment than the authorship/
 // flag checks above, following this codebase's own general rule: a fact

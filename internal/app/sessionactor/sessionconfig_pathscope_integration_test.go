@@ -16,7 +16,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/ports"
 )
 
-// This file proves Step 29's ("gitstate in-sandbox", §14.1/§3.4 design
+// This file proves §3.4's ("gitstate in-sandbox", §14.1/§3.4 design
 // section "Part D") own wire-contract threading against a REAL Postgres
 // instance: a session created under a scoped Environment (path_scope set)
 // produces a real spawn whose CreateSpec.SessionConfig.PathScope carries

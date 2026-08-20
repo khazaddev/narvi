@@ -1,11 +1,11 @@
 //go:build integration
 
-// -- Step 33, "Slack ingress" -- and split for tx support) --
+// -- §8.10, "Slack ingress" -- and split for tx support) --
 // deliberately in package httpapi (not httpapi_test, unlike this
 // package's other integration tests): even though CreateSessionCore/
 // CreateSessionOnTx are exported today, they remain CreateSession's own
 // internal implementation detail first and foremost, with the webhook
-// ingress packages (Steps 32-34) as their only outside callers today.
+// ingress packages (§8.2/§8.10) as their only outside callers today.
 // This file builds its own minimal rig rather than reusing httpapi_test's
 // own newTestRig/newTestPool -- an external test package's unexported
 // helpers are not reachable from an internal one, matching this

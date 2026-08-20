@@ -57,7 +57,7 @@ func TestResolveCounterReviewerModel(t *testing.T) {
 
 // TestResolveCounterReviewerModel_CredentialGating is B2's own regression
 // test: "prefer no pin over guessing when the opposing provider is not
-// known-credentialed". Step 53's own credential injection is best-effort
+// known-credentialed". §25.1's own credential injection is best-effort
 // and per-session configured -- counterReviewerProviderPreference's fixed
 // 3-provider list only names which providers the MECHANISM supports,
 // never which ones are actually usable for a given session -- so a

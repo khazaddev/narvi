@@ -1,4 +1,4 @@
-// Package seed implements Step 75's ("config/data seeding", §10-P6,
+// Package seed implements §10's ("config/data seeding", §10-P6,
 // §13.4) per-install seeding tool: it reads an operator-authored
 // internal/domain/seedmanifest.Manifest and reconciles it against a live
 // Postgres database via the SAME stores (internal/adapters/outbound/
@@ -96,7 +96,7 @@
 //     reports "success" while doing something structurally inert is
 //     worse than one that names the gap. The live equivalent of
 //     "environment-shaped" config TODAY is the sandbox_path_scope/
-//     sandbox_mock_configured/sandbox_contracts_path columns Step 52 put
+//     sandbox_mock_configured/sandbox_contracts_path columns §8.4 put
 //     directly on automations (§8.4) -- this package's own Automations
 //     section seeds exactly those. If a later Step gives Environment a
 //     real reuse-by-id surface, this package gains an Environments
@@ -112,9 +112,9 @@
 //     pair obtained through a live, human-driven consent redirect
 //     (internal/adapters/inbound/linear/callback.go). No manifest file
 //     can fabricate that exchange -- there is no "value" an operator
-//     could paste in. This tool's own answer to Step 75's "integrations"
+//     could paste in. This tool's own answer to §10's "integrations"
 //     checklist item is therefore RWX preview settings
-//     (repo_settings.rwx_preview_*, Step 57, §4.1.2): static,
+//     (repo_settings.rwx_preview_*, §4.1.2): static,
 //     operator-known config (a dispatch key + endpoint template + org
 //     slug) with an existing store method
 //     (RepoSettingsStore.UpsertPreviewSettings) and, as of today, NO
@@ -122,7 +122,7 @@
 //     yet" -- that file's own doc comment) -- making this tool the
 //     first real way to populate it.
 //
-//   - cloud_identity_bindings / cluster_bindings (Step 73) are also out
+//   - cloud_identity_bindings / cluster_bindings (§27.3) are also out
 //     of scope: both are environment-or-global scoped, and the
 //     environment half of that inherits the exact same "no standalone
 //     Environment" gap above; a global-only subset would be an

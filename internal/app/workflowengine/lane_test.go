@@ -29,7 +29,7 @@ func TestResolveLane(t *testing.T) {
 			want: workflow.LaneReview,
 		},
 		{
-			name: "target=release (Step 50's release-vs-feature category)",
+			name: "target=release (§15's release-vs-feature category)",
 			raw:  []byte(`{"surface":"github","source":"classifier","target":"release","mode":"build","decided_at":"2026-01-01T00:00:00Z","decided_at_stage":"create"}`),
 			want: workflow.LaneReview,
 		},

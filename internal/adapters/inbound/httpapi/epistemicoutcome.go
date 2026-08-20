@@ -1,4 +1,4 @@
-// This file (epistemicoutcome.go) implements Step 61's ("domain/turn:
+// This file (epistemicoutcome.go) implements §20's ("domain/turn:
 // builder epistemic pre-action check", §20.2) own STRUCTURED-SIGNAL-
 // REPORTING TOOL: POST /sessions/{sessionID}/turn/epistemic-outcome. This
 // is the ONLY way a build turn's own devil's-advocate preamble check
@@ -8,7 +8,7 @@
 // natural-language reply mentioning what it noticed is advisory only and
 // is never re-parsed as the outcome of record (this codebase's standing
 // invariant that a structured signal is a typed field on a payload, never
-// a marker scraped from markdown -- Step 45's own rule, restated at
+// a marker scraped from markdown -- §8.2's own rule, restated at
 // §26.4/§29).
 //
 // # Why an HTTP endpoint, not a genuine OpenCode/LLM function-call tool

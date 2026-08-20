@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 )
 
-// ApproveKeywords/RejectKeywords are Step 38's ("plan mode, cross-channel",
+// ApproveKeywords/RejectKeywords are §8.1's ("plan mode, cross-channel",
 // §8.1/§13.3) own deterministic, case-insensitive, trimmed keyword set for
 // a Linear text-based plan verdict (payload.AgentActivity.Content.Body,
 // internal/adapters/inbound/linear/webhook.go's handlePrompted). Declared

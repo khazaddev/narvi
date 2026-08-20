@@ -21,7 +21,7 @@ func repoRoot(t *testing.T) string {
 	return filepath.Join(filepath.Dir(file), "..", "..")
 }
 
-// TestNoMetricDrift is Step 77's own CI-enforcing structural guard
+// TestNoMetricDrift is §5.3's own CI-enforcing structural guard
 // (doc.go): scans this repo's REAL internal/ and cmd/ Go source for every
 // registered OTel instrument, loads the REAL
 // deploy/observability/{dashboards,alerts} files, and fails if either

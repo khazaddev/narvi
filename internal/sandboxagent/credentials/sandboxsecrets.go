@@ -1,11 +1,11 @@
-// This file (sandboxsecrets.go) implements Step 72's own ("sandbox
+// This file (sandboxsecrets.go) implements §27.1's own ("sandbox
 // secrets & opencode config", §27.1) sandbox-agent-side client half of
 // CP's POST /sessions/{id}/sandbox-secrets delivery endpoint
 // (internal/adapters/inbound/httpapi/sandboxsecretsdelivery.go) --
 // mirrors providercredentials.go's own FetchProviderCredentials shape
 // exactly, simplified to a bare name->value map (a sandbox secret is
 // always a plain string, there is no oauth-kind discriminated union the
-// way a provider credential can be, Step 59's §29.6).
+// way a provider credential can be, §8.8's §29.6).
 
 package credentials
 

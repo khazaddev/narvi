@@ -26,7 +26,7 @@ const digestInjectionEscaped = "&lt;details&gt;&lt;summary&gt;evil&lt;/summary&g
 // TestRenderVerdictComment_UntrustedDigestFieldsAreEscaped is the Phase 5
 // audit's MEDIUM-finding regression test: table-driven over every
 // model-authored free-text Digest field the audit found rendered
-// UNESCAPED (Steps 66/67/69's own additions, never brought in line with
+// UNESCAPED (§26.1/§26.2/§26.4's own additions, never brought in line with
 // f.Description's pre-existing escaping discipline) -- proving each one
 // now neutralizes an injected "<details>"/"</details>"/"List<int>" rather
 // than emitting it raw into the rendered comment, matching Description's
@@ -157,8 +157,8 @@ func TestRenderVerdictComment_FindingFilePathEscapedInEveryLineShape(t *testing.
 // Phase 5 audit's MEDIUM finding did NOT name: the narrative `summary`
 // parameter (VerdictInput.Summary -- the verdict's own "why" line,
 // rendered immediately under the header bullets). The finding's own
-// explicit scope was the fields Steps 66/67/69 ADDED (every Digest
-// field, plus Finding.FilePath); this parameter predates Step 66 and so
+// explicit scope was the fields §26.1/§26.2/§26.4 ADDED (every Digest
+// field, plus Finding.FilePath); this parameter existed before that scope and so
 // fell outside it -- but it is the identical hazard, in the identical
 // function, one line above "### What this PR does": same untrusted
 // provenance (the reviewing model authors it as open prose), same

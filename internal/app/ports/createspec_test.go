@@ -138,7 +138,7 @@ func TestImageSpec_CacheMount_CarriesKeyAndPaths(t *testing.T) {
 // passed to BuildImage" property STRUCTURAL, not merely observed: it
 // pins ImageSpec's own exact field set via reflection, so a future PR
 // that adds ANY new field to this type -- in particular, a per-scope
-// user-configurable env map (sandbox_secrets, Step 72, §27.1) or an
+// user-configurable env map (sandbox_secrets, §27.1) or an
 // opaque "extra env" escape hatch -- fails this test immediately and
 // loudly, rather than silently acquiring a channel §19.8 exists to
 // forbid. This is deliberately an EXHAUSTIVE field-name check (not just
@@ -151,7 +151,7 @@ func TestImageSpec_CacheMount_CarriesKeyAndPaths(t *testing.T) {
 // silent drift.
 //
 // cmd/sandbox-agent/main.go's own sandboxsecrets.go/opencodeconfig.go
-// (Step 72) never construct or touch a ports.ImageSpec/CreateSpec at
+// (§27.1) never construct or touch a ports.ImageSpec/CreateSpec at
 // all -- grepped for before writing this test -- so the OTHER half of
 // the "never reaches BuildImage" property (that sandbox-agent's own
 // fetch code is never even CALLED during a real image build, because a

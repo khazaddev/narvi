@@ -1,7 +1,7 @@
 package turn
 
 // EpistemicOutcome is the closed 3-value vocabulary the builder epistemic
-// pre-action check (§20, Step 61) reports on a build turn: whether the
+// pre-action check (§20) reports on a build turn: whether the
 // devil's-advocate preamble (epistemicpreamble.go) surfaced anything worth
 // a second look, and how seriously. Matches the epistemic_outcome Postgres
 // enum (migrations/000066_builder_epistemic_check.up.sql) exactly -- the
@@ -18,7 +18,7 @@ package turn
 // never called the reporting endpoint before the turn ended); a REAL,
 // non-nil value means the check ran and reported exactly this outcome.
 // §20.2 is explicit that these are two distinct facts, never collapsed:
-// "a non-negotiable part of Step 61 ... without it, the false-alarm-rate
+// "a non-negotiable part of §20 ... without it, the false-alarm-rate
 // question this feature exists to eventually answer ... is simply
 // unmeasurable." EpistemicOutcomeNone ("the check ran and found nothing")
 // must stay distinguishable from absent ("the check did not run") for

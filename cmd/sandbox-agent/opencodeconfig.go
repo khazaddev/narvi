@@ -1,4 +1,4 @@
-// This file (opencodeconfig.go) implements Step 72's own ("sandbox
+// This file (opencodeconfig.go) implements §27.1's own ("sandbox
 // secrets & opencode config", §27.2) sandbox-agent-side FETCH + WRITE of
 // OpenCode config documents into OpenCode's own documented config slots.
 //
@@ -6,7 +6,7 @@
 //
 // §27.2's own design claim is that occupying OpenCode's global + custom
 // slots (rather than its project slot) keeps a repo's own committed
-// opencode.json AND Step 48's sentinel-fix capability-restriction write
+// opencode.json AND §8.2's sentinel-fix capability-restriction write
 // (opencode/sentinelfixagent.go, which targets the WORKSPACE opencode.json
 // -- OpenCode's "project" slot) structurally above anything this Step
 // injects. CONFIRMED against OpenCode's own current public documentation
@@ -22,7 +22,7 @@
 // (remote < global < custom < project, later-wins) -- global and custom
 // (this file's own two injection points) sit BELOW project, so a
 // customer-authored config injected at either level can never override a
-// setting the project config (or Step 48's sentinel-fix write, which
+// setting the project config (or §8.2's sentinel-fix write, which
 // targets that SAME project slot -- opencode/sentinelfixagent.go's own
 // doc comment records having verified THAT write path live against the
 // real pinned 1.17.15 binary) already sets, confirming the security-
@@ -34,7 +34,7 @@
 // directories, inline config OPENCODE_CONFIG_CONTENT, managed files,
 // macOS preferences) are where OpenCode's own precedence stops helping --
 // a document injected THERE would sit ABOVE the project slot, capable of
-// overriding Step 48's own restriction. An EARLIER version of this
+// overriding §8.2's own restriction. An EARLIER version of this
 // codebase's own comment here claimed "no Narvi mechanism writes to any
 // of them" as though that settled the matter -- it did not: nothing
 // PREVENTED a maintainer-authored sandbox_secrets row literally named

@@ -1,5 +1,5 @@
 // This file (sessionconfig.go) implements real SessionConfig assembly
-// (Step 21, "e2e happy path", design decision 6) -- the FIRST real caller
+// (§9.3, "e2e happy path", design decision 6) -- the FIRST real caller
 // anywhere in the repo that constructs a sessionconfig.SessionConfig
 // struct literal (confirmed by a repo-wide grep before this Step started).
 
@@ -72,12 +72,12 @@ func reposFromJSON(raw []byte) ([]sessionconfig.SessionConfigReposElem, error) {
 
 // environmentSubstrate resolves everything assembleSessionConfig needs
 // from the session's own Environment row in exactly ONE Postgres read:
-// PathScope (§14.1, Step 29 -- §14.1's own clone-step enforcement needs
+// PathScope (§14.1 -- §14.1's own clone-step enforcement needs
 // the sandbox process to actually receive these glob patterns, since
 // sandbox-agent is a separate process from the control plane and only
-// knows what it's told via NARVI_SESSION_CONFIG), DockerRequired (§27.5,
-// Step 74), and EgressPolicy (§27.6, Step 74) -- Step 74 folds its own
-// two new derivations into what Step 29's own environmentPathScope
+// knows what it's told via NARVI_SESSION_CONFIG), DockerRequired (§27.5),
+// and EgressPolicy (§27.6) -- this folds its own
+// two new derivations into what §3.4's own environmentPathScope
 // (now this function) already fetched, rather than adding two more
 // independent queries against the SAME row inside the SAME transact.
 //
@@ -168,7 +168,7 @@ func (a *Actor) allowlistFloorHosts(ctx context.Context, repos []sessionconfig.S
 	return floor
 }
 
-// reviewCounterReviewerModel resolves Step 69's own §26.4 opposing-model-
+// reviewCounterReviewerModel resolves §26.4's own §26.4 opposing-model-
 // family override for THIS session, when one applies -- nil (no override
 // at all, sessionconfig.SessionConfig.ReviewCounterReviewerModel's own
 // documented "no override" zero value) for every session that is not a
@@ -230,7 +230,7 @@ func (a *Actor) reviewCounterReviewerModel(ctx context.Context, tx pgx.Tx, sessi
 // reviewCredentialedProviders resolves the set of counterReviewerProviderPreference
 // providers (internal/app/reviewtriage) that sessionRow's own repo(s)/
 // environment/creator actually has a usable credential for -- B2 fix
-// (adversarial review of Step 69, §26.4): "prefer no pin over guessing
+// (adversarial review of §26.4): "prefer no pin over guessing
 // when the opposing provider is not known-credentialed". Mirrors
 // httpapi.ProviderCredentialsDelivery's own resolution inputs exactly
 // (repoFullNames from sessionRow.Repos via reposource.ParseOwnerRepo,
@@ -311,10 +311,10 @@ func reviewCredentialRepoFullNames(rawRepos []byte) ([]string, error) {
 //
 //   - BootMode: the caller-supplied bootMode -- Fresh for a plain spawn
 //     (dispatch.go's planFreshSpawn), SnapshotRestore for a restore
-//     (dispatch.go's planRestore, Step 22 "snapshots & restore", design
+//     (dispatch.go's planRestore, §3.2 "snapshots & restore", design
 //     decision 6b: "thread a boolean/enum parameter through
 //     assembleSessionConfig rather than hardcoding a second copy of this
-//     function"). Step 26 ("image builds") upgrades a Fresh value to
+//     function"). §8.5 ("image builds") upgrades a Fresh value to
 //     RepoImage AFTER this function returns (dispatch.go's own
 //     resolveAndSetImage, imageresolve.go), once -- and only once -- a
 //     real, ready, matching prebuilt image is actually found for that
@@ -326,7 +326,7 @@ func reviewCredentialRepoFullNames(rawRepos []byte) ([]string, error) {
 //     defeating the entire point of image prebuilding. A restore's own
 //     BootMode is deliberately never upgraded this way (see
 //     resolveAndSetImage's own doc comment for why). BootModeBuild remains
-//     an unused placeholder even after Step 26 -- ports.SandboxProvider.
+//     an unused placeholder even after §8.5 -- ports.SandboxProvider.
 //     BuildImage's own signature (§4.1) carries no SessionConfig at all, so
 //     there is no SessionConfig for this control plane to ever stamp
 //     BootModeBuild onto; that value is reserved for whatever
@@ -339,11 +339,11 @@ func reviewCredentialRepoFullNames(rawRepos []byte) ([]string, error) {
 //     minted one -- SessionConfig.CorrelationId's own doc comment: "Null
 //     only when no upstream correlation id exists").
 //   - Gen: the sandbox row's own just-bumped gen.
-//   - PathScope: Step 29's own addition -- environmentSubstrate(ctx, tx,
+//   - PathScope: §3.4's own addition -- environmentSubstrate(ctx, tx,
 //     sessionRow.EnvironmentID), above; nil (absent from the wire document
 //     entirely, via its own omitempty) for the overwhelming common,
 //     unscoped case.
-//   - Docker/EgressPolicy: Step 74's own additions (§27.5/§27.6) -- the
+//   - Docker/EgressPolicy: §27.5's own additions (§27.5/§27.6) -- the
 //     SAME environmentSubstrate call's other two return values. Docker is
 //     env.DockerRequired verbatim (a plain bool, no further processing).
 //     EgressPolicy, when its Mode == EgressModeAllowlist, is threaded
@@ -432,7 +432,7 @@ func (a *Actor) assembleSessionConfig(
 		SandboxId:         sandboxID,
 		SandboxToken:      plaintextToken,
 		SessionId:         sessionID,
-		// CapabilityRestricted (Step 48, §17.2): true exactly for a
+		// CapabilityRestricted (§17.2): true exactly for a
 		// sentinel-auto-fix child session -- see provenance.
 		// IsSentinelAutoFix's own doc comment for the three independent
 		// things that key off this SAME provenance_tag value; this is the
@@ -440,7 +440,7 @@ func (a *Actor) assembleSessionConfig(
 		// config into the workspace before ever spawning `opencode serve`
 		// for this ONE kind of session.
 		CapabilityRestricted: provenance.IsSentinelAutoFix(sessionRow.ProvenanceTag),
-		// ReviewCounterReviewerModel (Step 69, §26.4): nil for every
+		// ReviewCounterReviewerModel (§26.4): nil for every
 		// session that either is not a GitHub PR review session at all, or
 		// is one but has no resolvable authoring-model provenance to
 		// oppose -- see reviewCounterReviewerModel's own doc comment,

@@ -1,4 +1,4 @@
-// This file (uploadmint.go) implements the mint half of Step 58's upload
+// This file (uploadmint.go) implements the mint half of §8.6's upload
 // lifecycle (§28.4/§28.5): POST .../uploads, in both auth variants. Mint
 // declares {filename, contentType, sizeBytes}, checks it against
 // MaxUploadBytes/MaxSessionUploadBytes (a fast-fail courtesy -- confirm.go

@@ -27,11 +27,11 @@ type CreateArtifactParams struct {
 
 // Queries backing ArtifactStore (§4.3, §6.3 GET /api/sessions/:id/
 // artifacts and the client WS hub's own SubscribedPayload.artifacts,
-// §6.2). CreateArtifact is Step 21's ("e2e happy path") own addition --
+// §6.2). CreateArtifact is §9.3's ("e2e happy path") own addition --
 // the first real artifact-minting caller anywhere in this codebase
 // (app/sessionactor's own createPRBestEffort records a "pr"-typed artifact
-// once SourceControl.CreatePR succeeds, see pushpr.go) -- previews (Step
-// 48) and uploads (Step 49) remain the only artifact_type values with no
+// once SourceControl.CreatePR succeeds, see pushpr.go) -- previews (§8.2)
+// and uploads (§14.4) remain the only artifact_type values with no
 // Create caller yet.
 func (q *Queries) CreateArtifact(ctx context.Context, arg CreateArtifactParams) (Artifact, error) {
 	row := q.db.QueryRow(ctx, createArtifact,
@@ -76,7 +76,7 @@ type CreateUploadArtifactParams struct {
 	CreatedBy   pgtype.UUID `json:"created_by"`
 }
 
-// Step 58 ("uploads, blob storage & the in-sandbox download_file tool",
+// §8.6 ("uploads, blob storage & the in-sandbox download_file tool",
 // §28.4): the upload lifecycle's own queries. type is always the literal
 // 'upload' and status always starts 'pending' -- never caller-supplied --
 // so a pending upload row can never be minted with the wrong type or in
@@ -158,7 +158,7 @@ WHERE type = 'pr' AND url = $1
 LIMIT 1
 `
 
-// Step 60 ("decision inbox: read model + API", §16.1)'s own "authored by
+// §16 ("decision inbox: read model + API", §16.1)'s own "authored by
 // a platform session" signal for ready_to_merge: a 'pr'-typed artifact row
 // exists, keyed on its own url column, iff SOME session's own
 // createPRBestEffort (pushpr.go) actually pushed and opened exactly this

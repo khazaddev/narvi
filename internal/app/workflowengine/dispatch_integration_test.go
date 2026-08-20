@@ -19,7 +19,7 @@ import (
 // header comment) -- mirrors internal/adapters/outbound/postgres's own
 // workflow_seed_integration_test.go identical constants (unreachable from
 // this external test package). No built-in plan constant is needed here:
-// as of migration 000088_plan_builtin_passthrough (Step 56's own
+// as of migration 000088_plan_builtin_passthrough (§25.9's own
 // corrective follow-up, §25.8/§25.9), the built-in plan workflow is a
 // single-step passthrough carrying no HITL, so this package's own
 // HITLAfter-specific tests below exercise a CUSTOM (non-built-in) step
@@ -136,11 +136,11 @@ func startRunAndAttachRealTurn(t *testing.T, ctx context.Context, sessions *post
 //
 // Exists so this package's own HITLAfter-specific tests no longer depend on
 // the built-in PLAN workflow's own shape: migration
-// 000088_plan_builtin_passthrough (Step 56's own corrective follow-up, an
+// 000088_plan_builtin_passthrough (§25.9's own corrective follow-up, an
 // audit-found design incoherence -- see that migration's own header comment
 // and docs/TECHNICAL_PLAN.md §25.8) made the built-in plan workflow a
 // genuine single-step passthrough, identical to review/request, so classic
-// plan mode (§8.1, Steps 37/38) stays the SOLE plan-approval authority and
+// plan mode (§8.1) stays the SOLE plan-approval authority and
 // no built-in carries hitl_after any longer. The HITLAfter mechanism itself
 // (OnTurnCompleted's own HITLAfter branch, completion.go) is completely
 // unchanged by that migration and remains available to any future custom
@@ -357,7 +357,7 @@ func TestResolveStepForNewTurn_MultiRepoSession_FallsBackToGlobalBinding(t *test
 //
 // Exercises a CUSTOM (non-built-in) hitl_after step (seedCustomHITLAfterStep)
 // rather than the built-in plan workflow: migration
-// 000088_plan_builtin_passthrough (Step 56's own corrective follow-up)
+// 000088_plan_builtin_passthrough (§25.9's own corrective follow-up)
 // removed hitl_after from every built-in, so this is now the only way to
 // reach case 2 at all -- see seedCustomHITLAfterStep's own doc comment for
 // the full "why".

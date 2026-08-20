@@ -1,5 +1,5 @@
 // This file (aggregate.go) implements Build -- the decision inbox's own
-// read-model aggregation (Step 60, "decision inbox: read model + API",
+// read-model aggregation ("decision inbox: read model + API",
 // §16). A READ MODEL, not new state (§16.2): every fact below is derived
 // from Postgres rows and SourceControl reads that already exist for other
 // reasons; this package writes NOTHING back to Postgres and introduces no
@@ -11,7 +11,7 @@
 //     (directly, as requested reviewer, or via CODEOWNERS), authored by a
 //     platform session (an artifacts row of type 'pr' exists for this
 //     PR's own URL -- internal/app/sessionactor/pushpr.go's own
-//     recordPRArtifact, Step 21), CI green at head, and passing this
+//     recordPRArtifact, §9.3), CI green at head, and passing this
 //     Step's own INTERIM auto-approval-eligibility stand-in (internal/
 //     domain/decisioninbox.ComputeAutoApprovalEligible -- see that
 //     function's own doc comment for the full justification: §21's real
@@ -109,11 +109,11 @@ type Deps struct {
 	TokenEncryptionKey []byte
 	Timeouts           platform.Timeouts
 
-	// ReviewVerdict bundles the Step 62 (§21.1/§21.2) stores the REAL
+	// ReviewVerdict bundles the (§21.1/§21.2) stores the REAL
 	// auto-approval eligibility engine needs -- review_verdicts history
 	// (the latest verdict per PR), repo_settings' own auto-approval
-	// config, and the contradiction-rate outcome table. Replaces Step
-	// 60's own interim internal/domain/decisioninbox.
+	// config, and the contradiction-rate outcome table. Replaces §16's
+	// own interim internal/domain/decisioninbox.
 	// ComputeAutoApprovalEligible, deleted by this Step -- see
 	// buildPROpenItem/revalidateCore below for the two call sites.
 	ReviewVerdict appreviewverdict.Deps
@@ -131,12 +131,11 @@ type Result struct {
 	// timestamp... never presented as live truth").
 	SCMAsOf *time.Time
 
-	// SCMFetchFailed is the third state SCMAsOf==nil alone cannot express
-	// (§60 review finding C1): true iff the actor's PR-derived rows in
+	// SCMFetchFailed is the third state SCMAsOf==nil alone cannot express:
+	// true iff the actor's PR-derived rows in
 	// this Result are a known-incomplete or degraded picture. ONE channel,
-	// fed by several independent producers (§60 review findings
-	// P1-2/P1-3/P2-1, second round -- deliberately reusing this SAME field
-	// rather than adding a second one, so a client only ever has one
+	// fed by several independent producers (deliberately reusing this SAME
+	// field rather than adding a second one, so a client only ever has one
 	// boolean to check):
 	//
 	//  1. The live PR fetch failed outright (buildPRItems returned an
@@ -156,8 +155,8 @@ type Result struct {
 	//     erroring (P1-3): that ONE row is dropped (fails closed, excluded)
 	//     but the overall read is no longer a complete picture either.
 	//     SCMAsOf is set here too, same as (3).
-	//  5. A per-PR ports.OpenPR.ReviewDecisionDegraded (§62 review finding
-	//     C4): githubapi.fetchReviewDecision itself failed for that ONE
+	//  5. A per-PR ports.OpenPR.ReviewDecisionDegraded: githubapi.fetchReviewDecision
+	//     itself failed for that ONE
 	//     PR. Unlike (4), the row is NOT dropped -- buildPROpenItem still
 	//     renders it, demoted out of ready_to_merge (that field's own doc
 	//     comment) -- but the overall read is, again, no longer a complete
@@ -276,7 +275,7 @@ func rank(items []Item) []Item {
 // ok=false means this actor's PR-derived items are simply skipped --
 // never an error that fails the whole Build call, since plan/attention
 // items still have plenty to show independent of any GitHub credential.
-// degraded (§60 review finding P2-1, second round) distinguishes WHY:
+// degraded distinguishes WHY:
 //
 //   - ok=false, degraded=false: no linked GitHub identity exists at all
 //     (pgx.ErrNoRows from the identity lookup) or the linked identity
@@ -319,7 +318,7 @@ func resolveActorGitHubCredential(ctx context.Context, deps Deps, actorUserID pg
 // full ready_to_merge/needs_review/handoff decision and the §17
 // structural exclusion.
 //
-// degraded (§60 review findings P1-2/P1-3, second round) is true iff this
+// degraded is true iff this
 // read is known to be an incomplete/partial picture despite otherwise
 // succeeding -- see Result.SCMFetchFailed's own doc comment for the full
 // producer list this feeds into; asOf is still a real, honest fetch
@@ -333,7 +332,7 @@ func buildPRItems(ctx context.Context, deps Deps, actorGitHubID, token string, n
 	degraded = truncated
 
 	// One fresh budget per Build call -- see codeOwnersBudget's own doc
-	// comment (§60 review finding B3) for why this must never be shared
+	// comment for why this must never be shared
 	// across actors/requests the way deps.SCMCache itself is.
 	budget := newCodeOwnersBudget(maxCodeOwnerResolutionsPerBuild)
 
@@ -347,14 +346,13 @@ func buildPRItems(ctx context.Context, deps Deps, actorGitHubID, token string, n
 
 		excluded, existsErr := deps.SentinelFixes.ExistsByFixPRNumber(ctx, repoFullName, int32(pr.Number))
 		if existsErr != nil {
-			// §17's structural exclusion must fail CLOSED (§60 review
-			// finding A3): a store error means "cannot prove this is NOT
+			// §17's structural exclusion must fail CLOSED: a store error means "cannot prove this is NOT
 			// a sentinel-auto-fix follow-up", treated identically to a
 			// CONFIRMED one below -- excluded outright, never best-effort
 			// passed through as if the check had simply found nothing.
 			// isPlatformAuthored (below) already fails closed this same
 			// way; this now matches it. This ALSO marks the overall read
-			// degraded (§60 review finding P1-3, second round): a row was
+			// degraded: a row was
 			// just dropped due to an infra failure, not a confirmed
 			// exclusion, so the read is no longer a complete picture --
 			// see Result.SCMFetchFailed's own doc comment.
@@ -367,7 +365,7 @@ func buildPRItems(ctx context.Context, deps Deps, actorGitHubID, token string, n
 		}
 
 		if pr.ReviewDecisionDegraded {
-			// §62 review finding C4: a per-PR degraded review-decision read
+			// a per-PR degraded review-decision read
 			// (githubapi.fetchReviewDecision itself failed for this ONE PR)
 			// means HasChangesRequested is not a confirmed fact for this
 			// row -- buildPROpenItem (below) already fails this row closed
@@ -385,8 +383,8 @@ func buildPRItems(ctx context.Context, deps Deps, actorGitHubID, token string, n
 }
 
 // openFindingsUnknownFailClosed is the OpenBlockingFindings value
-// buildPROpenItem substitutes when countOpenFindings itself errors (§60
-// review finding A1) -- any positive value fails ComputeAutoApprovalEligible
+// buildPROpenItem substitutes when countOpenFindings itself errors --
+// any positive value fails ComputeAutoApprovalEligible
 // closed (its own check is a bare "> 0"), so the exact magnitude carries
 // no further meaning beyond that; 1 is chosen purely so a human reading a
 // rendered row sees a small, plausible-looking finding count rather than
@@ -403,11 +401,10 @@ func buildPROpenItem(ctx context.Context, deps Deps, pr ports.OpenPR, repoFullNa
 	openFindings, findingsErr := countOpenFindings(ctx, deps, repoFullName, pr.Number)
 	findingsUnknown := false
 	if findingsErr != nil {
-		// Fail CLOSED for the ELIGIBILITY computation below (§60 review
-		// finding A1) -- see countOpenFindings' own doc comment for why a
+		// Fail CLOSED for the ELIGIBILITY computation below -- see countOpenFindings' own doc comment for why a
 		// degraded zero there would be actively dangerous, not merely
 		// imprecise. openFindings keeps the synthetic sentinel value for
-		// THAT purpose only; findingsUnknown (§60 review finding P3-3,
+		// THAT purpose only; findingsUnknown (
 		// second round) is the separate signal that stops this same
 		// sentinel from also being rendered on the wire as an honest,
 		// real findings count -- see Item.FindingsUnknown's own doc
@@ -443,9 +440,8 @@ func buildPROpenItem(ctx context.Context, deps Deps, pr ports.OpenPR, repoFullNa
 	default:
 		platformAuthored := isPlatformAuthored(ctx, deps, pr.HTMLURL)
 		eligible := computeRealEligibility(ctx, deps, repoFullName, pr, ciGreen, hasNeedsHuman)
-		// §60 review finding P1-4 (second round): HasChangesRequested is
-		// a HARD merge blocker at RevalidateForMerge (revalidate.go) but,
-		// before this fix, was never consulted HERE -- so such a PR sat
+		// HasChangesRequested is a HARD merge blocker at RevalidateForMerge
+		// (revalidate.go) but was previously never consulted HERE -- so such a PR sat
 		// in the TOP ready_to_merge section with a Merge button that
 		// would unconditionally 409 at click time. Demoted to
 		// needs_review instead, mirroring RevalidateForMerge's own
@@ -461,12 +457,12 @@ func buildPROpenItem(ctx context.Context, deps Deps, pr ports.OpenPR, repoFullNa
 		// unresolved finding is a fact the verdict's own Shippable value
 		// could be silently inconsistent with (a model reporting
 		// RiskLevel=low while ALSO reporting a real, unresolved finding
-		// via the SEPARATE findings array). Step 60's own interim engine
+		// via the SEPARATE findings array). §16's own interim engine
 		// already treated this as a hard exclusion; keeping it here,
 		// exactly like HasChangesRequested, preserves that safety
 		// property without stretching §21.2's own literal criteria list
 		// to cover something it never named.
-		// §62 review finding C4: !pr.ReviewDecisionDegraded is its own,
+		// !pr.ReviewDecisionDegraded is its own,
 		// separate AND-condition here, mirroring !pr.HasChangesRequested
 		// immediately beside it -- a degraded review-decision read is not
 		// a confirmed "no changes requested", so it must demote this row
@@ -488,7 +484,7 @@ func buildPROpenItem(ctx context.Context, deps Deps, pr ports.OpenPR, repoFullNa
 
 // computeRealEligibility runs §21.2 stage 1's real auto-approval
 // eligibility engine (internal/domain/autoapproval.ComputeEligible) for
-// pr -- replacing Step 60's own interim internal/domain/decisioninbox.
+// pr -- replacing §16's own interim internal/domain/decisioninbox.
 // ComputeAutoApprovalEligible (deleted by this Step). Fails CLOSED
 // (returns false) on every degraded path: no verdict ever posted for
 // this PR (reviewverdict.GetLatest's own ok=false), or a genuine store
@@ -516,7 +512,7 @@ func computeRealEligibility(ctx context.Context, deps Deps, repoFullName string,
 		return false
 	}
 
-	// §62 review finding C3: a genuine repo_settings read error means this
+	// a genuine repo_settings read error means this
 	// repo's own configured policy cannot be established -- FAIL CLOSED
 	// (not eligible), mirroring this function's own existing
 	// GetLatest-error handling immediately above (a degraded READ-MODEL
@@ -529,7 +525,7 @@ func computeRealEligibility(ctx context.Context, deps Deps, repoFullName string,
 		return false
 	}
 
-	// §62 review finding C1: ChangedFileCount/TouchedBlastRadius are BOTH
+	// ChangedFileCount/TouchedBlastRadius are BOTH
 	// derived here from pr -- pr is this call's own already-fetched,
 	// server-side ports.OpenPR (buildPRItems' own live SCMCache.
 	// ListOpenPRsForUser read), never the posted verdict's own
@@ -549,8 +545,7 @@ func computeRealEligibility(ctx context.Context, deps Deps, repoFullName string,
 	touchedBlastRadius := autoapproval.ClassifyChangedPaths(pr.ChangedFiles)
 	touchedBlastRadiusKnown := !pr.ChangedFilesListDegraded
 
-	// §62 review finding T1 (BLOCKER, also a genuine correctness bug,
-	// fixed): computed ONCE, ignoring BOTH human-disagreement signals --
+	// A genuine correctness bug: computed ONCE, ignoring BOTH human-disagreement signals --
 	// HasNeedsHumanLabel here, and pr.HasChangesRequested, which is not
 	// even a ComputeEligible INPUT at all (it is enforced entirely
 	// OUTSIDE this engine: this file's own Kind-classification
@@ -632,7 +627,7 @@ func resolvePRProvenance(ctx context.Context, deps Deps, pr ports.OpenPR, repoFu
 	}
 
 	// budget.take gates this call at zero I/O once the per-build
-	// CODEOWNERS-resolution cap is exhausted (§60 review finding B3) --
+	// CODEOWNERS-resolution cap is exhausted --
 	// see codeOwnersBudget's own doc comment. Skipping it here only ever
 	// degrades a display nicety (this ONE PR's provenance falls back to
 	// the "un-pinned requested reviewer" default below, or plain
@@ -641,8 +636,7 @@ func resolvePRProvenance(ctx context.Context, deps Deps, pr ports.OpenPR, repoFu
 	// DISCOVERED (searchOpenPRs' own doc comment), so skipping it can
 	// never hide a row or grant unintended access.
 	//
-	// Ref is pr.BaseRef, deliberately never pr.HeadSHA (§60 review
-	// finding B3's own related hardening): the PR's HEAD is attacker-
+	// Ref is pr.BaseRef, deliberately never pr.HeadSHA (related hardening): the PR's HEAD is attacker-
 	// chosen (whoever opened/pushed the PR controls it), so resolving
 	// CODEOWNERS there would let a PR's own author dictate which
 	// CODEOWNERS file this call reads for classifying THEIR OWN PR --
@@ -686,8 +680,8 @@ func resolvePRProvenance(ctx context.Context, deps Deps, pr ports.OpenPR, repoFu
 // this Step's own interim eligibility/handoff classification needs.
 //
 // riskLabel picks the MOST RESTRICTIVE of the review:*-risk labels
-// present -- any high-risk label wins over medium, which wins over low
-// (§60 review finding A6). GitHub's own labels array carries NO ordering
+// present -- any high-risk label wins over medium, which wins over low.
+// GitHub's own labels array carries NO ordering
 // guarantee a caller may rely on (verified directly: this codebase's own
 // verdictnotifier.go issues AddLabels then a SEPARATE per-label
 // RemoveLabel call, two independent GitHub calls -- a failed Remove
@@ -727,7 +721,7 @@ func classifyPRLabels(labels []string) (hasNeedsHuman bool, riskLabel string, is
 // (the adapter's own maxCodeOwnerRefsPerCall, githubapi/
 // resolvecodeowners.go, bounds a SINGLE PR's own CODEOWNERS fan-out;
 // this bounds the SUM across up to maxOpenPRsForUser PRs in one page
-// load) -- §60 review finding B3: a victim whose review is requested on
+// load) -- a victim whose review is requested on
 // many PRs, each carrying a moderately large CODEOWNERS file, still
 // cannot drive an unbounded number of outbound calls on the victim's own
 // token in one inbox load.
@@ -775,7 +769,7 @@ func (b *codeOwnersBudget) take(ctx context.Context) bool {
 // fix-pending/open/merged/applied finding does not count (each already
 // has an explicit resolution).
 //
-// A fetch failure is propagated to the caller (§60 review finding A1) --
+// A fetch failure is propagated to the caller --
 // it must NEVER degrade to zero. This function's own doc comment used to
 // justify a degraded zero here by claiming "this Step's own eligibility
 // check already requires the risk label to be exactly LabelLowRisk

@@ -4,7 +4,7 @@
 // reviewCostBudgetServer/reviewCostBudgetHandler (reviewcostbudgetserver.go)
 // end to end: a REAL loopback listener, a REAL net/http.Get against it,
 // and the REAL internal/domain/reviewtriage.ShouldSkipOptionalPass
-// decision reflected in the response -- Step 70's own central mutation-
+// decision reflected in the response -- §26.5's own central mutation-
 // test target ("prove ShouldSkipOptionalPass is actually reached with a
 // real value, not a hardcoded stub").
 //
@@ -254,8 +254,9 @@ func TestReviewCostBudgetServer_ShutdownClosesTheListener(t *testing.T) {
 	}
 
 	// Serve must return promptly, and with nil -- never leaving its own
-	// goroutine running forever (an orphaned goroutine, the class of leak
-	// Step 171 closed for a different subsystem).
+	// goroutine running forever (an orphaned goroutine, the same class of
+	// leak the process supervisor already closes for a different
+	// subsystem).
 	select {
 	case serveErr := <-serveDone:
 		if serveErr != nil {

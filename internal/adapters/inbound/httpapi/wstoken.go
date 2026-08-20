@@ -15,7 +15,7 @@ import (
 )
 
 // MintWSToken backs POST /api/sessions/{sessionID}/ws-token (§6.2, §6.3),
-// mounted (Step 20, "auth v1") behind internal/adapters/inbound/auth.
+// mounted (§13.1, "auth v1") behind internal/adapters/inbound/auth.
 // Middleware -- see doc.go's own updated writeup: 404 if the session
 // doesn't exist; otherwise mints a fresh plaintext token
 // (platform.GenerateToken), persists ONLY its hash (platform.HashToken)

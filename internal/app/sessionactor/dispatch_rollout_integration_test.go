@@ -1,6 +1,6 @@
 //go:build integration
 
-// This file proves Step 76's own dispatch-time half of the "fail-closed,
+// This file proves §10's own dispatch-time half of the "fail-closed,
 // twice" rule (§10 Phase 6, §32): tryPlanSpawn's own refuseIfRolloutUnenrolled
 // (dispatch.go) refuses to spawn a session whose own named repo is not
 // enrolled under rollout.ModeCohort -- mirrors dispatch_substrate_
@@ -204,8 +204,8 @@ func TestDispatch_DeEnrolledRepo_ExistingReadySandbox_ReusedTurnRefusedAndTermin
 
 // TestDispatch_RefusesUnenrolledRepoUnderCohortMode is a MUTATION-TESTABLE
 // guard (mirrors dispatch_substrate_integration_test.go's own identical
-// "remove the dispatch re-check -> this test must fail" framing, Step 74
-// brief, applied to Step 76's own dispatch-time gate): the session's own
+// "remove the dispatch re-check -> this test must fail" framing, §27.5
+// brief, applied to §10's own dispatch-time gate): the session's own
 // repo is never enrolled (no repo_settings row written at all) and
 // rollout.ModeCohort is armed -- CreateSandbox must never be called.
 func TestDispatch_RefusesUnenrolledRepoUnderCohortMode(t *testing.T) {

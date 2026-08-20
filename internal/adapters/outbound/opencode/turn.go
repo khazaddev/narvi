@@ -73,7 +73,7 @@ type turnState struct {
 	sawToolCall        bool
 
 	// spentUSD is this turn's own running cost total (§7.1's own corrected
-	// text, §26.7, Step 70) -- the accumulator §26.7's cost-budget
+	// text, §26.7) -- the accumulator §26.7's cost-budget
 	// mechanism assumed already existed (it did not, see
 	// internal/domain/reviewtriage.ShouldSkipOptionalPass's own "NOT YET
 	// CALLED BY ANY PRODUCTION PATH" doc comment, costbudget.go) and this
@@ -559,7 +559,7 @@ func (ts *turnState) markSawToolCall() {
 }
 
 // addCost adds cost (a single step-finish's own p.Cost, USD) to this
-// turn's own running spentUSD total (§26.7/§7.1, Step 70) -- called from
+// turn's own running spentUSD total (§26.7/§7.1) -- called from
 // dispatchPart's own "step-finish" case (sse.go) for every step-finish
 // this turn observes, main lane and every sub-task alike (see spentUSD's
 // own field doc comment above for why no separate sub-task case is

@@ -20,7 +20,7 @@ import (
 // ComputeLabelSync (label.go) just applied, rendered here purely for
 // visibility (mirrors docs/design/mockups.html's own verdict-foot "labels
 // synced: `review:medium-risk`" line); botHandle feeds RerunGuidance.
-// findings (Step 48, additive) is v's own already-built []Finding (nil/
+// findings (§8.2, additive) is v's own already-built []Finding (nil/
 // empty for a verdict reporting none -- every verdict posted before this
 // Step) -- rendered inside the collapsed appendix below, EXACTLY the same
 // "typed fields -> rendered text, never parsed back" discipline as every
@@ -31,7 +31,7 @@ import (
 // short form of it is ever surfaced, for a different, internal audience
 // (a re-reviewing agent's own prompt, not a human reading the PR).
 //
-// # Step 66 (§26.1): restructured into a merge readout
+// # (§26.1): restructured into a merge readout
 //
 // digest (digest.go, VerdictInput.Digest, already validated -- Digest.
 // Summary non-empty, per ValidateVerdictInput) supplies the new content
@@ -45,14 +45,14 @@ import (
 //     bullets), and shippable class (Shippable). §26.1 item 1 names
 //     exactly these three; TestsCoverage/DocsDrift/FilesChanged/
 //     BlastRadius, previously also rendered as flat bullets here, MOVE
-//     out of the header in Step 66 -- items 4 and 5 below name new, more
-//     specific homes for each of them. §26.2/Step 67 adds ONE further
+//     out of the header in §26.1 -- items 4 and 5 below name new, more
+//     specific homes for each of them. §26.2 adds ONE further
 //     header bullet -- "Description adequacy" (digest.DescriptionAdequacy
 //     + digest.AdequacyExplanation) -- immediately after Premise: the
 //     SAME structural role Premise already plays (a closed-vocabulary
 //     assessment that floors Shippable, §26.2's own third raise-only
 //     floor), so it belongs beside it, not buried in a later section.
-//  2. "What this PR does" -- digest.Summary, verbatim. §26.2/Step 67
+//  2. "What this PR does" -- digest.Summary, verbatim. §26.2
 //     additionally renders a "Suggested PR description" block here, when
 //     digest.ProposedBody is non-blank -- see renderProposedBody's own
 //     doc comment below for why this renders for EVERY PR regardless of
@@ -79,7 +79,7 @@ import (
 //     always produced, §26.1's own words: "demoted to supporting
 //     evidence", never restructured or dropped.
 //
-// # Step 69 (§26.4): "Contested points"
+// # (§26.4): "Contested points"
 //
 // digest.ContestedPoints (digest.go, the deep path's own inter-agent
 // disagreement narrative -- populated by counter-review synthesis, empty
@@ -94,15 +94,15 @@ import (
 // reasoning renderProposedBody already established for ProposedBody.
 //
 // TestsCoverage/DocsDrift/FilesChanged/BlastRadius are v's own PRE-
-// EXISTING fields (review.Verdict, unchanged by this Step -- Step 66 adds
-// no new field to that closed, seven-field type, digest.go's own doc
+// EXISTING fields (review.Verdict, unchanged here -- no new field is added
+// to that closed, seven-field type, digest.go's own doc
 // comment) -- this function only ever changes WHERE they render, never
 // what they are or how internal/app/reviewverdict.Insert persists them.
 func RenderVerdictComment(v review.Verdict, findings []Finding, digest Digest, summary, botHandle, syncedLabel string) string {
 	var b strings.Builder
 
 	// --- 1. Header (§26.1 item 1, §26.2 item 1) -- risk badge, why-line,
-	// shippable class, PLUS §26.2/Step 67's own "Description adequacy"
+	// shippable class, PLUS §26.2's own "Description adequacy"
 	// bullet (immediately after Premise -- the same structural role: a
 	// closed-vocabulary assessment that floors Shippable).
 	b.WriteString("### Code review verdict\n\n")
@@ -119,7 +119,7 @@ func RenderVerdictComment(v review.Verdict, findings []Finding, digest Digest, s
 	b.WriteString(escapeFindingDescription(strings.TrimSpace(digest.Summary)))
 	b.WriteString("\n\n")
 
-	// --- §26.2/Step 67: "Suggested PR description", when the agent
+	// --- §26.2: "Suggested PR description", when the agent
 	// proposed one -- see renderProposedBody's own doc comment for why
 	// this renders unconditionally on ProposedBody alone, for every PR
 	// regardless of authorship (graduated remediation, §26.2, decides
@@ -160,7 +160,7 @@ func RenderVerdictComment(v review.Verdict, findings []Finding, digest Digest, s
 	}
 	b.WriteString("\n")
 
-	// --- Step 69 (§26.4): "Contested points" -- rendered only when the
+	// --- (§26.4): "Contested points" -- rendered only when the
 	// deep path's counter-review synthesis actually produced one; see
 	// renderContestedPoints' own doc comment for why an empty value
 	// renders no section at all.
@@ -216,7 +216,7 @@ func RenderVerdictComment(v review.Verdict, findings []Finding, digest Digest, s
 }
 
 // renderProposedBody renders proposedBody (digest.ProposedBody, the
-// agent's own optional PR-body rewrite proposal, §26.2/Step 67) as a
+// agent's own optional PR-body rewrite proposal, §26.2) as a
 // collapsed "Suggested PR description" block -- an empty/blank
 // proposedBody renders NOTHING at all (not even a "none reported"
 // sentence, unlike Architecture choices/Risks to the stack above): most
@@ -250,7 +250,7 @@ func renderProposedBody(proposedBody string) string {
 }
 
 // renderContestedPoints renders contestedPoints (digest.ContestedPoints, the
-// deep path's own inter-agent disagreement narrative, §26.4/Step 69) as a
+// deep path's own inter-agent disagreement narrative, §26.4) as a
 // "### Contested points" section -- an empty/blank contestedPoints renders
 // NOTHING at all (not even a "none reported" sentence, the SAME choice
 // renderProposedBody already makes for ProposedBody immediately below, for
@@ -302,7 +302,7 @@ func renderArchDecision(ad ArchDecision) string {
 // general untrusted-free-text escaper: every field VerdictInput's POST
 // body lets the reviewing model author as open prose -- Finding.Description
 // (finding.go's own doc comment); since a Phase 5 audit finding closed
-// the gap Step 66/67/69 opened, every Digest field of the SAME
+// the gap §26.1/§26.2/69 opened, every Digest field of the SAME
 // provenance (Summary, AdequacyExplanation, StackRisks, UnverifiedLimits,
 // ProposedBody, ContestedPoints, and each ArchDecision's own three
 // fields); and the verdict's own narrative `summary` parameter
@@ -310,8 +310,8 @@ func renderArchDecision(ad ArchDecision) string {
 // immediately under the header bullets) -- all share the identical
 // hazard and all now go through this SAME escaper. That narrative
 // summary was NOT part of the audit finding's own explicitly-scoped
-// field list (it pre-dates Step 66, so it was not one of the fields
-// those Steps added), but it is the identical hazard in the identical
+// field list (it predates that work, so it was not one of the fields
+// added then), but it is the identical hazard in the identical
 // function, one line above "### What this PR does": an unclosed
 // "<details>" there swallows EVERY section below it -- What this PR
 // does, Architecture choices, Risks to the stack, Contested points --

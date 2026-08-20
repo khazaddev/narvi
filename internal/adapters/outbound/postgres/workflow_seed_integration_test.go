@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration proof for migrations/000057_workflows.up.sql (Step 54,
+// Integration proof for migrations/000057_workflows.up.sql (
 // "domain/workflow + loopguard + schema", §25.4/§25.8): the three
 // built-in workflow definitions, their steps and edge, and the three
 // global bindings come out of migrate-up seeded and well-formed in
@@ -10,8 +10,8 @@
 // unrepresentable, one deterministic edge per (step, outcome), one
 // running run per session, one live attempt per run) hold at the DB
 // level, not just in application code. Deliberately raw SQL throughout:
-// NO store layer exists for these tables yet -- Step 54 is dark by
-// design (schema/domain/contracts/RBAC only), and Steps 55-56 own the
+// NO store layer exists for these tables yet -- §25.4 is dark by
+// design (schema/domain/contracts/RBAC only), and §25.6/§25.9 own the
 // first real read/write paths.
 package postgres_test
 
@@ -26,8 +26,8 @@ import (
 // The fixed system-row ids migration 000057 seeds (see its own header
 // comment for why these are constants rather than gen_random_uuid()).
 // builtInPlanStep1ID is the ONE step that survives migration 000057's own
-// two-step plan seed -- migration 000088_plan_builtin_passthrough (Step
-// 56's own corrective follow-up, §25.8/§25.9) removed the second step
+// two-step plan seed -- migration 000088_plan_builtin_passthrough
+// (§25.8/§25.9's own corrective follow-up) removed the second step
 // (originally id ...032) and its hitl_after=true, so there is no
 // builtInPlanStep2ID constant any longer.
 const (
@@ -59,10 +59,10 @@ func expectPgErrCode(t *testing.T, err error, code, constraint string) {
 
 // TestWorkflowSeed_BuiltInDefinitions proves the three system templates
 // exist exactly as §25.8 shapes them TODAY, post migration
-// 000088_plan_builtin_passthrough (Step 56's own corrective follow-up):
+// 000088_plan_builtin_passthrough (§25.9's own corrective follow-up):
 // review/request/plan are now IDENTICALLY shaped single passthrough
 // steps (ModelID nil so turns.model_id/sessions.build_model_id inherit
-// exactly as today -- Step 55's zero-config proof), no HITL, no edges.
+// exactly as today -- §25.6's zero-config proof), no HITL, no edges.
 //
 // Migration 000057 originally seeded plan as a 2-step approve/build
 // shape with HITL after step 1 and a needs_fix self-loop edge; an audit
@@ -70,10 +70,10 @@ func expectPgErrCode(t *testing.T, err error, code, constraint string) {
 // double-parked a workflow-level HITL gate (workflow_step_runs.status =
 // 'awaiting_decision', resolved only via POST /api/workflow-runs/:runId/
 // steps/:stepRunId/decide) against classic plan mode's own pre-existing,
-// UNCONDITIONAL persisted-state awaiting-plan gate (Steps 37/38, §8.1:
+// UNCONDITIONAL persisted-state awaiting-plan gate (§8.1:
 // plans.status, plan.MatchVerdict/MatchRevise, turn.go's own
 // ErrPlanAwaitingApproval) on every single plan-mode session, since
-// internal/adapters/inbound/httpapi's createTurnLocked (Step 55) wires
+// internal/adapters/inbound/httpapi's createTurnLocked (§25.6) wires
 // the workflow engine into EVERY new turn unconditionally. Migration
 // 000088 (see its own header comment for the full "why") corrected this:
 // classic plan mode stays the SOLE plan-approval authority, and the

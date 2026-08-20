@@ -10,8 +10,8 @@ import (
 )
 
 // deepValidInput mirrors validInput() but additionally fills in the three
-// Step 68 deep-path-only digest fields, marks ReviewDepth deep, and
-// (§26.4/Step 69) sets CounterReview -- a caller on the deep path must
+// §26.3 deep-path-only digest fields, marks ReviewDepth deep, and
+// (§26.4) sets CounterReview -- a caller on the deep path must
 // pass ALL of these to validate.
 func deepValidInput() reviewpost.VerdictInput {
 	in := validInput()
@@ -126,7 +126,7 @@ func TestValidateVerdictInput_DeepPath(t *testing.T) {
 // light-path invariant explicitly (§26.1: "the light path requests the
 // full digest but does not hard-require it") -- an empty ArchDecisions/
 // StackRisks/UnverifiedLimits on a light-path (or ReviewDepth=="",
-// pre-Step-68) verdict must still validate cleanly. Mutating
+// pre-existing) verdict must still validate cleanly. Mutating
 // ValidateVerdictInput's own `in.ReviewDepth == reviewtriage.DepthDeep`
 // guard into an unconditional check must fail this test.
 func TestValidateVerdictInput_LightPathNeverRequiresFullDigest(t *testing.T) {
@@ -141,7 +141,7 @@ func TestValidateVerdictInput_LightPathNeverRequiresFullDigest(t *testing.T) {
 }
 
 // TestValidateVerdictInput_UnresolvedDepthNeverRequiresFullDigest covers
-// the ReviewDepth == "" case explicitly (a pre-Step-68 caller, or a turn
+// the ReviewDepth == "" case explicitly (a pre-existing caller, or a turn
 // whose depth could not be resolved) -- must degrade like the light path,
 // never like the deep path.
 func TestValidateVerdictInput_UnresolvedDepthNeverRequiresFullDigest(t *testing.T) {
@@ -169,8 +169,8 @@ func TestValidateVerdictInput_DeepDigestChecksRunLast(t *testing.T) {
 	}
 }
 
-// TestValidateVerdictInput_CounterReviewCheckedLastOfAll proves §26.4/Step
-// 69's own CounterReview check is appended at the very END of the
+// TestValidateVerdictInput_CounterReviewCheckedLastOfAll proves §26.4's
+// own CounterReview check is appended at the very END of the
 // deep-path-only block (this function's own "each added at the end of the
 // existing fixed order" discipline) -- a deep-path payload with BOTH an
 // empty UnverifiedLimits AND a garbled CounterReview must still report
@@ -187,7 +187,7 @@ func TestValidateVerdictInput_CounterReviewCheckedLastOfAll(t *testing.T) {
 }
 
 // TestValidateVerdictInput_FactCheckCheckedBeforeDeepPathBlock proves
-// §26.6/Step 69's own FactCheck check runs BEFORE the deep-path-only block
+// §26.6's own FactCheck check runs BEFORE the deep-path-only block
 // (it is unconditional, so it must never be positioned inside a block that
 // only ever runs on the deep path) -- a deep-path payload with BOTH a
 // garbled FactCheck AND an empty ArchDecisions must report

@@ -1,4 +1,4 @@
-// This file (cloudidentitykeys.go) implements Step 73a's own ("cloud
+// This file (cloudidentitykeys.go) implements §27.3's own ("cloud
 // identity: OIDC issuer, bindings, minting", §27.3) admin-triggered
 // signing-key ROTATION endpoint -- POST /api/cloud-identity/signing-keys/
 // rotate. This is this Step's own gap-2 resolution: §27.3 specifies

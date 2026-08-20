@@ -46,7 +46,7 @@ type BootProgressEvent struct {
 	Err error
 }
 
-// ProgressReporter is a plain callback, not an interface -- Step 16 is
+// ProgressReporter is a plain callback, not an interface -- §6.1 is
 // expected to supply one that forwards over the WS bridge once it exists;
 // for now main.go supplies a slog-only one. A func type (like
 // http.HandlerFunc) is the right amount of ceremony for a single-method

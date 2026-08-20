@@ -11,7 +11,7 @@ import (
 )
 
 // ReviewFindingStore is a thin, pass-through wrapper around the
-// sqlc-generated review_findings queries (Step 48, "sentinels +
+// sqlc-generated review_findings queries ("sentinels +
 // suggestions", §17/§22.1) -- see migrations/000046_review_findings.up.sql's
 // own doc comment for the table's full design. No caching, no retries, no
 // business rules -- callers (internal/adapters/inbound/httpapi/
@@ -116,7 +116,7 @@ func (s *ReviewFindingStore) MarkFixApplied(ctx context.Context, repoFullName st
 
 // ListStatusesInWindow returns the status column of every finding first
 // seen for repoFullName after sinceTime, oldest-first, bounded by limit
-// -- Step 62's own "Review finding outcomes" analytics KPI (§21.1).
+// -- §21's own "Review finding outcomes" analytics KPI (§21.1).
 func (s *ReviewFindingStore) ListStatusesInWindow(ctx context.Context, repoFullName string, sinceTime pgtype.Timestamptz, limit int32) ([]string, error) {
 	return s.q.ListReviewFindingStatusesInWindow(ctx, sqlcgen.ListReviewFindingStatusesInWindowParams{
 		RepoFullName: repoFullName,

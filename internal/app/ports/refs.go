@@ -7,7 +7,7 @@ package ports
 //
 // Different providers populate this differently: Modal's ProviderID
 // (internal/adapters/outbound/modal) holds Modal's own sandbox object id;
-// RWX (internal/adapters/outbound/rwx, Step 57), the second provider
+// RWX (internal/adapters/outbound/rwx, §4.1), the second provider
 // implementing this same interface, populates ProviderID with the
 // deterministic per-(session, gen) identity string its own adapter
 // derives (RWX itself keys a sandbox on branch + config-file path, not a
@@ -35,7 +35,7 @@ type SnapshotID string
 type BuildRef string
 
 // BuildOutcome is BuildImage's own success return value (§19.1's closing
-// paragraph, Step 43(c), third iteration: immutable versioned cache
+// paragraph(c), third iteration: immutable versioned cache
 // snapshots).
 type BuildOutcome struct {
 	// Ref is the provider's own opaque identifier for the built image —

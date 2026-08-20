@@ -1,7 +1,7 @@
 package sandboxboot
 
 // Hook names one of the boot-sequence scripts §6.4 defines (setup.sh,
-// start.sh) plus §19.6's own Step-43 addition, the optional delta script
+// start.sh) plus §19.6's own addition, the optional delta script
 // (sync.sh). This is a closed vocabulary controlled entirely by this
 // package and its caller (internal/sandboxagent/boot's hook runner) -- no
 // external input ever supplies a raw Hook value.
@@ -12,8 +12,8 @@ const (
 	HookSetup Hook = "setup.sh"
 	// HookStart is the per-boot service-start script.
 	HookStart Hook = "start.sh"
-	// HookDelta is the OPTIONAL, repo-authored delta script (§19.6, Step
-	// 43): "sync.sh", added to the closed hook vocabulary specifically to
+	// HookDelta is the OPTIONAL, repo-authored delta script (§19.6):
+	// "sync.sh", added to the closed hook vocabulary specifically to
 	// run INSTEAD OF a full HookSetup rerun under BootModeRepoImage when
 	// workspaceMoved is true but setup.sh itself is provably unchanged
 	// since the built SHA (`git diff --quiet <built_sha> HEAD --
@@ -34,8 +34,8 @@ type HookOutcome struct {
 	FatalOnFailure bool
 }
 
-// EvaluateHook implements §6.4's hook policy, AMENDED by §19.4 (Step 42,
-// warm-boot shared images) -- this amendment is a BREAKING CHANGE to the
+// EvaluateHook implements §6.4's hook policy, AMENDED by §19.4 (warm-boot
+// shared images) -- this amendment is a BREAKING CHANGE to the
 // §6.4 contract, carrying the Conventional-Commits `!` marker on the
 // commit that lands it: "setup.sh runs only in fresh/build (fatal only in
 // build), OR in repo_image when workspaceMoved; start.sh runs in all
@@ -83,13 +83,13 @@ type HookOutcome struct {
 // ever a warning).
 //
 // An unrecognized Hook value (anything other than HookSetup, HookStart, or
-// -- as of Step 43 -- HookDelta) is treated as a programming error, not a
+// HookDelta) is treated as a programming error, not a
 // data error: Hook is a closed vocabulary this package and its own caller
 // control, so this returns the zero HookOutcome (ShouldRun: false) rather
 // than defining a third named error type for a case that can only arise
 // from a bug in this codebase, never from external input.
 //
-// # Step 43 addition: HookDelta (§19.6)
+// # §19.1 addition: HookDelta (§19.6)
 //
 // HookDelta's own policy row is deliberately the SAME eligibility envelope
 // as HookSetup's own repo_image branch (mode == BootModeRepoImage &&

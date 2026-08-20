@@ -210,7 +210,7 @@ func (a *Adapter) dispatchEvent(env sseEnvelope) {
 			// eventually gets computed).
 			//
 			// Cost is the one deliberate exception to that suppression
-			// (D1 fix, post-Step-70 review): forceCompaction's own POST
+			// (D1 fix): forceCompaction's own POST
 			// /summarize call (compact.go) is a real, synchronous,
 			// billed call on this SAME session, and it emits its own
 			// genuine step-finish with a real, non-zero p.Cost as part
@@ -377,7 +377,7 @@ func (a *Adapter) dispatchPart(ts *turnState, subTaskID string, raw json.RawMess
 			slog.Warn("opencode: malformed step-finish part, skipping", "error", err)
 			return
 		}
-		// §26.7/§7.1 (Step 70): sum p.Cost into this turn's own running
+		// §26.7/§7.1: sum p.Cost into this turn's own running
 		// total -- unconditionally, regardless of subTaskID, since this
 		// SAME turnState is shared by the main lane and every sub-task
 		// alike (see turnState.spentUSD's own field doc comment, turn.go,

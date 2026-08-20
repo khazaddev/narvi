@@ -1,6 +1,6 @@
-// This file (reviewverdicttoolprompt.go) closes the other half of Step
-// 47's ("server-side verdict", §8.2/§5.2/§21.2) own verdict-posting tool:
-// internal/domain/review.RenderTurnPrompt (Step 46/47) renders a review
+// This file (reviewverdicttoolprompt.go) closes the other half of
+// §8.2's own ("server-side verdict", cf. §5.2/§21.2) verdict-posting tool:
+// internal/domain/review.RenderTurnPrompt (§8.2) renders a review
 // turn's prompt with a FIXED, deterministic block instructing the agent
 // how to call POST /sessions/{sessionID}/review/verdict -- but that
 // package runs at TURN-CREATION time, in the control plane, before any
@@ -10,7 +10,7 @@
 // see that package's own doc comment) in place of this turn's real,
 // live, CURRENT-gen URL/bearer/gen.
 //
-// Step 58 ("uploads, blob storage & the in-sandbox download_file tool",
+// §8.6 ("uploads, blob storage & the in-sandbox download_file tool",
 // §28.5) extends this SAME mechanism for a second tool, never a second
 // substitution scheme: internal/domain/upload's own
 // BaseURLPlaceholder/BearerPlaceholder/GenPlaceholder (rendered into a

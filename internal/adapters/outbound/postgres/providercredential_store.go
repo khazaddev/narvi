@@ -12,7 +12,7 @@ import (
 )
 
 // ProviderCredentialStore is a thin, pass-through wrapper around the
-// sqlc-generated provider_credentials queries (Step 53, "provider
+// sqlc-generated provider_credentials queries ("provider
 // credential injection", §25.1/§25.3, migrations/
 // 000056_provider_credentials.up.sql) -- this codebase's first generic
 // secret-storage table. No caching, no retries, no business rules, and
@@ -80,7 +80,7 @@ func (s *ProviderCredentialStore) Delete(ctx context.Context, id pgtype.UUID) (i
 // ListForResolution fetches every candidate row (across all 4 scopes, for
 // every provider at once) that could apply to a session naming
 // repoFullNames, optionally environmentID, and optionally the session's
-// own creator userID (Step 59, §29.4: "resolution keys on sessions.
+// own creator userID (§29.4: "resolution keys on sessions.
 // created_by") -- the sandbox-facing delivery endpoint's own single read.
 // repoFullNames may be empty (never an error); environmentID/userID nil
 // mean "this session has no attached Environment"/"this is a bot-

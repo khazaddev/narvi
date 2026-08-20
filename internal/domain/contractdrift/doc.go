@@ -1,4 +1,4 @@
-// Package contractdrift implements the pure decision functions Step 27
+// Package contractdrift implements the pure decision functions §14.3
 // ("mocking + contract drift", §14.3) needs to detect "backend changed,
 // contract didn't":
 //

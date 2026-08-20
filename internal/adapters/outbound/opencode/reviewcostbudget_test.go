@@ -7,7 +7,7 @@ import (
 	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
 )
 
-// These tests prove §26.7/§7.1's own cost accumulator (Step 70): every
+// These tests prove §26.7/§7.1's own cost accumulator (§26.5): every
 // step-finish this turn observes -- main lane AND every sub-task alike --
 // must be summed into ONE running total, and that total must be reachable
 // from Adapter.CurrentTurnSpentUSD, the method cmd/sandbox-agent's own

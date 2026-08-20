@@ -16,7 +16,7 @@ import (
 // attempt, and is cleared by NewCallbackHandler as soon as it is read.
 const oauthStateCookieName = "narvi_oauth_state"
 
-// oauthNextCookieName is Step 39's ("identities + full RBAC", §13.2) own
+// oauthNextCookieName is §13.2's ("identities + full RBAC", §13.2) own
 // addition -- a SEPARATE short-lived cookie carrying an optional
 // post-login redirect target, so a caller that sends a signed-out visitor
 // through this SAME GitHub OAuth login flow (internal/adapters/inbound/
@@ -67,7 +67,7 @@ func isSafeRedirectNext(next string) bool {
 // securely, so plain state-parameter protection is the correct, standard
 // choice here and keeps the flow simpler.
 //
-// Step 39 ("identities + full RBAC", §13.2) update: an OPTIONAL ?next=
+// §13.2 ("identities + full RBAC", §13.2) update: an OPTIONAL ?next=
 // query parameter (a same-origin absolute path ONLY -- isSafeRedirectNext,
 // this file's own doc comment) is stored in a second short-lived cookie
 // (oauthNextCookieName) and honored by NewCallbackHandler as the final

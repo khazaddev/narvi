@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 73a's own ("cloud identity: OIDC issuer,
+// Integration tests for §27.3's own ("cloud identity: OIDC issuer,
 // bindings, minting", §27.3) CP-side management CRUD surface
 // (cloudidentitybindings.go), against a real Postgres instance -- sharing
 // this package's own testRig (httpapi_integration_test.go).
@@ -96,9 +96,8 @@ func TestCreateGlobalCloudIdentityBinding_MaintainerAllowed(t *testing.T) {
 // TestCreateEnvironmentCloudIdentityBinding_IssuerUnset_FailsClosed and
 // TestCreateGlobalCloudIdentityBinding_IssuerUnset_FailsClosed pin §27.3's
 // own explicit requirement, verbatim: "the whole capability is off (and
-// binding CRUD refuses, fail-closed) when unset" -- repeated at the Step
-// 73 row: "capability off and binding CRUD refusing, fail-closed, when
-// unset". An adversarial review found this entirely UNIMPLEMENTED:
+// binding CRUD refuses, fail-closed) when unset". An adversarial review
+// found this entirely UNIMPLEMENTED:
 // cloudidentitybindings.go's own 4 shared handler cores (create/list/
 // update/delete) took no issuerURL parameter at all, and cmd/
 // control-plane/main.go mounted both binding route groups behind

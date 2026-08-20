@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 62's own (§21.1) read-only analytics route
+// Integration tests for §21's own (§21.1) read-only analytics route
 // (reviewanalytics.go's own GetReviewAnalytics), against a real Postgres
 // instance -- sharing this package's own testRig (httpapi_integration_test.go).
 package httpapi_test
@@ -164,7 +164,7 @@ func TestGetReviewAnalytics_RendersComputedRollups(t *testing.T) {
 }
 
 // TestGetReviewAnalytics_DigestContestationRate_ComputedFromDeepPathAndContest
-// proves §26.5's own "digest precision (contestation rate)" KPI (Step 69)
+// proves §26.5's own "digest precision (contestation rate)" KPI (§26.4)
 // is genuinely wired end to end through this HTTP surface -- not merely
 // present in restdtos, the exact defect B4 named (the capture path,
 // review_digest_section_feedback, and the pure DigestContestationRate

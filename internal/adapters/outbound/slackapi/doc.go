@@ -1,4 +1,4 @@
-// Package slackapi holds the Slack Notifier adapter (Step 35, "outbox
+// Package slackapi holds the Slack Notifier adapter ("outbox
 // delivery", §5.1/§8.10) -- a real chat.postMessage client implementing
 // ports.Notifier, consumed EXCLUSIVELY via the outbox (internal/app/
 // outboxworker), never called directly by any inbound handler.
@@ -8,8 +8,8 @@
 // envelope, bounded-read, Authorization: Bearer botToken auth), not an
 // oversight to "fix" by sharing one client across both packages: that
 // file's own doc comment already says so explicitly ("NOT the general
-// Notifier/outbox abstraction Step 35 builds"), and ack.go's own call is a
-// synchronous, in-request-path, best-effort in-thread ack (Step 33's own
+// Notifier/outbox abstraction §5.1 builds"), and ack.go's own call is a
+// synchronous, in-request-path, best-effort in-thread ack (§8.10's own
 // scope, called directly from the inbound webhook handler, no retry, no
 // outbox row) -- a fundamentally different caller shape from THIS
 // package's Client, which is called ONLY by the outbox delivery worker,

@@ -25,7 +25,7 @@ const (
 	// this Step already behaves (backfilled default, see this migration's
 	// own doc comment). Also the correct value for an automation whose
 	// only intended trigger is a future, still-unbuilt "Run now" manual UI
-	// action (Step 52/76's own scope note, mirrored from automation.go's
+	// action (a deliberate scope note, mirrored from automation.go's
 	// identical "no caller exists yet" precedent for TriggerResume).
 	TriggerTypeManual TriggerType = "manual"
 	// TriggerTypeCron is a schedule-driven trigger -- TriggerConfig.Cron

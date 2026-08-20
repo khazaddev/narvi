@@ -30,7 +30,7 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// Step 28 ("turn recovery", §8.7 "relaunch-and-resume"): integration tests
+// §3.3 ("turn recovery", §8.7 "relaunch-and-resume"): integration tests
 // for POST /api/sessions/{sessionID}/turns (turn.go's own CreateTurn),
 // mirroring this package's own established house style (newTestRig,
 // createAuthenticatedUser, doJSON) for the happy path/409/404 cases, and a
@@ -294,7 +294,7 @@ func TestCreateTurn_ConcurrentRequests_OnlyOneSucceeds(t *testing.T) {
 }
 
 // TestCreateTurn_AwaitingPlan_Returns409NothingCreated is this batch's own
-// REST-level regression test for the new awaiting-plan gate (Step 37/38
+// REST-level regression test for the new awaiting-plan gate (§8.1
 // follow-up fix, §8.1): a plan_mode=false relaunch POST against a session
 // that currently has a plan in StatusAwaitingApproval gets a 409 -- the
 // SAME CreateTurnError shape TestCreateTurn_InFlightTurnExists_Returns409
@@ -510,7 +510,7 @@ func TestCreateTurn_CarriesExistingConversationID(t *testing.T) {
 	}
 }
 
-// --- Step 61 ("domain/turn: builder epistemic pre-action check", §20) --
+// --- §20 ("domain/turn: builder epistemic pre-action check", §20) --
 // end-to-end coverage for the devil's-advocate preamble's own injection
 // into a dispatched turn's REAL Prompt.Text, proven the SAME way
 // TestCreateTurn_CarriesExistingConversationID above proves conversation-id
@@ -522,7 +522,7 @@ func TestCreateTurn_CarriesExistingConversationID(t *testing.T) {
 // own standalone rig above (this file's own top doc comment: "building
 // exactly what one test needs rather than forcing it through a shared
 // fixture") since three tests below need the IDENTICAL setup, varying only
-// epistemicCheckDefault (CreateTurn's own new Step 61 constructor
+// epistemicCheckDefault (CreateTurn's own new §20 constructor
 // parameter) and the request body's own planMode.
 type epistemicCheckTestRig struct {
 	commander *fakeTurnCommander
@@ -659,7 +659,7 @@ func dispatchAndCapturePrompt(t *testing.T, rig epistemicCheckTestRig, body []by
 // wires when NARVI_EPISTEMIC_CHECK_DEFAULT is unset, platform/config.go)
 // and no session-level override, the dispatched Prompt.Text is BYTE-FOR-
 // BYTE identical to the prompt this request would have produced before
-// Step 61 existed -- no preamble text, no placeholder tokens, nothing
+// §20 existed -- no preamble text, no placeholder tokens, nothing
 // prepended at all. This is the required "assembled prompt is a
 // byte-for-byte no-op versus today" proof CLAUDE.md's own prompt-byte-
 // stability discipline demands.

@@ -1,7 +1,7 @@
 // This file (client.go) implements the CLIENT half of the WS hub (§6.2):
 // the browser <-> control-plane protocol, as opposed to sandbox.go's
 // server-side mirror of the sandbox-agent <-> control-plane protocol
-// (§6.1, Step 18). It shares this package's route
+// (§6.1). It shares this package's route
 // (GET /sessions/{sessionID}/ws) with the sandbox socket, discriminated by
 // ?type=client vs ?type=sandbox via handler.go's own NewHandler
 // dispatcher -- see that file's own doc comment.
@@ -538,7 +538,7 @@ func eventWireMap(e sqlcgen.Event) map[string]interface{} {
 // sqlcgen.Artifact.Metadata is likewise a plain []byte needing the same
 // json.RawMessage treatment to avoid base64-encoding.
 func artifactWireMap(a sqlcgen.Artifact) map[string]interface{} {
-	// status/failureReason (Step 58, §28.6) are additive fields on the
+	// status/failureReason (§28.6) are additive fields on the
 	// wire SubscribedPayload.artifacts shape, mirroring the sandbox-ws
 	// artifact event's own identical additive change -- always present
 	// here (never omitted), unlike that WS event's own absent-means-ready
@@ -797,9 +797,9 @@ const hubConnBufferSize = 64
 //
 // Cross-pod broadcast fan-out is explicitly NOT solved here: a Hub only
 // ever reaches connections registered in THIS process, the same class of
-// honest, documented gap as Step 18's ErrSessionActorElsewhere/503
+// honest, documented gap as §3.2's ErrSessionActorElsewhere/503
 // stopgap (see this package's own doc.go) -- not a Postgres LISTEN/NOTIFY
-// or message-bus solution, genuinely out of scope for this Step.
+// or message-bus solution, genuinely out of scope here.
 type Hub struct {
 	mu    sync.Mutex
 	conns map[string]map[*websocket.Conn]chan []byte

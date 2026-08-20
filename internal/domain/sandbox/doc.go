@@ -21,7 +21,7 @@
 // randomness. Anything needing "the current time" takes it as an explicit
 // `now time.Time` parameter — there is no Clock interface here; that
 // abstraction (and this package's only caller, the session actor) lands in
-// internal/app/ports and internal/app/sessionactor at Step 11/12.
+// internal/app/ports and internal/app/sessionactor at §2/§4.1.
 //
 // Timeout/interval VALUES live in platform/timeouts.go (§5.4) — this
 // package only defines the Config *shapes* a future caller populates from
@@ -41,7 +41,7 @@
 //   - A standalone execution-timeout check ("how long can a turn run") is
 //     already Chain A in platform/timeouts.go (ProviderHardCap >
 //     SupervisorTurnCap > TurnDeadline > SSEInactivityTimeout, §5.4) — the
-//     turn domain's concern (Step 08), not sandbox's.
+//     turn domain's concern (§3.1), not sandbox's.
 //   - An in-flight-silence backstop is superseded by Narvi's own two-phase
 //     terminalization + late-success reconciliation (§3.2: a genuinely late
 //     success "reconciles: turn marked completed, session status re-derived,

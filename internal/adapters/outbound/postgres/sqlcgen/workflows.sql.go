@@ -271,7 +271,7 @@ const failWorkflowRun = `-- name: FailWorkflowRun :one
 UPDATE workflow_runs SET status = 'failed', finished_at = now(), updated_at = now() WHERE id = $1 RETURNING id, session_id, lane, workflow_definition_id, definition_version, status, created_at, updated_at, finished_at, needs_review_notified_at
 `
 
-// Step 56's own addition (§25.9): a winning HITL reject verdict ends the
+// §25.9's own addition (§25.9): a winning HITL reject verdict ends the
 // run -- mirrors CompleteWorkflowRun's own shape exactly, landing on
 // 'failed' instead of 'completed' (WorkflowStepDecideResponse.runStatus's
 // own documented "'failed' after a winning reject ends the run" example).
@@ -441,8 +441,8 @@ type GetWorkflowBindingForRepoParams struct {
 	RepoFullName *string      `json:"repo_full_name"`
 }
 
-// Queries backing WorkflowStore (Step 55, "workflow execution engine",
-// §25.6/§25.7/§25.8), the first real reader/writer of Step 54's own dark
+// Queries backing WorkflowStore ("workflow execution engine",
+// §25.6/§25.7/§25.8), the first real reader/writer of §25.4's own dark
 // schema (migrations/000057_workflows.up.sql). internal/app/workflowengine
 // is this file's only caller: it resolves which (lane, repo) binding and
 // WorkflowDefinition govern a session's current turn, tracks the run/
@@ -563,7 +563,7 @@ const getWorkflowStepRun = `-- name: GetWorkflowStepRun :one
 SELECT id, workflow_run_id, step_definition_id, turn_id, status, outcome_status, outcome_summary, outcome_payload, decision, decision_text, decided_at, decided_by, created_at, updated_at, finished_at FROM workflow_step_runs WHERE id = $1
 `
 
-// Step 56 ("workflow HITL gate + circuit breaker", §25.9) own additions
+// §25.9 ("workflow HITL gate + circuit breaker", §25.9) own additions
 // below: the decide endpoint's lookup/guarded-decision queries, the
 // circuit breaker's own COUNT(*) attempt read (§25.5), and the escalation
 // notice's one-time claim (migrations/000058_workflow_hitl.up.sql).

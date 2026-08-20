@@ -1,8 +1,8 @@
 // This file (githubtoken.go) holds decryptCreatorGitHubToken -- extracted
-// out of pushpr.go (Step 21, "e2e happy path", design decision 8) so it
+// out of pushpr.go (§9.3, "e2e happy path", design decision 8) so it
 // reads as a genuinely shared Actor-level helper rather than something
 // pushpr-specific: pushpr.go's own createPRBestEffort and dispatch.go's own
-// resolveAndSetImage (Step 26, "image builds") both need the SAME "decrypt
+// resolveAndSetImage (§8.5, "image builds") both need the SAME "decrypt
 // this session's creator's stored GitHub OAuth access token" logic, and
 // duplicating it verbatim in two places was never the right call once a
 // second caller existed. No behavior change from pushpr.go's own original
@@ -14,8 +14,8 @@
 // allowed to be used, right now" staleness recheck (§13.3 viewer guard).
 // An audit sweep (cross-step, cross-package finding) found FOUR call sites
 // that each mint or use a session creator's token long after session
-// creation -- pushpr.go's own createPRBestEffort (the original,
-// Step-39-era check), internal/adapters/inbound/httpapi/scmcredentials.go's
+// creation -- pushpr.go's own createPRBestEffort (the original
+// check), internal/adapters/inbound/httpapi/scmcredentials.go's
 // ScmCredentials (a DIFFERENT package, added its own inline copy of the
 // identical check first, see that file's own doc comment), and this same
 // audit sweep's own two further findings: contractdrift.go's
@@ -60,9 +60,9 @@ import (
 // absence, just logged rather than turned into an HTTP response, since
 // every caller of this helper is an internal, best-effort side effect, not
 // a request awaiting a status code. This is the honest "no bot/service-
-// account fallback exists" gap named in Step 21's own brief (§8.11's
+// account fallback exists" gap named in §9.3's own brief (§8.11's
 // fallback half), not a bug to work around by inventing one -- and, as of
-// Step 26, ALSO the documented reason a session whose creator has no
+// §8.5, ALSO the documented reason a session whose creator has no
 // usable GitHub token still spawns successfully on the base image, never
 // blocked or failed by image resolution (§10 Phase 2: "never block a
 // session").
@@ -187,7 +187,7 @@ func CheckCreatorGuard(ctx context.Context, users *postgres.UserStore, createdBy
 	return CreatorGuardVerdict{Allowed: true}
 }
 
-// creatorMayGetPRAttribution is Step 39's own viewer guard (§13.3),
+// creatorMayGetPRAttribution is §13.2's own viewer guard (§13.3),
 // called by pushpr.go's createPRBestEffort BEFORE it ever decrypts/uses
 // createdBy's own GitHub token to open a pull request -- this is a
 // SECOND, defense-in-depth check, distinct from (and in addition to)

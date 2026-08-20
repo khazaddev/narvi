@@ -65,7 +65,7 @@ func findLogEntry(t *testing.T, buf *bytes.Buffer, wantMsg string) map[string]an
 	return nil
 }
 
-// This file proves Step 37's ("plan mode, web", §8.1/§12.2 item 3) own
+// This file proves §8.1's ("plan mode, web", §8.1/§12.2 item 3) own
 // plan-row-creation hook (planrecord.go, called from pushpr.go's
 // completeProcessingTurn) against a REAL Postgres instance -- mirroring
 // outboxenqueue_integration_test.go's own established house style

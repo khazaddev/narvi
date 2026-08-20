@@ -197,7 +197,7 @@ func TestListOpenPRsForUser_OneQueryFailingDoesNotBlankTheOther(t *testing.T) {
 	if len(prs) != 1 || prs[0].Number != 5 {
 		t.Errorf("ListOpenPRsForUser() = %+v, want exactly PR #5 from the surviving query", prs)
 	}
-	// §60 review finding C1: the surviving query's own result is still
+	// the surviving query's own result is still
 	// returned in full (never blanked out), but truncated must still be
 	// true -- this result is a known-incomplete picture (the assignee:
 	// query's own failure means any PR only discoverable THAT way is
@@ -210,8 +210,7 @@ func TestListOpenPRsForUser_OneQueryFailingDoesNotBlankTheOther(t *testing.T) {
 
 // TestListOpenPRsForUser_QueuedOrCancelledCheckIsNotGreen proves
 // fetchCIConclusionLive's own STRICT departure from fetchCIConclusion's
-// lenient "any confirmed success, no confirmed failure" rule (§60 review
-// finding A2): a live, pre-merge read must never report CIConclusionSuccess
+// lenient "any confirmed success, no confirmed failure" rule: a live, pre-merge read must never report CIConclusionSuccess
 // while a required check is still queued/in_progress (Conclusion == nil)
 // or was cancelled -- "some check finished green" must never stand in for
 // "the whole suite is green" while other checks are still outstanding.
@@ -310,7 +309,7 @@ func TestListOpenPRsForUser_QueuedOrCancelledCheckIsNotGreen(t *testing.T) {
 }
 
 // TestListOpenPRsForUser_PendingCombinedStatusRequiresARealStatus is the
-// P0 (BLOCKER) regression test for the second §60 review round. GitHub's
+// P0 (BLOCKER) regression test for a second review round. GitHub's
 // own documented rule for the combined-status endpoint is "pending if
 // there are no statuses or a context is pending" -- a repo whose CI runs
 // exclusively through GitHub Actions check-runs (the dominant modern CI
@@ -410,7 +409,7 @@ func TestListOpenPRsForUser_PendingCombinedStatusRequiresARealStatus(t *testing.
 }
 
 // TestListOpenPRsForUser_ReviewDecisionReducesToLatestPerReviewer is the
-// P1-1 regression test (§60 review, second round): fetchReviewDecision
+// P1-1 regression test: fetchReviewDecision
 // must reduce GitHub's own append-only review list to each reviewer's
 // LATEST decision. A reviewer whose CHANGES_REQUESTED review is followed
 // by their own later APPROVED review must read as approved, never

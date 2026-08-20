@@ -219,7 +219,7 @@ func runMigrations(connStr string) error {
 // FK relationship among them regardless of order); and restoreStatements,
 // one `INSERT INTO t SELECT * FROM __seed_snapshot_t` for every table
 // that already had at least one row at this point (prompt_templates,
-// migrations/000033, plus Step 54's FK-dependent workflow seed rows,
+// migrations/000033, plus §25.4's FK-dependent workflow seed rows,
 // migrations/000057), restored in FK-dependency order
 // (orderTablesForSeedRestore, below) -- each
 // backed by a literal `CREATE TABLE __seed_snapshot_t AS TABLE t` copy

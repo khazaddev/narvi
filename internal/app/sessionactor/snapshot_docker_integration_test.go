@@ -1,6 +1,6 @@
 //go:build integration
 
-// This file proves Step 74's own resolution of §27.8's genuinely
+// This file proves §27.5's own resolution of §27.8's genuinely
 // unresolved point D ("Capabilities() is flat... a provider whose
 // snapshot support differs by runtime (Modal gVisor vs VM runtime)
 // cannot express that today"): triggerSnapshotBestEffort
@@ -119,10 +119,10 @@ func TestTriggerSnapshotBestEffort_DockerFalseSession_StillSnapshots(t *testing.
 	}
 }
 
-// --- §9.3-class resilience scenario #17: restore-with-docker (§27.8, Step 74) ---
+// --- §9.3-class resilience scenario #17: restore-with-docker (§27.8) ---
 //
 // §27.8's own closing bullet: "Snapshotting a running dockerd: daemon/
-// image-store state inside snapshots is untested territory; Step 74
+// image-store state inside snapshots is untested territory; §27.5
 // must add a §9.3-class scenario for restore-with-docker before
 // claiming it works." This codebase does not, and does not claim to,
 // support restoring a Docker-enabled sandbox from a snapshot at all

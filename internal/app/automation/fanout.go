@@ -121,7 +121,7 @@ func (e *Engine) fanOut(ctx context.Context, inv sqlcgen.AutomationInvocation) {
 // createRunAndSession creates ONE automation_runs row for target, and --
 // unless session/turn creation itself fails -- the session+turn it
 // dispatches against, together on ONE freshly opened transaction, via the
-// SAME httpapi.CreateSessionOnTx core Step 31 established (see this
+// SAME httpapi.CreateSessionOnTx core §5.1 established (see this
 // package's own doc.go for the full "why together, on one tx" reasoning).
 //
 // spawnSource is deliberately restdtos.CreateSessionRequestSpawnSourceWeb,
@@ -159,7 +159,7 @@ func (e *Engine) createRunAndSession(ctx context.Context, logger *slog.Logger, i
 		// closest existing fit. This does NOT lose the "which automation
 		// created this session" fact: automation_runs.session_id is the
 		// real, permanent link (a future read model joins through it,
-		// never spawn_source). Revisit if Step 52/76 want a dedicated
+		// never spawn_source). Revisit if §8.4/§10 want a dedicated
 		// value once/if the UI needs to distinguish an automation session
 		// from an ordinary web one at a glance.
 		SpawnSource: restdtos.CreateSessionRequestSpawnSourceWeb,

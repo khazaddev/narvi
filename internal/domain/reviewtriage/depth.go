@@ -16,7 +16,7 @@ const (
 	// today's review").
 	DepthLight ReviewDepth = "light"
 	// DepthDeep is the higher-scrutiny path: frontier-tier model, forced
-	// high effort, and (Step 69, not built by this Step) adversarial
+	// high effort, and (§26.4, not built here) adversarial
 	// counter-review + architecture recap.
 	DepthDeep ReviewDepth = "deep"
 )

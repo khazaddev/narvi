@@ -2,21 +2,21 @@ package reviewpost
 
 import "github.com/khazaddev/narvi/internal/domain/review"
 
-// This file implements Step 66's own restructuring of the rendered verdict
+// This file implements §26.1's own restructuring of the rendered verdict
 // into a "merge readout" (§26, §26.1: "when agents author most of the code
 // under review, the merge DECISION is the bottleneck, not line-by-line
 // reading"). Digest/ArchDecision live HERE, in reviewpost -- never as new
 // fields on internal/domain/review.Verdict -- for the EXACT reason
 // finding.go's own doc comment already establishes for Finding: review's
 // own doc.go pins Verdict at "exactly the seven named fields... and
-// nothing else" (design call #4), and this package is where Step 47's
+// nothing else" (design call #4), and this package is where §8.2's
 // posting-tool payload grows structure the closed review.Verdict type
 // itself never will (VerdictInput's own doc comment: "one level up, until
 // a later Step gives it a richer, structured home" -- this Step is that
 // later Step, for the digest specifically).
 
 // ArchDecision is one structural decision the diff makes -- §26.1 item 3
-// ("Architecture choices"), IMPLEMENTATION_PLAN.md's own Step 66 row:
+// ("Architecture choices"), §26.1:
 // "decision, implicitly-rejected alternative, convention conformance".
 // Every field is the agent's own free-text narrative, exactly like
 // VerdictInput.Summary/FindingInput.Description already are -- rendered
@@ -25,7 +25,7 @@ import "github.com/khazaddev/narvi/internal/domain/review"
 // parser, on principle" stance. Requested on every review; validation-
 // enforced (at least one entry with real, non-blank content -- see
 // validate.go's own hasNonBlankArchDecision) ONLY when the posting
-// VerdictInput's own ReviewDepth is reviewtriage.DepthDeep (Step 68,
+// VerdictInput's own ReviewDepth is reviewtriage.DepthDeep (
 // §26.3, which now exists and defines that deep path) -- see Digest's own
 // doc comment below for the full "Enforcement" picture.
 type ArchDecision struct {
@@ -49,9 +49,8 @@ type ArchDecision struct {
 	ConventionConformance string
 }
 
-// Digest is the merge readout's own typed content (§26.1, IMPLEMENTATION_
-// PLAN.md's Step 66 row: "Digest{Summary, ArchDecisions[], StackRisks,
-// UnverifiedLimits}", extended by §26.2/Step 67's own
+// Digest is the merge readout's own typed content (§26.1: "Digest{Summary, ArchDecisions[], StackRisks,
+// UnverifiedLimits}", extended by §26.2's own
 // "DescriptionAdequacy/AdequacyExplanation/ProposedBody" addition below)
 // -- a NEW, ADDITIVE field alongside VerdictInput's
 // pre-existing Summary (validate.go), never a replacement for it: the two
@@ -73,13 +72,12 @@ type ArchDecision struct {
 //
 // # Enforcement -- Summary/DescriptionAdequacy/AdequacyExplanation always required; ArchDecisions/StackRisks/UnverifiedLimits required too, but only on the deep path; ProposedBody never required
 //
-// §26.1's own "Enforcement" section, and IMPLEMENTATION_PLAN.md's Step 66
-// row verbatim: "Summary required on every review from day one, full
-// digest schema-required on the deep path once Step 68 defines it
-// (reject-don't-repair at the posting endpoint)". Step 68 (§26.3, the
+// §26.1's own "Enforcement" section, verbatim: "Summary required on every review from day one, full
+// digest schema-required on the deep path once that's defined
+// (reject-don't-repair at the posting endpoint)". (§26.3, the
 // light/deep triage) now exists and defines that deep path. Summary
 // (ValidateVerdictInput's own ErrEmptyDigestSummary check, validate.go)
-// and §26.2/Step 67's own DescriptionAdequacy/AdequacyExplanation
+// and §26.2's own DescriptionAdequacy/AdequacyExplanation
 // (ErrInvalidDescriptionAdequacy/ErrEmptyAdequacyExplanation, same file)
 // are hard-required on EVERY review, light and deep alike -- the
 // description-adequacy check is a normal, always-on part of every review,
@@ -91,7 +89,7 @@ type ArchDecision struct {
 // ValidateVerdictInput's own ErrEmptyDigestArchDecisions/
 // ErrEmptyDigestStackRisks/ErrEmptyDigestUnverifiedLimits -- whenever the
 // posting VerdictInput's own ReviewDepth is reviewtriage.DepthDeep.
-// ProposedBody (§26.2/Step 67) stays REQUESTED-but-never-required on
+// ProposedBody (§26.2) stays REQUESTED-but-never-required on
 // every path, deep included -- unlike the other three, §26.3 never made
 // it deep-path-mandatory (most reviews, light or deep, propose no PR-body
 // rewrite at all), mirroring VerdictInput.Findings' own "additive,
@@ -107,7 +105,7 @@ type Digest struct {
 	// (§26.1 item 3) -- nil/empty is legal on the LIGHT path (a PR with no
 	// structural decision worth naming, e.g. a pure bugfix), but REQUIRED
 	// (at least one entry with real, non-blank content) on the DEEP path
-	// (Step 68, §26.3) -- see ValidateVerdictInput's own
+	// (§26.3) -- see ValidateVerdictInput's own
 	// ErrEmptyDigestArchDecisions check and hasNonBlankArchDecision
 	// (validate.go) for the exact rule.
 	ArchDecisions []ArchDecision
@@ -118,7 +116,7 @@ type Digest struct {
 	// unchanged by this Step), which covers the SAME section's own "blast
 	// radius in the existing fixed vocabulary" requirement. Empty string
 	// is legal on the LIGHT path, but REQUIRED non-blank on the DEEP path
-	// (Step 68, §26.3, ValidateVerdictInput's own ErrEmptyDigestStackRisks)
+	// (§26.3, ValidateVerdictInput's own ErrEmptyDigestStackRisks)
 	// -- rendered only when non-blank (rendercomment.go).
 	StackRisks string
 	// UnverifiedLimits is the readout's own explicit, honest "what was
@@ -126,16 +124,16 @@ type Digest struct {
 	// run the migration against a production-sized table; did not verify
 	// the new retry path under actual network partition". Empty string is
 	// legal on the LIGHT path, but REQUIRED non-blank on the DEEP path
-	// (Step 68, §26.3, ValidateVerdictInput's own
+	// (§26.3, ValidateVerdictInput's own
 	// ErrEmptyDigestUnverifiedLimits) -- rendered only when non-blank.
 	UnverifiedLimits string
 
-	// DescriptionAdequacy/AdequacyExplanation/ProposedBody (§26.2, Step
-	// 67: "review digest: description adequacy + graduated remediation")
+	// DescriptionAdequacy/AdequacyExplanation/ProposedBody (§26.2:
+	// "review digest: description adequacy + graduated remediation")
 	// are this Step's own addition, placed here rather than as new fields
 	// on review.Verdict for the SAME reason ArchDecisions/StackRisks/
 	// UnverifiedLimits already are (this type's own top doc comment):
-	// review's own doc.go pins Verdict at exactly its seven Step-45-named
+	// review's own doc.go pins Verdict at exactly its seven named
 	// fields, and this content is thematically continuous with the rest
 	// of Digest -- the adequacy check's own reference text IS Digest.
 	// Summary (§26.2's own words: "compares its own diff-derived Digest.
@@ -182,7 +180,7 @@ type Digest struct {
 	// only.
 	ProposedBody string
 
-	// ContestedPoints (§26.4, Step 69) is the deep path's own "Contested
+	// ContestedPoints (§26.4) is the deep path's own "Contested
 	// points" digest section -- free-text prose naming where the primary
 	// reviewer's own findings/digest and the counter-reviewer sub-task's
 	// own adjudication genuinely disagreed (§26.4: "inter-agent

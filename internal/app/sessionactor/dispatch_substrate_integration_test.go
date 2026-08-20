@@ -1,6 +1,6 @@
 //go:build integration
 
-// This file proves Step 74's own dispatch-time half of the "fail-closed,
+// This file proves §27.5's own dispatch-time half of the "fail-closed,
 // twice" rule (§27.5/§27.6, brief point A): tryPlanSpawn (dispatch.go's
 // own refuseIfSubstrateUnsupported) refuses to spawn a docker-required or
 // enforced-egress session against a provider that does not support it --
@@ -58,7 +58,7 @@ func createTestEnvironmentWithEgressAllowlist(ctx context.Context, t *testing.T,
 }
 
 // TestDispatch_RefusesDockerRequiredSessionWhenProviderUnsupported is a
-// MUTATION-TESTABLE guard (Step 74 brief: "remove the dispatch re-check
+// MUTATION-TESTABLE guard (§27.5 brief: "remove the dispatch re-check
 // → a DIFFERENT named test must fail") and the dispatch-time half of "a
 // test that disables one and shows the other still refuses, in both
 // directions": the session's own Environment is created DIRECTLY against
@@ -184,7 +184,7 @@ func TestDispatch_RefusesEgressAllowlistSessionWhenProviderUnsupported(t *testin
 }
 
 // TestDispatch_AppendsAllowlistFloorEndToEnd proves the non-negotiable
-// allowlist floor (Step 74 brief, point B) is genuinely present on the
+// allowlist floor (§27.5 brief, point B) is genuinely present on the
 // real wire CreateSpec a spawn sends, computed from THIS session's own
 // actual repo, even though the customer's own configured allowlist named
 // only an unrelated host.

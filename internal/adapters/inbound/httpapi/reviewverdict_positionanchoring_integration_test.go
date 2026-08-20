@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 63's own §22.1.1 content-anchored
+// Integration tests for §22's own §22.1.1 content-anchored
 // positioning, end to end through the real POST /sessions/:id/review/
 // verdict handler (reviewverdict.go) against a real Postgres instance --
 // gated behind the "integration" build tag, sharing this package's own
@@ -62,7 +62,7 @@ func verdictRequestWithFinding(filePath, description string) string {
 			"descriptionAdequacy": "ok",
 			"adequacyExplanation": "The PR body accurately describes this change.",
 		},
-		// factCheck/factCheckKilled (Step 69, §26.6) are REQUIRED
+		// factCheck/factCheckKilled (§26.6) are REQUIRED
 		// unconditionally, both paths -- this is a light-path (unresolved-
 		// depth) turn in this file's own tests, so counterReview stays
 		// omitted (never required there, §26.9).

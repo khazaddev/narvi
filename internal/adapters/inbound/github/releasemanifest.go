@@ -1,4 +1,4 @@
-// This file (releasemanifest.go) wires Step 50's own ("release PR
+// This file (releasemanifest.go) wires §15's own ("release PR
 // review", §15) release-PR detection (§15.1) and manifest-check
 // enqueueing (§15.2) into this package's own webhook handler --
 // handler.go's own top-level call site, right after CreateOrJoin
@@ -58,7 +58,7 @@ import (
 // via ONE GetPullRequest call, rather than reusing whatever headBranch
 // this mention's own payload happened to carry: labels are never present
 // on any of this package's own parsed mention payloads today (payload.go
-// parses only what §46/§17.6's own already-shipped concerns needed), and
+// parses only what §17.6's own already-shipped concerns needed), and
 // a fresh call here -- paid only on the WINNER path, i.e. once per
 // brand-new review session, never once per ordinary mention -- is a
 // small, bounded cost for a session-creation-time-only signal.

@@ -29,7 +29,7 @@ type Spec struct {
 	// EXISTING call site's own zero value -- which discards that stream
 	// entirely (exec.Cmd's own documented behavior for a nil Writer),
 	// identical to this package's behavior before these two fields
-	// existed. Added (Step 21, "e2e happy path") for a caller that needs
+	// existed. Added (§9.3, "e2e happy path") for a caller that needs
 	// a short-lived command's own OUTPUT, not just its exit code (e.g.
 	// `git rev-parse HEAD` for the resulting push SHA) -- Process itself
 	// still only ever tracks ExitResult; capturing output is entirely the

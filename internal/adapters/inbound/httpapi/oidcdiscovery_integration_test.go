@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 73a's own ("cloud identity: OIDC issuer,
+// Integration tests for §27.3's own ("cloud identity: OIDC issuer,
 // bindings, minting", §27.3) public discovery/JWKS endpoints
 // (oidcdiscovery.go), against a real Postgres instance -- sharing this
 // package's own testRig (httpapi_integration_test.go).

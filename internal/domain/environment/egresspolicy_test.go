@@ -159,7 +159,7 @@ func TestAppendAllowlistFloor(t *testing.T) {
 // TestAppendAllowlistFloor_FloorAlwaysPresent is the mutation-testable
 // proof that the floor is genuinely appended, not merely validated: given
 // a customer allowlist that omits BOTH the CP host and a session's own
-// git host, the result must contain both anyway (Step 74 brief, point B).
+// git host, the result must contain both anyway (§27.5 brief, point B).
 func TestAppendAllowlistFloor_FloorAlwaysPresent(t *testing.T) {
 	customerAllowlist := EgressPolicy{Mode: EgressModeAllowlist, Allowlist: []string{"registry.npmjs.org"}}
 	cpHost := "cp.example.com"

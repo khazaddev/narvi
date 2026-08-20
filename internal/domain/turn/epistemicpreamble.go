@@ -1,6 +1,6 @@
 package turn
 
-// This file implements Step 61's ("domain/turn: builder epistemic
+// This file implements §20's ("domain/turn: builder epistemic
 // pre-action check", §20) own devil's-advocate preamble and the config
 // threading that decides whether a given build turn gets one.
 //
@@ -115,7 +115,7 @@ const (
 //     the agent's own natural-language reply (§20.2's own "never
 //     prompt-only" requirement; this codebase's standing invariant that a
 //     structured signal is a typed field on a payload, never a marker
-//     scraped from markdown, Step 45/§26.4/§29).
+//     scraped from markdown, §26.4/§29).
 const epistemicPreamble = "" +
 	"Before you take any substantial action on this turn (editing files, running commands, opening a pull request, or similar), pause and think it through the way a deliberately skeptical second reviewer would, in this order:\n" +
 	"1. Does anything about the action you are about to take rest on an assumption you have not actually verified -- about the codebase, the task, or your own prior steps this session?\n" +
@@ -136,7 +136,7 @@ const epistemicPreamble = "" +
 	"Use \"none\" when nothing rose to either tier. Do not skip this call regardless of outcome -- your reply's own wording is advisory only and is never re-read as the outcome of record; this call is.\n\n"
 
 // MaybeInjectEpistemicPreamble is F6's own shared gate (adversarial
-// review, Step 61): composes ResolveEpistemicCheckEnabled,
+// review, §20): composes ResolveEpistemicCheckEnabled,
 // ShouldInjectEpistemicPreamble, and RenderEpistemicPreamble into the ONE
 // three-line sequence every raw turn-insert call site now routes through,
 // rather than each duplicating it inline -- "duplication is exactly how

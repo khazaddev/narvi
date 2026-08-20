@@ -11,7 +11,7 @@ import (
 )
 
 // ReviewVerdictStore is a thin, pass-through wrapper around the
-// sqlc-generated review_verdicts queries (Step 62, §21.1) -- see
+// sqlc-generated review_verdicts queries (§21.1) -- see
 // migrations/000067_review_verdicts.up.sql's own doc comment for the
 // table's full append-only design. No caching, no retries, no business
 // rules -- callers (internal/app/reviewverdict) decide what a missing

@@ -9,7 +9,7 @@ import (
 )
 
 // OpenCodeConfigStore is a thin, pass-through wrapper around the
-// sqlc-generated opencode_configs queries (Step 72, "sandbox secrets &
+// sqlc-generated opencode_configs queries ("sandbox secrets &
 // opencode config", §27.2, migrations/000091_opencode_configs.up.sql).
 // Unlike ProviderCredentialStore/SandboxSecretStore, Document travels as
 // PLAINTEXT bytes throughout -- this table holds config, not secret

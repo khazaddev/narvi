@@ -20,7 +20,7 @@ type Environment struct {
 	PathScope []string
 
 	// DockerRequired is §27.5's per-Environment "docker: required" flag
-	// (Step 74). false is the ordinary, unchanged-behavior default. A
+	// (§27.5). false is the ordinary, unchanged-behavior default. A
 	// true value is assumed to have already passed the fail-closed
 	// provider-capability check both call sites run independently
 	// (httpapi.CreateSessionCore at session-creation time,
@@ -29,7 +29,7 @@ type Environment struct {
 	// CheckSubstrateCapabilities.
 	DockerRequired bool
 
-	// EgressPolicy is §27.6's per-Environment egress_policy (Step 74). Its
+	// EgressPolicy is §27.6's per-Environment egress_policy (§27.5). Its
 	// zero value (Mode == "") means "no policy attached to this
 	// Environment" -- today's unchanged, unrestricted behavior. A non-zero
 	// value is assumed to have already passed ValidateEgressPolicy;
@@ -261,7 +261,7 @@ func SparseCheckoutPatterns(env Environment) []string {
 // This computes exactly IsScoped's value, and deliberately calls IsScoped
 // rather than re-deriving it: the two functions exist as distinct names
 // because they document two different caller-facing concepts -- IsScoped
-// is a git-layer sparse-checkout decision (clone-step caller, Step 29),
+// is a git-layer sparse-checkout decision (clone-step caller, §3.4),
 // while RequiresProvenanceTag is a session-creation provenance decision
 // (session-creation caller, a later Step) -- that presently happen to
 // coincide but belong to different call sites reading correctly on their

@@ -116,7 +116,7 @@ func TestRenderAutofixBody_DoubleRenderEqualsSingleRender(t *testing.T) {
 // TestRenderAutofixBody_SecondReviewNewProposalPreservesRealOriginal
 // proves the OTHER real trigger for a second delivery (not a retry of the
 // SAME payload, but a genuinely NEW verdict from a later re-review
-// proposing a DIFFERENT rewrite -- Step 65 allows up to 10 automatic
+// proposing a DIFFERENT rewrite -- §24 allows up to 10 automatic
 // re-reviews per PR): the SECOND render's own preserved-original block
 // must still contain the REAL, human-authored original -- never the
 // FIRST render's own proposed text -- even though the proposed text
@@ -143,7 +143,7 @@ func TestRenderAutofixBody_SecondReviewNewProposalPreservesRealOriginal(t *testi
 }
 
 // TestRenderAutofixBody_TripleRenderStaysIdempotent extends the double-
-// render property across a THIRD round (mirroring Step 65's own "up to
+// render property across a THIRD round (mirroring §24's own "up to
 // 10 automatic re-reviews" reality -- this is never bounded at exactly
 // two rounds in production) -- proves the fix converges, rather than
 // merely surviving one extra round before some other compounding

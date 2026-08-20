@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for internal/app/digest.Pump (Step 62, §21.3)
+// Integration tests for internal/app/digest.Pump (§21.3)
 // against a real Postgres instance.
 package digest_test
 
@@ -201,7 +201,7 @@ func TestPumpOnce_SecondTickSameDay_NoDuplicateSend(t *testing.T) {
 	}
 }
 
-// TestPumpOnce_ConcurrentTicks_ExactlyOneSendPerChannel is Step 62's own
+// TestPumpOnce_ConcurrentTicks_ExactlyOneSendPerChannel is §21's own
 // explicitly-pinned mutation test: "the digest's at-most-one-send under
 // concurrent claims". N goroutines call PumpOnce concurrently for the
 // SAME channel/day (simulating multiple control-plane pods ticking at

@@ -29,7 +29,7 @@ const (
 	// (an issue comment posted to the session's own originating PR).
 	NotificationKindGitHub NotificationKind = "github"
 
-	// NotificationKindSlackPlanApproval is Step 38's ("plan mode,
+	// NotificationKindSlackPlanApproval is §8.1's ("plan mode,
 	// cross-channel", §8.1/§13.3) own addition -- routes to internal/app/
 	// outboxworker's own Slack plan-approval notifier (wrapping
 	// internal/adapters/outbound/slackapi), which posts the REAL
@@ -43,7 +43,7 @@ const (
 	// itself.
 	NotificationKindSlackPlanApproval NotificationKind = "slack_plan_approval"
 
-	// NotificationKindSlackPlanDecided is Step 38's own addition -- routes
+	// NotificationKindSlackPlanDecided is §8.1's own addition -- routes
 	// to the SAME Slack plan-approval notifier, but calls chat.update
 	// (never chat.postMessage) against an EXISTING message (channel+ts
 	// already known, carried in the payload itself -- see slackapi.
@@ -63,7 +63,7 @@ const (
 	// doc.go): that package's own top comment explicitly deferred a
 	// richer, asynchronous, retried "progressive" AgentActivity update
 	// (the "progressive" half of §8.10) to "a future Step" once the real
-	// Notifier/outbox consumer existed -- Step 35 shipped that consumer,
+	// Notifier/outbox consumer existed -- §5.1 shipped that consumer,
 	// but nothing ever enqueued a mid-turn update through it until now.
 	// Routes to the SAME internal/app/outboxworker linearNotifier already
 	// registered under NotificationKindLinear (reused, not a second
@@ -81,7 +81,7 @@ const (
 	// does.
 	NotificationKindLinearProgress NotificationKind = "linear_progress"
 
-	// NotificationKindGitHubVerdict is Step 47's own addition ("server-side
+	// NotificationKindGitHubVerdict is §8.2's own addition ("server-side
 	// verdict", §8.2/§5.2/§21.2): routes to internal/adapters/outbound/
 	// githubapi's own verdict notifier, which submits a FORMAL pull request
 	// review (the "formal-review gate") or, deliberately, never a plain
@@ -95,7 +95,7 @@ const (
 	// doc comment for why a review session never uses it any more.
 	NotificationKindGitHubVerdict NotificationKind = "github_verdict"
 
-	// NotificationKindSentinelAutoFix is Step 48's own addition
+	// NotificationKindSentinelAutoFix is §8.2's own addition
 	// ("sentinels + suggestions", §17.2): routes to internal/app/
 	// outboxworker's own sentinel-auto-fix notifier, which atomically
 	// claims its sentinel_fixes row and spawns a child session
@@ -107,7 +107,7 @@ const (
 	// verdict's own findings-upsert write).
 	NotificationKindSentinelAutoFix NotificationKind = "sentinel_auto_fix"
 
-	// NotificationKindHandoffSentinel is Step 49's own addition
+	// NotificationKindHandoffSentinel is §14.4's own addition
 	// ("handoff-readiness sentinel", §14.4): routes to internal/adapters/
 	// outbound/githubapi's own handoff notifier, which posts the
 	// sentinel's already-rendered summary as a plain issue comment
@@ -122,7 +122,7 @@ const (
 	// (internal/adapters/outbound/postgres.HandoffSentinelStore.Claim).
 	NotificationKindHandoffSentinel NotificationKind = "handoff_sentinel"
 
-	// NotificationKindReleaseManifest is Step 50's own addition ("release
+	// NotificationKindReleaseManifest is §15's own addition ("release
 	// PR review", §15.2): routes to internal/adapters/outbound/githubapi's
 	// own release-manifest notifier, which posts the manifest check's
 	// already-rendered comment (internal/domain/reviewpost.
@@ -137,7 +137,7 @@ const (
 	// for the ONE place this Kind is ever enqueued.
 	NotificationKindReleaseManifest NotificationKind = "release_manifest"
 
-	// NotificationKindSlackWorkflowDecision is Step 56's own addition
+	// NotificationKindSlackWorkflowDecision is §25.9's own addition
 	// ("workflow HITL gate + circuit breaker", §25.9): a THIRD extension of
 	// planSlackNotifier's own wrapper-per-provider pattern
 	// (planslacknotifier.go, already extended twice: approval+decided) --
@@ -159,14 +159,14 @@ const (
 	// NotificationKindReleaseManifest already established alongside
 	// NotificationKindGitHub.
 	NotificationKindSlackWorkflowDecision NotificationKind = "slack_workflow_decision"
-	// NotificationKindLinearWorkflowDecision is this SAME Step 56 addition's
+	// NotificationKindLinearWorkflowDecision is this SAME §25.9 addition's
 	// Linear twin -- a THIRD extension of linearNotifier's own
 	// wrapper-per-provider pattern (linearnotifier.go, already extended
 	// twice: outcome+progress), reusing the plain linearapi.Payload shape
 	// (Success always true) verbatim. See NotificationKindSlackWorkflowDecision's
 	// own doc comment above for the full "why a distinct Kind" reasoning.
 	NotificationKindLinearWorkflowDecision NotificationKind = "linear_workflow_decision"
-	// NotificationKindGitHubWorkflowDecision is this SAME Step 56 addition's
+	// NotificationKindGitHubWorkflowDecision is this SAME §25.9 addition's
 	// GitHub twin -- reuses the EXISTING githubapi.BotNotifier instance
 	// (cmd/control-plane/main.go), registered under a second Kind:
 	// BotNotifier.Deliver never inspects notification.Kind at all, so this
@@ -176,7 +176,7 @@ const (
 	// above for the full "why a distinct Kind" reasoning.
 	NotificationKindGitHubWorkflowDecision NotificationKind = "github_workflow_decision"
 
-	// NotificationKindRWXPreviewDispatch is Step 57's ("RWX provider +
+	// NotificationKindRWXPreviewDispatch is §4.1's ("RWX provider +
 	// previews", §4.1.2 point 2) own addition: routes to
 	// internal/adapters/outbound/rwx's own ports.Notifier implementation,
 	// which POSTs to RWX's real, documented Dispatches API
@@ -192,7 +192,7 @@ const (
 	// never waits for the build").
 	NotificationKindRWXPreviewDispatch NotificationKind = "rwx_preview_dispatch"
 
-	// NotificationKindGitHubPreviewLink is Step 57's own companion
+	// NotificationKindGitHubPreviewLink is §4.1's own companion
 	// addition (§4.1.2 point 3): routes to internal/adapters/outbound/
 	// githubapi's own small notifier, which posts a `narvi/preview` commit
 	// status (via a NEW CreateCommitStatus adapter capability — POST
@@ -205,7 +205,7 @@ const (
 	// NotificationKindRWXPreviewDispatch above, never independently.
 	NotificationKindGitHubPreviewLink NotificationKind = "github_preview_link"
 
-	// NotificationKindBlobDelete is Step 58's own outbox kind (§28.4):
+	// NotificationKindBlobDelete is §8.6's own outbox kind (§28.4):
 	// enqueued whenever confirm's Stat-based verification fails (pending
 	// -> failed) or the abandonment sweep reaps a stale pending row --
 	// either way the object may half-exist in storage, and an external
@@ -219,7 +219,7 @@ const (
 	// {"key": "<the blob's own ports.BlobKey, as a plain string>"}.
 	NotificationKindBlobDelete NotificationKind = "blob_delete"
 
-	// NotificationKindSlackDigest is Step 62's own outbox kind (§21.3):
+	// NotificationKindSlackDigest is §21's own outbox kind (§21.3):
 	// enqueued by internal/app/digest.Pump once per (date, channel), only
 	// after that channel's own digest_send_state row has already been
 	// atomically claimed (SELECT ... FOR UPDATE SKIP LOCKED) -- routes to
@@ -230,7 +230,7 @@ const (
 	// slackapi.DigestPayload{ChannelID, Text}.
 	NotificationKindSlackDigest NotificationKind = "slack_digest"
 
-	// NotificationKindGitHubDescriptionAutofix is Step 67's own addition
+	// NotificationKindGitHubDescriptionAutofix is §26.2's own addition
 	// ("review digest: description adequacy + graduated remediation",
 	// §26.2): routes to internal/app/outboxworker's own description-
 	// autofix notifier, which re-verifies BOTH the Narvi-authorship of
@@ -256,7 +256,7 @@ const (
 	// happen (DescriptionAutofixPayload's own doc comment).
 	NotificationKindGitHubDescriptionAutofix NotificationKind = "github_description_autofix"
 
-	// NotificationKindLinearDigest is Step 62's own Linear sibling of
+	// NotificationKindLinearDigest is §21's own Linear sibling of
 	// NotificationKindSlackDigest above. UNLIKE every other Linear
 	// notification this codebase sends, this one has no existing
 	// AgentSession to post an AgentActivity into -- a digest is not a

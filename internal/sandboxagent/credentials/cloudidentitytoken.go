@@ -1,6 +1,6 @@
-// This file (cloudidentitytoken.go) implements Step 73b's own ("cloud
+// This file (cloudidentitytoken.go) implements §27.4's own ("cloud
 // identity: sandbox-side consumption + kubeconfig injection", §27.3)
-// sandbox-agent-side client half of Step 73a's own CP minting endpoint,
+// sandbox-agent-side client half of §27.3's own CP minting endpoint,
 // POST /sessions/{id}/cloud-identity-token (internal/adapters/inbound/
 // httpapi/cloudidentitytoken.go) -- mirrors sandboxsecrets.go/
 // opencodeconfig.go's own shape, adapted for a request BODY (the

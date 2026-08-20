@@ -9,7 +9,7 @@ import "context"
 //
 // Modal (internal/adapters/outbound/modal) implements this interface
 // starting this Step; RWX (internal/adapters/outbound/rwx) implements the
-// SAME interface starting Step 57. Nothing provider-specific may leak
+// SAME interface starting §4.1. Nothing provider-specific may leak
 // into this package or this signature — see doc.go and CLAUDE.md's "don't
 // couple a port to a single adapter."
 type SandboxProvider interface {
@@ -59,8 +59,8 @@ type SandboxProvider interface {
 	// Step only requires the method to exist with a real implementation
 	// behind it.
 	//
-	// spec.CacheMount (§19.1's own "build-time dependency cache", Step
-	// 43(c); third iteration — immutable versioned cache snapshots)
+	// spec.CacheMount (§19.1's own "build-time dependency cache";
+	// third iteration — immutable versioned cache snapshots)
 	// optionally requests a specific, immutable, already-published cache
 	// version be mounted read-only for this build, plus a NEW version to
 	// publish if this build succeeds — see CacheMount's own doc comment

@@ -7,7 +7,7 @@ import (
 )
 
 // WellKnownCachePaths is the fixed, closed, package-manager-agnostic set of
-// cache directories §19.1's own "build-time dependency cache" (Step 43(c))
+// cache directories §19.1's own "build-time dependency cache"
 // mounts a persistent, provider-backed cache volume at, inside the build
 // sandbox — mirroring §19.1 item 4's own "fixed, closed set" discipline for
 // the dependency-manifest scan (the SAME idiom, applied to a different
@@ -162,7 +162,7 @@ import (
 // wellKnownCachePaths is unexported: WellKnownCachePaths() below is the
 // only way to reach it, returning a fresh copy on every call so no caller
 // can mutate the shared backing array a naked exported slice would expose
-// (an audit-remediation finding on Step 43(c): "WellKnownCachePaths is an
+// (an audit-remediation finding: "WellKnownCachePaths is an
 // exported mutable slice handed across the port on every build").
 var wellKnownCachePaths = []string{
 	"/root/.npm/_cacache",

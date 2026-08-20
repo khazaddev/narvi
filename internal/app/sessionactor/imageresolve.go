@@ -1,4 +1,4 @@
-// This file (imageresolve.go) implements Step 26's ("image builds",
+// This file (imageresolve.go) implements §8.5's ("image builds",
 // §8.5-note/§10-P2) own real per-spawn image selection: dispatch.go's
 // planFreshSpawn/planRestore both build their CreateSpec with
 // Image=defaultBaseImage (unconditionally, exactly as before this Step),
@@ -8,10 +8,10 @@
 // fingerprint -- immediately before executeSpawn/executeRestore ever calls
 // the real provider.
 //
-// # Step 41 ("warm boot: shared fingerprint + spawn-path simplification",
+// # §19.1 ("warm boot: shared fingerprint + spawn-path simplification",
 // §19.1) rewrite -- what changed and why
 //
-// Before Step 41, computing a fingerprint here required a per-repo
+// Previously, computing a fingerprint here required a per-repo
 // `ResolveBranchSHA` GitHub API call (up to
 // len(repos)*platform.Timeouts.RepoSHAResolutionTimeout of sequential
 // network latency per spawn), which in turn required a usable creator
@@ -33,20 +33,20 @@
 // three remain exactly as they were for pushpr.go/contractdrift.go/
 // scmcredentials.go's own, unrelated call sites (githubtoken.go).
 //
-// # Step 41/42 boundary (§19.1 vs §19.9) -- documented design decision
+// # §19.1/§19.2 boundary (§19.1 vs §19.9) -- documented design decision
 //
 // §19.1's own prose describes the builder resolving each repo's
 // default-branch tip SHA "at claim time" -- §19.9's phasing note assigns
 // that exact claim-time SHA resolution, and the new platform-level GitHub
 // credential it needs (the freshness pump/background builder has no
 // session/creator context to borrow a token from, unlike this spawn-time
-// call site), to Step 42, not this one. Step 41's own resolved design
+// call site), to §19.2, not this one. §19.1's own resolved design
 // decision, still exactly as implemented in THIS file: a cache MISS here
 // creates a best-effort, URL-only pending row (repo_urls, no
 // built_repo_shas yet) and does NOTHING further -- this spawn-path call
 // site never resolves a per-repo SHA, on this spawn or any other; this
-// spawn still uses the base image regardless, exactly as before. Step 42
-// has since shipped: app/imagebuild.Builder.attempt is what actually
+// spawn still uses the base image regardless, exactly as before.
+// app/imagebuild.Builder.attempt is what actually
 // performs that claim-time SHA resolution now (using
 // platform.Config.GitHubImageBuildToken, §19.2), turning a brand-new
 // pending row into a buildable one asynchronously, off this spawn's own
@@ -88,13 +88,13 @@
 
 // # Repo-access gate (audit fix, "warm-boot image access control", HIGH)
 //
-// Step 41's own rewrite above (deliberately) dropped every creator/token
+// §19.1's own rewrite above (deliberately) dropped every creator/token
 // dependency this function used to have -- which also, as an unintended
 // side effect, dropped the ONLY thing that had ever gated which repos a
-// given user's sandbox could contain: before Step 41, a warm hit required
+// given user's sandbox could contain: previously, a warm hit required
 // resolving each repo's SHA under the CREATOR's own GitHub token, which
 // implicitly 404/403'd for a repo that creator could not read. Once the
-// fingerprint became URL-only and the background builder (Step 42) started
+// fingerprint became URL-only and the background builder (§19.2) started
 // resolving/building under a platform-level credential with no notion of
 // which user asked, an authenticated member with ZERO read access to a
 // private repo could name it in a session's repo list, cause a platform-
@@ -169,7 +169,7 @@
 //   - a real, enabled, non-viewer creator whose token genuinely cannot
 //     read the repo (CheckRepoAccess returns false, nil): denied -- the
 //     actual attack case this batch exists to close. This degrades to
-//     exactly the pre-Step-41 property: cold boot on the base image, and
+//     exactly the pre-existing property: cold boot on the base image, and
 //     that same user's own credentials still fail naturally at CloneAll
 //     (fatal boot for the primary repo) if they try anyway.
 //   - CheckRepoAccess itself fails to even answer the question (network
@@ -196,7 +196,7 @@
 // creator, normalized repo URL) for platform.Timeouts.RepoAccessCacheTTL,
 // shared across every Actor via the Registry (like a.stores/a.sourceControl
 // already are) -- after the first check per (user, repo), this reduces to
-// zero network calls for the life of the TTL, preserving Step 41/42's own
+// zero network calls for the life of the TTL, preserving §19.1/§19.2's own
 // "zero network calls on the steady-state hot path" property for the
 // common case of a user who DOES have access.
 
@@ -267,10 +267,10 @@ func (a *Actor) resolveAndSetImage(ctx context.Context, plan *spawnPlan) {
 		// No row yet for this fingerprint: best-effort create a pending
 		// tracking row carrying the URL-keyed fingerprint inputs, so
 		// internal/app/imagebuild's own background loop has a record of
-		// this repo set (see this file's own top comment for the Step
-		// 41/42 boundary this best-effort row sits on: no SHA resolution
+		// this repo set (see this file's own top comment for the §19.1/§19.2
+		// boundary this best-effort row sits on: no SHA resolution
 		// ever happens on this spawn path -- app/imagebuild.Builder's
-		// claim-time resolution, Step 42, is what later resolves and
+		// claim-time resolution, §19.2, is what later resolves and
 		// builds this row asynchronously). This spawn still uses the base
 		// image regardless of whether the upsert itself succeeds.
 		a.upsertPendingImageBuildBestEffort(ctx, fingerprint, repoURLs)
@@ -404,7 +404,7 @@ func (a *Actor) repoAccessAllowedForSpawn(ctx context.Context, plan *spawnPlan, 
 	// all -- the decrypted token would never have been used anyway (every
 	// repo already answered from repoAccessCache) -- restoring the "zero
 	// network calls, minimal Postgres reads" property of the all-cache-hit
-	// hot path Step 41/42 built this gate to sit in front of, without
+	// hot path §19.1/§19.2 built this gate to sit in front of, without
 	// weakening CheckCreatorGuard's own always-fresh recheck above.
 	var (
 		token        string

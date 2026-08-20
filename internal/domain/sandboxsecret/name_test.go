@@ -86,7 +86,7 @@ func TestValidateName_NarviPrefixTakesPriorityOverShape(t *testing.T) {
 // for the adversarial-review CRITICAL finding: before this fix, nothing in
 // ValidateName rejected a sandbox_secrets row named "OPENCODE_CONFIG_CONTENT"
 // -- OpenCode's own documented "inline config" env var, which sits ABOVE
-// even the project slot (the one Step 48's sentinel-fix capability
+// even the project slot (the one §8.2's sentinel-fix capability
 // restriction targets) in OpenCode's real, verified precedence order (see
 // cmd/sandbox-agent/opencodeconfig.go's own top doc comment). A maintainer
 // holding ActionManageEnvSecrets could therefore have saved exactly this
@@ -140,7 +140,7 @@ func TestValidateName_EveryProviderCredentialEnvVarNameIsRejected(t *testing.T) 
 	}
 }
 
-// TestValidateName_EveryCloudIdentityEnvVarNameIsRejected is Step 73b's own
+// TestValidateName_EveryCloudIdentityEnvVarNameIsRejected is §27.4's own
 // exhaustive, non-hardcoded mirror of
 // TestValidateName_EveryProviderCredentialEnvVarNameIsRejected, ranged over
 // cloudidentity.ReservedEnvVarNames rather than copy-pasted -- this is the
@@ -160,7 +160,7 @@ func TestValidateName_EveryCloudIdentityEnvVarNameIsRejected(t *testing.T) {
 
 // TestValidateName_EveryClusterBindingEnvVarNameIsRejected mirrors
 // TestValidateName_EveryCloudIdentityEnvVarNameIsRejected exactly, for
-// Step 73b's own §27.4 KUBECONFIG reservation.
+// §27.4's own §27.4 KUBECONFIG reservation.
 func TestValidateName_EveryClusterBindingEnvVarNameIsRejected(t *testing.T) {
 	for _, reserved := range clusterbinding.ReservedEnvVarNames() {
 		t.Run(reserved, func(t *testing.T) {

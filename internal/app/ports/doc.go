@@ -13,16 +13,16 @@
 // invert the dependency direction hexagonal architecture exists to
 // enforce: adapters depend on ports, ports never depend on adapters.
 //
-// SandboxProvider (§4.1) is the first port implemented, at Step 12,
-// against two adapters: internal/adapters/outbound/modal (Step 12, real)
-// and internal/adapters/outbound/rwx (a stub through Step 56; Step 57
-// makes it a real second implementation — same interface, per §4.1.1's
+// SandboxProvider (§4.1) is the first port implemented,
+// against two adapters: internal/adapters/outbound/modal (real)
+// and internal/adapters/outbound/rwx (a stub, later becoming a real
+// second implementation — same interface, per §4.1.1's
 // design). See sandboxprovider.go, capabilities.go, createspec.go,
 // refs.go, and providererror.go for the interface and its supporting
 // value types.
 //
 // AgentRuntime (§4.2, the OpenCode anti-corruption layer) is the SECOND
-// port, added this Step (17), against internal/adapters/outbound/opencode
+// port, added at §7, against internal/adapters/outbound/opencode
 // (this Step, real) — CLAUDE.md's "the agent runtime... is expected to
 // gain a second adapter" line applies to this interface exactly as it
 // already did to SandboxProvider: nothing OpenCode-specific may leak into
@@ -33,7 +33,7 @@
 // adapter should reuse rather than reimplement).
 //
 // SandboxCommander (sandboxcommander.go) and SourceControl (sourcecontrol.go)
-// are the THIRD and FOURTH ports, both added at Step 21 ("e2e happy
+// are the THIRD and FOURTH ports, both added at §9.3 ("e2e happy
 // path"): SandboxCommander lets app/sessionactor push an outbound command
 // to a session's live sandbox WS connection (internal/adapters/inbound/
 // wshub's own SandboxRegistry is the implementation) without importing
@@ -42,7 +42,7 @@
 // internal/adapters/outbound/gitlabapi remains an untouched stub for a
 // future Step).
 //
-// Notifier (notifier.go) is the FIFTH port, added at Step 35 ("outbox
+// Notifier (notifier.go) is the FIFTH port, added at §5.1 ("outbox
 // delivery", §5.1/§5.4): a single Deliver(ctx, Notification) method,
 // implemented by THREE real adapters (internal/adapters/outbound/
 // slackapi, linearapi, githubapi) -- see notifier.go's own doc comment for
@@ -54,7 +54,7 @@
 // kind->Notifier routing.
 //
 // LLM (llm.go) and IntentClassifier (intentclassifier.go) are the SIXTH
-// and SEVENTH ports, both added this Step (36, §8.3/§18): LLM is a
+// and SEVENTH ports, both added at §8.3/§18: LLM is a
 // genuinely reusable, provider-agnostic structured-output text-completion
 // port (internal/adapters/outbound/llm's Anthropic adapter is the first
 // real implementation this Step; a future internal/adapters/outbound/
@@ -64,7 +64,7 @@
 // implements against LLM.
 //
 // BlobStore (blobstore.go, blobstoreerror.go) is the EIGHTH port, added at
-// Step 58 ("uploads, blob storage & the in-sandbox download_file tool",
+// §8.6 ("uploads, blob storage & the in-sandbox download_file tool",
 // §28): PresignPut/PresignGet/Stat/Delete against S3-compatible object
 // storage, implemented by internal/adapters/outbound/objstore. Mirrors
 // SandboxProvider/ProviderError's own "complete interface + typed

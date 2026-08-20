@@ -10,7 +10,7 @@ import (
 )
 
 // AutoApprovalOutcomeStore is a thin, pass-through wrapper around the
-// sqlc-generated auto_approval_outcomes queries (Step 62, §21.2 stage 2)
+// sqlc-generated auto_approval_outcomes queries (§21.2 stage 2)
 // -- see migrations/000070_auto_approval_outcomes.up.sql's own doc
 // comment for the contradiction-rate calibration read model's full
 // design.

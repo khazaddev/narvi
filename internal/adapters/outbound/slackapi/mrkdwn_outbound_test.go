@@ -51,8 +51,8 @@ func TestMarkdownToMrkdwn_Conversions(t *testing.T) {
 		},
 		{
 			name: "h3 heading degrades to bold line",
-			in:   "### Step 2: migrate the schema",
-			want: "*Step 2: migrate the schema*",
+			in:   "### §5.4: migrate the schema",
+			want: "*§5.4: migrate the schema*",
 		},
 		{
 			name: "heading among body text",

@@ -55,7 +55,7 @@ type Actor struct {
 	broadcaster ports.EventBroadcaster
 
 	// commander is how a successfully-dispatched turn's prompt actually
-	// reaches a live sandbox connection (Step 21, "e2e happy path", design
+	// reaches a live sandbox connection (§9.3, "e2e happy path", design
 	// decision 4) -- implemented by internal/adapters/inbound/wshub's own
 	// SandboxRegistry, app depends on the port
 	// (internal/app/ports.SandboxCommander), never the adapter. May be nil
@@ -63,7 +63,7 @@ type Actor struct {
 	// test, which never exercises the dispatch path at all).
 	commander ports.SandboxCommander
 
-	// provider is this Actor's own SandboxProvider (Step 21) -- the SAME
+	// provider is this Actor's own SandboxProvider (§9.3) -- the SAME
 	// port every Actor of this Registry shares, used only by
 	// handleEnsureDispatched's own spawn branch (dispatch.go) to actually
 	// call CreateSandbox. May be nil (tests that never exercise the spawn
@@ -73,7 +73,7 @@ type Actor struct {
 	// publicBaseURL is this control plane's own externally-reachable
 	// http(s):// base URL (platform.Config.PublicBaseURL, e.g.
 	// "http://localhost:8080" in dev, a real "https://..." URL in
-	// production) -- the SAME value Step 20's OAuth wiring already uses
+	// production) -- the SAME value §13.1's OAuth wiring already uses
 	// for its own redirect URL. sessionconfig.go's own assembleSessionConfig
 	// derives SessionConfig.ControlPlaneWsUrl from it by swapping the
 	// scheme (http->ws, https->wss) rather than requiring a second,
@@ -81,32 +81,32 @@ type Actor struct {
 	// doc comment for the full reasoning.
 	publicBaseURL string
 
-	// sourceControl is this Actor's own ports.SourceControl (Step 21) --
+	// sourceControl is this Actor's own ports.SourceControl (§9.3) --
 	// used only by pushpr.go's createPRBestEffort, once a push_complete
 	// event arrives for a turn that completed successfully, to open a pull
 	// request. May be nil (tests that never exercise the push/PR path,
 	// e.g. the resilience test).
 	sourceControl ports.SourceControl
 
-	// githubBotToken is Step 48's ("sentinels + suggestions", §17.2) own
+	// githubBotToken is §8.2's ("sentinels + suggestions", §17.2) own
 	// addition -- see Registry's own identical field doc comment
 	// (registry.go) for the full rationale; createSentinelFixPRBestEffort
 	// (pushpr.go) is this Actor's own one use of it. May be empty (tests
 	// that never exercise the sentinel-fix PR path).
 	githubBotToken string
 
-	// reviewModelDeep is Step 68's own addition (§26.3) -- see
+	// reviewModelDeep is §26.3's own addition (§26.3) -- see
 	// RegistryOptions.ReviewModelDeep's own doc comment.
 	reviewModelDeep string
 
-	// diffFetcher is Step 49's ("handoff-readiness sentinel", §14.4) own
+	// diffFetcher is §14.4's ("handoff-readiness sentinel", §14.4) own
 	// addition -- see Registry's own identical field doc comment
 	// (registry.go) for the full rationale; handoffsentinel.go's own
 	// runHandoffSentinelBestEffort is this Actor's own one use of it. May
 	// be nil (tests that never exercise the handoff-sentinel path).
 	diffFetcher PRDiffFetcher
 
-	// reviewDiffFetcher/githubBotHandle are Step 65's ("review: automatic
+	// reviewDiffFetcher/githubBotHandle are §24's ("review: automatic
 	// re-review on new commits", §24) own additions -- see Registry's own
 	// identical field doc comments (registry.go) for the full rationale;
 	// reviewretrigger.go's own handleReviewRetriggerDebounceTimer is this
@@ -118,13 +118,13 @@ type Actor struct {
 	// tokenEncryptionKey decrypts identities.access_token_encrypted (§13.1)
 	// to obtain the session creator's own plaintext GitHub OAuth access
 	// token -- the SAME key platform.Config.TokenEncryptionKey already
-	// supplies Step 20's OAuth callback and the scm-credentials endpoint
+	// supplies §13.1's OAuth callback and the scm-credentials endpoint
 	// (design decision 8); createPRBestEffort (pushpr.go) is this
 	// package's own use of it. Never logged. May be nil/empty (tests that
 	// never exercise the push/PR path).
 	tokenEncryptionKey []byte
 
-	// openCodeRuntimeVersion is Step 26's ("image builds") own addition:
+	// openCodeRuntimeVersion is §8.5's ("image builds") own addition:
 	// the pinned OpenCode runtime version (platform.Config.
 	// OpenCodeRuntimeVersion) fed into domain/imagebuild.Fingerprint
 	// alongside a spawn's own resolved repo SHAs (dispatch.go/
@@ -132,7 +132,7 @@ type Actor struct {
 	// never exercise the image-resolution path).
 	openCodeRuntimeVersion string
 
-	// contractDriftDetected is Step 27's ("mocking + contract drift",
+	// contractDriftDetected is §14.3's ("mocking + contract drift",
 	// §14.3) own OTel counter -- the SAME instance every Actor this
 	// Registry hydrates shares, constructed exactly once by NewRegistry
 	// and threaded through at hydration time (hydrate.go), never
@@ -140,7 +140,7 @@ type Actor struct {
 	// own checkContractDrift.
 	contractDriftDetected metric.Int64Counter
 
-	// opsMetrics is Step 77's ("ops: dashboards, alerts, runbooks", §5.3)
+	// opsMetrics is §5.3's ("ops: dashboards, alerts, runbooks", §5.3)
 	// own bundle of five OTel instruments -- the SAME instance every Actor
 	// this Registry hydrates shares, constructed exactly once by
 	// NewRegistry and threaded through at hydration time (hydrate.go),
@@ -158,7 +158,7 @@ type Actor struct {
 	// cache as "always miss, always check live" (see imageresolve.go).
 	repoAccessCache *repoAccessCache
 
-	// epistemicCheckDefault (F6, adversarial review, Step 61) is the SAME
+	// epistemicCheckDefault (F6, adversarial review) is the SAME
 	// platform.Config.EpistemicCheckDefault value every Actor this
 	// Registry hydrates shares (registry.go's own field doc comment) --
 	// threaded into workflowengine.Deps.EpistemicCheckDefault at each of
@@ -166,7 +166,7 @@ type Actor struct {
 	// dispatch.go, timerfired.go).
 	epistemicCheckDefault bool
 
-	// rolloutMode (Step 76, §10 Phase 6, §32) is the SAME
+	// rolloutMode (§10 Phase 6, §32) is the SAME
 	// Registry.rolloutMode value every Actor this Registry hydrates
 	// shares (registry.go's own field doc comment, and RegistryOptions.
 	// RolloutMode's own doc comment for why this is an options field, not
@@ -271,7 +271,7 @@ func (a *Actor) run(ctx context.Context) error {
 			// §2: "evicts after idle TTL (default 30 min without
 			// commands or connected clients)". This Step has no
 			// mechanism to observe "connected clients" (that's the
-			// client WS hub, Steps 18+) -- only "no commands" is
+			// client WS hub) -- only "no commands" is
 			// checked here; see doc.go for the same documented gap.
 			a.logger.Info("sessionactor: evicting self: idle TTL elapsed with no commands")
 			return nil
@@ -358,7 +358,7 @@ func (a *Actor) drainMailbox() {
 
 // appendRawEvent inserts a session event row inside tx, exactly like
 // timerfired.go's own appendEvent, but for a caller that already holds raw
-// wire bytes to persist verbatim (Step 18's sandboxevent.go) rather than a
+// wire bytes to persist verbatim (§3.2's sandboxevent.go) rather than a
 // map[string]any this package would otherwise have to marshal itself --
 // skipping that round-trip means the append-only event log holds precisely
 // what the sandbox sent, not a lossy re-encoding through an intermediate Go

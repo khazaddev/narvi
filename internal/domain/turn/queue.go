@@ -54,7 +54,7 @@ func NextToDispatch[ID any](turns []QueueEntry[ID]) (ID, bool) {
 // InFlightTurn returns the ID of the (at most one, per
 // turns_one_processing_per_session/HasInFlightTurn's own invariant)
 // currently in-flight (Dispatched or Processing) turn in turns, or (zero
-// value, false) if none. Step 28 ("turn recovery") adds this alongside
+// value, false) if none. §3.3 ("turn recovery") adds this alongside
 // HasInFlightTurn/NextToDispatch (unchanged, per this package's own
 // established convention of never modifying an existing pure helper's
 // behavior) to identify WHICH turn is in flight, not merely whether one

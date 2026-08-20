@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// This file implements the OTHER half of the Step 48 row's own rebuttal
+// This file implements the OTHER half of the §8.2 rebuttal
 // requirement: "feeding re-review reconciliation as deterministic 'already
 // answered' facts prepended to (not replacing) the prose fallback."
 // RenderAlreadyAnsweredFacts is pure (§11) -- the actual Postgres read
@@ -76,7 +76,7 @@ const alreadyAnsweredDelimiter = "already_answered_findings"
 // # Retirement (§22.1.2's own "determinable fact" refinement, now shipped)
 //
 // changedPaths is the CURRENT diff's own changed-path list
-// (reviewtriage.ExtractChangedPaths, Step 68 -- threaded in by this
+// (reviewtriage.ExtractChangedPaths, §26.3 -- threaded in by this
 // function's one real caller, internal/app/reviewcontext.
 // FetchAlreadyAnswered, from review.PreFetchedContext.ChangedPaths).
 // diffTruncated is that SAME PreFetchedContext's own DiffTruncated (D1,

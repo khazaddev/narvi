@@ -1,4 +1,4 @@
-// This file implements Step 63's own §22.2 capture command: an explicit
+// This file implements §22's own §22.2 capture command: an explicit
 // `false positive: <reason>` PR-thread comment teaches a repo-scoped
 // false-positive pattern. Handled DISPATCH-BEFORE-ROUTER, exactly like
 // pullrequestevent.go's own `pull_request`/action=="closed" merge-gating

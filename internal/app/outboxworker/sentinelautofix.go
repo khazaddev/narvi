@@ -21,7 +21,7 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// This file implements Step 48's own ("sentinels + suggestions", §17.2)
+// This file implements §8.2's own ("sentinels + suggestions", §17.2)
 // sentinel-auto-fix notifier: ports.NotificationKindSentinelAutoFix's own
 // real Deliver -- spawning the child session §17.2 describes. Lives in
 // internal/app/outboxworker, NOT internal/app/sessionactor, for the exact
@@ -59,7 +59,7 @@ import (
 const sentinelFixBranchPrefix = "narvi/sentinel-fix/"
 
 // errRolloutRefused is spawnClaimedChildSession's own sentinel for "the
-// origin PR's own repo is not enrolled in Step 76's cohort rollout" (§10
+// origin PR's own repo is not enrolled in §10's cohort rollout" (§10
 // Phase 6, §32: CreateSessionError.RolloutRefusal, checked structurally,
 // never by string-matching). Deliver checks for this specifically and
 // maps it to the existing terminal-skip precedent (descriptionautofix.go:
@@ -106,14 +106,14 @@ type sentinelAutoFixNotifier struct {
 	sourceControl  ports.SourceControl
 	githubBotToken string
 	timeouts       platform.Timeouts
-	// epistemicCheckDefault (F6, adversarial review, Step 61) is the SAME
+	// epistemicCheckDefault (F6, adversarial review) is the SAME
 	// platform.Config.EpistemicCheckDefault value every other
 	// CreateSessionOnTx-reaching caller in this codebase now threads
 	// through -- spawnClaimedChildSession's own httpapi.CreateSessionOnTx
 	// call below is an ordinary (never review-session) build session, so
 	// no F7-style hardcoded-false carve-out applies here.
 	epistemicCheckDefault bool
-	// rolloutMode/repoSettings (Step 76, §10 Phase 6, §32) are the SAME
+	// rolloutMode/repoSettings (§10 Phase 6, §32) are the SAME
 	// two REQUIRED httpapi.CreateSessionOnTx parameters every other
 	// caller now threads through -- spawnClaimedChildSession's own
 	// CreateSessionOnTx call below needs both. See Deliver's own updated
@@ -313,7 +313,7 @@ func (n *sentinelAutoFixNotifier) Deliver(ctx context.Context, notification port
 		spawned, err := n.spawnClaimedChildSession(ctx, payload)
 		if err != nil {
 			if errors.Is(err, errRolloutRefused) {
-				// Step 76 (§10 Phase 6, §32): terminal-skip, mirroring
+				// (§10 Phase 6, §32): terminal-skip, mirroring
 				// descriptionautofix.go's own "confirmed negative -> nil,
 				// never retried" precedent -- see errRolloutRefused's own
 				// doc comment for the full "why this is not the ordinary
@@ -435,7 +435,7 @@ func (n *sentinelAutoFixNotifier) spawnClaimedChildSession(ctx context.Context, 
 	})
 	if cerr != nil {
 		if cerr.RolloutRefusal {
-			// Step 76 (§10 Phase 6, §32): a PERMANENT policy refusal --
+			// (§10 Phase 6, §32): a PERMANENT policy refusal --
 			// the origin PR's own repo is not enrolled -- never a
 			// transient failure. errRolloutRefused lets Deliver (this
 			// notifier's own entry point) distinguish this from every

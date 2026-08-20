@@ -11,7 +11,7 @@ import (
 )
 
 // LinearAgentSessionStore is a thin, pass-through wrapper around the
-// sqlc-generated linear_agent_sessions queries (Step 34, "Linear
+// sqlc-generated linear_agent_sessions queries ("Linear
 // ingress", §8.10 -- see migrations/000030_linear_agent_sessions.up.sql's
 // own doc comment for why this table exists and how its atomic claim is
 // used). No caching, no retries, no business rules -- internal/adapters/
@@ -67,7 +67,7 @@ func (s *LinearAgentSessionStore) GetByAgentSessionID(ctx context.Context, agent
 	return row, nil
 }
 
-// GetBySessionID is the REVERSE lookup Step 35 ("outbox delivery") needs:
+// GetBySessionID is the REVERSE lookup §5.1 ("outbox delivery") needs:
 // given a session_id, which agent_session_id/organization_id does it
 // back? Returns pgx.ErrNoRows (unwrapped) when sessionID was never
 // created via a Linear agent session.

@@ -11,11 +11,11 @@ import (
 )
 
 // setRequiredEnv sets NARVI_STAGE, NARVI_DATABASE_URL, the three
-// per-direction HMAC secret env vars (PR-06), Step 20's ("auth v1") own
+// per-direction HMAC secret env vars (PR-06), §13.1's ("auth v1") own
 // required vars (GitHub OAuth credentials, PublicBaseURL, a valid 32-byte
-// base64 token encryption key, and one allowlist mechanism), Step
-// 32's ("GitHub ingress") own required vars (the real GitHub webhook
-// secret and the bot mention handle), and Step 35's ("outbox delivery")
+// base64 token encryption key, and one allowlist mechanism),
+// §8.2's ("GitHub ingress") own required vars (the real GitHub webhook
+// secret and the bot mention handle), and §5.1's ("outbox delivery")
 // own GitHub bot token to valid dummy values for the
 // duration of the calling (sub)test, via
 // t.Setenv. Tests that exercise one specific, unrelated env var
@@ -50,13 +50,13 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("NARVI_LINEAR_CLIENT_SECRET", "test-linear-client-secret")
 	t.Setenv("NARVI_LINEAR_DEFAULT_REPO_NAME", "narvi")
 	t.Setenv("NARVI_LINEAR_DEFAULT_REPO_URL", "https://github.com/khazaddev/narvi")
-	// Step 33 ("Slack ingress") own required vars -- SlackDefaultRepoName/
+	// §8.10 ("Slack ingress") own required vars -- SlackDefaultRepoName/
 	// URL are deliberately left unset here since they're optional (see
 	// internal/platform/config.go's own slackDefaultRepoNameEnvVarName doc
 	// comment).
 	t.Setenv("NARVI_SLACK_SIGNING_SECRET", "test-slack-signing-secret")
 	t.Setenv("NARVI_SLACK_BOT_TOKEN", "test-slack-bot-token")
-	// Step 36 ("intent classifier") own required vars --
+	// §8.3 ("intent classifier") own required vars --
 	// NARVI_INTENT_CLASSIFIER_ACTIVE_SURFACES is deliberately left unset
 	// here since it's optional (§18.5: every surface defaults to shadow
 	// mode when unset).
@@ -525,7 +525,7 @@ func TestLoadGitHubOAuthConfig(t *testing.T) {
 
 // TestLoadModalConfig mirrors TestLoadGitHubOAuthConfig's own table shape:
 // NARVI_MODAL_BASE_URL/NARVI_MODAL_AUTH_TOKEN are each individually
-// required (Step 21, "e2e happy path" -- this Step is the SandboxProvider's
+// required (§9.3, "e2e happy path" -- this Step is the SandboxProvider's
 // first real production caller), NARVI_MODAL_EGRESS_PROXY_URL stays
 // optional.
 func TestLoadModalConfig(t *testing.T) {
@@ -579,7 +579,7 @@ func TestLoadModalConfig(t *testing.T) {
 }
 
 // TestLoadGitHubWebhookConfig mirrors TestLoadModalConfig's own table
-// shape: NARVI_GITHUB_WEBHOOK_SECRET/NARVI_GITHUB_BOT_HANDLE (Step 32,
+// shape: NARVI_GITHUB_WEBHOOK_SECRET/NARVI_GITHUB_BOT_HANDLE (
 // "GitHub ingress", §8.2) are each individually required -- never
 // defaulted, matching every other secret/credential this file already
 // reads.
@@ -630,7 +630,7 @@ func TestLoadGitHubWebhookConfig(t *testing.T) {
 	})
 }
 
-// TestLoadOpenCodeRuntimeVersion covers Step 26's ("image builds") own
+// TestLoadOpenCodeRuntimeVersion covers §8.5's ("image builds") own
 // optional NARVI_OPENCODE_RUNTIME_VERSION: unset defaults to
 // defaultOpenCodeRuntimeVersion (pinned equal to .github/workflows/ci.yml's
 // own opencode-ai pin at the time this Step was written -- see that
@@ -872,7 +872,7 @@ func TestLoadMakefileDevTargetValues(t *testing.T) {
 	}
 }
 
-// TestLoadIntentClassifierConfig covers Step 36's ("intent classifier",
+// TestLoadIntentClassifierConfig covers §8.3's ("intent classifier",
 // §8.3/§18) own required vars (AnthropicAPIKey/IntentClassifierProvider/
 // IntentClassifierModel -- each individually required, never defaulted,
 // matching every other secret/credential this file already reads) and the
@@ -946,7 +946,7 @@ func TestLoadIntentClassifierConfig(t *testing.T) {
 	})
 }
 
-// TestLoadGitHubImageBuildToken covers Step 42's ("warm boot: refresh pump
+// TestLoadGitHubImageBuildToken covers §19.2's ("warm boot: refresh pump
 // + hook policy", §19.2) own platform-level GitHub credential --
 // DELIBERATELY OPTIONAL, unlike every other GitHub-flavored secret this
 // file reads: Load must succeed with an empty GitHubImageBuildToken when
@@ -981,14 +981,14 @@ func TestLoadGitHubImageBuildToken(t *testing.T) {
 	})
 }
 
-// NARVI_CACHE_VOLUME_EPOCH no longer exists as a config surface (Step
-// 43(c)'s third iteration removes the rotation escape hatch attempt 2
+// NARVI_CACHE_VOLUME_EPOCH no longer exists as a config surface
+// (§19.1's third iteration removes the rotation escape hatch attempt 2
 // added -- domain/imagebuild.CacheVolumeKey's own doc comment has the
 // full "why"). TestLoadCacheVolumeEpoch used to live here; deleted along
 // with the field and env var it tested, not left behind pointing at
 // nothing.
 
-// TestLoadGitHubReReviewLabel covers Step 46's ("review sessions", §8.2)
+// TestLoadGitHubReReviewLabel covers §8.2's ("review sessions", §8.2)
 // own optional NARVI_GITHUB_REREVIEW_LABEL -- mirrors
 // TestLoadGitHubImageBuildToken's own "unset succeeds, set carries through"
 // shape exactly, except an unset value here defaults to a non-empty,
@@ -1023,7 +1023,7 @@ func TestLoadGitHubReReviewLabel(t *testing.T) {
 	})
 }
 
-// TestLoadEpistemicCheckDefault covers Step 61's ("builder epistemic
+// TestLoadEpistemicCheckDefault covers §20's ("builder epistemic
 // pre-action check", §20.4) own platform-wide default -- mirrors
 // TestLoadObjectStorageConfig's own NARVI_OBJECT_STORE_USE_PATH_STYLE
 // subtests exactly, the cited precedent for "optional boolean env var,
@@ -1088,7 +1088,7 @@ func TestLoadEpistemicCheckDefault(t *testing.T) {
 	})
 }
 
-// TestLoadRolloutMode covers Step 76's own master switch (§10 Phase 6,
+// TestLoadRolloutMode covers §10's own master switch (§10 Phase 6,
 // §32) -- mirrors TestLoadEpistemicCheckDefault's own shape exactly,
 // with an explicit two-value enum in place of a boolean: unset defaults
 // to rollout.ModeOpen (§32's own "byte-for-byte no-op" requirement, the
@@ -1152,7 +1152,7 @@ func TestLoadRolloutMode(t *testing.T) {
 	})
 }
 
-// TestLoadObjectStorageConfig covers Step 58's ("uploads, blob storage &
+// TestLoadObjectStorageConfig covers §8.6's ("uploads, blob storage &
 // the in-sandbox download_file tool", §28.7) object-storage block --
 // feature-flagged on NARVI_OBJECT_STORE_ENDPOINT alone, with Region/Bucket
 // becoming required only once an endpoint is set, and every other
@@ -1355,7 +1355,7 @@ func flattenJoinedErrors(err error) []error {
 	return out
 }
 
-// TestLoadCloudIdentityIssuerURL covers Step 73a's ("cloud identity: OIDC
+// TestLoadCloudIdentityIssuerURL covers §27.3's ("cloud identity: OIDC
 // issuer", §27.3) own NARVI_CLOUD_IDENTITY_ISSUER_URL -- DELIBERATELY
 // optional (unset means the whole cloud-identity capability is off,
 // fail-closed -- see Config.CloudIdentityIssuerURL's own doc comment),

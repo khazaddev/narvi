@@ -24,7 +24,7 @@ func TestDefaultTimeouts_Valid(t *testing.T) {
 // bridge > SSE" chain contributes 3 adjacent links; the independent
 // "providerHTTPClientTimeout > cold start" and "first_connect_budget >
 // image pull + boot p99" pairs contribute one link each -- 5 links total
-// from the 8-field design in the original PR-02; Step 25's own reconciler
+// from the 8-field design in the original PR-02; §5.3's own reconciler
 // orphan-GC debounce fix adds a 6th, independent link:
 // "ReconcilerInterval > ReconcilerOrphanConfirmationPeriod", needed for
 // app/reconciler.Reconciler's own "confirmed on the SECOND consecutive
@@ -96,7 +96,7 @@ func TestValidate_CatchesEachBrokenLink(t *testing.T) {
 			wantChain: "OutboxClaimDuration > OutboxDeliveryTimeout",
 		},
 		{
-			// Step 52 review fix ("cron trigger pump has no catch-up for
+			// §8.4 fix ("cron trigger pump has no catch-up for
 			// missed evaluations") adds an 8th, independent link:
 			// "AutomationCronCatchUpWindow > AutomationEnginePumpInterval",
 			// needed for the catch-up window to reliably span at least one
@@ -109,7 +109,7 @@ func TestValidate_CatchesEachBrokenLink(t *testing.T) {
 			wantChain: "AutomationCronCatchUpWindow > AutomationEnginePumpInterval",
 		},
 		{
-			// Step 58 ("uploads, blob storage & the in-sandbox
+			// §8.6 ("uploads, blob storage & the in-sandbox
 			// download_file tool", §28.4): UploadPendingSweepAfter must
 			// stay at least MinTimeoutMargin above
 			// UploadAbandonmentSweepInterval, or a pending row could cross
@@ -167,7 +167,7 @@ func TestDefaultTimeouts_StandaloneFields(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step07StandaloneFields proves the Step 07 standalone
+// TestDefaultTimeouts_Step07StandaloneFields proves the §3.2 standalone
 // additions (sandbox liveness/circuit-breaker/spawn/inactivity fields) ship
 // with the exact values §3.2 specifies (or, where §3.2 gives no figure, the
 // chosen default documented alongside the field). These fields have no
@@ -201,7 +201,7 @@ func TestDefaultTimeouts_Step07StandaloneFields(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step11StandaloneFields proves the Step 11 standalone
+// TestDefaultTimeouts_Step11StandaloneFields proves the §2 standalone
 // additions (ActorIdleTTL, TimerPumpInterval, TimerClaimDuration) ship
 // with the exact values §2 specifies (or, where §2 gives no figure, the
 // chosen default documented alongside the field). These fields have no
@@ -229,7 +229,7 @@ func TestDefaultTimeouts_Step11StandaloneFields(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step13StandaloneFields proves the Step 13 standalone
+// TestDefaultTimeouts_Step13StandaloneFields proves the §6.4 standalone
 // additions (HookTimeout, ProcessStopGracePeriod, SupervisorShutdownTimeout,
 // RepoSHADiscoveryTimeout) ship with sane, non-zero defaults. These fields
 // have no ordering relationship with either invariant chain, so this only
@@ -257,7 +257,7 @@ func TestDefaultTimeouts_Step13StandaloneFields(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step14StandaloneFields proves the Step 14 standalone
+// TestDefaultTimeouts_Step14StandaloneFields proves the §14.2 standalone
 // additions (ServiceReadinessTimeout, ServiceReadinessPollInterval) ship
 // with sane, non-zero defaults. These fields have no ordering relationship
 // with either invariant chain, so this only checks their own values -- not
@@ -283,7 +283,7 @@ func TestDefaultTimeouts_Step14StandaloneFields(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step15StandaloneFields proves the Step 15 standalone
+// TestDefaultTimeouts_Step15StandaloneFields proves the §6.4 standalone
 // additions (RepoCloneTimeout, CredentialFetchTimeout,
 // CredentialExpiryBuffer) ship with sane, non-zero defaults. These fields
 // have no ordering relationship with either invariant chain, so this only
@@ -310,7 +310,7 @@ func TestDefaultTimeouts_Step15StandaloneFields(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step18StandaloneFields proves the Step 18 standalone
+// TestDefaultTimeouts_Step18StandaloneFields proves the §3.2 standalone
 // addition (SandboxEventAckTimeout) ships with a sane, non-zero default,
 // and that adding it did not accidentally break either pre-existing
 // invariant chain (it is a standalone field, wired into neither).
@@ -331,7 +331,7 @@ func TestDefaultTimeouts_Step18StandaloneFields(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step21StandaloneFields proves the Step 21 ("e2e
+// TestDefaultTimeouts_Step21StandaloneFields proves the §9.3 ("e2e
 // happy path") standalone additions (SandboxCommandSendTimeout,
 // ScmCredentialTTL, PRCreateTimeout) ship with sane, non-zero defaults,
 // and that adding them did not accidentally break either pre-existing
@@ -352,7 +352,7 @@ func TestDefaultTimeouts_Step21StandaloneFields(t *testing.T) {
 	}
 
 	if err := to.Validate(); err != nil {
-		t.Fatalf("Validate() = %v, want nil (Step 21 fields must not disturb either invariant chain)", err)
+		t.Fatalf("Validate() = %v, want nil (§9.3 fields must not disturb either invariant chain)", err)
 	}
 }
 
@@ -394,7 +394,7 @@ func TestDefaultTimeouts_OpenCodeTurnCompletionStandaloneFields(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step44StandaloneField proves Step 44's ("OpenCode
+// TestDefaultTimeouts_Step44StandaloneField proves §7.2's ("OpenCode
 // adapter: context-overflow compaction retry", §7.2) own addition --
 // OpenCodeSummarizeTimeout -- ships with a sensible, non-zero default,
 // deliberately more generous than OpenCodeRequestTimeout (the field it
@@ -508,7 +508,7 @@ func TestDefaultTimeouts_ExpiredCredentialCleanupStandaloneField(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step26StandaloneFields proves the Step 26 ("image
+// TestDefaultTimeouts_Step26StandaloneFields proves the §8.5 ("image
 // builds") standalone additions ship with sane, non-zero defaults matching
 // their own documented values, and that ImageBuildBackoffBase is strictly
 // less than ImageBuildBackoffMax (the property domain/imagebuild.
@@ -548,11 +548,11 @@ func TestDefaultTimeouts_Step26StandaloneFields(t *testing.T) {
 	}
 
 	if err := to.Validate(); err != nil {
-		t.Fatalf("Validate() = %v, want nil (Step 26 fields must not disturb either invariant chain)", err)
+		t.Fatalf("Validate() = %v, want nil (§8.5 fields must not disturb either invariant chain)", err)
 	}
 }
 
-// TestDefaultTimeouts_Step27StandaloneFields proves the Step 27 ("mocking +
+// TestDefaultTimeouts_Step27StandaloneFields proves the §14.3 ("mocking +
 // contract drift") standalone addition ships with a sane, non-zero default
 // matching its own documented value. This field has no ordering
 // relationship with either invariant chain, so this only checks its own
@@ -574,7 +574,7 @@ func TestDefaultTimeouts_Step27StandaloneFields(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step31StandaloneField proves Step 31's ("webhook
+// TestDefaultTimeouts_Step31StandaloneField proves §5.1's ("webhook
 // toolkit") own addition -- WebhookTimestampFreshnessWindow -- is
 // populated with a sensible default and does not disturb either
 // invariant chain, matching every other standalone addition's own test
@@ -596,7 +596,7 @@ func TestDefaultTimeouts_Step31StandaloneField(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step33StandaloneField proves Step 33's ("Slack
+// TestDefaultTimeouts_Step33StandaloneField proves §8.10's ("Slack
 // ingress") own addition -- SlackAckTimeout -- is populated with a
 // sensible default and does not disturb either invariant chain, matching
 // every other standalone addition's own test precedent above.
@@ -617,7 +617,7 @@ func TestDefaultTimeouts_Step33StandaloneField(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step35StandaloneFields proves Step 35's ("outbox
+// TestDefaultTimeouts_Step35StandaloneFields proves §5.1's ("outbox
 // delivery", §5.1) own additions -- OutboxPumpInterval, OutboxBackoffBase,
 // OutboxBackoffMax, OutboxDeliveryTimeout, OutboxClaimDuration -- are
 // populated with sensible defaults and that Validate() still returns nil.
@@ -632,7 +632,7 @@ func TestDefaultTimeouts_Step33StandaloneField(t *testing.T) {
 // Unlike its four siblings, OutboxClaimDuration is NOT purely standalone
 // any more: the H6 audit fix (per-row claim renewal, see that field's own
 // doc comment) wired it into a new, independent Validate() invariant
-// against OutboxDeliveryTimeout, mirroring Step 25's own
+// against OutboxDeliveryTimeout, mirroring §5.3's own
 // ReconcilerInterval/ReconcilerOrphanConfirmationPeriod precedent of a
 // later fix adding one narrow pairwise check outside either named chain --
 // so this test also asserts that specific relationship explicitly (not
@@ -693,12 +693,12 @@ func TestDefaultTimeouts_Step35StandaloneFields(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step38StandaloneField proves Step 38's ("plan mode,
+// TestDefaultTimeouts_Step38StandaloneField proves §8.1's ("plan mode,
 // cross-channel") own addition -- SlackInteractivityAckTimeout -- is
 // populated with a sensible default, does not disturb either invariant
 // chain, and is genuinely much tighter than SlackAckTimeout -- the specific
 // property this field exists to fix (a confirmed adversarial-review
-// finding): SlackAckTimeout (Step 33) was sized for the Events API's own
+// finding): SlackAckTimeout (§8.10) was sized for the Events API's own
 // in-thread ack, a completely different and much less time-pressured
 // budget than Slack's real interactivity payload ack window (a hard ~3s),
 // so reusing it for the interactivity path silently permitted the handler
@@ -726,7 +726,7 @@ func TestDefaultTimeouts_Step38StandaloneField(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step36StandaloneField proves Step 36's ("intent
+// TestDefaultTimeouts_Step36StandaloneField proves §8.3's ("intent
 // classifier", §8.3/§18) own addition -- IntentClassifierLLMTimeout -- is
 // populated with a sensible default and does not disturb either invariant
 // chain, matching every other standalone addition's own test precedent
@@ -751,7 +751,7 @@ func TestDefaultTimeouts_Step36StandaloneField(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step39StandaloneFields proves Step 39's ("identities
+// TestDefaultTimeouts_Step39StandaloneFields proves §13.2's ("identities
 // + full RBAC", §13.2) own additions -- the identity profile-email fetch
 // retry knobs and the identity-link-prompt TTL -- are populated with
 // sensible defaults and do not disturb either invariant chain.
@@ -879,7 +879,7 @@ func TestDefaultTimeouts_IdentityEmailFetchWorstCaseTimingBudget(t *testing.T) {
 }
 
 // TestDefaultTimeouts_SandboxSecretAndOpenCodeConfigFetchWorstCaseTimingBudget
-// is Step 72's own adversarial-review MEDIUM fix's timing-budget proof,
+// is an adversarial-review MEDIUM fix's timing-budget proof,
 // mirroring TestDefaultTimeouts_IdentityEmailFetchWorstCaseTimingBudget's
 // own shape exactly (a standalone test, not a new Validate() invariant --
 // same reasoning: this compares a computed worst case, built by
@@ -947,7 +947,7 @@ func TestDefaultTimeouts_GitHubPRPayloadCorrectnessStandaloneField(t *testing.T)
 	}
 }
 
-// TestDefaultTimeouts_Step40StandaloneField proves Step 40's ("warm boot:
+// TestDefaultTimeouts_Step40StandaloneField proves §19.3's ("warm boot:
 // fetch-aware git sync", §19.3) own addition -- GitFetchStepTimeout -- ships
 // with a sane, non-zero default matching its own documented value (§19.3's
 // own explicit "propose 90s"), and that adding it did not disturb either
@@ -1013,12 +1013,12 @@ func TestDefaultTimeouts_WarmBootAccessGateStandaloneFields(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step42StandaloneField proves Step 42's ("warm boot:
+// TestDefaultTimeouts_Step42StandaloneField proves §19.2's ("warm boot:
 // refresh pump + hook policy", §19.2) own addition -- ImageRefreshCheckInterval
 // -- ships with a sane, non-zero default matching its own documented value
 // (§19.2's own explicit "propose 10 min"), and that adding it did not
 // disturb either pre-existing invariant chain. This field shipped with the
-// original Step 42 diff but -- unlike GitFetchStepTimeout/
+// original diff but -- unlike GitFetchStepTimeout/
 // OpenCodeSummarizeTimeout above -- had no standalone-field test of its own
 // (an audit finding this batch closes): a NewBuilder/runRefreshPump caller
 // constructing a partial Timeouts (several tests already do) would panic
@@ -1106,7 +1106,7 @@ func TestDefaultTimeouts_ImageRefreshClaimStaleAfter(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step58StandaloneFields proves Step 58's ("uploads,
+// TestDefaultTimeouts_Step58StandaloneFields proves §8.6's ("uploads,
 // blob storage & the in-sandbox download_file tool", §28) own additions --
 // UploadPresignPutTTL, UploadPresignGetTTL, UploadPendingSweepAfter,
 // UploadAbandonmentSweepInterval, ObjectStoreHTTPClientTimeout -- ship with
@@ -1160,7 +1160,7 @@ func TestDefaultTimeouts_Step58StandaloneFields(t *testing.T) {
 	}
 
 	if err := to.Validate(); err != nil {
-		t.Fatalf("Validate() = %v, want nil (Step 58's additions must not disturb any invariant chain)", err)
+		t.Fatalf("Validate() = %v, want nil (§8.6's additions must not disturb any invariant chain)", err)
 	}
 }
 
@@ -1207,7 +1207,7 @@ func TestDefaultTimeouts_Step59StandaloneFields(t *testing.T) {
 	}
 
 	if err := to.Validate(); err != nil {
-		t.Fatalf("Validate() = %v, want nil (Step 59's additions must not disturb any invariant chain)", err)
+		t.Fatalf("Validate() = %v, want nil (§8.8's additions must not disturb any invariant chain)", err)
 	}
 }
 
@@ -1263,7 +1263,7 @@ func TestDefaultTimeouts_Step62StandaloneFields(t *testing.T) {
 	}
 
 	if err := to.Validate(); err != nil {
-		t.Fatalf("Validate() = %v, want nil (Step 62's additions must not disturb any invariant chain)", err)
+		t.Fatalf("Validate() = %v, want nil (§21's additions must not disturb any invariant chain)", err)
 	}
 }
 
@@ -1280,7 +1280,7 @@ func TestDefaultTimeouts_Step70StandaloneField(t *testing.T) {
 	}
 
 	if err := to.Validate(); err != nil {
-		t.Fatalf("Validate() = %v, want nil (Step 70's addition must not disturb any invariant chain)", err)
+		t.Fatalf("Validate() = %v, want nil (§26.5's addition must not disturb any invariant chain)", err)
 	}
 }
 

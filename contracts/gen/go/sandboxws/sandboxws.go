@@ -61,8 +61,8 @@ func (j *Ack) UnmarshalJSON(value []byte) error {
 }
 
 // artifactType MUST match the Postgres artifact_type enum
-// (migrations/000012_artifacts.up.sql) exactly. status/failureReason (Step 58,
-// §28.6) are additive and OPTIONAL: absent status means "ready" (the same
+// (migrations/000012_artifacts.up.sql) exactly. status/failureReason (§28.6) are
+// additive and OPTIONAL: absent status means "ready" (the same
 // zero-producers-today additive reasoning SnapshotReady.commandMessageId used) --
 // every pr/preview artifact event emitted before this Step, and every future one
 // that never sets them, stays a valid, unchanged shape. Both fields are
@@ -101,15 +101,15 @@ type Artifact struct {
 	// Type corresponds to the JSON schema field "type".
 	Type string `json:"type" yaml:"type" mapstructure:"type"`
 
-	// format is deliberately "uri-reference", not the stricter "uri" (Step 58
-	// relaxation -- backward compatible: every absolute URL a plain "uri" ever
-	// accepted still validates, so no pr/preview producer's existing behavior
-	// changes). pr/preview artifacts always carry an ABSOLUTE external link (a GitHub
-	// PR/preview URL); upload artifacts carry the artifacts row's own STABLE,
-	// RELATIVE /api/sessions/{id}/uploads/{uploadId}/content path (§28.5: "the
-	// artifact row's url column stores this stable /api/... content path, never a
-	// presigned URL") -- a relative reference a browser client resolves against its
-	// own current origin, which "uri" alone would have rejected.
+	// format is deliberately "uri-reference", not the stricter "uri" (§8.6 relaxation
+	// -- backward compatible: every absolute URL a plain "uri" ever accepted still
+	// validates, so no pr/preview producer's existing behavior changes). pr/preview
+	// artifacts always carry an ABSOLUTE external link (a GitHub PR/preview URL);
+	// upload artifacts carry the artifacts row's own STABLE, RELATIVE
+	// /api/sessions/{id}/uploads/{uploadId}/content path (§28.5: "the artifact row's
+	// url column stores this stable /api/... content path, never a presigned URL") --
+	// a relative reference a browser client resolves against its own current origin,
+	// which "uri" alone would have rejected.
 	Url string `json:"url" yaml:"url" mapstructure:"url"`
 }
 
@@ -1688,7 +1688,7 @@ type SubTaskStart struct {
 	// SessionId corresponds to the JSON schema field "sessionId".
 	SessionId string `json:"sessionId" yaml:"sessionId" mapstructure:"sessionId"`
 
-	// Step 71 (§26.4/§7.1): the task tool's own 'subagent_type' dispatch parameter --
+	// §26.4 (§26.4/§7.1): the task tool's own 'subagent_type' dispatch parameter --
 	// the literal named sub-agent (e.g. 'counter-reviewer', 'architecture-scribe',
 	// 'fact-check') the engine was actually told to invoke, VERIFIED LIVE as one of
 	// the task tool's own real input fields

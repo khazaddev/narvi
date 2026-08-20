@@ -52,7 +52,7 @@ const fallbackReconnectGraceMultiplier = 2
 // package does NOT spawn or supervise the OpenCode process itself; that is
 // internal/sandboxagent/opencodeproc's job, using
 // internal/sandboxagent/supervisor — the same separation Modal's adapter
-// already establishes relative to Step 13's supervisor. Build one with New
+// already establishes relative to §6.4's supervisor. Build one with New
 // from a baseURL an opencodeproc.Spawn call already confirmed healthy.
 //
 // # Verified vs. schema-derived vs. best-effort
@@ -134,7 +134,7 @@ type Adapter struct {
 	baseURL    string
 	httpClient *http.Client
 
-	// capabilityRestricted (Step 48, "sentinels + suggestions", §17.2) is
+	// capabilityRestricted ("sentinels + suggestions", §17.2) is
 	// set ONCE, at construction, from SessionConfig.CapabilityRestricted
 	// -- true exactly for a sentinel-auto-fix child session. postPromptAsync
 	// (session.go) is this field's own one reader: every build-mode turn
@@ -277,7 +277,7 @@ var _ ports.AgentRuntime = (*Adapter)(nil)
 // wait before re-dispatching after a first-time transient APIError — see
 // that field's own doc comment above for why this, unlike the compaction
 // retry, needs a backoff at all.
-// capabilityRestricted (Step 48, §17.2) is a trailing, variadic bool
+// capabilityRestricted (§17.2) is a trailing, variadic bool
 // parameter -- so every EXISTING caller (cmd/sandbox-agent/main.go's own
 // production wiring, this package's own newAdapter(t) test helper) keeps
 // compiling and behaving identically (capabilityRestricted false) with no
@@ -456,7 +456,7 @@ func (a *Adapter) disconnectedSince(t time.Time) bool {
 // finalizeCanceled instead of returning silently (Finding 5 — the three
 // gaps this promise used to have).
 //
-// Step 28 ("turn recovery") adds onConversationID: invoked immediately
+// §3.3 ("turn recovery") adds onConversationID: invoked immediately
 // after resolveSession succeeds below — BEFORE registerTurn/
 // postPromptAsync/waitForTurn, i.e. well before this call's own long
 // block for the rest of the turn — with the real, resolved sessionID.
@@ -1452,7 +1452,7 @@ func (a *Adapter) Stop(ctx context.Context, _ sandboxws.Stop) error {
 // CurrentTurnSpentUSD returns the running cost total (turnState.spentUSD,
 // turn.go's own addCost/spentUSDTotal) for whichever turn is currently
 // live on this adapter -- §26.7/§7.1's own accumulator, finally given a
-// real reader (Step 70). Mirrors Stop's own getCurrentSession/lookupTurn
+// real reader (§26.5). Mirrors Stop's own getCurrentSession/lookupTurn
 // precedent immediately above exactly, for the identical reason: a
 // review sub-agent's own budget-check call (cmd/sandbox-agent's loopback
 // review-cost-budget HTTP server) has no OpenCode session id of its own

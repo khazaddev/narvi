@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 69's own (§26.7) per-repo cost-budget config
+// Integration tests for §26.4's own (§26.7) per-repo cost-budget config
 // REST route (reposettings.go's own PutReviewCostBudget), against a real
 // Postgres instance -- sharing this package's own testRig (httpapi_
 // integration_test.go), mirroring reviewdepthconfig_integration_test.go's
@@ -153,8 +153,8 @@ func TestPutReviewCostBudget_ExplicitZeroRejected_BadRequest(t *testing.T) {
 }
 
 // TestPutReviewCostBudget_PreservesAutoMergeToggle_ColumnScoped proves the
-// column-scoped write discipline this endpoint's own doc comment describes
-// (§62 review finding C5's pattern): arming auto-merge first, then
+// column-scoped write discipline this endpoint's own doc comment describes:
+// arming auto-merge first, then
 // separately configuring the cost budget, must never silently disarm
 // auto-merge as a side effect -- mirrors
 // TestPutReviewDepthConfig_PreservesAutoMergeToggle_ColumnScoped exactly.

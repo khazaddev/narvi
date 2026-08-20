@@ -1,5 +1,5 @@
 // This file (chatgptlink.go) implements the browser-facing REST surface
-// for the ChatGPT-account-OAuth link flow (Step 59, §29.3/§29.9):
+// for the ChatGPT-account-OAuth link flow (§29.3/§29.9):
 // POST/GET/DELETE /api/me/chatgpt-link. Self-service, own-user only --
 // every one of these three handlers acts on the AUTHENTICATED caller's
 // own userID (authenticatedUserID), never a path parameter naming a

@@ -1,7 +1,7 @@
 // This file (classifiertemplates.go) closes an audit finding (M5): the
 // prompt-template preview/upsert backend was never built. postgres.
 // PromptTemplateStore's own Upsert method (prompttemplate_store.go) has
-// existed, fully implemented, since Step 36 ("intent classifier", §18.6)
+// existed, fully implemented, since §8.3 ("intent classifier", §18.6)
 // -- but until this file, NOTHING in the entire codebase ever called it,
 // and there was no way for an admin to see what a draft template
 // assembles to before saving it either. This file adds exactly those two

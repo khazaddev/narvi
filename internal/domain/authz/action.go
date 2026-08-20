@@ -38,18 +38,18 @@ const (
 	// member only on one they created or joined.
 	ActionApprovePlan Action = "approve_plan"
 	// ActionDecideWorkflowStep is rendering an approve/reject/revise
-	// verdict on a workflow run's HITL-gated step (§25.9/§25.11 — Step
-	// 54) — own/joined-aware, the SAME row shape as ActionApprovePlan
+	// verdict on a workflow run's HITL-gated step (§25.9/§25.11)
+	// — own/joined-aware, the SAME row shape as ActionApprovePlan
 	// above by §25.11's explicit instruction ("same row as
 	// ActionApprovePlan"): admin/maintainer on any run, member only on a
 	// session they created or joined. No caller exists yet — the decide
 	// endpoint (POST /api/workflow-runs/:runId/steps/:stepRunId/decide)
-	// is Step 56's; reserved here so that Step's call site needs no
+	// is §25.9's; reserved here so that Step's call site needs no
 	// shape change, exactly like every other reserved Action below.
 	ActionDecideWorkflowStep Action = "decide_workflow_step"
 	// ActionUploadToSession is minting/confirming a file upload against an
 	// EXISTING session (POST /api/sessions/:id/uploads and its own
-	// /complete twin, Step 58, §28.5) — the SAME row shape as
+	// /complete twin, §28.5) — the SAME row shape as
 	// ActionPromptSession by that section's own explicit instruction ("a
 	// new Authorize action mapped to the same §13.3 row as prompting"):
 	// admin/maintainer on any session, member only on one they created or
@@ -61,7 +61,7 @@ const (
 	// no separate Authorize call" precedent.
 	ActionUploadToSession Action = "upload_to_session"
 	// ActionMergePR covers clicking Merge on a decision-inbox
-	// ready_to_merge row (Step 60, "decision inbox: read model + API",
+	// ready_to_merge row ("decision inbox: read model + API",
 	// §16.2/§16.1 -- "Viewer role sees the queue read-only and cannot
 	// merge"). §13.3's own table names no dedicated "merge PRs" row at
 	// all; this Action is placed in THIS row, the SAME shape as
@@ -84,7 +84,7 @@ const (
 	ActionMergePR Action = "merge_pr"
 	// ActionLinkChatGPTAccount covers self-service linking/unlinking of
 	// the caller's OWN ChatGPT account (POST/DELETE /api/me/chatgpt-link,
-	// Step 59, §29.3/§29.9 — "self-service, own-user only... one new
+	// §29.3/§29.9 — "self-service, own-user only... one new
 	// action row, own-aware like ActionApprovePlan's own row"): admin/
 	// maintainer unconditionally (though in practice every /api/me/...
 	// call is already self-scoped by the caller's own identity), member
@@ -113,7 +113,7 @@ const (
 	// ActionResumeSession resumes a stopped session. Same "no caller yet"
 	// note as ActionStopSession.
 	ActionResumeSession Action = "resume_session"
-	// ActionViewShadowComparison covers Step 59's own "shadow-comparison
+	// ActionViewShadowComparison covers §8.8's own "shadow-comparison
 	// tooling for review" deliverable (GET /api/admin/shadow-compare,
 	// shadowcompare.go) -- reads across ANY two turns/sessions, never
 	// scoped to ones the caller created or joined, so this sits in THIS
@@ -140,7 +140,7 @@ const (
 	// ActionManageEnvSecrets covers per-environment secret management.
 	ActionManageEnvSecrets Action = "manage_env_secrets"
 	// ActionManageWorkflowDefinitions covers creating/editing/deleting a
-	// CUSTOM workflow definition — an unbound draft (§25.11 — Step 54),
+	// CUSTOM workflow definition — an unbound draft (§25.11),
 	// maintainer+ in this SAME row as ActionManageAutomations by
 	// §25.11's explicit instruction. Deliberately NOT the action that
 	// makes a definition live anywhere (that is
@@ -148,11 +148,11 @@ const (
 	// gate on built-in definitions at all: PUT/DELETE on an is_built_in
 	// row is refused unconditionally, even for an admin, as a
 	// STRUCTURAL invariant (§25.4), never an RBAC verdict this matrix
-	// could express. No caller exists yet — Steps 55-56 own the first
+	// could express. No caller exists yet — §25.6/§25.9 own the first
 	// handlers.
 	ActionManageWorkflowDefinitions Action = "manage_workflow_definitions"
 	// ActionManageCloudIdentityBindings covers creating/editing/deleting a
-	// cloud_identity_bindings row (Step 73a, "cloud identity: OIDC
+	// cloud_identity_bindings row ("cloud identity: OIDC
 	// issuer, bindings, minting", §27.3) -- both scope=environment AND
 	// scope=global rows share this ONE action, per §27.3's own explicit
 	// instruction ("params are... maintainer+ managed (the §13.3
@@ -168,7 +168,7 @@ const (
 	// cloudidentitybindings.go is this Action's own caller.
 	ActionManageCloudIdentityBindings Action = "manage_cloud_identity_bindings"
 	// ActionManageClusterBindings covers creating/editing/deleting the
-	// (at most one, per-Environment) cluster_bindings row (Step 73b,
+	// (at most one, per-Environment) cluster_bindings row (
 	// "cloud identity: sandbox-side consumption + kubeconfig injection",
 	// §27.4) -- this SAME row (maintainer+) as ActionManageCloudIdentityBindings
 	// immediately above, by the identical reasoning that action's own doc
@@ -178,7 +178,7 @@ const (
 	// one Environment's own deployment target, not a platform-wide
 	// security posture -- never the admin-only row a real credential
 	// value would sit at (the static rung's own uploaded kubeconfig is
-	// itself stored through Step 72's sandbox_secrets, gated by
+	// itself stored through §27.1's sandbox_secrets, gated by
 	// ActionManageEnvSecrets/ActionManageGlobalSecrets at ITS OWN write
 	// path, not this one). A separate Action from
 	// ActionManageCloudIdentityBindings (not a reuse) because the two
@@ -201,8 +201,8 @@ const (
 	// eligibility CONFIG (repo_settings.max_auto_approve_files_changed/
 	// sensitive_blast_radius_tags, migrations/000069_repo_settings_auto_
 	// approval.up.sql -- internal/adapters/inbound/httpapi/reposettings.go's
-	// own PutRepoSettings). Originally reserved (Step 47) for a label-
-	// driven auto-approve rule config that §21.2 (Step 62) supersedes
+	// own PutRepoSettings). Originally reserved (§8.2) for a label-
+	// driven auto-approve rule config that §21.2 supersedes
 	// entirely -- see internal/domain/review's own doc comment on why
 	// auto-approval is now a deterministic, criteria-driven engine with
 	// no per-PR human label in the loop at all; the CONFIGURATION of that
@@ -216,7 +216,7 @@ const (
 	// ActionToggleSentinelAutoFix's own identical split from this row.
 	ActionConfigureAutoApprove Action = "configure_auto_approve"
 	// ActionTeachFalsePositivePattern covers §22.2's own capture command
-	// (Step 63, "review: learned false-positive patterns"): a maintainer+
+	// (§22, "review: learned false-positive patterns"): a maintainer+
 	// teaches a repo-scoped false-positive pattern via an explicit
 	// `false positive: <reason>` PR-thread command
 	// (internal/domain/falsepositive.Match), dispatched BEFORE the
@@ -230,7 +230,7 @@ const (
 	// already establish for a maintainer-level review-adjacent write.
 	ActionTeachFalsePositivePattern Action = "teach_false_positive_pattern"
 	// ActionManageFalsePositivePatterns covers §22.4's own lifecycle
-	// surface (Step 63): retiring an already-taught pattern and reading
+	// surface (§22): retiring an already-taught pattern and reading
 	// the per-repo audit view (list every pattern, active or retired) --
 	// ONE action gating both, mirroring ActionManageMembers' own
 	// identical "one action gates every read+write endpoint of this
@@ -246,11 +246,11 @@ const (
 	// this same row 2 shape, still two names) rather than merging into
 	// one action whose meaning would depend on which caller invoked it.
 	ActionManageFalsePositivePatterns Action = "manage_false_positive_patterns"
-	// ActionContestArchRecap covers §26.5/Step 69's own "arch recap
+	// ActionContestArchRecap covers §26.5's own "arch recap
 	// wrong: <reason>" PR-thread command -- a maintainer+ contests the
 	// deep path's own architecture-recap digest section, mirroring
 	// ActionTeachFalsePositivePattern's own capture-command shape EXACTLY
-	// (Step 63, §22.2, this SAME row): dispatched BEFORE the ordinary
+	// (§22.2, this SAME row): dispatched BEFORE the ordinary
 	// mention/session router (internal/adapters/inbound/github's own
 	// archrecapcontest.go), reusing THIS SAME §13.3 gate directly, never
 	// a parallel permission model invented for this one command. Placed
@@ -285,7 +285,7 @@ const (
 	// ActionManageGlobalSecrets covers org-wide (non-repo/env-scoped)
 	// secret management.
 	ActionManageGlobalSecrets Action = "manage_global_secrets"
-	// ActionManageCloudIdentityKeys covers Step 73a's own ("cloud
+	// ActionManageCloudIdentityKeys covers §27.3's own ("cloud
 	// identity: OIDC issuer, bindings, minting", §27.3) admin-triggered
 	// OIDC signing-key rotation (POST /api/cloud-identity/signing-keys/
 	// rotate) -- admin only, in THIS row, deliberately NOT the same row
@@ -311,7 +311,7 @@ const (
 	// ActionToggleSentinelAutoFix covers §17's own sentinel auto-fix
 	// on/off toggle.
 	ActionToggleSentinelAutoFix Action = "toggle_sentinel_auto_fix"
-	// ActionConfigureBlockOnHighRisk covers §8.2/Step 47's own
+	// ActionConfigureBlockOnHighRisk covers §8.2's own
 	// blockOnHighRisk admin, per-repo, strict-boolean setting
 	// (repo_settings, migrations/000044_repo_settings.up.sql) --
 	// internal/adapters/inbound/httpapi/reposettings.go's own GET/PUT
@@ -349,7 +349,7 @@ const (
 	// 100% of a lane's production traffic (§25.6), a system-posture
 	// change like template activation, not a per-draft authoring step
 	// like row 4's ActionManageWorkflowDefinitions. No caller exists
-	// yet (Step 54 is dark; Steps 55-56 own the first handlers).
+	// yet (§25.4 is dark; §25.6/§25.9 own the first handlers).
 	ActionActivateWorkflowBinding Action = "activate_workflow_binding"
 	// ActionToggleAutoRetriggerReview covers §24.5's own per-repo opt-in
 	// for automatic re-review on new commits (repo_settings.
@@ -365,12 +365,12 @@ const (
 	// actions are. Unlike ActionToggleAutoMerge, arming this toggle alone
 	// never merges or approves anything by itself (§24.5: "this
 	// automation never auto-approves anything on its own") -- it only
-	// ever enqueues an ordinary review turn through Step 46's existing
+	// ever enqueues an ordinary review turn through §8.2's existing
 	// dispatch, but the "changes what runs unattended" reasoning for
 	// admin-only placement applies identically regardless of that
 	// downstream distinction.
 	ActionToggleAutoRetriggerReview Action = "toggle_auto_retrigger_review"
-	// ActionToggleDescriptionAutofix covers Step 67's own per-repo opt-in
+	// ActionToggleDescriptionAutofix covers §26.2's own per-repo opt-in
 	// (§26.2, "review digest: description adequacy + graduated
 	// remediation") for automatically rewriting a Narvi-authored PR's own
 	// body when the reviewing agent's description-adequacy check finds it
@@ -397,7 +397,7 @@ const (
 	// human PRs only ever get a rendered suggestion, never a write) --
 	// this action governs ONLY the Narvi-authored, unattended-write path.
 	ActionToggleDescriptionAutofix Action = "toggle_description_autofix"
-	// ActionConfigureReviewDepth covers Step 68's own per-repo reviewDepth
+	// ActionConfigureReviewDepth covers §26.3's own per-repo reviewDepth
 	// config (§26.3: "reviewDepth: {mode: auto|always_light|always_deep,
 	// deepPaths: [...]}", repo_settings.review_depth_mode/
 	// review_depth_deep_paths, migrations/
@@ -421,7 +421,7 @@ const (
 	// comment on that action) -- "changes unattended behavior" is the
 	// admin-only trigger here, not "necessarily makes things riskier".
 	ActionConfigureReviewDepth Action = "configure_review_depth"
-	// ActionConfigureReviewCostBudget covers Step 69's own per-repo
+	// ActionConfigureReviewCostBudget covers §26.4's own per-repo
 	// reviewCostBudget config (§26.7: "reviewCostBudget: {light: <usd>,
 	// deep: <usd>} joins §26.3's reviewDepth config on the SAME per-repo
 	// settings row", repo_settings.review_cost_budget_light_usd/

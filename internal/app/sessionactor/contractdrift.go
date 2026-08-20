@@ -1,6 +1,6 @@
-// This file (contractdrift.go) implements Step 27's ("mocking + contract
+// This file (contractdrift.go) implements §14.3's ("mocking + contract
 // drift", §14.3) own checkContractDrift -- the sessionactor-side half of
-// the drift-detection design the user already chose: reuse Step 26's own
+// the drift-detection design the user already chose: reuse §8.5's own
 // per-repo GitHub-API resolution pattern, called from dispatch.go at the
 // SAME post-transact hook point resolveAndSetImage (imageresolve.go)
 // already occupies, scoped ONLY to sessions whose Environment is

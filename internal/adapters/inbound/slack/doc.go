@@ -1,9 +1,9 @@
-// Package slack is the Slack Events API ingress adapter (Step 33, "Slack
-// ingress", §8.10 "Slack/Linear fidelity" -- the Slack half only; Step 34
+// Package slack is the Slack Events API ingress adapter ("Slack
+// ingress", §8.10 "Slack/Linear fidelity" -- the Slack half only; §8.10
 // covers Linear, in a separate package/worktree in parallel). One route,
 // wired in cmd/control-plane/main.go: POST /webhooks/slack.
 //
-// Step 38 ("plan mode, cross-channel", §8.1/§13.3) adds a SECOND route to
+// §8.1 ("plan mode, cross-channel", §8.1/§13.3) adds a SECOND route to
 // this package, POST /webhooks/slack/interactive -- Slack's own
 // structurally different Interactivity payload shape (real Block Kit
 // button clicks / modal submissions on the plan-approval-request message),
@@ -44,7 +44,7 @@
 //     need to understand, rather than erroring on them).
 //  5. For a real "event_callback": WebhookDeliveryStore.Claim(ctx,
 //     "slack", envelope.EventID) BEFORE any processing (§5.1's dedupe
-//     claim, Step 31) -- envelope.EventID is Slack's own "globally unique
+//     claim) -- envelope.EventID is Slack's own "globally unique
 //     across all workspaces" event_id field (confirmed against Slack's
 //     own Events API documentation), which Slack repeats byte-for-byte on
 //     every redelivery of the SAME event (a real, common occurrence any
@@ -140,14 +140,14 @@
 // configured with a default repo yet and no session is created; a REPLY
 // on an already-mapped thread is entirely unaffected (it never needs a
 // repo). Real per-channel repo routing is left to a future Step (most
-// naturally automations, §8.4/Step 47).
+// naturally automations, §8.4).
 //
-// # In-thread acks -- scoping decision (Step 33's own row, "in-thread
+// # In-thread acks -- scoping decision (§8.10's own row, "in-thread
 // acks")
 //
 // internal/app/ports has no Notifier port yet, and the outbox table
 // (migrations/000010_outbox.up.sql) has no delivery-worker consumer --
-// both are explicitly Step 35's ("outbox delivery") own job, confirmed
+// both are explicitly §5.1's ("outbox delivery") own job, confirmed
 // against IMPLEMENTATION_PLAN.md before this Step started. Building
 // either here would be scope creep into that Step's own territory. An
 // in-thread ack is also a latency-sensitive UX signal ("a mention was
@@ -157,7 +157,7 @@
 // makes the smallest possible direct call instead: ackClient (ack.go) is
 // a tiny, unexported chat.postMessage client, used for exactly one
 // message per processed event -- never a queued, retried, or
-// dead-lettered delivery the way Step 35's real Notifier will be. A
+// dead-lettered delivery the way §5.1's real Notifier will be. A
 // failure here is logged and swallowed (see step 8 above), never
 // escalated into a redelivery.
 package slack

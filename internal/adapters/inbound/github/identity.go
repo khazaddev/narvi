@@ -1,6 +1,6 @@
 // This file (identity.go) closes the H4 audit finding this batch
 // (fix/audit-github-actor-rbac) fixes: GitHub ingress was the only ingress
-// surface Step 39's ("identities + full RBAC", §13.2/§13.3) own RBAC work
+// surface §13.2's ("identities + full RBAC", §13.2/§13.3) own RBAC work
 // never gated -- it did zero actor resolution and never called domain/
 // authz.Authorize before creating sessions/turns, even though Slack and
 // Linear ingress already enforce exactly that (internal/adapters/inbound/
@@ -14,7 +14,7 @@
 // identities, decide, maybe mint a magic-link prompt) because a Slack or
 // Linear user id has no OTHER way to already be known to this codebase.
 // A GitHub user id is different: every real Narvi user already has a
-// "github" identities row from signing in via GitHub OAuth (Step 20,
+// "github" identities row from signing in via GitHub OAuth (§13.1,
 // internal/adapters/inbound/auth/callback.go's own
 // externalID := strconv.FormatInt(ghUser.ID, 10) /
 // identities.GetByProviderAndExternalID(..., IdentityProviderGithub, ...)

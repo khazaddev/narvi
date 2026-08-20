@@ -119,18 +119,18 @@ const envVarPreamblePrefix = "Environment variables for this automation run:"
 // This is NOT the same thing as injecting env_vars into the sandboxed
 // agent PROCESS's own OS environment (cmd.Env) -- no generic mechanism for
 // that exists anywhere in this codebase yet for ANY per-automation/
-// per-session value (docs/IMPLEMENTATION_PLAN.md's own Step 53 row is
+// per-session value (§25.1 is
 // explicit that even provider API keys, the simplest possible case, are
 // not wired into cmd.Env today: "no ANTHROPIC_API_KEY/OPENAI_API_KEY/
 // Google-equivalent is wired anywhere"). Building a SEPARATE, automation-
-// specific env-injection mechanism ahead of Step 53's own generic one would
+// specific env-injection mechanism ahead of §25.1's own generic one would
 // risk exactly the same conflict-or-be-thrown-away outcome this package's
 // own doc.go already names for per-automation secrets. Surfacing env_vars
 // into the dispatched prompt's own text is the honest, working alternative
 // available today: the agent genuinely sees and can act on these values
 // (a feature-flag name, a target-environment label -- the non-sensitive
 // config this field exists for), with no change to the sandbox spawn path
-// at all. Once Step 53 lands a generic cmd.Env injection mechanism, a
+// at all. Once §25.1 lands a generic cmd.Env injection mechanism, a
 // small follow-up can thread automations.env_vars through THAT mechanism
 // too, alongside the prompt preamble kept here (the two are not mutually
 // exclusive).

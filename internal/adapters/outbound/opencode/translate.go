@@ -230,7 +230,7 @@ func translateSubTaskStart(cmd sandboxws.Prompt, p subtaskPart) sandboxws.SubTas
 // this sub-task" the wire schema's own SubTaskStart.parentMessageId
 // documents. Label is best-effort from the task call's own "description"
 // input field (taskInputDescription below) -- a human-readable label, not
-// a correctness-bearing value. SubAgentType (Step 71, §26.4/§7.1) is the
+// a correctness-bearing value. SubAgentType (§26.4/§7.1) is the
 // SAME task call's own "subagent_type" input field (taskInputSubAgentType
 // below) -- unlike Label, this IS the engine's own reliable dispatch
 // parameter, and is what post-hoc sub-task corroboration
@@ -273,7 +273,7 @@ func taskInputDescription(raw json.RawMessage) string {
 // OpenCode's own real dispatch parameter: the literal value the model
 // passes to invoke a specific named custom agent (e.g.
 // review.CounterReviewerAgentName's "counter-reviewer"), not freeform
-// text — which is exactly why Step 71's post-hoc corroboration
+// text — which is exactly why §26.4's post-hoc corroboration
 // (reviewverdict.CounterReviewCorroborated) keys off this field rather
 // than Label. Returns "" on absent/malformed input, never an error: this
 // only feeds a display/correlation field on the wire event, the same
@@ -293,7 +293,7 @@ func taskInputSubAgentType(raw json.RawMessage) string {
 }
 
 // subAgentTypePtr converts a subAgentType string into sub_task_start's own
-// wire shape for SubAgentType (§6.1: OPTIONAL, additive, Step 71) --
+// wire shape for SubAgentType (§6.1: OPTIONAL, additive) --
 // mirrors subTaskIDPtr's own identical "empty string becomes a nil
 // pointer, non-empty becomes a pointer to it" convention immediately
 // above, so json.Marshal's own omitempty tag on that field omits it

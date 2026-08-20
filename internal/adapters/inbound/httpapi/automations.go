@@ -1,11 +1,11 @@
-// This file (automations.go) implements Step 52's own ("automations:
+// This file (automations.go) implements §8.4's own ("automations:
 // triggers & extras", §8.4) REST CRUD surface over automations
 // (migrations/000051_automations.up.sql, extended by migrations/
-// 000055_automations_triggers_and_extras.up.sql) -- Step 51 ("automations:
+// 000055_automations_triggers_and_extras.up.sql) -- §3.5 ("automations:
 // engine") shipped the fan-out/reconcile/sweep engine ENGINE-ONLY, with no
 // HTTP surface at all (verified directly: no automations.go existed in
 // this package before this Step) -- invocationenqueue.go's own doc comment
-// already anticipated this: "Step 52's own future trigger evaluator is
+// already anticipated this: "§8.4's own future trigger evaluator is
 // expected to call [CreateInvocation] unchanged once it exists."
 //
 // Seven routes, all mounted behind auth.Middleware (cmd/control-plane/
@@ -156,7 +156,7 @@ func automationToDTO(a sqlcgen.Automation) restdtos.Automation {
 	}
 }
 
-// CreateAutomation backs POST /api/automations (Step 52, §8.4). 403 if the
+// CreateAutomation backs POST /api/automations (§8.4). 403 if the
 // caller fails authz.ActionManageAutomations; 400 for a malformed request
 // body or any validation failure (repos, trigger config, sandbox
 // settings, env vars); 201 with restdtos.CreateAutomationResponse
@@ -460,7 +460,7 @@ func GetAutomation(automations *postgres.AutomationStore) http.HandlerFunc {
 	}
 }
 
-// ListAutomations backs GET /api/automations (Step 52, §8.4's own
+// ListAutomations backs GET /api/automations (§8.4's own
 // "creator/status filters"): two independent, optional query params --
 // ?createdBy=me|<uuid> and ?status=active|paused. "me" resolves to the
 // authenticated caller's own id (mockups.html's own "My automations ▾"

@@ -1,7 +1,7 @@
 // This file (ack.go) implements the single, direct Slack API call this
 // Step's own in-thread ack needs (doc.go's own "in-thread acks --
 // scoping decision") -- a tiny, unexported chat.postMessage client, NOT
-// the general Notifier/outbox abstraction Step 35 builds.
+// the general Notifier/outbox abstraction (§5.1).
 
 package slack
 
@@ -133,7 +133,7 @@ type postEphemeralRequest struct {
 }
 
 // postEphemeral posts text into channel via chat.postEphemeral, visible
-// ONLY to userID -- Step 39's own security-remediation addition
+// ONLY to userID -- §13.2's own security-remediation addition
 // ("identities + full RBAC", §13.2): a confirmed review finding proved
 // that posting the magic-link identity-link notice via the ordinary,
 // whole-channel-visible postAck above let ANY other member of a shared

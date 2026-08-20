@@ -1,5 +1,5 @@
 // Package identitylink is the inbound HTTP adapter backing §13.2 step 4's
-// own magic link ("connect your account") -- Step 39's ("identities +
+// own magic link ("connect your account") -- §13.2's ("identities +
 // full RBAC") second half. One route, mounted OUTSIDE auth.Middleware
 // entirely (cmd/control-plane/main.go):
 //
@@ -18,7 +18,7 @@
 // result itself:
 //
 //   - Not authenticated: 302 to /auth/github/login?next=<this same URL>
-//     (auth.NewLoginHandler's own ?next= addition, Step 39) -- once the
+//     (auth.NewLoginHandler's own ?next= addition, §13.2) -- once the
 //     visitor completes that REAL GitHub OAuth round trip,
 //     NewCallbackHandler lands them right back on this exact URL,
 //     narvi_auth_session cookie now set, and this handler runs again,

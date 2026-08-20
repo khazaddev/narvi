@@ -414,7 +414,7 @@ func cloneOne(
 // "credential-helper" subcommand, prefixed with `!` so git runs this exact
 // shell command rather than treating it as a suffix appended to
 // "git-credential-" (git itself appends the final "get"/"store"/"erase"
-// argument when it invokes the helper). Exported (Step 21, "e2e happy
+// argument when it invokes the helper). Exported (§9.3, "e2e happy
 // path") so cmd/sandbox-agent's own HandlePush can configure the SAME
 // per-invocation credential helper for `git push` that CloneAll already
 // configures for `git clone` -- one shared implementation, two callers,

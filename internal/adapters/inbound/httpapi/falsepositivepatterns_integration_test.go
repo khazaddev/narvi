@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 63's own §22.4 lifecycle REST surface
+// Integration tests for §22's own §22.4 lifecycle REST surface
 // (falsepositivepatterns.go), against a real Postgres instance -- gated
 // behind the "integration" build tag, sharing this package's own testRig
 // (httpapi_integration_test.go).

@@ -1,10 +1,10 @@
 package review
 
 // DescriptionAdequacy is the reviewer's own tri-state assessment (§26.2,
-// Step 67, "review digest: description adequacy + graduated remediation")
+// "review digest: description adequacy + graduated remediation")
 // of whether a PR's title+body honestly represent what its diff actually
 // does -- the reviewing agent's own comparison of its diff-derived
-// Digest.Summary (internal/domain/reviewpost, Step 66's own §26.1
+// Digest.Summary (internal/domain/reviewpost, §26.1's own §26.1
 // addition) against the PR's title+body, which stay untrusted INPUT
 // throughout (§5.2): the comparison consumes them, never obeys them. The
 // zero value ("") is deliberately not one of the three named values --
@@ -34,7 +34,7 @@ const (
 
 // AdequacyFloor is the THIRD raise-only floor's single exported pure
 // function (§26.2, composing alongside CoverageFloor/PremiseFloor via the
-// existing max(rank) in ComputeShippable, Step 45's own
+// existing max(rank) in ComputeShippable, §8.2's own
 // exactly-one-pure-function-per-floor pattern extended by this Step):
 // given the reviewer's own DescriptionAdequacy, it returns the MOST
 // CONSERVATIVE Shippable value adequacy alone ever forces. This function

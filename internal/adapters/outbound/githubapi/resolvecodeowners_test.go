@@ -180,7 +180,7 @@ func TestResolveCodeOwners_UnresolvableOwnerSkippedNotFatal(t *testing.T) {
 }
 
 // TestResolveCodeOwners_CapsDistinctOwnerResolutions is the B3 regression
-// test named explicitly in the §60 review's TEST BATCH: "raising the cap
+// test named explicitly to close a real gap: "raising the cap
 // passes everything" because no existing test in this file names more
 // than a handful of distinct owners -- maxCodeOwnerRefsPerCall (50) was
 // never actually exercised. A single catch-all pattern names 60 distinct

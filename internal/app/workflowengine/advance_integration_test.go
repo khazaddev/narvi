@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 56's ("workflow HITL gate + circuit breaker",
+// Integration tests for §25.9's ("workflow HITL gate + circuit breaker",
 // §25.9) own advance.go: the circuit breaker's real first call site
 // (loopguard.Evaluate consulted only on a genuine needs_fix re-fire), the
 // escalation notice's "never repeated" guarantee, and human-revision

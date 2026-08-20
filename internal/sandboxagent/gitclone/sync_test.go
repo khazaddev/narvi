@@ -167,7 +167,7 @@ func TestSyncAll_DirtyTree_StashCheckoutPop_PreservesEditsByteForByte(t *testing
 // proves §9.3 resilience scenario #11 end to end, at the sandbox-agent
 // level, in the exact shape that scenario names: "Dirty working tree at
 // relaunch -> stash -> checkout session branch -> pop; zero lost user
-// edits." This is the scenario Step 29 exists to make real -- a repo with
+// edits." This is the scenario §3.4 exists to make real -- a repo with
 // REAL uncommitted changes reconciles against a session branch that
 // ALREADY EXISTS but is DIFFERENT from whatever is currently checked out
 // (simulating a BootModeRepoImage/BootModeSnapshotRestore relaunch whose
@@ -1136,7 +1136,7 @@ func TestSyncAll_StashPopFailure_StillReAppliesSparseCheckout(t *testing.T) {
 	}
 }
 
-// --- §19.3 (Step 40, "warm boot: fetch-aware git sync") tests below ---
+// --- §19.3 (§19.3, "warm boot: fetch-aware git sync") tests below ---
 //
 // newLocalOrigin/addOriginBranch create a real, local, non-bare git
 // repository to act as this Step's new boot-time fetch step's own remote

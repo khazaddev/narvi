@@ -1,4 +1,4 @@
-// This file (deliveryretry.go) implements Step 72's own adversarial-review
+// This file (deliveryretry.go) implements an adversarial-review
 // MEDIUM fix (§27.1: "with bounded retry") -- the shared retry-
 // classification policy fetchSandboxSecrets (sandboxsecrets.go) and
 // fetchOpenCodeConfig (opencodeconfig.go) both apply around their own
@@ -63,7 +63,7 @@ func classifyDeliveryFetchError(err error) error {
 	return platform.Permanent(err)
 }
 
-// classifyMintTokenError is Step 73b's own ("cloud identity: sandbox-side
+// classifyMintTokenError is §27.4's own ("cloud identity: sandbox-side
 // consumption + kubeconfig injection", §27.3) sibling to
 // classifyDeliveryFetchError, for cloud-identity-token minting
 // (credentials.CPClient.MintCloudIdentityToken) specifically -- NOT a
@@ -111,7 +111,7 @@ func classifyDeliveryFetchError(err error) error {
 // warn-and-continue on EITHER outcome (retries exhausted, or a
 // first-attempt terminal classification) -- see that file's own doc
 // comment for the full "what happens to the token file" resolution,
-// consistent with the same posture Step 72 established.
+// consistent with the same posture §27.1 established.
 func classifyMintTokenError(err error) error {
 	if err == nil {
 		return nil

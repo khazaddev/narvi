@@ -14,7 +14,7 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// This file implements Step 48's own ("sentinels + suggestions", §17.2
+// This file implements §8.2's own ("sentinels + suggestions", §17.2
 // amendment) explicitly required test: "the fix PR's base being the
 // origin head branch and never the repo default." Mirrors pushpr_
 // integration_test.go's own established real-Postgres, real-Actor,

@@ -16,7 +16,7 @@ const getRepoSettings = `-- name: GetRepoSettings :one
 SELECT repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled FROM repo_settings WHERE repo_full_name = $1
 `
 
-// Queries backing RepoSettingsStore (§8.2/Step 47, §21.2): a small,
+// Queries backing RepoSettingsStore (§8.2, §21.2): a small,
 // extensible table of admin-configured, per-repo policy flags -- see
 // migrations/000044_repo_settings.up.sql's own doc comment for the full
 // "one shared table, not one bespoke table per toggle" design rationale.
@@ -114,7 +114,7 @@ type UpsertAutoApprovalEligibilityParams struct {
 	SensitiveBlastRadiusTags   []byte `json:"sensitive_blast_radius_tags"`
 }
 
-// §62 review finding C5's own fix: idempotent create-or-update of ONLY
+// Idempotent create-or-update of ONLY
 // max_auto_approve_files_changed/sensitive_blast_radius_tags -- the
 // column-scoped sibling of UpsertAutoMergeToggle immediately above (see
 // that query's own doc comment for the full "why"). auto_merge_enabled
@@ -161,8 +161,8 @@ type UpsertAutoMergeToggleParams struct {
 	AutoMergeEnabled bool   `json:"auto_merge_enabled"`
 }
 
-// UpsertAutoApprovalSettings (Step 62, §21.2) is REMOVED as of §62
-// review finding C5 (MEDIUM but a privilege boundary, fixed) -- it wrote
+// UpsertAutoApprovalSettings (§21.2) is REMOVED (an adversarial-review
+// fix, MEDIUM but a privilege boundary) -- it wrote
 // all three auto-approval/auto-merge columns together, even though the
 // TWO REST endpoints that ever called it (PutAutoApprovalSettings,
 // gated by ActionConfigureAutoApprove; PutAutoMergeToggle, admin-only
@@ -181,7 +181,7 @@ type UpsertAutoMergeToggleParams struct {
 // touching DIFFERENT columns can no longer race at the DATABASE level,
 // closing the hazard by construction rather than by an app-layer
 // read-then-preserve convention a future edit could easily forget.
-// §62 review finding C5's own fix: idempotent create-or-update of ONLY
+// Idempotent create-or-update of ONLY
 // auto_merge_enabled (migrations/000069_repo_settings_auto_approval.up.sql)
 // -- mirrors UpsertRWXPreviewSettings' own identical "touches ONLY these
 // columns, ON CONFLICT leaves every other column untouched" shape.
@@ -228,12 +228,12 @@ type UpsertAutoRetriggerReviewToggleParams struct {
 	AutoRetriggerReviewEnabled bool   `json:"auto_retrigger_review_enabled"`
 }
 
-// Step 65's own admin-only, per-repo opt-in (§24.5, migrations/
+// §24's own admin-only, per-repo opt-in (§24.5, migrations/
 // 000076_repo_settings_auto_retrigger_review.up.sql) -- idempotent
 // create-or-update of ONLY auto_retrigger_review_enabled, mirroring
 // UpsertAutoMergeToggle's own identical column-scoped shape immediately
-// above (§62 review finding C5's fix, generalized to this further,
-// independently-gated toggle): every other repo_settings column is left
+// above (the same
+// independently-gated-toggle pattern): every other repo_settings column is left
 // COMPLETELY untouched, so a concurrent write to any of them (an admin's
 // PutRepoSettings, PutAutoMergeToggle, or PutAutoApprovalSettings call)
 // can never race with this one at the database level.
@@ -276,12 +276,12 @@ type UpsertDescriptionAutofixToggleParams struct {
 	DescriptionAutofixEnabled bool   `json:"description_autofix_enabled"`
 }
 
-// Step 67's own admin-only, per-repo opt-in (§26.2, migrations/
+// §26.2's own admin-only, per-repo opt-in (§26.2, migrations/
 // 000079_repo_settings_description_autofix.up.sql) -- idempotent
 // create-or-update of ONLY description_autofix_enabled, mirroring
 // UpsertAutoMergeToggle/UpsertAutoRetriggerReviewToggle's own identical
-// column-scoped shape above (§62 review finding C5's fix, generalized to
-// this further, independently-gated toggle): every other repo_settings
+// column-scoped shape above (the same independently-gated-toggle
+// pattern): every other repo_settings
 // column is left COMPLETELY untouched, so a concurrent write to any of
 // them can never race with this one at the database level.
 func (q *Queries) UpsertDescriptionAutofixToggle(ctx context.Context, arg UpsertDescriptionAutofixToggleParams) (RepoSetting, error) {
@@ -325,7 +325,7 @@ type UpsertRWXPreviewSettingsParams struct {
 	RwxPreviewOrgSlug          *string `json:"rwx_preview_org_slug"`
 }
 
-// Step 57 ("RWX provider + previews", §4.1.2 point 1): idempotent
+// §4.1 ("RWX provider + previews", §4.1.2 point 1): idempotent
 // create-or-update of ONLY the three RWX-preview columns (migrations/
 // 000059_repo_settings_rwx_preview.up.sql), keyed on repo_full_name --
 // deliberately independent of UpsertRepoSettings above: block_on_high_risk/
@@ -384,7 +384,7 @@ type UpsertRepoSettingsParams struct {
 // the full, current desired value rather than patching a delta, so a
 // concurrent double-submit from the same admin settles on whichever write
 // lands last, never a non-deterministic partial merge. sentinel_autofix_
-// enabled (Step 48, §17.1) is this SAME table's own further admin-only,
+// enabled (§17.1) is this SAME table's own further admin-only,
 // per-repo boolean, exactly as migrations/000044's own doc comment
 // anticipated -- see migrations/000048_repo_settings_sentinel_autofix.up.sql.
 func (q *Queries) UpsertRepoSettings(ctx context.Context, arg UpsertRepoSettingsParams) (RepoSetting, error) {
@@ -427,13 +427,13 @@ type UpsertReviewCostBudgetParams struct {
 	ReviewCostBudgetDeepUsd  pgtype.Numeric `json:"review_cost_budget_deep_usd"`
 }
 
-// Step 69's own admin-only, per-repo reviewCostBudget config (§26.7,
+// §26.4's own admin-only, per-repo reviewCostBudget config (§26.7,
 // migrations/000085_repo_settings_review_cost_budget.up.sql) -- idempotent
 // create-or-update of ONLY review_cost_budget_light_usd/
 // review_cost_budget_deep_usd, mirroring UpsertReviewDepthConfig's own
-// identical column-scoped shape immediately above (§62 review finding
-// C5's fix, generalized to this further, independently-gated config):
-// every other repo_settings column is left COMPLETELY untouched, so a
+// identical column-scoped shape immediately above (the same
+// independently-gated-config pattern): every other repo_settings column
+// is left COMPLETELY untouched, so a
 // concurrent write to any of them can never race with this one at the
 // database level.
 func (q *Queries) UpsertReviewCostBudget(ctx context.Context, arg UpsertReviewCostBudgetParams) (RepoSetting, error) {
@@ -476,13 +476,13 @@ type UpsertReviewDepthConfigParams struct {
 	ReviewDepthDeepPaths []byte  `json:"review_depth_deep_paths"`
 }
 
-// Step 68's own admin-only, per-repo reviewDepth config (§26.3,
+// §26.3's own admin-only, per-repo reviewDepth config (§26.3,
 // migrations/000082_repo_settings_review_depth.up.sql) -- idempotent
 // create-or-update of ONLY review_depth_mode/review_depth_deep_paths,
 // mirroring UpsertAutoMergeToggle/UpsertAutoRetriggerReviewToggle/
 // UpsertDescriptionAutofixToggle's own identical column-scoped shape
-// above (§62 review finding C5's fix, generalized to this further,
-// independently-gated config): every other repo_settings column is left
+// above (the same independently-gated-config pattern): every other
+// repo_settings column is left
 // COMPLETELY untouched, so a concurrent write to any of them can never
 // race with this one at the database level.
 func (q *Queries) UpsertReviewDepthConfig(ctx context.Context, arg UpsertReviewDepthConfigParams) (RepoSetting, error) {
@@ -524,12 +524,12 @@ type UpsertSessionsEnabledParams struct {
 	SessionsEnabled bool   `json:"sessions_enabled"`
 }
 
-// Step 76's own cohort-rollout enrollment gate (§10 Phase 6, §32) --
+// §10's own cohort-rollout enrollment gate (§10 Phase 6, §32) --
 // idempotent create-or-update of ONLY sessions_enabled, mirroring
 // UpsertAutoMergeToggle/UpsertAutoRetriggerReviewToggle/
 // UpsertDescriptionAutofixToggle's own identical column-scoped shape
-// above (§62 review finding C5's fix, generalized to this further,
-// independently-gated toggle): every other repo_settings column is left
+// above (the same
+// independently-gated-toggle pattern): every other repo_settings column is left
 // COMPLETELY untouched, so a concurrent write to any of them can never
 // race with this one at the database level. Written ONLY by the seed
 // tool in v1 (§32: "seed-manifest-only") -- no REST route calls this yet.

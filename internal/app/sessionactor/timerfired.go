@@ -4,7 +4,7 @@
 // for every actual decision -- this file's own job is orchestration
 // (reading current state, calling the right decision function, writing
 // the result back transactionally) and never reimplementing a decision
-// those packages already make. Step 65 ("review: automatic re-review on
+// those packages already make. §24 ("review: automatic re-review on
 // new commits", §24) adds a 6th named timer, review_retrigger_debounce --
 // its own fire handler, handleReviewRetriggerDebounceTimer, is dispatched
 // from the SAME switch below but implemented in reviewretrigger.go, not
@@ -13,8 +13,8 @@
 // unlike the 5 timers this file's rest describes.
 //
 // All 5 named timers' RE-ARM/handling logic is fully wired here -- none
-// needed a SandboxProvider or AgentRuntime (neither exists until Step
-// 12+). The initial arm (the very first time each timer is ever set) is
+// needed a SandboxProvider or AgentRuntime (neither port exists yet). The
+// initial arm (the very first time each timer is ever set) is
 // each timer's OWN concern, not this file's: connecting_deadline and
 // turn_deadline are armed for the first time at spawn/dispatch time
 // (dispatch.go), and liveness_check/inactivity are armed for the first
@@ -31,7 +31,7 @@
 //     deliberate, documented simplification: ConnectedClientCount is
 //     always 0. The client WS hub itself now exists and does track
 //     connected participants (internal/adapters/inbound/wshub's *Hub,
-//     Step 19), but this package has no port through which to ask it for
+//     §6.2), but this package has no port through which to ask it for
 //     a live count -- see handleInactivityTimer. This does not stop the
 //     timer from being fully wired; it just means the "clients connected
 //     -> extend + warn" branch stays unreachable until that wiring lands.
@@ -143,7 +143,7 @@ func (a *Actor) handleInactivityTimer(ctx context.Context) error {
 			// ConnectedClientCount is always 0 for now: the client WS
 			// hub itself now exists and does track connected
 			// participants (internal/adapters/inbound/wshub's *Hub,
-			// Step 19), but this actor has no field/port through which
+			// §6.2), but this actor has no field/port through which
 			// to query it for a live count. Until that wiring lands,
 			// EvaluateInactivityTimeout can never take its "clients
 			// still connected -> extend + warn" branch -- every genuine
@@ -181,7 +181,7 @@ func (a *Actor) handleInactivityTimer(ctx context.Context) error {
 			// §3.2's two-phase design: the watchdog's only job is moving
 			// the sandbox to Suspect and arming terminal_grace -- NOT
 			// calling a provider to actually snapshot/stop it (that's
-			// Step 12+'s SandboxProvider, out of scope here).
+			// the SandboxProvider's own job, out of scope here).
 			// action.ShouldSnapshot is deliberately never consulted.
 			//
 			// gap: EvaluateInactivityTimeout's own InactivityAction
@@ -338,7 +338,7 @@ func (a *Actor) handleTerminalGraceTimer(ctx context.Context) error {
 		// §3.2: "Any liveness signal during grace returns to previous
 		// state." This Step has no mechanism for a genuine external
 		// liveness signal to arrive DURING grace and reach this actor as
-		// a command (that requires the sandbox WS hub, Steps 16-18, to
+		// a command (that requires the sandbox WS hub to
 		// exist and deliver one -- e.g. a future LivenessSignal command
 		// driving TriggerRecover). Absent that, terminal_grace firing
 		// here is UNCONDITIONALLY treated as a genuine timeout:
@@ -349,7 +349,7 @@ func (a *Actor) handleTerminalGraceTimer(ctx context.Context) error {
 		// handler yet -- Stopped needs an HTTP stop endpoint (a later
 		// Step) to have recorded that a stop was explicitly requested.
 		// Stale remains genuinely unreachable too, but NOT for lack of a
-		// reconciler any more: internal/app/reconciler (Step 25,
+		// reconciler any more: internal/app/reconciler (§5.3,
 		// "reconciler + GC") exists now, but is deliberately PURE
 		// cloud-side orphan reaping -- it calls ports.SandboxProvider.
 		// StopSandbox on a provider ref with no live Postgres owner, and
@@ -447,14 +447,14 @@ func (a *Actor) handleTurnDeadlineTimer(ctx context.Context) error {
 		}
 
 		// sessionRow is fetched once here, reused below both by
-		// OnTurnCompleted (Step 55/56) and by enqueueOutboxNotification
-		// (Step 35) further down this same transact.
+		// OnTurnCompleted (§25.6/§25.9) and by enqueueOutboxNotification
+		// (§5.1) further down this same transact.
 		sessionRow, err := a.stores.session.WithTx(tx).Get(ctx, a.sessionID)
 		if err != nil {
 			return fmt.Errorf("sessionactor: get session: %w", err)
 		}
 
-		// Step 55/56 ("workflow execution engine" / "workflow HITL gate +
+		// §25.6/§25.9 ("workflow execution engine" / "workflow HITL gate +
 		// circuit breaker", §25.6/§25.9): this turn just reached a real
 		// terminal state via its own turn_deadline, exactly like a real
 		// execution_complete event would (pushpr.go's completeProcessingTurn)
@@ -472,7 +472,7 @@ func (a *Actor) handleTurnDeadlineTimer(ctx context.Context) error {
 
 		// §3.3: "Stop/failure paths emit a synthetic execution_complete
 		// event so clients always see one terminal event per turn" --
-		// exactly the machinery Step 08 built for this caller (see
+		// exactly the machinery §3.1 built for this caller (see
 		// domain/turn's own doc.go). RequiresSyntheticExecutionComplete
 		// and DeriveFailureReason are used exactly as built, not
 		// reimplemented.
@@ -492,7 +492,7 @@ func (a *Actor) handleTurnDeadlineTimer(ctx context.Context) error {
 			return err
 		}
 
-		// Step 35 ("outbox delivery", §5.1): a turn that fails HERE, on its
+		// §5.1 ("outbox delivery", §5.1): a turn that fails HERE, on its
 		// own turn_deadline, needs the same outbound notification a turn
 		// that fails via a real execution_complete already gets
 		// (completeProcessingTurn, pushpr.go). Before this fix, only that
@@ -523,7 +523,7 @@ func (a *Actor) handleTurnDeadlineTimer(ctx context.Context) error {
 // step every watchdog-style timer (inactivity, connecting_deadline,
 // liveness_check) performs identically on timeout, per §3.2's two-phase
 // design: "a watchdog never writes failed directly. It writes suspect and
-// arms terminal_grace." Step 24 ("two-phase terminalization") extends this
+// arms terminal_grace." §3.2 ("two-phase terminalization") extends this
 // shared step to ALSO persist row.Status -- the live state being left,
 // always one of the five states TriggerSuspect's own transition-table
 // entries allow (Spawning/Connecting/Booting/Ready/Snapshotting) -- as

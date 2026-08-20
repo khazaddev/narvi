@@ -12,7 +12,7 @@ import (
 
 // GitHubPRSessionStore is a thin, pass-through wrapper around the
 // sqlc-generated github_pr_sessions queries (§8.2's "atomic claim
-// coalescing of concurrent @mentions", Step 32 "GitHub ingress"). No
+// coalescing of concurrent @mentions" "GitHub ingress"). No
 // caching, no retries, no business rules -- the coalescing DECISION
 // (create a new session vs. reuse an existing one) lives in
 // internal/adapters/inbound/github/coalesce.go, which is the only caller
@@ -70,7 +70,7 @@ func (s *GitHubPRSessionStore) SetSessionID(ctx context.Context, repoFullName st
 	})
 }
 
-// GetBySessionID is the REVERSE lookup Step 35 ("outbox delivery") needs:
+// GetBySessionID is the REVERSE lookup §5.1 ("outbox delivery") needs:
 // given a session_id, which (repoFullName, prNumber) PR does it back?
 // Returns pgx.ErrNoRows (unwrapped) when sessionID was never created via a
 // GitHub PR mention.
@@ -79,7 +79,7 @@ func (s *GitHubPRSessionStore) GetBySessionID(ctx context.Context, sessionID pgt
 }
 
 // SetHeadSHA is REMOVED as of migrations/000072_turns_review_head_sha.up.sql
-// (§62 review finding C2, CRITICAL, fixed) -- github_pr_sessions.
+// -- github_pr_sessions.
 // pending_head_sha (and this method) is superseded by turns.
 // review_head_sha, set once at turn-creation time
 // (internal/adapters/inbound/httpapi's createTurnLocked/CreateSessionOnTx)
@@ -87,7 +87,7 @@ func (s *GitHubPRSessionStore) GetBySessionID(ctx context.Context, sessionID pgt
 // migration's own doc comment for the full "why a shared, mutable
 // per-(repo,PR) column was the wrong place for this fact".
 
-// UpsertPendingRetriggerHeadSHA is Step 65's own actor-bypassing write
+// UpsertPendingRetriggerHeadSHA is §24's own actor-bypassing write
 // (§24.1's 4th cost item, internal/adapters/inbound/github/
 // pullrequestsynchronize.go): guarded on session_id IS NOT NULL, so
 // pgx.ErrNoRows (unwrapped) means exactly "no row, or a row with

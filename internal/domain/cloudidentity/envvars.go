@@ -1,6 +1,6 @@
 package cloudidentity
 
-// This file (envvars.go) is Step 73b's own ("cloud identity: sandbox-side
+// This file (envvars.go) is §27.4's own ("cloud identity: sandbox-side
 // consumption + kubeconfig injection", §27.3) enumeration of the STANDARD,
 // cloud-SDK-documented env-var names sandbox-agent's own in-sandbox
 // consumption mechanism (cmd/sandbox-agent/cloudidentity.go) sets on every

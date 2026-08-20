@@ -12,7 +12,7 @@ import (
 
 // SessionStore is a thin, pass-through wrapper around the sqlc-generated
 // session queries (§4.3 SessionStore). No caching, no retries, no business
-// rules — that lives in app/sessionactor (Step 11+).
+// rules — that lives in app/sessionactor (§2).
 type SessionStore struct {
 	q *sqlcgen.Queries
 }
@@ -87,7 +87,7 @@ func (s *SessionStore) UpdateIntentDecisionIfNull(ctx context.Context, id pgtype
 }
 
 // ListFailed returns up to limit currently-'failed', unarchived sessions,
-// most-recently-failed first -- Step 60's own needs_attention row source
+// most-recently-failed first -- §16's own needs_attention row source
 // (see ListFailedSessions' own generated doc comment for the full design:
 // system-wide, no per-user filter, ADMIN-ONLY at the RBAC/httpapi layer).
 func (s *SessionStore) ListFailed(ctx context.Context, limit int32) ([]sqlcgen.Session, error) {

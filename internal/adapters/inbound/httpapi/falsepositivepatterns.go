@@ -1,4 +1,4 @@
-// This file implements Step 63's own §22.4 lifecycle surface (audit view
+// This file implements §22's own §22.4 lifecycle surface (audit view
 // + retire) for review_false_positive_patterns -- shipped in the SAME
 // Step as the capture command (§22.2, internal/adapters/inbound/github's
 // own dispatch-before-router handler), never a deferred follow-up: "a
@@ -12,7 +12,7 @@
 // auth.Middleware, alongside every other browser-facing REST route in
 // this package (this is an admin/maintainer reviewing or retiring a
 // pattern, not the sandbox agent calling a tool). §22.5 names the actual
-// Settings UI consuming these two endpoints as Step 84 (Phase 7) -- the
+// Settings UI consuming these two endpoints as §14.4 (Phase 7) -- the
 // underlying capability ships here, now, exactly like review_findings'
 // own rebut/apply-suggestion endpoints predated any "finding cards" UI
 // (§12.2 item 2, also Phase 7).
