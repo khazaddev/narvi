@@ -33,3 +33,11 @@ export const sessionListQueryKeys = {
 export const authQueryKeys = {
   me: () => ['auth', 'me'] as const,
 }
+
+// modelCatalogQueryKeys (§8.8) -- the composer's own model/effort
+// selector. One key, no params: GET /api/models returns one deployment-
+// wide catalog (a compiled-in snapshot, modelcatalog.go's own doc
+// comment), not something parameterized per session.
+export const modelCatalogQueryKeys = {
+  all: () => ['models'] as const,
+}

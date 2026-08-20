@@ -269,4 +269,55 @@ describe('SessionStream', () => {
     await drainOneBackfillRound(secondConn, [], null)
     await waitFor(() => stream!.getSnapshot().syncState === 'complete')
   })
+
+  // §12.2 item 1: state.sandbox (client.go's own sandboxWireMap) is the ONLY
+  // source this codebase has for a session's current sandbox row -- see
+  // session/sandboxSnapshot.ts's own top comment. This proves the WIRING:
+  // handleSubscribed captures payload.state.sandbox into the snapshot
+  // untouched (parsing/narrowing is session/sandboxSnapshot.ts's own job,
+  // covered by that module's own unit tests).
+  it('captures the subscribe reply\'s own state.sandbox into the snapshot, refreshed on every (re)subscribe', async () => {
+    server = await FakeClientWsServer.start()
+    const queryClient = new QueryClient()
+    stream = newStream('sess-8', queryClient)
+
+    const connPromise = server.waitForConnection()
+    stream.start()
+    const conn = await connPromise
+    await conn.nextMessage()
+    conn.send(subscribedPayload('sess-8', [fakeEvent(1)], { sandbox: { id: 'sb-1', gen: 2, status: 'booting', lastSeenAt: null, createdAt: 'x', updatedAt: 'y' } }))
+    await drainOneBackfillRound(conn, [], null)
+    await waitFor(() => stream!.getSnapshot().syncState === 'complete')
+
+    expect(stream.getSnapshot().sandboxState).toEqual({ id: 'sb-1', gen: 2, status: 'booting', lastSeenAt: null, createdAt: 'x', updatedAt: 'y' })
+
+    // A reconnect's fresh subscribe reply with an UPDATED sandbox state
+    // (gen bumped by a respawn) must replace the cached one, not merge or
+    // retain the stale value.
+    const secondConnPromise = server.waitForConnection()
+    conn.close(1011, 'simulated drop')
+    const secondConn = await secondConnPromise
+    await secondConn.nextMessage()
+    secondConn.send(subscribedPayload('sess-8', [fakeEvent(1)], { sandbox: { id: 'sb-1', gen: 3, status: 'ready', lastSeenAt: 'z', createdAt: 'x', updatedAt: 'w' } }))
+    await drainOneBackfillRound(secondConn, [], null)
+
+    await waitFor(() => stream!.getSnapshot().connectionStatus === 'open' && stream!.getSnapshot().syncState === 'complete')
+    expect(stream.getSnapshot().sandboxState).toEqual({ id: 'sb-1', gen: 3, status: 'ready', lastSeenAt: 'z', createdAt: 'x', updatedAt: 'w' })
+  })
+
+  it('exposes sandboxState as null when this session has no sandbox row yet (state.sandbox absent/empty)', async () => {
+    server = await FakeClientWsServer.start()
+    const queryClient = new QueryClient()
+    stream = newStream('sess-9', queryClient)
+
+    const connPromise = server.waitForConnection()
+    stream.start()
+    const conn = await connPromise
+    await conn.nextMessage()
+    conn.send(subscribedPayload('sess-9', [fakeEvent(1)]))
+    await drainOneBackfillRound(conn, [], null)
+    await waitFor(() => stream!.getSnapshot().syncState === 'complete')
+
+    expect(stream.getSnapshot().sandboxState).toBeNull()
+  })
 })

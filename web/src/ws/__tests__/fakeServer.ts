@@ -133,12 +133,16 @@ export function fakeEvent(id: number, type = 'tool_call', payload: unknown = { o
   return { id, type, payload, createdAt: new Date(2026, 0, 1, 0, 0, id).toISOString() }
 }
 
-export function subscribedPayload(sessionId: string, events: FakeEventEnvelope[]): {
+export function subscribedPayload(
+  sessionId: string,
+  events: FakeEventEnvelope[],
+  state: Record<string, unknown> = {},
+): {
   sessionId: string
   state: Record<string, unknown>
   events: FakeEventEnvelope[]
   artifacts: unknown[]
   participants: unknown[]
 } {
-  return { sessionId, state: {}, events, artifacts: [], participants: [] }
+  return { sessionId, state, events, artifacts: [], participants: [] }
 }

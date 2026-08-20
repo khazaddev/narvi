@@ -457,6 +457,20 @@ func TestClientHandler_SubscribeReplaysFailedUploadStatusAndFailureReason(t *tes
 	if elem["failureReason"] != "verification_failed" {
 		t.Errorf(`Artifacts[0]["failureReason"] = %v, want "verification_failed"`, elem["failureReason"])
 	}
+	// §12.2 item 1's own rail (the rail's own artifacts panel): filename/sizeBytes/
+	// contentType, the SAME addition as this test's own REST-side twin
+	// (httpapi_integration_test.go's TestListArtifacts_
+	// FailedUploadStatusAndFailureReason) -- artifactWireMap (client.go)
+	// dropped all three before this Step.
+	if elem["filename"] != filename {
+		t.Errorf(`Artifacts[0]["filename"] = %v, want %q`, elem["filename"], filename)
+	}
+	if elem["contentType"] != contentType {
+		t.Errorf(`Artifacts[0]["contentType"] = %v, want %q`, elem["contentType"], contentType)
+	}
+	if elem["sizeBytes"] != float64(size) {
+		t.Errorf(`Artifacts[0]["sizeBytes"] = %v, want %v`, elem["sizeBytes"], size)
+	}
 }
 
 // TestClientHandler_SubscribedPayloadExcludesSandboxTokenHash proves the

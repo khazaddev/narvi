@@ -50,6 +50,22 @@ export interface SessionStreamSnapshot {
   events: EventEnvelope[]
   activity: SessionActivityState
   lastError: string | null
+  /**
+   * The subscribe reply's own `state.sandbox` (client.go's own
+   * sandboxWireMap: `{id, gen, status, lastSeenAt, createdAt, updatedAt}`,
+   * or null when this session has no sandbox row yet), passed through
+   * verbatim and UNTYPED -- `state` is additionalProperties:true on the
+   * wire, so this stays `unknown` here for the exact same reason `events`
+   * elements stay a loose EventEnvelope rather than a fully-typed
+   * SandboxEvent: the deeper, type-checked narrowing belongs to the
+   * session view layer (session/sandboxSnapshot.ts's own
+   * parseSandboxSnapshot, mirroring session/eventPayloads.ts's precedent),
+   * never to this generic pipeline. Only refreshed on (re)subscribe --
+   * `state` is not re-sent on every live broadcast/backfill page, so a
+   * consumer wanting a LIVE status must layer this session's own event
+   * log on top (session/sandboxRail.ts does exactly that).
+   */
+  sandboxState: unknown
 }
 
 export interface SessionStreamOptions {
@@ -92,6 +108,7 @@ export class SessionStream {
   private syncState: SyncState = 'idle'
   private activity: SessionActivityState = initialSessionActivityState
   private lastError: string | null = null
+  private sandboxState: unknown = null
   private readonly listeners = new Set<() => void>()
   private backfillInFlight = false
   private backfillDirty = false
@@ -163,6 +180,7 @@ export class SessionStream {
         events: this.log.entries(),
         activity: this.activity,
         lastError: this.lastError,
+        sandboxState: this.sandboxState,
       }
     }
     return this.cachedSnapshot
@@ -181,6 +199,12 @@ export class SessionStream {
   }
 
   private handleSubscribed(payload: SubscribedPayload): void {
+    // this.sandboxState is set unconditionally on every (re)subscribe --
+    // including a reconnect, which is the ONLY way this client ever
+    // learns about a sandbox transition that produced no client-visible
+    // event of its own (see sandboxRail.ts's own top comment for the full
+    // "what this can and cannot show" accounting).
+    this.sandboxState = isPlainObject(payload.state) ? (payload.state.sandbox ?? null) : null
     const inserted = this.log.appendMany(parseEnvelopes(payload.events))
     this.applyNewEvents(inserted)
     // Always run at least one backfill pass after a (re)subscribe: the

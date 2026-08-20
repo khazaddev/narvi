@@ -15,12 +15,17 @@
 // through this SAME request<T> + rest-dtos.ts pattern -- Steps 81+ add
 // them as each view needs one, not speculatively here.
 import type {
+  ArtifactsResponse,
+  ConfirmUploadResponse,
   CreateSessionRequest,
   CreateTurnRequest,
   CreateTurnResponse,
   EventsResponse,
   ListSessionsResponse,
   Member,
+  MintUploadRequest,
+  MintUploadResponse,
+  ModelCatalog,
   Session,
   WSTokenResponse,
 } from '@narvi/contracts/rest-dtos'
@@ -90,4 +95,27 @@ export function getMe(signal?: AbortSignal): Promise<Member> {
  */
 export function logout(signal?: AbortSignal): Promise<undefined> {
   return request<undefined>('/auth/logout', { method: 'POST', signal })
+}
+
+// -- §12.2 item 1 / §28: the composer's model/effort selector,
+// file attachment, and the rail's own artifacts panel. --
+
+/** listArtifacts calls GET /api/sessions/:id/artifacts (§6.3) -- the rail's own Artifacts panel data source, invalidated automatically on every 'artifact' WS event (ws/invalidation.ts's own existing EVENT_TYPE_INVALIDATION entry, wired before this Step ever needed it). */
+export function listArtifacts(sessionId: string, signal?: AbortSignal): Promise<ArtifactsResponse> {
+  return request<ArtifactsResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/artifacts`, { signal })
+}
+
+/** getModelCatalog calls GET /api/models (§8.8) -- the composer's own model/effort selector data source. Available to every authenticated role including viewer (modelcatalog.go's own doc comment). */
+export function getModelCatalog(signal?: AbortSignal): Promise<ModelCatalog> {
+  return request<ModelCatalog>('/api/models', { signal })
+}
+
+/** mintUpload calls POST /api/sessions/:id/uploads (§28.4/§28.5) -- the browser-facing mint variant (attachments.ts's own runUpload calls this as step 1 of mint -> PUT -> confirm). */
+export function mintUpload(sessionId: string, body: MintUploadRequest, signal?: AbortSignal): Promise<MintUploadResponse> {
+  return request<MintUploadResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/uploads`, { method: 'POST', body, signal })
+}
+
+/** confirmUpload calls POST /api/sessions/:id/uploads/:uploadId/complete (§28.4/§28.6) -- attachments.ts's own runUpload calls this as step 3, after the direct-to-storage PUT. */
+export function confirmUpload(sessionId: string, uploadId: string, signal?: AbortSignal): Promise<ConfirmUploadResponse> {
+  return request<ConfirmUploadResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/uploads/${encodeURIComponent(uploadId)}/complete`, { method: 'POST', signal })
 }
