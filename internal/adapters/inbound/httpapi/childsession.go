@@ -54,7 +54,7 @@ import (
 // provenance tag to set should call CreateSessionCore instead, not this
 // function with an empty string.
 //
-// epistemicCheckDefault (F6, adversarial review, Step 61) mirrors
+// epistemicCheckDefault (F6, adversarial review) mirrors
 // CreateSessionOnTx's own identical required parameter -- see that
 // function's own doc comment. A sentinel-auto-fix child session is an
 // ordinary build session (it edits test/doc files to fix a finding),

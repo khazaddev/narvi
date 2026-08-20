@@ -682,7 +682,7 @@ func checkSubstrateCapabilitiesUpFront(registry *sessionactor.Registry, req rest
 // sessions.created_by's own existing NULL-for-bot convention: actor_user_id
 // is NULL on a bot-attributed row, never a fabricated "system user".
 //
-// epistemicCheckDefault (F6, adversarial review, Step 61) is a REQUIRED
+// epistemicCheckDefault (F6, adversarial review) is a REQUIRED
 // parameter, exactly mirroring createTurnLocked's own identical parameter
 // (turn.go's own doc comment on why: every call site must compile-time-
 // decide what to pass, never a silently-defaulted zero value) -- this
@@ -879,7 +879,7 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 
 	hasPrompt = req.Prompt != nil
 	if hasPrompt {
-		// F6 (adversarial review, Step 61): the SAME shared gate
+		// F6 (adversarial review): the SAME shared gate
 		// createTurnLocked/dispatchNextAttempt/DecidePlanOnTx now all
 		// route through (internal/domain/turn.MaybeInjectEpistemicPreamble)
 		// -- created.EpistemicCheckEnabled is THIS SAME session's own

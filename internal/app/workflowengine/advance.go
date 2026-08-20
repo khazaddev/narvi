@@ -232,7 +232,7 @@ func dispatchNextAttempt(ctx context.Context, deps Deps, runID pgtype.UUID, toSt
 	// BuildModelID/BuildEffort, never a Narvi-side default of their own).
 	res := applyStep(ctx, toStep, promptText, sessionRow.BuildModelID, sessionRow.BuildEffort, true, stepRun.ID)
 
-	// F6 (adversarial review, Step 61): the SAME shared gate createTurnLocked/
+	// F6 (adversarial review): the SAME shared gate createTurnLocked/
 	// CreateSessionOnTx/DecidePlanOnTx also route through
 	// (internal/domain/turn.MaybeInjectEpistemicPreamble) -- this call
 	// site used to bypass it entirely (this file's own top doc comment

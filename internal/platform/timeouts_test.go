@@ -879,7 +879,7 @@ func TestDefaultTimeouts_IdentityEmailFetchWorstCaseTimingBudget(t *testing.T) {
 }
 
 // TestDefaultTimeouts_SandboxSecretAndOpenCodeConfigFetchWorstCaseTimingBudget
-// is Step 72's own adversarial-review MEDIUM fix's timing-budget proof,
+// is an adversarial-review MEDIUM fix's timing-budget proof,
 // mirroring TestDefaultTimeouts_IdentityEmailFetchWorstCaseTimingBudget's
 // own shape exactly (a standalone test, not a new Validate() invariant --
 // same reasoning: this compares a computed worst case, built by

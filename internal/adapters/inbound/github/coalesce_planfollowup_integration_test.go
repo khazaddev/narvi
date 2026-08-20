@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration test for F1 (Step 64 follow-up fix, adversarial review
+// Integration test for F1 (a follow-up fix, adversarial review
 // Finding 1): coalesce.go's REUSE path must classify the mention's own
 // RAW, un-enriched comment text against the plan_followup category
 // (ClassifyPlanFollowup, gated on an awaiting-approval plan), never the

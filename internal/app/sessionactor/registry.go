@@ -361,7 +361,7 @@ type Registry struct {
 	// any one of them.
 	repoAccessCache *repoAccessCache
 
-	// epistemicCheckDefault (F6, adversarial review, Step 61) is
+	// epistemicCheckDefault (F6, adversarial review) is
 	// platform.Config.EpistemicCheckDefault, threaded through to every
 	// Actor this Registry hydrates exactly like the fields above --
 	// workflowengine.Deps.EpistemicCheckDefault (each Actor's own three

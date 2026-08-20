@@ -120,7 +120,7 @@ func TestPostEpistemicOutcome_GenMismatch_Forbidden(t *testing.T) {
 }
 
 // TestPostEpistemicOutcome_DeadSandbox_Gone is F2's own addition
-// (adversarial review, Step 61): proves a terminalized sandbox (status
+// (adversarial review): proves a terminalized sandbox (status
 // stopped/failed/stale) can never post an epistemic outcome -- mirrors
 // TestPostReviewVerdict_DeadSandbox_Gone (reviewverdict_integration_test.go)
 // exactly, the sibling this endpoint's own doc comment already names as

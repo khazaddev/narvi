@@ -35,7 +35,7 @@ import (
 // no bearer/gen counterpart: the endpoint it points at needs no
 // authentication at all, reviewcostbudgetserver.go's own doc comment).
 //
-// F1 (adversarial review, Step 61): epistemicOutcomeTool*'s three were the
+// F1 (adversarial review): epistemicOutcomeTool*'s three were the
 // verified omission -- added to Step 61's own turn package but never
 // registered here, so sanitizeUntrustedField did not strip them from
 // untrusted attachment metadata, letting a filename like

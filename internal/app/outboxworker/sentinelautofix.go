@@ -106,7 +106,7 @@ type sentinelAutoFixNotifier struct {
 	sourceControl  ports.SourceControl
 	githubBotToken string
 	timeouts       platform.Timeouts
-	// epistemicCheckDefault (F6, adversarial review, Step 61) is the SAME
+	// epistemicCheckDefault (F6, adversarial review) is the SAME
 	// platform.Config.EpistemicCheckDefault value every other
 	// CreateSessionOnTx-reaching caller in this codebase now threads
 	// through -- spawnClaimedChildSession's own httpapi.CreateSessionOnTx

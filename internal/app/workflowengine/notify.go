@@ -77,7 +77,7 @@ type Deps struct {
 	// this Step ever enqueues per event.
 	Outbox *postgres.OutboxStore
 
-	// EpistemicCheckDefault (F6, adversarial review, Step 61) is the SAME
+	// EpistemicCheckDefault (F6, adversarial review) is the SAME
 	// platform.Config.EpistemicCheckDefault value every other
 	// createTurnLocked-reaching caller in this codebase now threads
 	// through -- advance.go's own dispatchNextAttempt is this package's

@@ -751,7 +751,7 @@ func (a *Actor) createSentinelFixPRBestEffort(ctx context.Context, evt sandboxws
 // fencing check does not care what a caller's fn writes, only that the
 // actor invoking it is still the legitimate owner of the session.
 // recordPRArtifact inserts a "pr"-typed artifact row for ref, unless one
-// already exists for this session (Step 49 confirmed-finding fix,
+// already exists for this session (a confirmed-finding fix,
 // companion to CreatePR's own new idempotency, githubapi/adapter.go):
 // making CreatePR idempotent means createPRBestEffort's per-repo loop now
 // "succeeds" (recovering the SAME PR) on turn 2+ instead of erroring, so

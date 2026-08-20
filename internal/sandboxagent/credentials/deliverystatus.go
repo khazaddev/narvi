@@ -2,7 +2,7 @@
 // DeliveryStatusError -- used by this package's own two boot-time
 // delivery-endpoint fetches (FetchSandboxSecrets, sandboxsecrets.go;
 // FetchOpenCodeConfig, opencodeconfig.go) to report a non-2xx CP response.
-// Step 72's own adversarial-review MEDIUM fix (§27.1: "with bounded
+// An adversarial-review MEDIUM fix (§27.1: "with bounded
 // retry") needs a caller (cmd/sandbox-agent's fetchSandboxSecrets/
 // fetchOpenCodeConfig) to classify a failure as retryable (a transport
 // error, or a 5xx) vs terminal (401/403/404/410 -- this delivery

@@ -231,7 +231,7 @@
 //     coverage/premise/adequacy, never touches RiskLevel, for the
 //     identical reason AdequacyFloor does not (design call #6 above).
 //
-//  8. (Step 62 hardening, adversarial review) A NINTH exported function,
+//  8. (hardening, adversarial review) A NINTH exported function,
 //     StripPlaceholderTokens (sanitize.go), was added on top of the eight
 //     above without renumbering that section's own count -- a deliberate
 //     choice, not an oversight the "exactly eight" wording failed to catch.

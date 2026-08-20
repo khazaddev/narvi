@@ -397,7 +397,7 @@ func TestHandoffSentinel_Idempotent_RunningTwiceDoesNotDuplicate(t *testing.T) {
 
 	// Second, duplicate delivery -- same repo/branch/sha, same fake
 	// (same nextRef.Number). CreatePR's own idempotency (githubapi/
-	// adapter.go, Step 49 confirmed-finding fix) means this "succeeds" by
+	// adapter.go, a confirmed-finding fix) means this "succeeds" by
 	// recovering the SAME PR rather than erroring, and recordPRArtifact's
 	// own companion dedup guard means this does NOT create a second "pr"
 	// artifact row for it -- both fixed together, not a pre-existing

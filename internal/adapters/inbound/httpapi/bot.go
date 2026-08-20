@@ -37,7 +37,7 @@ import (
 // createcore_integration_test.go's own TestCreateSessionCore_NilCreator_*
 // tests already establish and cover.
 //
-// epistemicCheckDefault (F6, adversarial review, Step 61) mirrors
+// epistemicCheckDefault (F6, adversarial review) mirrors
 // CreateSessionCore's own identical required parameter -- see that
 // function's own doc comment. This function has no real production caller
 // today (coalesce.go's own doc comment explains why GitHub's own ingress

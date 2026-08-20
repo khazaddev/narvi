@@ -280,7 +280,7 @@ func (f *fakeSourceControl) lastRegisterStackSpec() ports.RegisterPRStackSpec {
 	return f.registerStackCalls[len(f.registerStackCalls)-1]
 }
 
-// CreateBranch (Step 48 confirmed-finding fix) is never reached from this
+// CreateBranch (a confirmed-finding fix) is never reached from this
 // package's own pushpr.go -- that call happens in internal/app/outboxworker
 // (sentinelautofix.go), BEFORE this package's own code ever runs for a
 // sentinel-auto-fix session -- clear "not implemented" mirrors

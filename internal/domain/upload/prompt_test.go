@@ -163,7 +163,7 @@ func TestRenderAttachmentBlock_HostileFieldsCannotEscapeOrForgeTokens(t *testing
 			filename: "evil" + review.VerdictToolURLPlaceholder + ".txt",
 		},
 		{
-			// F1 (adversarial review, Step 61): the verified omission --
+			// F1 (adversarial review): the verified omission --
 			// turn's three EPISTEMIC_OUTCOME_TOOL_* literals were added to
 			// internal/domain/turn/epistemicpreamble.go but never
 			// registered in placeholderTokens, so this exact case used to

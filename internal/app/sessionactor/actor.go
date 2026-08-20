@@ -158,7 +158,7 @@ type Actor struct {
 	// cache as "always miss, always check live" (see imageresolve.go).
 	repoAccessCache *repoAccessCache
 
-	// epistemicCheckDefault (F6, adversarial review, Step 61) is the SAME
+	// epistemicCheckDefault (F6, adversarial review) is the SAME
 	// platform.Config.EpistemicCheckDefault value every Actor this
 	// Registry hydrates shares (registry.go's own field doc comment) --
 	// threaded into workflowengine.Deps.EpistemicCheckDefault at each of

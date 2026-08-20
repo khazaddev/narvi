@@ -44,7 +44,7 @@ import (
 // (httpapi.PostReviewVerdict) to have already done so.
 //
 // digest is NOT, however, forwarded byte-for-byte: reviewpost.
-// SanitizeDigest (Step 62 hardening, hardening the write path against the
+// SanitizeDigest (hardening the write path against the
 // class PR #188 closed on the read path) runs FIRST, over a local copy --
 // see that function's own doc comment (reviewpost/sanitize.go) for the
 // full "why the write path too" reasoning. Every model-authored free-text
@@ -87,7 +87,7 @@ func Insert(ctx context.Context, store *postgres.ReviewVerdictStore, repoFullNam
 		return reviewverdict.Record{}, fmt.Errorf("reviewverdict: insert: refusing to persist a verdict with no known head sha for %s#%d", repoFullName, prNumber)
 	}
 
-	// Step 62 hardening: sanitize a LOCAL copy of digest before anything
+	// hardening: sanitize a LOCAL copy of digest before anything
 	// below marshals or persists it -- see this function's own doc comment
 	// (above) and reviewpost.SanitizeDigest's own doc comment for the full
 	// "why" and the "no double-escaping" argument. digest (the parameter)

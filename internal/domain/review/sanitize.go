@@ -156,7 +156,7 @@ func removeAllOccurrences(s, tok string) string {
 // reviewpost's own write-path digest sanitizer, next paragraph) composes
 // this with its own separate escaping step instead.
 //
-// EXPORTED (Step 62 hardening, review digest write-path sanitization):
+// EXPORTED (hardening, review digest write-path sanitization):
 // this function was unexported until this Step, called only by
 // sanitizeDiffField/sanitizeDescriptionField below for THIS package's own
 // read/prompt path (RenderTurnPrompt). internal/domain/reviewpost's own

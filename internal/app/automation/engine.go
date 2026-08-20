@@ -45,7 +45,7 @@ type Engine struct {
 	pool         *pgxpool.Pool
 	registry     *sessionactor.Registry
 	timeouts     platform.Timeouts
-	// epistemicCheckDefault (F6, adversarial review, Step 61) is the SAME
+	// epistemicCheckDefault (F6, adversarial review) is the SAME
 	// platform.Config.EpistemicCheckDefault value every other
 	// CreateSessionOnTx-reaching caller in this codebase now threads
 	// through -- createRunAndSession (fanout.go) is this Engine's own ONE

@@ -265,7 +265,7 @@ func TestSpawn_NilProviderCredentialEnv_UnchangedBehavior(t *testing.T) {
 }
 
 // TestSpawn_SandboxSecretEnvAppended is the direct, real-spawn proof of
-// Step 72's own adversarial-review HIGH fix (threading, §27.1): the
+// an adversarial-review HIGH fix (threading, §27.1): the
 // sandboxSecretEnv parameter -- NOT sandbox-agent's own os.Setenv'd
 // process environment (the pre-fix mechanism) -- actually reaches the
 // spawned opencode process's own environment. Mirrors

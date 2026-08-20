@@ -758,7 +758,7 @@ type SourceControl interface {
 	// no caller of this port needs one yet: PR creation is not retried by
 	// any circuit-breaker-style mechanism this Step builds).
 	//
-	// Idempotent (Step 49 confirmed-finding fix, mirroring CreateBranch's
+	// Idempotent (a confirmed-finding fix, mirroring CreateBranch's
 	// own identical guarantee): a caller that already opened this exact
 	// head/base pull request -- createPRBestEffort (pushpr.go) runs on
 	// every completed turn, not just the first -- gets back the EXISTING
@@ -915,7 +915,7 @@ type SourceControl interface {
 	ListMergedBetween(ctx context.Context, spec ListMergedBetweenSpec) (merged []MergedPR, truncated bool, err error)
 
 	// CreateBranch creates a new branch ref (refs/heads/spec.Branch)
-	// pointing at spec.SHA (Step 48 confirmed-finding fix, §17.2) --
+	// pointing at spec.SHA (a confirmed-finding fix, §17.2) --
 	// IDEMPOTENT: a spec.Branch that already exists is treated as success,
 	// never an error, since this method's own one real caller (the
 	// sentinel-auto-fix notifier) may be redelivered for the SAME claim

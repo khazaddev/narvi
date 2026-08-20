@@ -954,7 +954,7 @@ func serve() error {
 			// SessionCoalescer.RolloutMode's own doc comment for why).
 			RolloutMode:  cfg.RolloutMode,
 			RepoSettings: repoSettingsStore,
-			// F7 correction (adversarial review, Step 61): SessionCoalescer
+			// F7 correction (adversarial review): SessionCoalescer
 			// no longer has an EpistemicCheckDefault field -- both of its
 			// own CreateSessionOnTx/CreateTurnForBot call sites now
 			// hardcode false instead (coalesce.go's own doc comment on the

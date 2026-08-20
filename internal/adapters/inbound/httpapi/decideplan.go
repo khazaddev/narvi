@@ -184,7 +184,7 @@ func planDecisionOutcomeText(verdict PlanVerdict) string {
 // cross-channel-notify outbox rows (enqueuePlanDecisionNotifications
 // below), inside this SAME transaction, so they are visible if and only if
 // the whole decision itself commits.
-// epistemicCheckDefault (F6, adversarial review, Step 61) is a REQUIRED
+// epistemicCheckDefault (F6, adversarial review) is a REQUIRED
 // parameter, exactly mirroring createTurnLocked's own identical parameter
 // (turn.go's own doc comment on why) -- closes F6's own verified gap: the
 // Approve verdict's own implementation-turn insert below used to bypass
@@ -319,7 +319,7 @@ func DecidePlanOnTx(
 	}
 
 	if verdict == PlanVerdictApprove {
-		// F6 (adversarial review, Step 61): the SAME shared gate
+		// F6 (adversarial review): the SAME shared gate
 		// createTurnLocked/CreateSessionOnTx/dispatchNextAttempt also route
 		// through (internal/domain/turn.MaybeInjectEpistemicPreamble).
 		// planMode is passed literally false, matching CreateTurnParams.

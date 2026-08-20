@@ -676,7 +676,7 @@ func TestComputeShippable_FactCheckSkippedNeverRaisesShippable(t *testing.T) {
 }
 
 // TestValidateVerdictInput_DigestLengthCaps is this Step's own regression
-// test for G3 (Step 62 hardening): table-driven, pinning the EXACT
+// test for G3 (hardening): table-driven, pinning the EXACT
 // boundary of every Max*Bytes cap declared above (validate.go) -- a field
 // AT the cap is legal, one byte OVER is rejected. strings.Repeat("a", n)
 // is used throughout (never a multi-byte rune) so len() (a byte count) and

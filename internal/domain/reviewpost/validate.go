@@ -124,7 +124,7 @@ type VerdictInput struct {
 // MaxDigestSummaryBytes/MaxDigestAdequacyExplanationBytes/
 // MaxDigestStackRisksBytes/MaxDigestUnverifiedLimitsBytes/
 // MaxDigestProposedBodyBytes/MaxDigestContestedPointsBytes/
-// MaxArchDecisionFieldBytes (Step 62 hardening, G3) cap the byte length of
+// MaxArchDecisionFieldBytes (hardening, G3) cap the byte length of
 // every model-authored free-text digest field ValidateVerdictInput
 // enforces below -- mirroring internal/domain/upload's own MaxFilenameBytes/
 // MaxContentTypeBytes precedent (upload/validate.go) for the identical
@@ -266,7 +266,7 @@ var (
 	// ErrDigestSummaryTooLong/ErrDigestAdequacyExplanationTooLong/
 	// ErrDigestStackRisksTooLong/ErrDigestUnverifiedLimitsTooLong/
 	// ErrDigestProposedBodyTooLong/ErrDigestContestedPointsTooLong/
-	// ErrDigestArchDecisionFieldTooLong (Step 62 hardening, G3) -- the
+	// ErrDigestArchDecisionFieldTooLong (hardening, G3) -- the
 	// MaxDigest*Bytes/MaxArchDecisionFieldBytes caps' own rejection errors
 	// (see those consts' own doc comment, above the errors block, for the
 	// full "why" and how each limit was chosen). Checked LAST of all,
@@ -305,7 +305,7 @@ var (
 // FactCheckKilled (§26.6, unconditional), Digest.ArchDecisions/
 // StackRisks/UnverifiedLimits/CounterReview (§26.4, ONLY when
 // in.ReviewDepth == reviewtriage.DepthDeep), Findings (Step 48), and --
-// Step 62 hardening, G3, LAST of all -- the seven digest length caps
+// hardening, G3, LAST of all -- the seven digest length caps
 // (Digest.Summary/AdequacyExplanation/StackRisks/UnverifiedLimits/
 // ProposedBody/ContestedPoints/each ArchDecision field, unconditional on
 // path)) so a caller presenting more than one bad field always gets the
@@ -498,7 +498,7 @@ func ValidateVerdictInput(in VerdictInput) error {
 		}
 	}
 
-	// Digest field length caps (Step 62 hardening, G3) -- checked LAST of
+	// Digest field length caps (hardening, G3) -- checked LAST of
 	// all, after every other check above including the Findings loop; see
 	// the Max*Bytes consts' own doc comment and each Err*TooLong error's
 	// own doc comment (both above) for the full "why here, why

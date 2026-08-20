@@ -1251,7 +1251,7 @@ func (a *Adapter) RegisterPRStack(ctx context.Context, spec ports.RegisterPRStac
 }
 
 // createRefRequest is the body POSTed to /repos/{owner}/{repo}/git/refs
-// (Step 48 confirmed-finding fix, §17.2 -- "Git References" API:
+// (a confirmed-finding fix, §17.2 -- "Git References" API:
 // https://docs.github.com/rest/git/refs#create-a-reference).
 type createRefRequest struct {
 	Ref string `json:"ref"`

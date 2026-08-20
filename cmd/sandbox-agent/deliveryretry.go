@@ -1,4 +1,4 @@
-// This file (deliveryretry.go) implements Step 72's own adversarial-review
+// This file (deliveryretry.go) implements an adversarial-review
 // MEDIUM fix (§27.1: "with bounded retry") -- the shared retry-
 // classification policy fetchSandboxSecrets (sandboxsecrets.go) and
 // fetchOpenCodeConfig (opencodeconfig.go) both apply around their own

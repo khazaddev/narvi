@@ -123,7 +123,7 @@ type SessionCoalescer struct {
 	Users        *postgres.UserStore
 	Participants *postgres.ParticipantStore
 
-	// F7 correction (adversarial review, Step 61): this struct used to
+	// F7 correction (adversarial review): this struct used to
 	// carry its own EpistemicCheckDefault bool field, threaded through to
 	// the REUSE path's own httpapi.CreateTurnForBot call below, with a doc
 	// comment claiming that matched "every other createTurnLocked-reaching

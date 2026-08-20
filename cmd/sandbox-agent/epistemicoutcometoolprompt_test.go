@@ -3,7 +3,7 @@
 // renderEpistemicOutcomeToolPromptText/epistemicOutcomeToolURL
 // (epistemicoutcometoolprompt.go) directly, in-process.
 //
-// # F1 correction (adversarial review, Step 61)
+// # F1 correction (adversarial review)
 //
 // An EARLIER version of this doc comment claimed this file carried no
 // hostile-filename exfiltration test equivalent to
@@ -249,7 +249,7 @@ func TestEpistemicOutcomeToolURL(t *testing.T) {
 }
 
 // TestRenderEpistemicOutcomeToolPromptText_HostileFilenameCannotExfiltrateSecrets
-// is F1's own end-to-end proof (adversarial review, Step 61) -- mirrors
+// is F1's own end-to-end proof (adversarial review) -- mirrors
 // TestRenderUploadToolPromptText_HostileFilenameCannotExfiltrateSecrets
 // (reviewverdicttoolprompt_test.go) exactly, one placeholder family over:
 // see this file's own top doc comment for why that class of test DOES
