@@ -840,7 +840,7 @@ type snapshotPlan struct {
 //     minted MessageId onto sandboxes.pending_snapshot_message_id, in this
 //     SAME transact (message-id correlation fix, below), commit.
 //  3. OUTSIDE that transact: send a real sandboxws.Snapshot command via
-//     ports.SandboxCommander.SendCommand (the SAME port Step 21 built for
+//     ports.SandboxCommander.SendCommand (the SAME port used for
 //     Prompt commands -- reused, not a second sandbox-command channel),
 //     carrying the SAME MessageId just persisted.
 //  4. If SendCommand fails (including ports.ErrNoLiveSandboxConnection):

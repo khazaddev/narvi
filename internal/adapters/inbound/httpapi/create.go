@@ -390,10 +390,10 @@ func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *p
 // failure -- a distinct type (rather than a plain error) so CreateSession's
 // own writeError call sites, and every message they produce, stay
 // byte-for-byte identical to what this codebase's existing tests already
-// assert, before and after this Step 31 extraction. Exported (alongside
+// assert. Exported (alongside
 // CreateSessionCore/CreateSessionOnTx) so a caller outside this package
 // can inspect Status/Message directly -- including internal/adapters/
-// inbound/slack (Step 33), which reads cerr.Status/cerr.Message directly.
+// inbound/slack (§8.10), which reads cerr.Status/cerr.Message directly.
 type CreateSessionError struct {
 	Status  int
 	Message string

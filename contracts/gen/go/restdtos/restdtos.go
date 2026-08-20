@@ -3759,7 +3759,7 @@ func (j *PendingLinkPrompt) UnmarshalJSON(value []byte) error {
 
 // One plan-mode VERSION's own REST wire shape
 // (migrations/000034_plan_mode.up.sql), returned by GET /api/sessions/:id/plans
-// (audit finding M3, completeness: Step 37 shipped approve/reject with no way for
+// (audit finding M3, completeness: approve/reject shipped with no way for
 // a web client to ever discover a planId to approve). Deliberately omits turnId
 // and slack_channel_id/slack_message_ts, both present on the underlying plans row:
 // turnId is an internal linkage to the producing turn's own event stream (where
@@ -5210,7 +5210,7 @@ type RepoSettings struct {
 	// means 'not configured -- the engine's own built-in default applies'
 	// (internal/domain/reviewtriage.DefaultCostBudget, $5.00). Gated by
 	// authz.ActionConfigureReviewCostBudget, same row as reviewCostBudgetLightUsd --
-	// see that field's own description for how this ceiling is checked as of Step 70
+	// see that field's own description for how this ceiling is checked
 	// (a real GET to this sandbox's own loopback review-cost-budget endpoint,
 	// answered from a real running spend total, not a self-estimate).
 	ReviewCostBudgetDeepUsd RepoSettingsReviewCostBudgetDeepUsd `json:"reviewCostBudgetDeepUsd" yaml:"reviewCostBudgetDeepUsd" mapstructure:"reviewCostBudgetDeepUsd"`
@@ -5230,7 +5230,7 @@ type RepoSettings struct {
 	// internal/adapters/outbound/opencode's turnState.spentUSD). The reviewing agent
 	// still has to make that GET and obey the answer -- this control plane has no
 	// channel to intervene inside an already-dispatched turn -- but the answer itself
-	// is a real, server-computed fact as of Step 70, not the agent's own
+	// is a real, server-computed fact, not the agent's own
 	// self-estimate of spend it was asked for before. The same 'changes what an
 	// unattended review is TOLD, admin-gated' reasoning every sibling toggle in this
 	// row already carries.
@@ -5286,7 +5286,7 @@ type RepoSettingsMaxAutoApproveFilesChanged *int
 // means 'not configured -- the engine's own built-in default applies'
 // (internal/domain/reviewtriage.DefaultCostBudget, $5.00). Gated by
 // authz.ActionConfigureReviewCostBudget, same row as reviewCostBudgetLightUsd --
-// see that field's own description for how this ceiling is checked as of Step 70
+// see that field's own description for how this ceiling is checked
 // (a real GET to this sandbox's own loopback review-cost-budget endpoint, answered
 // from a real running spend total, not a self-estimate).
 type RepoSettingsReviewCostBudgetDeepUsd *float64
@@ -5306,7 +5306,7 @@ type RepoSettingsReviewCostBudgetDeepUsd *float64
 // internal/adapters/outbound/opencode's turnState.spentUSD). The reviewing agent
 // still has to make that GET and obey the answer -- this control plane has no
 // channel to intervene inside an already-dispatched turn -- but the answer itself
-// is a real, server-computed fact as of Step 70, not the agent's own self-estimate
+// is a real, server-computed fact, not the agent's own self-estimate
 // of spend it was asked for before. The same 'changes what an unattended review is
 // TOLD, admin-gated' reasoning every sibling toggle in this row already carries.
 type RepoSettingsReviewCostBudgetLightUsd *float64

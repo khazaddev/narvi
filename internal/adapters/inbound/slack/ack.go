@@ -1,7 +1,7 @@
 // This file (ack.go) implements the single, direct Slack API call this
 // Step's own in-thread ack needs (doc.go's own "in-thread acks --
 // scoping decision") -- a tiny, unexported chat.postMessage client, NOT
-// the general Notifier/outbox abstraction Step 35 builds.
+// the general Notifier/outbox abstraction (§5.1).
 
 package slack
 

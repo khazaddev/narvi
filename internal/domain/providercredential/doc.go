@@ -86,7 +86,7 @@
 //     Step 72 brief's own instruction, not a drift this package's own
 //     author introduced unprompted): a new, differently-named package for
 //     4 lines of generic scope-priority logic would fork the ONE piece
-//     Step 53 built specifically to be reused (Candidate[T]/Resolve's own
+//     already built specifically to be reused (Candidate[T]/Resolve's own
 //     doc comment: "generic... specifically so this package never has to
 //     know or care whether the caller has already decrypted..."). Renaming
 //     this package is left as a possible future cleanup, not done here,

@@ -7,7 +7,7 @@
 // contracts/README.md's own scope note on rest/v1/dtos.schema.json).
 //
 // # Routes (all under /api/sessions, mounted by cmd/control-plane/main.go,
-// behind internal/adapters/inbound/auth.Middleware as of Step 20 -- see
+// behind internal/adapters/inbound/auth.Middleware -- see
 // that package's own doc.go)
 //
 //   - POST /api/sessions -- create.go's CreateSession: decodes
@@ -158,7 +158,7 @@
 // Independent webhook-ingress adapters each ended up needing "create a
 // session (+ optional turn), then post-commit trigger dispatch" from
 // OUTSIDE this package -- CreateSessionCore/CreateSessionError are already
-// exported as of Step 33 above (Status/Message fields, same Error()
+// exported above (Status/Message fields, same Error()
 // method), so no further export/rename is needed here. At least one
 // such adapter also needs to create a session+turn while ALREADY holding
 // an unrelated lock on its own already-open transaction (e.g. an atomic

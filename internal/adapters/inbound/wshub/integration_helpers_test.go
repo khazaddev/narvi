@@ -156,7 +156,7 @@ func newTestServer(registry *sessionactor.Registry, sandboxes *narvipg.SandboxSt
 // NewClientHandler at the single shared route) -- used by client_test.go
 // for the client-hub's own tests and for proving the type=sandbox vs
 // type=client routing itself, as opposed to newTestServer above (which
-// mounts the sandbox handler alone, unchanged since Step 18, still used by
+// mounts the sandbox handler alone, still used by
 // this package's pre-existing sandbox-only tests).
 func newDispatcherTestServer(
 	registry *sessionactor.Registry,

@@ -216,12 +216,11 @@ func serve() error {
 	// package-level http.Client.Timeout.
 	sourceControl := githubapi.New(nil, githubAPIBaseURL)
 
-	// Registry/wshub are wired into the real binary for the first time in
-	// Step 18 -- an intended, natural consequence of that: the timer pump
-	// (already built in Step 11) becomes genuinely live here for the first
-	// time too, run via the errgroup below. Step 19 adds the client-hub
-	// half (hub above) and the store handles its own handlers/REST
-	// endpoints need. Step 21 adds commander/sandboxProvider/
+	// Registry/wshub are wired into the real binary here -- an intended,
+	// natural consequence: the timer pump becomes genuinely live here for
+	// the first time too, run via the errgroup below, alongside the
+	// client-hub half (hub above), the store handles its own handlers/REST
+	// endpoints need, and commander/sandboxProvider/
 	// cfg.PublicBaseURL/sourceControl/cfg.TokenEncryptionKey -- see
 	// internal/app/sessionactor.NewRegistry's own doc comment for what
 	// each is used for. §14.3 ("mocking + contract drift") makes

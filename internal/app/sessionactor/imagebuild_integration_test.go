@@ -61,10 +61,10 @@ import (
 // computed against a real config by accident.
 const testRuntimeVersion = "1.0.0-test"
 
-// newImageBuildTestRegistry builds a Registry wired with everything Step
-// 26's own image-resolution path reads: provider (for CreateSandbox/
+// newImageBuildTestRegistry builds a Registry wired with everything §8.5's
+// own image-resolution path reads: provider (for CreateSandbox/
 // BuildImage), sourceControl (kept for signature parity / other Actor
-// functionality -- imageresolve.go itself never calls it as of Step 41,
+// functionality -- imageresolve.go itself never calls it,
 // see this file's own top comment), testTokenEncryptionKey
 // (pushpr_integration_test.go's own fixed test key), and testRuntimeVersion.
 func newImageBuildTestRegistry(t *testing.T, ctx context.Context, pool *pgxpool.Pool, provider ports.SandboxProvider, sourceControl ports.SourceControl) *Registry {

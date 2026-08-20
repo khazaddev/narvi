@@ -2186,7 +2186,7 @@ type Timeouts struct {
 	// own FIRST HTTP server (reviewcostbudgetserver.go) -- a tiny,
 	// loopback-only (127.0.0.1) listener serving GET /review-cost-budget,
 	// the real production call site internal/domain/reviewtriage.
-	// ShouldSkipOptionalPass has been missing since Step 69. Applied as
+	// ShouldSkipOptionalPass has never had one. Applied as
 	// http.Server.ReadHeaderTimeout, guarding against a slow/stalled
 	// client leaving a connection's headers half-read indefinitely. Not
 	// specified in the plan; chosen as 5s -- matches

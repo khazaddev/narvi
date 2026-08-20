@@ -52,8 +52,8 @@
 //
 // # Fail-open is the load-bearing safety property of this whole package
 //
-// Step 55 ships this engine into 100% of production turn dispatch from day
-// one (IMPLEMENTATION_PLAN.md row 55) -- so neither wiring point may ever
+// This engine runs in 100% of production turn dispatch from day
+// one -- so neither wiring point may ever
 // let an internal bug, a malformed custom definition, or a missing row
 // block an ordinary turn from being created or completed. ResolveStepForNewTurn
 // and OnTurnCompleted therefore never return an error at all: any failure

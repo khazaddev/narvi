@@ -49,10 +49,10 @@ const (
 	defaultAgentVersion = "dev"
 
 	// defaultImageDigest is used when NARVI_IMAGE_DIGEST is unset. HONEST
-	// GAP: as of Step 12, ports.CreateSpec/the Modal adapter have no
+	// GAP: ports.CreateSpec/the Modal adapter have no
 	// mechanism to inject an arbitrary env var like this one into a
 	// spawned sandbox, so in practice this will always default to
-	// "unknown" until some later Step closes that gap.
+	// "unknown" until some later change closes that gap.
 	defaultImageDigest = "unknown"
 
 	// defaultWorkspaceDir is used when NARVI_WORKSPACE_DIR is unset (§6.4:

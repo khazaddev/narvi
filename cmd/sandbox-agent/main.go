@@ -11,7 +11,7 @@
 // (§5.3), runs the boot sequence for whatever repo list names, then blocks
 // until told to shut down.
 //
-// Step 15 adds two things: (1) when Config.SessionConfig is present (the
+// Two things follow: (1) when Config.SessionConfig is present (the
 // NARVI_SESSION_CONFIG env var was set), run() clones every repo it names
 // (internal/sandboxagent/gitclone.CloneAll) and writes the generated
 // AGENTS.md manifest BEFORE handing the successfully-cloned subset to
@@ -31,8 +31,8 @@
 // existing OS-signal-driven shutdown -- whichever finishes first (an OS
 // signal cancels ctx, or the control plane sends a "shutdown" command, or
 // the handshake returns a fatal 401/403/404/410 status) converges on the
-// SAME StopAll-based graceful shutdown Step 13 built, except a fatal
-// connect status propagates as run()'s own error instead. As of Step 16,
+// SAME StopAll-based graceful shutdown the process supervisor built, except a fatal
+// connect status propagates as run()'s own error instead. Originally,
 // prompt/stop/push/snapshot/git_sync_complete were all wired to a log-only
 // stub handler.
 //
@@ -128,7 +128,7 @@
 // long-standing gap named in every prior Step's own opencodeproc.Spawn
 // call: no ANTHROPIC_API_KEY/OPENAI_API_KEY/Google-equivalent was ever
 // wired into the spawned `opencode serve` process for ANY provider, even
-// though per-turn model selection has worked end to end since Step 7.
+// though per-turn model selection has worked end to end already.
 // fetchProviderCredentialSpawnEnv (below) resolves this session's own
 // repo/environment/global-scoped provider credentials from CP (a NEW
 // sandbox-bearer-authenticated delivery endpoint, mirroring scm-
@@ -271,10 +271,10 @@ func runCredentialHelper(args []string) error {
 }
 
 // commandHandler is sandbox-agent's own wsbridge.CommandHandler
-// implementation. Step 16 shipped it as an empty, log-only struct for all
-// 5 commands; Step 17 gives HandlePrompt/HandleStop their real behavior
-// (push/snapshot/git_sync_complete are untouched, still each their own
-// later Step's job, confirmed against docs/IMPLEMENTATION_PLAN.md rather
+// implementation. It started as an empty, log-only struct for all
+// 5 commands; HandlePrompt/HandleStop now have their real behavior
+// (push/snapshot/git_sync_complete are untouched, still unimplemented,
+// confirmed against docs/IMPLEMENTATION_PLAN.md rather
 // than guessed).
 //
 // A *commandHandler (pointer receiver, unlike §6.1's value-receiver

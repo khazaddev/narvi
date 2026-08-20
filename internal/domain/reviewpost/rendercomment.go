@@ -94,8 +94,8 @@ import (
 // reasoning renderProposedBody already established for ProposedBody.
 //
 // TestsCoverage/DocsDrift/FilesChanged/BlastRadius are v's own PRE-
-// EXISTING fields (review.Verdict, unchanged by this Step -- Step 66 adds
-// no new field to that closed, seven-field type, digest.go's own doc
+// EXISTING fields (review.Verdict, unchanged here -- no new field is added
+// to that closed, seven-field type, digest.go's own doc
 // comment) -- this function only ever changes WHERE they render, never
 // what they are or how internal/app/reviewverdict.Insert persists them.
 func RenderVerdictComment(v review.Verdict, findings []Finding, digest Digest, summary, botHandle, syncedLabel string) string {

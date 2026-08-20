@@ -77,7 +77,7 @@ func newTestPool(t *testing.T) *pgxpool.Pool {
 
 // testRig bundles a fresh pool + every store + an httptest.Server
 // mounting all 5 REST routes exactly as cmd/control-plane/main.go does --
-// including, as of Step 20, auth.Middleware gating the whole /api/sessions
+// including auth.Middleware gating the whole /api/sessions
 // group.
 type testRig struct {
 	pool         *pgxpool.Pool

@@ -247,7 +247,7 @@ ORDER BY version
 
 // Audit-fix batch (completeness/discoverability, M3): backs GET
 // /api/sessions/:id/plans (internal/adapters/inbound/httpapi/plans.go) --
-// the endpoint that closes the "Step 37 shipped approve/reject with no way
+// the endpoint that closes the "approve/reject shipped with no way
 // for a web client to ever discover a planId to approve" gap. Unlike
 // ListPlanSummariesForSession above (an internal, minimal shape feeding
 // internal/domain/plan's own NextVersion/ShouldSupersede), this returns

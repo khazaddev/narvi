@@ -109,9 +109,9 @@
 // the real one, not always empty; deeper server-side verification of that
 // value is a separate, deliberately unaddressed hardening step.
 //
-// Heartbeat.ConversationId was always nil as of Step 16 (no OpenCode
-// adapter existed yet); Step 17 adds SetConversationID (bridge.go) so
-// cmd/sandbox-agent's own commandHandler can record a real OpenCode
+// Heartbeat.ConversationId was always nil before an OpenCode
+// adapter existed; SetConversationID (bridge.go) lets
+// cmd/sandbox-agent's own commandHandler record a real OpenCode
 // conversation id once StartTurn returns one, which the heartbeat loop
 // (run.go) now reports on every subsequent tick.
 package wsbridge

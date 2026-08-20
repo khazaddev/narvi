@@ -108,7 +108,7 @@ type SessionCoalescer struct {
 	// Identities/Users/Participants are batch fix/audit-github-actor-rbac's
 	// own additions, closing the H4 audit finding that GitHub ingress never
 	// gated session/turn creation behind domain/authz.Authorize at all
-	// (Slack/Linear ingress already do, since Step 39). Identities backs
+	// (Slack/Linear ingress already do). Identities backs
 	// handler.go's own resolveCommenterActor (identity.go) -- a direct
 	// (provider, external_id) lookup, no auto-linking algorithm needed (see
 	// that file's own doc comment for why). Users/Participants are exactly

@@ -83,7 +83,7 @@ type HookOutcome struct {
 // ever a warning).
 //
 // An unrecognized Hook value (anything other than HookSetup, HookStart, or
-// -- as of Step 43 -- HookDelta) is treated as a programming error, not a
+// HookDelta) is treated as a programming error, not a
 // data error: Hook is a closed vocabulary this package and its own caller
 // control, so this returns the zero HookOutcome (ShouldRun: false) rather
 // than defining a third named error type for a case that can only arise

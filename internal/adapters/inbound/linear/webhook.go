@@ -265,7 +265,7 @@ func NewWebhookHandler(deps Deps) http.HandlerFunc {
 		// the signature (Linear's own worked example does the same order),
 		// against LinearWebhookTimestampWindow (60s, Linear's own explicit
 		// recommendation -- NOT the generic, wider
-		// WebhookTimestampFreshnessWindow Step 31 added).
+		// WebhookTimestampFreshnessWindow).
 		webhookTimestampSeconds := int64(payload.WebhookTimestamp / 1000)
 		if err := platform.VerifyWebhookTimestamp(webhookTimestampSeconds, time.Now(), deps.Timeouts.LinearWebhookTimestampWindow); err != nil {
 			logger.Warn("linear: webhook rejected: stale timestamp", "error", err)

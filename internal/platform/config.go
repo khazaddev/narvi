@@ -372,7 +372,7 @@ const gitHubReReviewLabelEnvVarName = "NARVI_GITHUB_REREVIEW_LABEL"
 // mirroring defaultHTTPAddr's own precedent (httpAddrEnvVarName's doc
 // comment above). "run-review" is a verb phrase, deliberately distinct in
 // SHAPE (not just prefix) from the noun-phrase `review: <state>` labels
-// Step 47 introduces later (gitHubReReviewLabelEnvVarName's own doc comment
+// used elsewhere (gitHubReReviewLabelEnvVarName's own doc comment
 // above) -- a human applying it reads unambiguously as "please run a
 // review", never confusable with a bot-posted status.
 const defaultGitHubReReviewLabel = "run-review"
@@ -586,7 +586,7 @@ const (
 // closed); SlackBotToken authenticates the one direct
 // chat.postMessage call this Step's own in-thread ack makes (see that
 // package's own doc.go for why this is a single direct API call, not the
-// general Notifier/outbox abstraction Step 35 builds). Both required in
+// general Notifier/outbox abstraction (§5.1)). Both required in
 // every stage -- never defaulted, matching every other secret this file
 // already reads.
 const (
