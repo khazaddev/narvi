@@ -39,6 +39,26 @@ interface RequestOptions {
   signal?: AbortSignal
 }
 
+// onUnauthorized (Step 81, §13.1's own "expired session" state) -- a
+// module-level hook, default no-op, so THIS generic layer can announce
+// "a request just came back 401" without importing TanStack Query (or
+// anything else app-specific) into it. web/src/auth/session.ts's own
+// installUnauthorizedHandler wires the real handler exactly once, from
+// main.tsx, to invalidate the cached GET /api/me query -- so a session
+// that expires or is revoked mid-use (not just one caught by a route's own
+// beforeLoad guard on the NEXT navigation) is noticed the moment ANY
+// in-flight request surfaces it, from wherever in the app that request
+// happened to originate. Deliberately fire-and-forget (never awaited, and
+// request<T> below still throws its own ApiError to the original caller
+// either way) -- this is a side-channel notification, not a substitute
+// for the caller's own error handling.
+let unauthorizedHandler: () => void = () => {}
+
+/** setUnauthorizedHandler installs handler as the one function every 401 response calls (see onUnauthorized's own doc comment above). Test-only escape hatch: real app code calls this exactly once, from main.tsx. */
+export function setUnauthorizedHandler(handler: () => void): void {
+  unauthorizedHandler = handler
+}
+
 /** request performs one JSON REST call against path (e.g. "/api/sessions/abc/events?limit=50") and decodes the response as T -- T is always a generated contracts/gen/ts/rest-dtos.ts export at every real call site (endpoints.ts), never invented here. */
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const init: RequestInit = {
@@ -71,6 +91,9 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
       body !== undefined && typeof body === 'object' && body !== null && 'error' in body && typeof (body as { error: unknown }).error === 'string'
         ? (body as { error: string }).error
         : `request failed: ${response.status} ${response.statusText}`
+    if (response.status === 401) {
+      unauthorizedHandler()
+    }
     throw new ApiError(response.status, message, body)
   }
 

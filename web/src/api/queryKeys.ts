@@ -17,3 +17,11 @@ export const sessionQueryKeys = {
   events: (sessionId: string) => ['session', sessionId, 'events'] as const,
   artifacts: (sessionId: string) => ['session', sessionId, 'artifacts'] as const,
 }
+
+// authQueryKeys (Step 81, §13.1) -- the sign-in view's own "am I signed
+// in, and as whom" query (GET /api/me). One key, no params: there is only
+// ever one meaningful "current caller" per browser session, unlike
+// sessionQueryKeys above (which is parameterized per session id).
+export const authQueryKeys = {
+  me: () => ['auth', 'me'] as const,
+}

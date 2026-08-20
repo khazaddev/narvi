@@ -30,7 +30,13 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['src/**/__tests__/**/*.test.ts'],
+    // Step 81 adds this suite's first .tsx tests (component-level
+    // escaping/rendering proofs via react-dom/server's renderToStaticMarkup
+    // -- no jsdom, no @testing-library/react: static server-side rendering
+    // to a string needs neither, and 'node' above stays correct). .ts-only
+    // tests (src/ws, src/api, src/auth's own pure-function tests) are
+    // untouched by this widened glob.
+    include: ['src/**/__tests__/**/*.test.{ts,tsx}'],
     // A hung fetch_history round-trip (the exact failure mode
     // src/ws/sessionStream.ts's own backfill loop is written to recover
     // from -- see its top comment) must fail the offending test loudly
