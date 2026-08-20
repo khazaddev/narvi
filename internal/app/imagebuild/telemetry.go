@@ -14,10 +14,12 @@ import (
 // regression afterwards, the same role §19.5's telemetry now plays for
 // (a)/(b)." §19.9 is explicit this does NOT gate shipping the build-time
 // dependency cache (c) -- it ships ungated, alongside it, as the
-// after-the-fact confirmation and regression signal, mirroring
+// after-the-fact confirmation and regression signal, mirroring the
+// "measure AFTER shipping, not as a precondition to ship" precedent
 // internal/sandboxagent/boot/telemetry.go's own hookRerunDurationHistogram
-// precedent for (a)/(b) exactly (measure AFTER shipping, not as a
-// precondition to ship).
+// set for (a)/(b) -- that file (and its (a)/(b) histogram) is deleted as
+// of §33.3, its recording moved control-plane-side, but the reasoning it
+// established still applies here unchanged.
 //
 // Deliberately general-purpose, not cache-specific: neither metric carries
 // a "cache used" attribute, because BuildImage's own signature -- by
@@ -42,11 +44,14 @@ import (
 // (internal/adapters/outbound/modal's cache-mount-trouble retry) can issue
 // TWO sequential HTTP calls, each individually bounded by that same
 // client timeout, for a worst-case single BuildImage call approaching
-// twice that ceiling. Mirrors internal/sandboxagent/boot/telemetry.go's own
-// bootDurationBuckets Finding-4 reasoning (concentrate resolution where
-// duration is actually expected to live, not the OTel SDK's own
-// millisecond-oriented default boundaries), extended further out to cover
-// that two-call worst case.
+// twice that ceiling. Mirrors the Finding-4 bucket-boundary reasoning
+// internal/sandboxagent/boot/telemetry.go's own bootDurationBuckets used
+// to apply (concentrate resolution where duration is actually expected to
+// live, not the OTel SDK's own millisecond-oriented default boundaries) --
+// that file is deleted as of §33.3 (its four histograms' recording moved
+// control-plane-side), but the bucket-sizing reasoning itself is
+// independent of where the recording happens, so it is extended further
+// out here to cover this package's own two-call worst case.
 var buildDurationBuckets = []float64{
 	1, 2, 3, 5, 7.5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 300, 450, 600, 900, 1200,
 }

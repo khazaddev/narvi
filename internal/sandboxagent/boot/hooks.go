@@ -71,8 +71,8 @@ type RepoInfo struct {
 // deleted by this Step): the control plane now records that histogram
 // instead (internal/app/sessionactor/opsmetrics.go), from the relayed
 // event. repo/hook/bootMode/workspaceMoved/seconds/failed carry exactly
-// the same information recordHookRerunDuration's own call sites always
-// have in scope.
+// the same information the old, now-deleted recordHookRerunDuration's own
+// call sites always had in scope.
 type OnHookRerunTiming func(repo, hook, bootMode string, workspaceMoved, failed bool, seconds float64)
 
 // RunHooks runs, for each repo IN ORDER, HookSetup then HookStart (in that
@@ -161,8 +161,9 @@ func RunHooks(
 // internal/sandboxagent/boot's new RunBoot (runboot.go) can reuse it for a
 // repo that falls back to the hook contract.
 //
-// Each hook run is timed (recordHookRerunDuration, §19.5(b), now also
-// carrying boot_mode/workspace_moved attributes) and its own combined
+// Each hook run is timed (onHookRerunTiming, §19.5(b)/§33.3, carrying
+// boot_mode/workspace_moved alongside repo/hook/seconds/failed -- see that
+// callback's own doc comment) and its own combined
 // stdout+stderr is captured into a bounded, ANSI-stripped tail (runHook's
 // own *outputTail, §19.5(a)) -- surfaced in the boot log alongside EITHER
 // outcome (fatal or non-fatal): a non-fatal failure is otherwise
@@ -465,8 +466,8 @@ func waitSetupRetryDelay(ctx context.Context, d time.Duration) bool {
 // Returns (ran, ok): ran is false when the script was absent (or its own
 // stat failed) -- nothing was attempted, ok is meaningless. ran is true
 // once the script was actually spawned; ok then reports whether it
-// succeeded. recordHookRerunDuration is only ever called when ran is true,
-// exactly mirroring runRepoHooks' own existing "absent hook records
+// succeeded. onHookRerunTiming is only ever called when ran is true,
+// exactly mirroring runRepoHooks' own existing "absent hook reports
 // nothing" behavior.
 func runNamedHookNonFatal(ctx context.Context, sup *supervisor.Supervisor, repoDir, repoName, scriptName string, mode sandboxboot.BootMode, moved bool, secretEnv []string, onHookRerunTiming OnHookRerunTiming, hookTimeout, stopGrace time.Duration) (ran, ok bool) {
 	scriptPath := filepath.Join(repoDir, scriptName)
