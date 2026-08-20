@@ -16,7 +16,7 @@ import "github.com/khazaddev/narvi/internal/domain/review"
 // later Step, for the digest specifically).
 
 // ArchDecision is one structural decision the diff makes -- §26.1 item 3
-// ("Architecture choices"), IMPLEMENTATION_PLAN.md's own Step 66 row:
+// ("Architecture choices"), §26.1:
 // "decision, implicitly-rejected alternative, convention conformance".
 // Every field is the agent's own free-text narrative, exactly like
 // VerdictInput.Summary/FindingInput.Description already are -- rendered
@@ -49,8 +49,7 @@ type ArchDecision struct {
 	ConventionConformance string
 }
 
-// Digest is the merge readout's own typed content (§26.1, IMPLEMENTATION_
-// PLAN.md's Step 66 row: "Digest{Summary, ArchDecisions[], StackRisks,
+// Digest is the merge readout's own typed content (§26.1: "Digest{Summary, ArchDecisions[], StackRisks,
 // UnverifiedLimits}", extended by §26.2's own
 // "DescriptionAdequacy/AdequacyExplanation/ProposedBody" addition below)
 // -- a NEW, ADDITIVE field alongside VerdictInput's

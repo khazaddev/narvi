@@ -1,5 +1,5 @@
 // This file (modelcatalog.go) implements GET /api/models -- §8.8's own
-// "Catalog" deliverable (IMPLEMENTATION_PLAN.md Step 59 row; §8 item 8;
+// "Catalog" deliverable (§8.8; §8 item 8;
 // §29; §25.2). See internal/app/modelcatalog's own doc.go for the full
 // "why a compiled-in snapshot, not a live per-sandbox proxy" reasoning.
 //

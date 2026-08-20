@@ -165,7 +165,7 @@
 //     raised it was posted — §8.2's structured type already
 //     carries this data; storing it is not new capture, just retention")
 //     both describe §8.2's verdict type as already carrying
-//     per-finding content. But IMPLEMENTATION_PLAN.md's own Step 45 row
+//     per-finding content. But §8.2
 //     — the authoritative, dedicated description of this Step's scope —
 //     enumerates exactly seven fields (RiskLevel, PremiseState,
 //     BlastRadius, FilesChanged, TestsCoverageState, DocsDriftState,

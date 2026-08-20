@@ -20,7 +20,7 @@ import (
 // (contradiction.go, §21.2's own calibration-rate function) rather than a
 // near-identical new function: both are the SAME "contested/total" ratio
 // with the SAME "zero total means not-yet-computed, never a real zero"
-// sentinel -- IMPLEMENTATION_PLAN.md's own Step 69 row explicitly warns
+// sentinel -- §26.4 explicitly warns
 // against duplicating existing aggregation.
 //
 // total is the count of DEEP-PATH verdicts posted in the window (only a

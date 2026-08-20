@@ -4,7 +4,7 @@ package review
 // — the type a review session (a later Step) produces and the
 // server-side verdict-posting tool (§8.2) persists, never a
 // free-text comment re-parsed after the fact (doc.go). It carries exactly
-// the seven fields IMPLEMENTATION_PLAN.md's own Step 45 row names, plus
+// the seven fields §8.2 names, plus
 // ProposedShippable (required by the server-computed-Shippable property
 // below) — see doc.go's design call #4 for why no Finding/rebuttal-content
 // shape is included here.

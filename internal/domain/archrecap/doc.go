@@ -4,7 +4,7 @@
 // choices" section, informed by the architecture-scribe sub-task on the
 // deep path). Deliberately mirrors internal/domain/falsepositive's own
 // `false positive: <reason>` capture command (§22.2) precisely
-// -- IMPLEMENTATION_PLAN.md's own Step 69 row: "a maintainer command
+// -- §26.4: "a maintainer command
 // `arch recap wrong: <reason>` that MIRRORS §22's `false positive:
 // <reason>` command EXACTLY" -- down to the deterministic, case-
 // insensitive whole-prefix match discipline and its own Unicode-byte-

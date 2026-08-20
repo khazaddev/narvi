@@ -54,7 +54,7 @@ type Config struct {
 // reviewtriage.LoadConfig's own doc comment: a missing repo_settings row,
 // or a NULL reviewDepth column on an existing one, both resolve to this).
 // CostBudget defaults to DefaultCostBudget() (§26.7's own "on by default,
-// both paths" -- IMPLEMENTATION_PLAN.md's Step 69 row and §26.9's own
+// both paths" -- §26.4 and §26.9's own
 // "Decided defaults" section both name the cost budget as on by default,
 // unlike Mode/DeepPaths above, which default to "no extra behavior at
 // all" -- reviewDepth's own triage rules were already the engine's

@@ -119,7 +119,7 @@ const envVarPreamblePrefix = "Environment variables for this automation run:"
 // This is NOT the same thing as injecting env_vars into the sandboxed
 // agent PROCESS's own OS environment (cmd.Env) -- no generic mechanism for
 // that exists anywhere in this codebase yet for ANY per-automation/
-// per-session value (docs/IMPLEMENTATION_PLAN.md's own Step 53 row is
+// per-session value (§25.1 is
 // explicit that even provider API keys, the simplest possible case, are
 // not wired into cmd.Env today: "no ANTHROPIC_API_KEY/OPENAI_API_KEY/
 // Google-equivalent is wired anywhere"). Building a SEPARATE, automation-

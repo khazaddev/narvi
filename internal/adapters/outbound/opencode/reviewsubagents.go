@@ -166,7 +166,7 @@ func counterReviewerAgentEntry(counterReviewerModel string) reviewSubAgentEntry 
 // deep paths (§26.6: "the light path's own single review turn spawns
 // exactly one fact-check sub-task"). Deliberately NOT §22.1.1's own `LLM`
 // port -- see review/context.go's own subAgentOrchestrationInstructions
-// doc comment, and IMPLEMENTATION_PLAN.md's own Step 69 row, for why this
+// doc comment, and §26.4, for why this
 // is mechanically an in-sandbox sub-task like the other two, never a
 // CP-side call.
 func factCheckAgentEntry() reviewSubAgentEntry {

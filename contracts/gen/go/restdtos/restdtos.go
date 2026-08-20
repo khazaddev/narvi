@@ -3393,7 +3393,7 @@ func (j *MintUploadResponse) UnmarshalJSON(value []byte) error {
 }
 
 // Response body for GET /api/models -- §8.8's own 'Catalog' deliverable
-// (IMPLEMENTATION_PLAN.md Step 59 row; §8 item 8; §29; §25.2). STRUCTURAL
+// (§8.8; §8 item 8; §29; §25.2). STRUCTURAL
 // DECISION, named here since §29 leaves it open: sourced from a
 // control-plane-embedded snapshot of OpenCode's own GET /provider catalog
 // (live-verified against the pinned OpenCode 1.17.15 binary during this Step's own

@@ -10,7 +10,7 @@ import "github.com/khazaddev/narvi/internal/domain/review"
 // never returned by ComputeFormalReviewEvent below, on purpose -- §21.2's
 // criteria-driven auto-approval eligibility engine (§8.6) is the
 // future, dedicated machinery for approving a PR; this Step never
-// approves anything itself (IMPLEMENTATION_PLAN.md's own Step 47 row:
+// approves anything itself (§8.2:
 // "auto-approval is criteria-driven, never label-triggered... the
 // eligibility engine itself ships in Step 58").
 type FormalReviewEvent string
