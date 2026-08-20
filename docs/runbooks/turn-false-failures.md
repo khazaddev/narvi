@@ -15,6 +15,10 @@ failure or crash.
 
 ## Confirm
 
+```json narvi-metrics
+{"metrics": ["turn_false_failure_total"]}
+```
+
 - `turn_false_failure_total` (counter, no attributes — see the
   instrument's own doc comment, `internal/app/sessionactor/opsmetrics.go`,
   for why one narrow gate needs no label) — increments when a real, late,

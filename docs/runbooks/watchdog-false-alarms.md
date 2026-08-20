@@ -15,6 +15,10 @@ agent was making real progress.
 
 ## Confirm
 
+```json narvi-metrics
+{"metrics": ["watchdog_activation_total", "watchdog_false_alarm_total", "sandbox_liveness_gap_seconds"]}
+```
+
 - `watchdog_activation_total` (counter, tagged `watchdog`:
   `inactivity`/`connecting_deadline`/`liveness_check`) — every time
   `transitionSandboxToSuspect` (`internal/app/sessionactor/timerfired.go`)

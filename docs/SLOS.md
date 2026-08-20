@@ -8,38 +8,95 @@ the SAME quantity the objective is actually about. No new alert is added
 by this Step — see "Why no new alert" at the bottom for why that is a
 deliberate choice, not an oversight.
 
-Every metric name below is checked against the real registered OTel
-instruments by `internal/ops`'s own `TestNoMetricDrift`
-(`go test ./internal/ops/...`, part of `make test`) — an SLO or an alert
-naming a metric the code stops emitting fails that build, not just this
-document.
+Every metric an alert names is checked against the real registered OTel
+instruments by `internal/ops`'s own `TestNoMetricDrift` (via
+`deploy/observability/alerts/*.json`); every metric named inside one of
+this document's own ```` ```json narvi-metrics ```` fenced blocks below is
+checked the SAME way, directly, by `TestNoRunbookMetricDrift`
+(`internal/ops/docmetrics.go`) — both run as `go test ./internal/ops/...`,
+part of `make test`. A metric named INSIDE a fence that the code stops
+emitting fails that build, not just this document; the surrounding prose
+carries no such guarantee on its own (mirrors
+[`docs/guides/README.md`](guides/README.md)'s own "Prose is not
+machine-verified" discipline).
 
-## SLO 1 — A sandbox becomes usable quickly
+## SLO 1 — A sandbox's own in-sandbox boot sequence completes quickly
 
-**Objective.** A newly spawned sandbox reaches ready (first sign of life)
-within the SAME budget the liveness watchdog itself uses to decide a
-booting sandbox has gone quiet too long — not merely "eventually", a
-concrete, user-felt ceiling: this is the time between "create a session"
-and the agent actually being able to do anything.
+**Objective.** Once a sandbox has connected, the in-sandbox boot sequence
+(repo clone/sync through hook/service startup) finishes quickly — not
+merely "eventually", a concrete, user-felt ceiling. This is the IN-SANDBOX
+half of "create a session" → "the agent can actually do anything"; the
+provider-facing half (the real `CreateSandbox`/`RestoreFromSnapshot`/
+`ResumeSandbox` call, plus the WS connect handshake) is SLO 2, measured at
+the provider API boundary, not here — see `slow-boot-and-spawn.md`'s own
+"Confirm — which half is slow" section, which already draws this exact
+boundary and is what this Step's own earlier draft failed to re-read
+before writing the paragraph below.
 
 **Metric.** `sandbox_agent_boot_duration_seconds` (histogram, p95) — the
-sandbox-agent's own wall-clock measurement of one full boot-to-ready
-sequence (`internal/sandboxagent/boot/telemetry.go`).
+sandbox-agent's own wall-clock measurement of one boot-to-ready sequence,
+recorded from `RunBoot`'s own repo-prepare start through its hook/service
+startup finish (`internal/sandboxagent/boot/telemetry.go`'s own
+`RecordBootDuration` doc comment) — i.e. AFTER the sandbox has already
+connected, never including provider spawn time or the connect handshake
+itself.
 
-**Threshold and the arithmetic linking them.** `platform.Timeouts.
-FirstConnectBudget` is **240s**, explicit in the plan (§3.2: "covers
-provider cold start + boot") — the exact ceiling
-`EvaluateConnectingTimeout` (`internal/domain/sandbox/liveness.go`) uses
-to decide a booting sandbox has been silent too long and should be
-suspected. A p95 boot time AT that budget means a material fraction of
-ordinary, healthy boots are now at real risk of being watchdog-suspected
-purely for being slow, not for being genuinely stuck — the objective is
-therefore "p95 boot duration stays measurably below the watchdog's own
-ceiling", not merely "below 240s with zero margin".
+```json narvi-metrics
+{"metrics": ["sandbox_agent_boot_duration_seconds"]}
+```
+
+**Threshold and the arithmetic linking them — corrected (Phase 6 audit
+fix, Finding 1).** An earlier draft of this section claimed 240s
+(`platform.Timeouts.FirstConnectBudget`) was "the ceiling the watchdog
+uses to decide a booting sandbox has gone quiet too long", implying a p95
+boot time approaching it meant real watchdog-suspicion risk. Re-read
+against `EvaluateConnectingTimeout` (`internal/domain/sandbox/
+liveness.go`) and §3.2 itself, that claim is wrong on the mechanism, not
+just imprecise:
+
+- `EvaluateConnectingTimeout` does not apply one ceiling to a sandbox's
+  TOTAL elapsed boot time. It measures elapsed time since the sandbox's
+  own last liveness signal (`max(createdAt, lastSeenAt)`), using
+  `FirstConnectBudget` (240s) ONLY before the FIRST signal ever arrives,
+  and the much shorter `SteadyHeartbeatBudget` (90s) for every gap after
+  that — §3.2, explicit: "Boot-progress reports during long boots re-arm
+  the connecting deadline." `last_seen_at` is bumped by ANY recognized
+  sandbox event (heartbeat, boot-progress report, tool_call, token,
+  step — §3.2's own "Liveness = max of all signals"), and boot-progress
+  reports are emitted throughout the docker/gitclone/services phases
+  (`cmd/sandbox-agent/main.go`) that make up the SAME span this metric
+  measures — so for an ordinary, legitimately-progressing boot, the
+  watchdog ceiling governing nearly this entire span is the 90s per-gap
+  budget, not 240s, and even that bounds only the GAP between successive
+  signals, never this metric's own cumulative total.
+- This is not a theoretical distinction: `TestResilienceScenario3_
+  SlowBoot_SurvivesRepeatedBootProgressPings_NeverFalselyKilled`
+  (`test/resilience/scenario3_slow_boot_test.go`) exists specifically to
+  drive a boot's CUMULATIVE elapsed wall-clock time past
+  `FirstConnectBudget` while asserting the sandbox is never suspected, as
+  long as boot-progress pings keep arriving under `SteadyHeartbeatBudget`
+  apart — i.e. this codebase already has an end-to-end proof that a
+  legitimate `sandbox_agent_boot_duration_seconds` value CAN exceed 240s.
+
+**Honest conclusion.** No single `platform.Timeouts` constant is a literal
+ceiling on this metric's own cumulative value the way the previous draft
+claimed — the watchdog bounds inter-signal gaps, not a boot's total
+duration. `240s` is kept as the alert's threshold anyway, but reclassified
+honestly: it is CHOSEN, not derived, matching `platform/timeouts.go`'s own
+established "not specified; chosen" convention — reused specifically
+because it is the only concrete figure this codebase has ever assigned to
+"how long boot is expected to comfortably take as a whole" (§3.2's own
+"covers provider cold start + boot" framing for `FirstConnectBudget`),
+not because `EvaluateConnectingTimeout` enforces it as this metric's own
+ceiling.
 
 **Alert.** `BootDurationP95High` — `p95(sandbox_agent_boot_duration_seconds)
 > 240s for 15m`, severity warning, runbook
-[slow-boot-and-spawn.md](runbooks/slow-boot-and-spawn.md).
+[slow-boot-and-spawn.md](runbooks/slow-boot-and-spawn.md). Firing means
+p95 boot time has reached this system's own chosen "should comfortably
+finish well inside this" anchor — worth investigating as ordinary
+capacity/regression signal (see the runbook) — not a claim that watchdog
+suspicion is imminent.
 
 ## SLO 2 — Sandbox spawn calls complete within the cold-start budget
 
@@ -55,6 +112,10 @@ visible independently of anything happening inside the sandbox itself.
 duration of one real `SandboxProvider.CreateSandbox`/
 `RestoreFromSnapshot`/`ResumeSandbox` call
 (`internal/app/sessionactor/dispatch.go`).
+
+```json narvi-metrics
+{"metrics": ["sandbox_spawn_duration_seconds"]}
+```
 
 **Threshold and the arithmetic linking them.** `platform.Timeouts.
 ProviderWorstColdStart` is **220s** — §4.1's own stated floor ("Modal
@@ -85,6 +146,10 @@ when a late, REAL `execution_complete{outcome:completed}` event arrives
 for a session the control plane already terminalized `Failed` with
 `failure_reason=timeout` (`internal/app/sessionactor`).
 
+```json narvi-metrics
+{"metrics": ["turn_false_failure_total"]}
+```
+
 **Threshold and the arithmetic linking them.** Zero tolerance, not a
 rate: unlike a watchdog false alarm (SLO 5 below), a
 `turn_false_failure_total` increment has **no documented benign
@@ -114,6 +179,10 @@ still-due outbox row claimed at the start of the most recent pump tick
 reads misleadingly near zero — see the outbox runbook) — `outbox_lag_seconds`
 is the one that actually measures elapsed wait time, the quantity this
 objective is about.
+
+```json narvi-metrics
+{"metrics": ["outbox_lag_seconds", "outbox_due_backlog_count", "outbox_dead_letter_total"]}
+```
 
 **Threshold and the arithmetic linking them (full derivation, carried
 verbatim from `deploy/observability/alerts/reliability.json`'s own
@@ -161,6 +230,10 @@ crashed.
 turned out to be wrong (the sandbox recovered during its own
 `terminal_grace` window, proving it was alive the whole time)
 (`internal/app/sessionactor`).
+
+```json narvi-metrics
+{"metrics": ["watchdog_false_alarm_total", "watchdog_activation_total"]}
+```
 
 **Threshold and the arithmetic linking them.** This is the one SLO in
 this set whose threshold is **not** derived from a single

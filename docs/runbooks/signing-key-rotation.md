@@ -49,6 +49,10 @@ timer — rotation happens only when an admin calls the endpoint below.
 
 ## When to rotate (operator judgment, not automated)
 
+```json narvi-metrics
+{"metrics": ["cloud_identity_mint_total"]}
+```
+
 - Suspected private-key compromise (the strongest reason — rotate
   immediately, then confirm no unexpected mints occurred via
   `cloud_identity_mint_total`, tagged `kind`, for the affected window).

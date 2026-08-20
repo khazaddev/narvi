@@ -15,6 +15,10 @@ cloud resources.
 
 ## Confirm
 
+```json narvi-metrics
+{"metrics": ["orphans_reaped"]}
+```
+
 - `orphans_reaped` (counter) — increments only when
   `internal/app/reconciler.Reconciler.ReconcileOnce` finds a real
   provider-side sandbox with no matching live Postgres row and
