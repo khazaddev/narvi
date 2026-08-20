@@ -1398,6 +1398,11 @@ func TestLoadCloudIdentityIssuerURL(t *testing.T) {
 		{"missing scheme", "issuer.narvi.example.test"},
 		{"non-http(s) scheme", "ftp://issuer.narvi.example.test"},
 		{"missing host", "https:///.well-known"},
+		// Same port-only hole as the OTLP endpoint's own table below, and
+		// sharper here: an issuer naming no host is published in the
+		// discovery document and becomes the `iss` claim customer clouds
+		// match on.
+		{"port-only authority names no host", "https://:8443"},
 		{"carries a path", "https://issuer.narvi.example.test/tenant-a"},
 		{"carries a query string", "https://issuer.narvi.example.test?x=1"},
 		{"carries a fragment", "https://issuer.narvi.example.test#frag"},
@@ -1423,6 +1428,91 @@ func TestLoadCloudIdentityIssuerURL(t *testing.T) {
 			var urlErr *platform.InvalidCloudIdentityIssuerURLError
 			if !errors.As(err, &urlErr) {
 				t.Fatalf("Load() error = %v, want *platform.InvalidCloudIdentityIssuerURLError", err)
+			}
+		})
+	}
+}
+
+// TestLoadOTLPEndpoint covers §33's ("control-plane OTLP export")
+// NARVI_OTLP_ENDPOINT -- DELIBERATELY OPTIONAL (unset means SetupOTel keeps
+// building the stdouttrace/stdoutmetric exporters it always has, byte-
+// identical to every deployment before §33), mirroring
+// objectStoreEndpointEnvVarName's own "absent = feature off" precedent one
+// field instead of a whole typed sub-config -- but a non-empty value gets
+// real URL-shape validation, exactly like TestLoadCloudIdentityIssuerURL
+// immediately above, since a malformed collector address should refuse to
+// boot loudly rather than surface as silent, permanent export failure.
+//
+// This is also this Step's own required mutation test for "make a
+// malformed endpoint boot successfully": weakening/removing
+// canonicalOTLPEndpointURL's own validation makes every subtest in
+// invalidCases below fail (Load() would return nil error instead of
+// *platform.InvalidOTLPEndpointError).
+func TestLoadOTLPEndpoint(t *testing.T) {
+	t.Run("unset succeeds with an empty value (capability off)", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_OTLP_ENDPOINT", "")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil (this field is optional)", err)
+		}
+		if cfg.OTLPEndpoint != "" {
+			t.Errorf("Load().OTLPEndpoint = %q, want empty when unset", cfg.OTLPEndpoint)
+		}
+	})
+
+	t.Run("a well-formed http URL with no path carries through", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_OTLP_ENDPOINT", "http://otel-collector.narvi.example.test:4318")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil", err)
+		}
+		if cfg.OTLPEndpoint != "http://otel-collector.narvi.example.test:4318" {
+			t.Errorf("Load().OTLPEndpoint = %q, want %q", cfg.OTLPEndpoint, "http://otel-collector.narvi.example.test:4318")
+		}
+	})
+
+	invalidCases := []struct {
+		name string
+		val  string
+	}{
+		{"not a URL at all", "://not a url"},
+		{"missing scheme", "otel-collector.narvi.example.test:4318"},
+		{"non-http(s) scheme", "grpc://otel-collector.narvi.example.test:4317"},
+		{"missing host", "https:///v1/traces"},
+		// A port-only authority: url.Parse gives Host==":4318" with an EMPTY
+		// Hostname(), so the old parsed.Host=="" check accepted it, and
+		// WithEndpointURL then exported to the LOCAL machine rather than any
+		// collector -- verified by binding a listener and watching both the
+		// trace and metric streams arrive there. Pins the Hostname() fix:
+		// restoring parsed.Host=="" makes this subtest fail.
+		{"port-only authority names no host", "http://:4318"},
+		{"carries a path", "https://otel-collector.narvi.example.test/custom-prefix"},
+		{"carries a query string", "https://otel-collector.narvi.example.test?x=1"},
+		{"carries a fragment", "https://otel-collector.narvi.example.test#frag"},
+		// A bare trailing slash is a REAL path (url.Parse's own Path ==
+		// "/") that doubles up against each OTLP/HTTP exporter's own fixed
+		// "/v1/traces"/"/v1/metrics" suffix -- see
+		// canonicalOTLPEndpointURL's own doc comment, mirrors
+		// canonicalCloudIdentityIssuerURL's own identical trailing-slash
+		// case above exactly.
+		{"a bare trailing slash doubles up against each exporter's fixed suffix", "http://localhost:4318/"},
+	}
+	for _, tc := range invalidCases {
+		t.Run(tc.name, func(t *testing.T) {
+			setRequiredEnv(t)
+			t.Setenv("NARVI_OTLP_ENDPOINT", tc.val)
+
+			_, err := platform.Load()
+			if err == nil {
+				t.Fatalf("Load() error = nil, want *platform.InvalidOTLPEndpointError for %q", tc.val)
+			}
+			var urlErr *platform.InvalidOTLPEndpointError
+			if !errors.As(err, &urlErr) {
+				t.Fatalf("Load() error = %v, want *platform.InvalidOTLPEndpointError", err)
 			}
 		})
 	}

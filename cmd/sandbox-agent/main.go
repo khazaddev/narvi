@@ -757,12 +757,25 @@ func (*commandHandler) HandleGitSyncComplete(_ context.Context, cmd sandboxws.Gi
 // second, different value to ever exist -- mirroring control-plane's own
 // identical fixed-literal call.
 //
+// otlpEndpoint is hardcoded "" here, never threaded through from any
+// config this process might carry: sandbox-agent runs INSIDE the sandbox
+// (§33), and giving it any pathway to an operator's real OTLP collector
+// would mean an ingestion credential living where customer-directed,
+// model-authored code runs -- the exact secret class this codebase strips
+// from every child environment (§27.4's removed kube-credential
+// subcommand is the precedent, §33.4). §27.6's server-appended egress
+// allowlist floor (allowlistFloorHosts) admits the control-plane host plus
+// the session's git hosts and nothing else, so a collector would not even
+// be reachable if this call somehow acquired one -- but the point is this
+// call site can never acquire one in the first place, by construction, not
+// merely by the network refusing it downstream.
+//
 // Factored out of run() specifically so it is unit-testable in isolation
 // (see main_test.go's own TestSetupSandboxAgentOTel_InstallsRealMeterProvider):
 // run() itself blocks on OS signals / a live WS bridge / a real opencode
 // spawn, none of which this seam needs or touches.
 func setupSandboxAgentOTel(ctx context.Context) (shutdown func(context.Context) error, err error) {
-	return platform.SetupOTel(ctx, "narvi-sandbox-agent")
+	return platform.SetupOTel(ctx, "narvi-sandbox-agent", "")
 }
 
 // shutdownSandboxAgentOTel bounds one call to shutdown (setupSandboxAgentOTel's
@@ -772,21 +785,32 @@ func setupSandboxAgentOTel(ctx context.Context) (shutdown func(context.Context) 
 //
 // Audit-remediation batch B7 (MEDIUM finding): run() previously called
 // shutdownOTel(context.Background()) directly, with nothing in-process
-// bounding it. cmd/control-plane/main.go's serve() has the IDENTICAL
-// no-timeout shape today and is deliberately left unchanged by this fix --
-// that binary is a long-running daemon that would eventually get another
-// periodic metric export anyway even if one flush somehow hung or was
-// missed. sandbox-agent has no such fallback: its own package doc comment
-// (setupSandboxAgentOTel, above run()) calls this shutdown "the last chance
-// before the process exits" for a single boot+session process. If os.Stdout
-// backpressures (a slow/blocked log collector, a full pipe buffer under
-// load, ...) while metric.NewPeriodicReader/tracerProvider.Shutdown are
-// flushing, the underlying write blocks synchronously -- with no bound of
-// its own, that hangs sandbox teardown indefinitely, past whatever grace
-// period the orchestrator expects, and a subsequent force-kill would then
-// discard the still-unflushed metrics (including this batch's own
-// hook-rerun-duration histogram) anyway, defeating the point of flushing at
-// all.
+// bounding it. cmd/control-plane/main.go's serve() had the IDENTICAL
+// no-timeout shape at the time and was deliberately left unchanged by that
+// fix -- that binary is a long-running daemon that would eventually get
+// another periodic metric export anyway even if one flush somehow hung or
+// was missed, and a bare stdout write essentially never hangs regardless.
+// sandbox-agent had no such fallback even then: its own package doc
+// comment (setupSandboxAgentOTel, above run()) calls this shutdown "the
+// last chance before the process exits" for a single boot+session process.
+// If os.Stdout backpressures (a slow/blocked log collector, a full pipe
+// buffer under load, ...) while metric.NewPeriodicReader/tracerProvider.
+// Shutdown are flushing, the underlying write blocks synchronously -- with
+// no bound of its own, that hangs sandbox teardown indefinitely, past
+// whatever grace period the orchestrator expects, and a subsequent
+// force-kill would then discard the still-unflushed metrics (including
+// this batch's own hook-rerun-duration histogram) anyway, defeating the
+// point of flushing at all.
+//
+// §33 gave control-plane's own identical-looking call this SAME bound
+// (cmd/control-plane/main.go's shutdownControlPlaneOTel) once an OTLP
+// exporter's own flush became a real network call with a real hang mode a
+// stdout write never had -- see that function's own doc comment for why
+// the asymmetry this comment used to describe no longer holds. sandbox-
+// agent's own otlpEndpoint stays hardcoded "" regardless (setupSandboxAgentOTel's
+// own doc comment, above), so this function's own reasoning is unchanged by
+// that: still bounding a stdout flush, still "the last chance before the
+// process exits" with no periodic-export fallback to lean on.
 //
 // Factored out of run() specifically so it is unit-testable in isolation
 // (see main_test.go's own TestShutdownSandboxAgentOTel_BoundsAHungShutdown),
@@ -975,16 +999,15 @@ func run() error {
 		// own lifetime is a single boot+session, not control-plane's
 		// long-running daemon -- there is no "next periodic export" to rely
 		// on if this doesn't flush now: this IS the last chance before the
-		// process exits, unlike control-plane, which would eventually get
-		// another periodic export anyway even if one flush were somehow
-		// missed.
+		// process exits. control-plane's own equivalent call gets another
+		// periodic export anyway even if one flush were somehow missed, but
+		// (as of §33) is bounded identically to this one regardless, now
+		// that its own flush can be a real network call too.
 		//
 		// Audit-remediation batch B7: bounded by timeouts.OTelShutdownTimeout
-		// (a fresh WithTimeout over the same background context above), NOT
-		// left to run unbounded the way control-plane's identical-looking
-		// call is -- see shutdownSandboxAgentOTel's own doc comment for why
-		// that difference is deliberate, not an inconsistency: a hang in the
-		// stdout metric/trace exporter's own flush (a slow/blocked log
+		// (a fresh WithTimeout over the same background context above) --
+		// see shutdownSandboxAgentOTel's own doc comment for why a hang in
+		// the stdout metric/trace exporter's own flush (a slow/blocked log
 		// collector, a full pipe buffer under load, ...) must cost this
 		// process's exit at most this bounded amount, never an unbounded
 		// wait, since there is no future periodic export here to fall back

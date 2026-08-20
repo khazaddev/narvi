@@ -153,10 +153,16 @@ func TestRetry_DelayDoublesAndCapsAtMax(t *testing.T) {
 		t.Fatalf("len(timestamps) = %d, want 4", len(timestamps))
 	}
 
-	// Deliberately loose bounds (this is real wall-clock timing, not a
-	// fake clock) -- just proves the gaps are non-decreasing and roughly
-	// match the doubling-capped-at-max schedule (5ms, 10ms, 12ms) rather
-	// than e.g. a fixed or shrinking delay.
+	// Real wall-clock timing, not a fake clock, so each gap is asserted
+	// against its OWN nominal floor from the 5ms/10ms/12ms
+	// doubling-capped-at-max schedule -- never against another gap.
+	// Comparing two adjacent measurements to each other looks looser and
+	// is in fact the tightest possible assertion here: a sleep can only
+	// overrun, so gap1 (nominal 5ms) inflated past gap2 (nominal 10ms) by
+	// more than 5ms of scheduler jitter, which is ordinary under CI load
+	// and made this test fail on a run where the schedule was correct.
+	// A floor per gap proves the same schedule and cannot flake, because
+	// a gap is never SHORTER than the delay that produced it.
 	gap1 := timestamps[1].Sub(timestamps[0])
 	gap2 := timestamps[2].Sub(timestamps[1])
 	gap3 := timestamps[3].Sub(timestamps[2])
@@ -164,8 +170,8 @@ func TestRetry_DelayDoublesAndCapsAtMax(t *testing.T) {
 	if gap1 < 5*time.Millisecond {
 		t.Errorf("gap1 = %v, want >= 5ms", gap1)
 	}
-	if gap2 < gap1 {
-		t.Errorf("gap2 = %v, want >= gap1 = %v (should double)", gap2, gap1)
+	if gap2 < 10*time.Millisecond {
+		t.Errorf("gap2 = %v, want >= 10ms (5ms doubled)", gap2)
 	}
 	if gap3 < 12*time.Millisecond {
 		t.Errorf("gap3 = %v, want >= 12ms (capped delay still applies)", gap3)
