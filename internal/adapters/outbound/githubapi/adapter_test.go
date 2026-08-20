@@ -839,7 +839,7 @@ func TestGetPullRequestDiff_EscapesOwnerAndRepo(t *testing.T) {
 
 // TestGetCompareDiff_Success proves the happy path: GET
 // /repos/{owner}/{repo}/compare/{base}...{head}, content-negotiated for
-// the SAME diff media type GetPullRequestDiff uses -- §62 review finding
+// the SAME diff media type GetPullRequestDiff uses -- Step 62 review finding
 // C2's own new adapter method.
 func TestGetCompareDiff_Success(t *testing.T) {
 	t.Parallel()

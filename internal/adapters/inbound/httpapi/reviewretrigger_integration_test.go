@@ -25,7 +25,7 @@ import (
 // HTTP round trip, mirroring internal/adapters/inbound/github's own
 // identically-named fixture (handler_integration_test.go) exactly.
 // diffOwner/diffRepo/diffBase/diffHead/diffToken (audit fix, test-coverage
-// finding, updated for §62 review finding C2) record GetCompareDiff's own
+// finding, updated for Step 62 review finding C2) record GetCompareDiff's own
 // last call args: this endpoint's own diffFetcher call site
 // (reviewretrigger.go) previously had NO integration coverage at all with
 // a non-nil diffFetcher wired in (this rig's own default leaves it nil)
@@ -213,7 +213,7 @@ func TestRetriggerReview_Success(t *testing.T) {
 func TestRetriggerReview_PreFetchesReviewContext_CorrectOwnerRepoArgs(t *testing.T) {
 	fetcher := &fakeReviewContextFetcher{
 		diff: "diff --git a/x b/x\n+hello\n",
-		// §62 review finding C2: HeadSHA/BaseRef are what GetCompareDiff
+		// Step 62 review finding C2: HeadSHA/BaseRef are what GetCompareDiff
 		// must be pinned to -- a zero-value fixture would only prove the
 		// degenerate empty-base/empty-head case.
 		pr: githubapi.PullRequest{HeadSHA: "resolved-head-sha", BaseRef: "main"},
@@ -243,7 +243,7 @@ func TestRetriggerReview_PreFetchesReviewContext_CorrectOwnerRepoArgs(t *testing
 			fetcher.diffOwner, fetcher.diffRepo, fetcher.diffBase, fetcher.diffHead, fetcher.diffToken, "acme", "prefetch-retrigger-repo", "main", "resolved-head-sha", "test-bot-token")
 	}
 
-	// §62 review finding C2: the turn's own persisted review_head_sha
+	// Step 62 review finding C2: the turn's own persisted review_head_sha
 	// must equal exactly the SHA the diff above was pinned to.
 	var reviewHeadSHA *string
 	if err := rig.pool.QueryRow(ctx, `SELECT review_head_sha FROM turns WHERE session_id = $1 ORDER BY created_at DESC LIMIT 1`, session.ID).Scan(&reviewHeadSHA); err != nil {

@@ -751,7 +751,7 @@ func TestDecisionInboxItemRoundTrip(t *testing.T) {
 			Findings:               &findings,
 			IsHandoff:              &isHandoff,
 			HasApprovingReview:     &hasApprovingReview,
-			// hasChangesRequested (§60 review finding P1-4, second round):
+			// hasChangesRequested (Step 60 review finding P1-4, second round):
 			// false here -- this row is ready_to_merge, which could never
 			// legitimately coexist with a true value (RevalidateForMerge
 			// hard-blocks the merge on it) -- see the
@@ -769,7 +769,7 @@ func TestDecisionInboxItemRoundTrip(t *testing.T) {
 		})
 	})
 
-	// AwaitingApprovalHandoffPR (§60 review finding C4) covers the OTHER
+	// AwaitingApprovalHandoffPR (Step 60 review finding C4) covers the OTHER
 	// PR-shaped kind=awaiting_approval sub-case a plain plan row (below)
 	// does not: a handoff-labeled PR rides awaiting_approval instead of
 	// an ordinary code-review kind, but is still a PR row -- ciGreen/
@@ -786,7 +786,7 @@ func TestDecisionInboxItemRoundTrip(t *testing.T) {
 		findings := 0
 		isHandoff := true
 		hasApprovingReview := false
-		// hasChangesRequested TRUE here (§60 review finding P1-4, second
+		// hasChangesRequested TRUE here (Step 60 review finding P1-4, second
 		// round) -- the one PR-shaped kind=awaiting_approval case in this
 		// test that round-trips a true value, proving marshal/unmarshal of
 		// a REAL non-null payload for this new field, not merely a null
@@ -953,7 +953,7 @@ func TestListDecisionInboxResponseRoundTrip(t *testing.T) {
 		})
 	})
 
-	// GitHubLinkedButFetchFailed (§60 review finding C1) is the THIRD
+	// GitHubLinkedButFetchFailed (Step 60 review finding C1) is the THIRD
 	// state scmAsOf==null alone could not previously distinguish: a
 	// linked identity exists, but the live PR fetch itself failed (a
 	// revoked token, a GitHub incident, a timeout) -- scmAsOf stays null
@@ -970,7 +970,7 @@ func TestListDecisionInboxResponseRoundTrip(t *testing.T) {
 		})
 	})
 
-	// PartialReadStillHasARealAsOf (§60 review findings P1-2/P1-3, second
+	// PartialReadStillHasARealAsOf (Step 60 review findings P1-2/P1-3, second
 	// round) is a FOURTH state, distinct from GitHubLinkedButFetchFailed
 	// above: scmAsOf non-null AND scmFetchFailed true, together -- a
 	// truncated/partial GitHub read (one discovery query failed while the

@@ -1992,7 +1992,7 @@ type DecisionInboxItem struct {
 	// kind=needs_attention, an auto-paused automation, only.
 	AutomationId DecisionInboxItemAutomationId `json:"automationId" yaml:"automationId" mapstructure:"automationId"`
 
-	// Set for any PR-shaped row, exactly like repoFullName above (§60 review finding
+	// Set for any PR-shaped row, exactly like repoFullName above (Step 60 review finding
 	// C4 -- this field, findings, and isHandoff used to be nulled out for the handoff
 	// sub-case of kind=awaiting_approval, the one row isHandoff exists to identify).
 	CiGreen DecisionInboxItemCiGreen `json:"ciGreen" yaml:"ciGreen" mapstructure:"ciGreen"`
@@ -2013,7 +2013,7 @@ type DecisionInboxItem struct {
 
 	// Count of still-open (never rebutted/fixed) review findings on this PR. Set for
 	// any PR-shaped row -- see ciGreen's own description -- UNLESS the count itself
-	// could not be determined (a store error): §60 review finding P3-3 (second round)
+	// could not be determined (a store error): Step 60 review finding P3-3 (second round)
 	// -- a transient failure fails the *eligibility computation* closed (treated
 	// internally as though a blocking finding were present) but that fail-closed
 	// sentinel must never be presented on the wire as an honest, real count, so this
@@ -2028,12 +2028,12 @@ type DecisionInboxItem struct {
 	HasApprovingReview DecisionInboxItemHasApprovingReview `json:"hasApprovingReview" yaml:"hasApprovingReview" mapstructure:"hasApprovingReview"`
 
 	// The PR's own current GitHub review-decision fact, reduced to each reviewer's
-	// LATEST review (§60 review finding P1-1, second round) so a reviewer who
+	// LATEST review (Step 60 review finding P1-1, second round) so a reviewer who
 	// requested changes and has since re-reviewed and approved no longer counts here.
 	// UNLIKE hasApprovingReview above, this DOES gate an action: RevalidateForMerge
-	// treats a true value as a hard block on the Merge endpoint (§60 review finding
+	// treats a true value as a hard block on the Merge endpoint (Step 60 review finding
 	// A4, first round) -- a client should use this field, not hasApprovingReview, to
-	// pre-disable/explain a disabled Merge action (§60 review finding P1-4, second
+	// pre-disable/explain a disabled Merge action (Step 60 review finding P1-4, second
 	// round: this field previously did not exist on the wire at all, even though the
 	// fact it surfaces already hard-blocked the merge server-side). Set for any
 	// PR-shaped row, exactly like ciGreen above.
@@ -2115,7 +2115,7 @@ type DecisionInboxItemArtifactSummary *string
 // kind=needs_attention, an auto-paused automation, only.
 type DecisionInboxItemAutomationId *string
 
-// Set for any PR-shaped row, exactly like repoFullName above (§60 review finding
+// Set for any PR-shaped row, exactly like repoFullName above (Step 60 review finding
 // C4 -- this field, findings, and isHandoff used to be nulled out for the handoff
 // sub-case of kind=awaiting_approval, the one row isHandoff exists to identify).
 type DecisionInboxItemCiGreen *bool
@@ -2126,7 +2126,7 @@ type DecisionInboxItemFailureReason *string
 
 // Count of still-open (never rebutted/fixed) review findings on this PR. Set for
 // any PR-shaped row -- see ciGreen's own description -- UNLESS the count itself
-// could not be determined (a store error): §60 review finding P3-3 (second round)
+// could not be determined (a store error): Step 60 review finding P3-3 (second round)
 // -- a transient failure fails the *eligibility computation* closed (treated
 // internally as though a blocking finding were present) but that fail-closed
 // sentinel must never be presented on the wire as an honest, real count, so this
@@ -2141,12 +2141,12 @@ type DecisionInboxItemFindings *int
 type DecisionInboxItemHasApprovingReview *bool
 
 // The PR's own current GitHub review-decision fact, reduced to each reviewer's
-// LATEST review (§60 review finding P1-1, second round) so a reviewer who
+// LATEST review (Step 60 review finding P1-1, second round) so a reviewer who
 // requested changes and has since re-reviewed and approved no longer counts here.
 // UNLIKE hasApprovingReview above, this DOES gate an action: RevalidateForMerge
-// treats a true value as a hard block on the Merge endpoint (§60 review finding
+// treats a true value as a hard block on the Merge endpoint (Step 60 review finding
 // A4, first round) -- a client should use this field, not hasApprovingReview, to
-// pre-disable/explain a disabled Merge action (§60 review finding P1-4, second
+// pre-disable/explain a disabled Merge action (Step 60 review finding P1-4, second
 // round: this field previously did not exist on the wire at all, even though the
 // fact it surfaces already hard-blocked the merge server-side). Set for any
 // PR-shaped row, exactly like ciGreen above.
@@ -2913,7 +2913,7 @@ type ListDecisionInboxResponse struct {
 	// When the PR-derived rows (ready_to_merge/needs_review) were actually fetched
 	// from GitHub (§16.2: 'the response carries its as-of timestamp... never
 	// presented as live truth') -- null iff the caller has no linked GitHub identity,
-	// so no SCM read was attempted AT ALL. Distinct from scmFetchFailed below (§60
+	// so no SCM read was attempted AT ALL. Distinct from scmFetchFailed below (Step 60
 	// review finding C1): scmAsOf==null alone used to be the ONLY signal here, which
 	// meant a GitHub outage or a revoked token (a read that WAS attempted and failed)
 	// was indistinguishable from never having linked GitHub in the first place -- a
@@ -2925,7 +2925,7 @@ type ListDecisionInboxResponse struct {
 
 	// True iff the caller's PR-derived rows (ready_to_merge/needs_review) are a
 	// known-incomplete or degraded picture -- ONE channel fed by several independent
-	// producers (§60 review findings P1-2/P1-3/P2-1, second round, extending §60
+	// producers (Step 60 review findings P1-2/P1-3/P2-1, second round, extending Step 60
 	// review finding C1, first round): the live PR fetch failing outright (a revoked
 	// token, a GitHub incident, a timeout, or a linked-identity lookup/decrypt
 	// failure -- scmAsOf stays null in these cases, no fetch was attempted or it

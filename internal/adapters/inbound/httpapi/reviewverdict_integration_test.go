@@ -323,7 +323,7 @@ func TestPostReviewVerdict_Success_EnqueuesGitHubVerdictOutboxRow(t *testing.T) 
 }
 
 // TestPostReviewVerdict_PersistsReviewVerdictRow_WhenReviewHeadSHAKnown
-// is Step 62's own (§21.1, updated for §62 review finding C2) end-to-end
+// is Step 62's own (§21.1, updated for Step 62 review finding C2) end-to-end
 // persistence test: when the session's own CURRENTLY-PROCESSING turn
 // carries a review_head_sha (set here exactly the way turn-creation
 // itself sets it in production -- turns.Create's own ReviewHeadSha
@@ -337,7 +337,7 @@ func TestPostReviewVerdict_PersistsReviewVerdictRow_WhenReviewHeadSHAKnown(t *te
 	ctx := context.Background()
 	session := setupReviewSessionWithSandbox(ctx, t, rig, "acme/verdict-persist", 55)
 
-	// §62 review finding C2: the head sha now lives on the session's own
+	// Step 62 review finding C2: the head sha now lives on the session's own
 	// CURRENTLY-PROCESSING turn (turns.review_head_sha), resolved via
 	// TurnStore.GetProcessingTurnForSession -- mirrors how a real review
 	// turn is dispatched (status='processing') by the time its own agent
@@ -511,7 +511,7 @@ func TestPostReviewVerdict_PersistsDigestColumns(t *testing.T) {
 // review_verdicts persistence is best-effort enrichment, never a
 // precondition for this tool call to succeed (see reviewverdict.go's own
 // doc comment on this exact point). A real processing turn IS seeded
-// here (updated for §62 review finding C2 -- a verdict POST in
+// here (updated for Step 62 review finding C2 -- a verdict POST in
 // production always corresponds to some real, currently-processing
 // turn), just with review_head_sha left nil.
 func TestPostReviewVerdict_SkipsReviewVerdictInsert_WhenNoReviewHeadSHA(t *testing.T) {
@@ -539,7 +539,7 @@ func TestPostReviewVerdict_SkipsReviewVerdictInsert_WhenNoReviewHeadSHA(t *testi
 
 // TestPostReviewVerdict_SkipsReviewVerdictInsert_WhenNoProcessingTurnAtAll
 // is TestPostReviewVerdict_SkipsReviewVerdictInsert_WhenNoReviewHeadSHA's
-// own sibling for the OTHER degraded case §62 review finding C2's fix
+// own sibling for the OTHER degraded case Step 62 review finding C2's fix
 // must also handle gracefully: no processing turn can be resolved for
 // this session AT ALL (a genuine race -- the turn already completed/
 // failed/was cancelled between the agent's own HTTP call landing and

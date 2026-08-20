@@ -282,7 +282,7 @@ type UpsertPendingRetriggerHeadSHAParams struct {
 }
 
 // SetGitHubPRSessionHeadSHA (and pending_head_sha, migrations/000068) is
-// REMOVED as of migrations/000072_turns_review_head_sha.up.sql (§62
+// REMOVED as of migrations/000072_turns_review_head_sha.up.sql (Step 62
 // review finding C2, CRITICAL, fixed) -- superseded by turns.
 // review_head_sha, set once at turn-creation time and read back via
 // TurnStore.GetProcessingTurnForSession, never a shared per-(repo,PR)

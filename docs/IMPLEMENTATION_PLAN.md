@@ -47,7 +47,7 @@ TECHNICAL_PLAN.md §12), never invented independently of it.
 | 07 | domain/sandbox | Sandbox state machine (explicit transition table), **port the decision-function corpus + its test suite** (spawn/restore/resume, circuit breaker with unknown=transient, first-connect 240s / steady 90s budgets), `gen` fencing | §3.2 |
 | 08 | domain/turn + session | Turn machine (single `processing`), queue, session-status derivation, `cancelled≠failed≠timeout≠never_started` taxonomy, synthetic `execution_complete` event | §3.1, §3.3 |
 | 09 ∥ | domain/gitstate | Pure git machine: stash-if-dirty → checkout session branch → pop; branch-name normalization | §3.4 |
-| 10 | domain: Environment scoping | Extend Environment with `path_scope` (globs) + optional `mock_config`; the clone (§09) runs `git sparse-checkout` per repo when a scope is present; provenance tag on sessions created under a scoped Environment | §14.1 |
+| 10 | domain: Environment scoping | Extend Environment with `path_scope` (globs) + optional `mock_config`; the clone (Step 9) runs `git sparse-checkout` per repo when a scope is present; provenance tag on sessions created under a scoped Environment | §14.1 |
 | 11 | app/sessionactor | Goroutine+mailbox actor, hydration, advisory lock + epoch fencing, transactional writes, timer pump (`FOR UPDATE SKIP LOCKED`), named timers | §2 |
 | 12 | ports + Modal provider | **Complete** `SandboxProvider` interface (§4.1), typed transient/permanent errors by code, HTTP client timeout > cold start, egress proxy, single SESSION_CONFIG document | §4.1 |
 | 13 ∥ | sandbox-agent: supervisor | Static binary: boot modes + hook policy, native supervision (process groups, killpg, reaping, drain, bounded shutdown), **boot fingerprint logged first** | §6.4, §5.3 |

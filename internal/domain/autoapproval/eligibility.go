@@ -36,13 +36,13 @@ func DefaultSensitiveTags() []review.Tag {
 type EligibilityConfig struct {
 	// MaxFilesChanged is the diff-size threshold (§21.2: "diff size
 	// under a configurable-per-repo threshold") -- compared against
-	// EligibilityInput.ChangedFileCount (§62 review finding C1: the
+	// EligibilityInput.ChangedFileCount (Step 62 review finding C1: the
 	// server-fetched fact, never Verdict.FilesChanged).
 	MaxFilesChanged int
 	// SensitiveTags is the configurable-per-repo sensitive-path list
 	// (§21.2: "no sensitive path touched -- configurable per repo").
 	// Compared against EligibilityInput.TouchedBlastRadius: ANY overlap
-	// disqualifies (§62 review finding C1: the server-DERIVED fact,
+	// disqualifies (Step 62 review finding C1: the server-DERIVED fact,
 	// never Verdict.BlastRadius).
 	SensitiveTags []review.Tag
 }
@@ -65,7 +65,7 @@ type EligibilityInput struct {
 	// Verdict is the LATEST posted review.Verdict for this PR
 	// (review_verdicts' own DISTINCT ON (repo, pr_number) ... ORDER BY
 	// created_at DESC reduction, §21.1). ONLY Verdict.Shippable is ever
-	// consulted by ComputeEligible below -- §62 review finding C1
+	// consulted by ComputeEligible below -- Step 62 review finding C1
 	// (CRITICAL, fixed): Verdict.FilesChanged and Verdict.BlastRadius are
 	// BOTH the reviewing LLM's own self-report, typed into its own POST
 	// body (restdtos.PostReviewVerdictRequest) alongside the untrusted PR
@@ -84,7 +84,7 @@ type EligibilityInput struct {
 	// the commit Verdict was actually produced against.
 	VerdictHeadSHA string
 	// ChangedFileCount is this PR's own CURRENT, server-fetched
-	// changed-file count (§62 review finding C1) -- ports.OpenPR.
+	// changed-file count (Step 62 review finding C1) -- ports.OpenPR.
 	// ChangedFilesCount, GitHub's own authoritative "changed_files"
 	// scalar, NEVER Verdict.FilesChanged. Compared against
 	// EligibilityConfig.MaxFilesChanged (§21.2: "diff size under a
@@ -116,7 +116,7 @@ type EligibilityInput struct {
 	// this fix deliberately does not invent one un-asked-for.
 	ChangedFileCount int
 	// TouchedBlastRadius is this PR's own CURRENT, server-DERIVED blast
-	// radius (§62 review finding C1) -- autoapproval.ClassifyChangedPaths
+	// radius (Step 62 review finding C1) -- autoapproval.ClassifyChangedPaths
 	// applied to ports.OpenPR.ChangedFiles (the SAME server-fetched
 	// listing, though -- Phase 5 audit finding 2 -- that listing is
 	// capped at one GitHub page and is NOT what ChangedFileCount above
@@ -147,7 +147,7 @@ type EligibilityInput struct {
 	// here to a plain bool: a caller that constructs an EligibilityInput
 	// and simply FORGETS to set this field gets false ("unknown, fail
 	// closed"), never true ("confirmed clean") by accident. This is
-	// exactly the C1 hole (§62 review finding C1) Phase 5 found again,
+	// exactly the C1 hole (Step 62 review finding C1) Phase 5 found again,
 	// one layer down: before this fix, EligibilityInput's own
 	// ChangedFileCount==0/TouchedBlastRadius==nil zero values WERE
 	// themselves the permissive end of both criteria, so a swallowed
@@ -219,7 +219,7 @@ func ComputeEligible(in EligibilityInput, cfg EligibilityConfig) (eligible bool,
 	if in.Verdict.Shippable != review.ShippableAuto {
 		return false, ReasonNotShippableAuto
 	}
-	// §62 review finding C1 (CRITICAL, fixed): both checks below now read
+	// Step 62 review finding C1 (CRITICAL, fixed): both checks below now read
 	// server-derived facts (EligibilityInput's own doc comment) -- never
 	// in.Verdict.FilesChanged/in.Verdict.BlastRadius, which are the
 	// reviewing model's own self-report and were the exploited hole.

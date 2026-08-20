@@ -95,7 +95,7 @@ type fakeMergeSourceControl struct {
 	mergeCalls []ports.MergePRSpec
 
 	// listOpenPRsCalls counts every ListOpenPRsForUser call this fake
-	// receives -- §60 review finding A5's own regression guard: a viewer,
+	// receives -- Step 60 review finding A5's own regression guard: a viewer,
 	// unconditionally denied ActionMergePR, must be rejected at the cheap
 	// role-only pre-check BEFORE the expensive live SCM re-validation ever
 	// calls this method at all.
@@ -361,7 +361,7 @@ func TestMergePullRequest_HappyPath(t *testing.T) {
 		t.Errorf("MergePR calls = %+v, want exactly one call with HeadSHA=headsha1204 (the freshly revalidated head, never a stale/client-supplied one)", fakeSCM.mergeCalls)
 	}
 
-	// §62 review findings T1/M5 (fixed): this human 1-click merge path
+	// Step 62 review findings T1/M5 (fixed): this human 1-click merge path
 	// must now record a 'confirmed' auto-approval outcome -- BEFORE this
 	// fix, RecordConfirmed's only real caller was the armed auto-merge
 	// worker, so this endpoint (the ONE merge path every unarmed repo
@@ -373,7 +373,7 @@ func TestMergePullRequest_HappyPath(t *testing.T) {
 		t.Fatalf("count auto-approval outcomes: %v", err)
 	}
 	if total != 1 || contested != 0 {
-		t.Errorf("outcome counts = (total=%d, contested=%d), want (1, 0) -- the human 1-click merge must record a 'confirmed' outcome (§62 review findings T1/M5)", total, contested)
+		t.Errorf("outcome counts = (total=%d, contested=%d), want (1, 0) -- the human 1-click merge must record a 'confirmed' outcome (Step 62 review findings T1/M5)", total, contested)
 	}
 }
 
@@ -434,7 +434,7 @@ func TestMergePullRequest_NotPlatformAuthored(t *testing.T) {
 }
 
 // TestMergePullRequest_Viewer_Returns403 proves authz.Authorize
-// (ActionMergePR) actually gates this endpoint end to end (§60 review
+// (ActionMergePR) actually gates this endpoint end to end (Step 60 review
 // finding T2, CRITICAL/security) -- every OTHER merge test in this file
 // authenticates as Member, so a deleted/bypassed RBAC gate would pass the
 // whole suite; §16.2's own "Viewer role sees the queue read-only" would
@@ -443,7 +443,7 @@ func TestMergePullRequest_NotPlatformAuthored(t *testing.T) {
 // (planapprove_integration_test.go), which the merge endpoint uniquely
 // lacked.
 //
-// Also proves §60 review finding A5's own regression guard in the same
+// Also proves Step 60 review finding A5's own regression guard in the same
 // request: a viewer must be rejected by the cheap, role-only authz
 // pre-check BEFORE the expensive live SCM re-validation ever runs --
 // ListOpenPRsForUser must never be called at all for a role
@@ -479,12 +479,12 @@ func TestMergePullRequest_Viewer_Returns403(t *testing.T) {
 		t.Errorf("MergePR called %d times, want 0 -- a viewer must never reach the actual merge call", len(fakeSCM.mergeCalls))
 	}
 	if fakeSCM.listOpenPRsCalls != 0 {
-		t.Errorf("ListOpenPRsForUser called %d times, want 0 (§60 review finding A5: a viewer must be rejected by the cheap role-only pre-check BEFORE the expensive live SCM re-validation ever runs)", fakeSCM.listOpenPRsCalls)
+		t.Errorf("ListOpenPRsForUser called %d times, want 0 (Step 60 review finding A5: a viewer must be rejected by the cheap role-only pre-check BEFORE the expensive live SCM re-validation ever runs)", fakeSCM.listOpenPRsCalls)
 	}
 }
 
 // TestMergePullRequest_MergePRErrorStatusMapping covers the merge
-// handler's own ports.MergePRError status mapping end to end (§60 review
+// handler's own ports.MergePRError status mapping end to end (Step 60 review
 // finding T5): 405 (not currently mergeable) and 409 (the PR changed
 // since it was last checked -- GitHub's own optimistic-concurrency
 // signal, exactly the HeadSHA-moved race this endpoint's own re-
@@ -560,7 +560,7 @@ func TestMergePullRequest_MergePRErrorStatusMapping(t *testing.T) {
 }
 
 // TestListDecisionInbox_HandoffPR_FieldsPopulated is the DTO-mapping half
-// of §60 review finding C4 (the domain-Item half is covered separately in
+// of Step 60 review finding C4 (the domain-Item half is covered separately in
 // aggregate_integration_test.go's TestBuild_PRLabelVariations): a
 // handoff-labeled PR's ciGreen/findings/isHandoff/hasApprovingReview/
 // hasChangesRequested must all render non-null over the wire even though
@@ -569,7 +569,7 @@ func TestMergePullRequest_MergePRErrorStatusMapping(t *testing.T) {
 // on Kind, which nulled exactly these fields for exactly this row.
 //
 // HasApprovingReview/HasChangesRequested are deliberately set to TRUE in
-// the fixture below (§60 review TEST BATCH: "HasApprovingReview is
+// the fixture below (Step 60 review TEST BATCH: "HasApprovingReview is
 // asserted non-nil only, never for its value" -- a fixture that leaves
 // both at their bool zero-value cannot tell "populated with the real
 // value" apart from "always renders false regardless of input"). Both
@@ -624,12 +624,12 @@ func TestListDecisionInbox_HandoffPR_FieldsPopulated(t *testing.T) {
 		t.Errorf("HasApprovingReview = %v, want a non-nil pointer to TRUE (fixture sets HasApprovingReview: true -- previously this was asserted non-nil only, never for its real value)", row.HasApprovingReview)
 	}
 	if row.HasChangesRequested == nil || !*row.HasChangesRequested {
-		t.Errorf("HasChangesRequested = %v, want a non-nil pointer to TRUE (§60 review finding P1-4, second round: this DTO field previously did not exist on the wire at all)", row.HasChangesRequested)
+		t.Errorf("HasChangesRequested = %v, want a non-nil pointer to TRUE (Step 60 review finding P1-4, second round: this DTO field previously did not exist on the wire at all)", row.HasChangesRequested)
 	}
 }
 
 // TestListDecisionInbox_FindingsUnknownRendersNullNotTheFailClosedSentinel
-// is the wire-level regression test for §60 review finding P3-3 (second
+// is the wire-level regression test for Step 60 review finding P3-3 (second
 // round): A1's fail-closed sentinel (openFindingsUnknownFailClosed, the
 // synthetic value 1) exists ONLY to fail buildPROpenItem's own eligibility
 // computation closed on a genuine ReviewFindings store error -- it must

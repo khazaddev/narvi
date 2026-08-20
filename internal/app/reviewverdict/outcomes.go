@@ -22,7 +22,7 @@ import (
 // its audit-log write, applied here to this SAME class of post-merge
 // bookkeeping.
 //
-// §62 review findings T1/M5 (fixed): this doc comment (and migration
+// Step 62 review findings T1/M5 (fixed): this doc comment (and migration
 // 000070_auto_approval_outcomes.up.sql's own identical claim) previously
 // described httpapi.MergePullRequest as ALREADY calling this -- it did
 // not; the ONLY real caller was the armed auto-merge worker. During the

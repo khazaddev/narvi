@@ -21,7 +21,7 @@ func discardLogger() *slog.Logger {
 // trip, exactly the point of that interface being narrow and locally
 // defined (fetch.go's own doc comment).
 //
-// §62 review finding C2 (CRITICAL, fixed): GetCompareDiff replaces the
+// Step 62 review finding C2 (CRITICAL, fixed): GetCompareDiff replaces the
 // PREVIOUS GetPullRequestDiff here, and callOrder (below) is this file's
 // own NEW assertion surface -- proving GetPullRequest always runs BEFORE
 // GetCompareDiff, and that the diff fetch is PINNED to exactly what
@@ -89,7 +89,7 @@ func assertDiffArgs(t *testing.T, f *fakeFetcher, wantOwner, wantRepo, wantBase,
 }
 
 // TestFetch_Success_DiffPinnedToExactlyWhatGetPullRequestReported is the
-// C2 regression test (§62 review, CRITICAL, fixed) at the unit level: the
+// C2 regression test (Step 62 review, CRITICAL, fixed) at the unit level: the
 // core atomicity property this whole fix exists to provide -- the diff
 // fetch (GetCompareDiff) is parametrized by EXACTLY pr.BaseRef/pr.HeadSHA,
 // the SAME values this call returns as HeadSHA, never a second,

@@ -485,7 +485,7 @@ func PutRepoSettings(repoSettings *postgres.RepoSettingsStore, prSessions *postg
 // UpdateAutoApprovalSettingsRequest's own doc comment, contracts/rest/v1/
 // dtos.schema.json).
 //
-// §62 review finding C5 (MEDIUM but a privilege boundary, fixed):
+// Step 62 review finding C5 (MEDIUM but a privilege boundary, fixed):
 // COLUMN-SCOPED write, via appreviewverdict.UpsertAutoApprovalEligibility
 // -- touches ONLY max_auto_approve_files_changed/sensitive_blast_radius_tags
 // at the SQL level, never repo_settings.auto_merge_enabled (PutAutoMergeToggle
@@ -544,7 +544,7 @@ func PutAutoApprovalSettings(repoSettings *postgres.RepoSettingsStore, reviewVer
 // row 6) -- see UpdateAutoMergeToggleRequest's own doc comment for why
 // this is a separate endpoint from PutAutoApprovalSettings above.
 //
-// §62 review finding C5's own fix, mirrored in the other direction:
+// Step 62 review finding C5's own fix, mirrored in the other direction:
 // COLUMN-SCOPED write, via appreviewverdict.UpsertAutoMergeToggle --
 // touches ONLY auto_merge_enabled, never the eligibility-config columns
 // PutAutoApprovalSettings above owns. See that handler's own doc comment
@@ -592,7 +592,7 @@ func PutAutoMergeToggle(repoSettings *postgres.RepoSettingsStore, reviewVerdictD
 // COLUMN-SCOPED write, via postgres.RepoSettingsStore.
 // UpsertAutoRetriggerReviewToggle -- touches ONLY
 // auto_retrigger_review_enabled, never any other repo_settings column
-// (§62 review finding C5's own column-scoped-write discipline, applied
+// (Step 62 review finding C5's own column-scoped-write discipline, applied
 // here from the start rather than as a later fix). Unlike
 // PutAutoMergeToggle, this store method already returns the FULL,
 // just-written repo_settings row, so no follow-up Get call is needed to
@@ -658,7 +658,7 @@ func PutAutoRetriggerReviewToggle(repoSettings *postgres.RepoSettingsStore, prSe
 //
 // COLUMN-SCOPED write, via postgres.RepoSettingsStore.
 // UpsertDescriptionAutofixToggle -- touches ONLY
-// description_autofix_enabled, never any other repo_settings column (§62
+// description_autofix_enabled, never any other repo_settings column (Step 62
 // review finding C5's own column-scoped-write discipline, applied here
 // from the start). This store method returns the FULL, just-written
 // repo_settings row, so no follow-up Get call is needed to render every
@@ -783,7 +783,7 @@ func reviewDepthModeString(mode restdtos.UpdateReviewDepthConfigRequestMode) (*s
 //
 // COLUMN-SCOPED write, via postgres.RepoSettingsStore.
 // UpsertReviewDepthConfig -- touches ONLY review_depth_mode/
-// review_depth_deep_paths, never any other repo_settings column (§62
+// review_depth_deep_paths, never any other repo_settings column (Step 62
 // review finding C5's own column-scoped-write discipline, applied here
 // from the start). This store method already returns the FULL,
 // just-written repo_settings row, so no follow-up Get call is needed to
@@ -868,7 +868,7 @@ func PutReviewDepthConfig(repoSettings *postgres.RepoSettingsStore, prSessions *
 //
 // COLUMN-SCOPED write, via postgres.RepoSettingsStore.
 // UpsertReviewCostBudget -- touches ONLY review_cost_budget_light_usd/
-// review_cost_budget_deep_usd, never any other repo_settings column (§62
+// review_cost_budget_deep_usd, never any other repo_settings column (Step 62
 // review finding C5's own column-scoped-write discipline, applied here
 // from the start, exactly like PutReviewDepthConfig above). This store
 // method already returns the FULL, just-written repo_settings row, so no

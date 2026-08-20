@@ -113,7 +113,7 @@ func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *post
 // own doc comment, turn.go, for why this is required rather than bundled
 // into a variadic options slot).
 //
-// reviewHeadSHA (§62 review finding C2, CRITICAL, fixed) is non-nil ONLY
+// reviewHeadSHA (Step 62 review finding C2, CRITICAL, fixed) is non-nil ONLY
 // for github/coalesce.go's own REUSE-path caller (an @mention or label
 // re-trigger enqueuing a new turn on an ALREADY-EXISTING review session)
 // -- the commit SHA THIS turn's own pre-fetched review diff was anchored

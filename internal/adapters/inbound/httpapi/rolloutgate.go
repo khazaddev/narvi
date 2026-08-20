@@ -201,7 +201,7 @@ func checkRolloutGate(ctx context.Context, tx pgx.Tx, repoSettings *postgres.Rep
 			// A genuine read error -- including a context-canceled or
 			// timed-out query, which surfaces here identically, never as
 			// some other classification -- on the transaction about to
-			// insert this very session -- fail-closed (§32, §62 finding
+			// insert this very session -- fail-closed (§32, Step 62 finding
 			// C3's own precedent: widening policy on a degraded read is
 			// backwards), never treated as "no row, so unenrolled"
 			// without comment: logged distinctly so an operator can tell

@@ -916,7 +916,7 @@ func (a *Adapter) GetPullRequestDiff(ctx context.Context, owner, repo string, nu
 // -- this method is the SAME URL family, content-negotiated for raw diff
 // text instead.
 //
-// §62 review finding C2 (CRITICAL, fixed): UNLIKE GetPullRequestDiff
+// Step 62 review finding C2 (CRITICAL, fixed): UNLIKE GetPullRequestDiff
 // (which always reflects the PR's CURRENT head, a moving target a slow
 // caller can race against), this PINS the diff to an EXACT head commit:
 // two calls a second apart against the identical (base, head) pair

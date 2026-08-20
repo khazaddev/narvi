@@ -11,7 +11,7 @@ import (
 // VERDICT-POSTING time, distinct from Fetch's own turn-CREATION-time
 // pre-fetch above: httpapi.PostReviewVerdict needs the SAME diff the
 // reviewing agent's own turn was anchored to (turns.review_head_sha,
-// §62 review finding C2) in order to run reviewpost.MatchPosition/the
+// Step 62 review finding C2) in order to run reviewpost.MatchPosition/the
 // internal/app/findingposition relocation fallback against it -- but that
 // diff was never persisted anywhere queryable (review.PreFetchedContext.
 // Diff lives only in the turn's own rendered prompt text, in memory, at

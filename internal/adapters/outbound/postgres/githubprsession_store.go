@@ -79,7 +79,7 @@ func (s *GitHubPRSessionStore) GetBySessionID(ctx context.Context, sessionID pgt
 }
 
 // SetHeadSHA is REMOVED as of migrations/000072_turns_review_head_sha.up.sql
-// (§62 review finding C2, CRITICAL, fixed) -- github_pr_sessions.
+// (Step 62 review finding C2, CRITICAL, fixed) -- github_pr_sessions.
 // pending_head_sha (and this method) is superseded by turns.
 // review_head_sha, set once at turn-creation time
 // (internal/adapters/inbound/httpapi's createTurnLocked/CreateSessionOnTx)

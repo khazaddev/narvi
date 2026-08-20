@@ -343,7 +343,7 @@ type CreateTurnOptions struct {
 	// Configured. Only CreateTurn's own REST handler below ever sets it.
 	Effort *string
 
-	// ReviewHeadSHA (§62 review finding C2, CRITICAL, fixed) is the
+	// ReviewHeadSHA (Step 62 review finding C2, CRITICAL, fixed) is the
 	// commit SHA THIS turn's own pre-fetched review diff was anchored to
 	// -- non-nil ONLY for a review-session turn (reviewretrigger.go's own
 	// manual-retrigger path; the GitHub mention/label-retrigger path via

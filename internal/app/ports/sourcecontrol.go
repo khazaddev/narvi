@@ -489,7 +489,7 @@ type OpenPR struct {
 	// state instead of one fixed historical SHA.
 	HasApprovingReview  bool
 	HasChangesRequested bool
-	// ReviewDecisionDegraded (§62 review finding C4, BLOCKER, fixed) is
+	// ReviewDecisionDegraded (Step 62 review finding C4, BLOCKER, fixed) is
 	// true iff the fetch that produced HasApprovingReview/
 	// HasChangesRequested above itself failed (a transient HTTP error, or
 	// a response that did not decode) -- githubapi.fetchReviewDecision's
@@ -578,7 +578,7 @@ type OpenPR struct {
 	// touches zero files" -- the SAME "confirmed negative" vs. "could not
 	// confirm" distinction ReviewDecisionDegraded/CIConclusionUnknown
 	// already draw elsewhere on this same struct, applied here to the
-	// identical ambiguity §62 review finding C1 originally fixed for
+	// identical ambiguity Step 62 review finding C1 originally fixed for
 	// Verdict.FilesChanged/BlastRadius, now closed for THIS field's own
 	// failure/truncation modes too.
 	ChangedFilesListDegraded bool
@@ -654,7 +654,7 @@ type ListOpenPRsForUserSpec struct {
 // §16.2) needs: Owner/Repo/Token are the same generic source-control
 // concepts every other spec in this file already uses. Ref is the commit
 // SHA (or branch) the CODEOWNERS file itself is read at -- callers MUST
-// pass the repo's own BASE ref/branch here, never the PR's head (§60
+// pass the repo's own BASE ref/branch here, never the PR's head (Step 60
 // review finding P2-3, second round, correcting this doc comment, which
 // previously said the opposite -- "the PR's own current head branch/SHA"
 // -- the exact attacker-controlled value finding B3, first round, moved
@@ -937,7 +937,7 @@ type SourceControl interface {
 	// interactive action a caller needs a granular failure reason for.
 	//
 	// truncated mirrors ListMergedBetween's own identical (merged,
-	// truncated, err) shape below (§60 review finding C1): true whenever
+	// truncated, err) shape below (Step 60 review finding C1): true whenever
 	// this adapter KNOWS the returned prs slice is an incomplete picture
 	// of every PR spec's own account is actually involved in right now --
 	// e.g. one of the underlying discovery queries itself failed (a

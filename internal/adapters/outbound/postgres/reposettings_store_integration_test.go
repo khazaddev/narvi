@@ -83,7 +83,7 @@ func TestRepoSettingsStore_Upsert_CreateThenUpdate(t *testing.T) {
 }
 
 // TestRepoSettingsStore_ColumnScopedUpserts_NeverClobberEachOther is the
-// C5 regression test (§62 review, MEDIUM but a privilege boundary,
+// C5 regression test (Step 62 review, MEDIUM but a privilege boundary,
 // fixed): UpsertAutoMergeToggle and UpsertAutoApprovalEligibility are
 // column-scoped -- a write through EITHER must never overwrite whatever
 // the OTHER already set, no matter which one runs last. BEFORE this fix,
@@ -160,11 +160,11 @@ func TestRepoSettingsStore_ColumnScopedUpserts_NeverClobberEachOther(t *testing.
 }
 
 // TestRepoSettingsStore_AutoMergeEnabled_SchemaDefaultsToFalse is the T3
-// regression test (§62 review, fixed): migrations/000069_repo_settings_
+// regression test (Step 62 review, fixed): migrations/000069_repo_settings_
 // auto_approval.up.sql's own `auto_merge_enabled BOOLEAN NOT NULL DEFAULT
 // false` is exercised here via TWO real, production-reachable INSERT
 // paths that never mention that column at all -- Upsert (block_on_high_
-// risk/sentinel_autofix_enabled) and, since §62 review finding C5's own
+// risk/sentinel_autofix_enabled) and, since Step 62 review finding C5's own
 // column-scoped split, UpsertAutoApprovalEligibility -- proving the
 // SCHEMA's own default, not merely the Go-layer AutoMergeEnabled
 // function's identical-looking but INDEPENDENT "missing row -> false"
@@ -188,7 +188,7 @@ func TestRepoSettingsStore_AutoMergeEnabled_SchemaDefaultsToFalse(t *testing.T) 
 		}
 	})
 
-	t.Run("via UpsertAutoApprovalEligibility (§62 review finding C5's own column-scoped path)", func(t *testing.T) {
+	t.Run("via UpsertAutoApprovalEligibility (Step 62 review finding C5's own column-scoped path)", func(t *testing.T) {
 		const repoFullName = "acme/schema-default-via-eligibility"
 		maxFiles := int32(10)
 		created, err := store.UpsertAutoApprovalEligibility(ctx, repoFullName, &maxFiles, nil)

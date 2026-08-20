@@ -72,7 +72,7 @@ func newRevalidateStores(pool *pgxpool.Pool) *revalidateStores {
 // under actorGitHubID -- platform-authored (an artifacts row is created),
 // low-risk, CI green, no findings, no needs-human label, no changes
 // requested, not a draft/handoff/sentinel-fix. Every test below starts
-// from this exact baseline and perturbs ONE fact (§60 review finding T1:
+// from this exact baseline and perturbs ONE fact (Step 60 review finding T1:
 // "the row renders ready_to_merge, then X changes -> assert the merge is
 // refused"), proving each negative check independently actually gates
 // the merge rather than merely existing in the source.
@@ -123,9 +123,9 @@ func (rs *revalidateStores) replaceTargetPR(actorGitHubID string, pr ports.OpenP
 }
 
 // TestRevalidateForMerge_NegativeCases covers every fact RevalidateForMerge
-// re-checks that used to have zero coverage (§60 review finding T1,
+// re-checks that used to have zero coverage (Step 60 review finding T1,
 // CRITICAL): the CI-green re-check, the needs-human label, the §17
-// sentinel-fix exclusion, draft, handoff, and (§60 review finding A4,
+// sentinel-fix exclusion, draft, handoff, and (Step 60 review finding A4,
 // folded in here since it is the SAME "the row renders ready_to_merge,
 // then a fact changes" shape) HasChangesRequested. Each subtest starts
 // from eligiblePR's own fully-eligible baseline and perturbs ONE fact.
@@ -152,7 +152,7 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 	})
 
 	t.Run("CIRed_Refused", func(t *testing.T) {
-		// §60 review finding A2/T1: this is the one guard that directly
+		// Step 60 review finding A2/T1: this is the one guard that directly
 		// exercises the merge gate's own strict CI check -- deletable
 		// before this test existed.
 		const repoFullName = "acme/revalidate-ci-red"
@@ -172,7 +172,7 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 		}
 	})
 
-	// §62 review finding C4 (BLOCKER, fixed): a degraded review-decision
+	// Step 62 review finding C4 (BLOCKER, fixed): a degraded review-decision
 	// read (GitHub's own reviews endpoint failed) must refuse the merge
 	// exactly like a CONFIRMED changes-request would -- "we could not
 	// tell" must never silently satisfy this gate. This is the ONE
@@ -269,7 +269,7 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 	// Paired with review:low-risk deliberately -- an otherwise-fully-
 	// eligible risk label -- so needs-human is provably the ONE thing
 	// keeping this refused, not a coincidental "no/unrecognized risk
-	// label" refusal (§60 review TEST BATCH: this subtest and what used
+	// label" refusal (Step 60 review TEST BATCH: this subtest and what used
 	// to be a separate "NeedsHumanWithLowRisk_Refused" subtest were
 	// byte-identical, both pairing needs-human with low-risk -- the
 	// latter was deleted as pure duplication, adding zero coverage
@@ -343,7 +343,7 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 		if ok {
 			t.Fatal("RevalidateForMerge() ok = true, want false (this PR is a draft)")
 		}
-		// §60 review TEST BATCH: this subtest is DOUBLE-GATED by
+		// Step 60 review TEST BATCH: this subtest is DOUBLE-GATED by
 		// ComputeAutoApprovalEligible's own IsDraft input, so deleting
 		// RevalidateForMerge's explicit `if target.Draft` early return
 		// still passes an `ok`-only/reason-non-empty assertion -- the PR
@@ -358,7 +358,7 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 		}
 	})
 
-	// §60 review finding T6: the handoff-label branch, merge-path half
+	// Step 60 review finding T6: the handoff-label branch, merge-path half
 	// (aggregate.go's own read-path half lives in
 	// aggregate_integration_test.go's TestBuild_HandoffPR).
 	t.Run("HandoffLabel_Refused", func(t *testing.T) {
@@ -379,7 +379,7 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 		}
 	})
 
-	// §60 review finding A4: HasChangesRequested is a hard merge blocker
+	// Step 60 review finding A4: HasChangesRequested is a hard merge blocker
 	// -- the one review-decision fact this endpoint's own "approval
 	// state" re-check actually gates on (never HasApprovingReview, which
 	// is display-only -- see RevalidateForMerge's own doc comment).
@@ -402,7 +402,7 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 	})
 
 	// Step 62 (§21.2) note: classifyPRLabels' own "most restrictive risk
-	// label wins" property (§60 review finding A6) is no longer
+	// label wins" property (Step 60 review finding A6) is no longer
 	// observable through RevalidateForMerge's own ok/refused OUTCOME --
 	// the real auto-approval eligibility engine (internal/domain/
 	// autoapproval) gates on the STORED verdict's own Shippable field,
@@ -479,7 +479,7 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 		}
 	})
 
-	// §60 review TEST BATCH (second round): RevalidateForMerge's own
+	// Step 60 review TEST BATCH (second round): RevalidateForMerge's own
 	// truncated->500 branch was never executed by any existing test --
 	// when the target PR is not found in a TRUNCATED (partial/degraded)
 	// read, this must return a genuine ERROR (the httpapi handler maps
@@ -509,7 +509,7 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 }
 
 // TestRevalidateForMerge_EligibilityConfigStoreError_FailsClosed is the C3
-// regression test (§62 review, BLOCKER, fixed): a GENUINE repo_settings
+// regression test (Step 62 review, BLOCKER, fixed): a GENUINE repo_settings
 // read error (never pgx.ErrNoRows) resolving this repo's own §21.2
 // eligibility config must refuse the merge outright (a propagated error,
 // mirroring this function's own existing §17 sentinel-fix-exclusion/
@@ -560,7 +560,7 @@ func TestRevalidateForMerge_EligibilityConfigStoreError_FailsClosed(t *testing.T
 }
 
 // TestRevalidateForMerge_LyingVerdictAgainstReal300FileSensitivePR is the
-// C1 regression test (§62 review, CRITICAL, fixed) at the FULL
+// C1 regression test (Step 62 review, CRITICAL, fixed) at the FULL
 // system level -- the exact attack the reviewers verified reproducible
 // end to end: a review agent (whose own input includes the untrusted PR
 // diff, §5.2) posts riskLevel=low/premise=ok/testsCoverage=adequate (so

@@ -38,7 +38,7 @@ const githubDeliveryProvider = "github"
 const signatureHeaderPrefix = "sha256="
 
 // diffFetcher is Config.DiffFetcher's own declared type -- the union of
-// reviewcontext.Fetcher (review-turn-context assembly, §62 review finding
+// reviewcontext.Fetcher (review-turn-context assembly, Step 62 review finding
 // C2's own narrower interface) and prDiffFetcher (pullrequestevent.go's
 // sentinel-fix merge-gate, a genuinely different consumer of the SAME
 // underlying *githubapi.Adapter) -- see Config.DiffFetcher's own doc
@@ -601,7 +601,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 				m.CommentBody = advisory + m.CommentBody
 			}
 		}
-		// fetchedHeadSHA (§62 review finding C2, CRITICAL, fixed) is
+		// fetchedHeadSHA (Step 62 review finding C2, CRITICAL, fixed) is
 		// captured OUTSIDE the block below so it survives to the
 		// CreateOrJoin call further down, which threads it onto the
 		// turn this mention actually creates/joins (turns.
@@ -885,7 +885,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 			return
 		}
 
-		// §62 review finding C2 (CRITICAL, fixed): fetchedHeadSHA is
+		// Step 62 review finding C2 (CRITICAL, fixed): fetchedHeadSHA is
 		// already persisted onto the turn CreateOrJoin just created/joined
 		// (turns.review_head_sha, set atomically as part of that turn's
 		// own INSERT) -- no separate post-hoc write needed here anymore;

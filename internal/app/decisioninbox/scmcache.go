@@ -139,10 +139,10 @@ func NewSCMCache(sourceControl ports.SourceControl, timeouts platform.Timeouts) 
 // never now) -- the "as of 2 min ago" staleness §16.2 requires be
 // displayed, never silently masked.
 //
-// truncated (§60 review finding P1-2, second round -- threading through
+// truncated (Step 60 review finding P1-2, second round -- threading through
 // ports.SourceControl.ListOpenPRsForUser's own identical return, which
 // this method previously consumed only to decide whether to cache,
-// silently dropping it from its OWN return signature) mirrors §60 review
+// silently dropping it from its OWN return signature) mirrors Step 60 review
 // finding C1's original "degraded/partial read" meaning: true iff one of
 // GitHub's two underlying search queries itself failed while the other
 // still returned a real, if incomplete, result. A cache HIT always
@@ -172,7 +172,7 @@ func (c *SCMCache) ListOpenPRsForUser(ctx context.Context, spec ports.ListOpenPR
 		return nil, time.Time{}, false, fmt.Errorf("decisioninbox: list open prs for user: %w", err)
 	}
 
-	// fetchedAt (§60 review finding, "born-expired entries"): anchored on
+	// fetchedAt (Step 60 review finding, "born-expired entries"): anchored on
 	// FETCH COMPLETION, a fresh now taken AFTER the (potentially slow, up
 	// to GitHubListOpenPRsForUserTimeout == 3 minutes) call above returns
 	// -- deliberately NOT the pre-fetch `now` parameter this method was
@@ -202,7 +202,7 @@ func (c *SCMCache) ListOpenPRsForUser(ctx context.Context, spec ports.ListOpenPR
 //
 // fetchedAt/asOf are anchored on FETCH COMPLETION, exactly like
 // ListOpenPRsForUser's own identical "born-expired entries" fix above
-// (§60 review finding P2-2, second round: that fix was previously applied
+// (Step 60 review finding P2-2, second round: that fix was previously applied
 // ONLY to the openPRs cache -- this method still anchored both expiresAt
 // and the returned asOf on the caller's PRE-fetch `now` parameter, stale
 // by the whole duration of whichever ResolveCodeOwners call this races

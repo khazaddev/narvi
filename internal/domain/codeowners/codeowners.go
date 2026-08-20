@@ -280,7 +280,7 @@ func (m *Matcher) Match(path string) (Rule, bool) {
 // "^docs/[^/]*(?:/.*)?$", which matches "docs/build-app/troubleshooting.md"
 // by letting "[^/]*" consume the "build-app" DIRECTORY NAME and the
 // suffix consume the rest -- GitHub's own documentation gives this exact
-// path as the canonical NON-match for "docs/*" (§60 review finding C2):
+// path as the canonical NON-match for "docs/*" (Step 60 review finding C2):
 // a bare trailing "*" stays within the one path segment it is written in,
 // exactly like plain gitignore's own "never crosses a /" rule for "*",
 // with no implicit "everything beneath" extension layered on top merely

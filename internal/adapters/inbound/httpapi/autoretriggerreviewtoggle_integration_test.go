@@ -64,7 +64,7 @@ func TestPutAutoRetriggerReviewToggle_MaintainerDenied(t *testing.T) {
 
 // TestPutAutoRetriggerReviewToggle_PreservesAutoMergeToggle_ColumnScoped
 // proves the column-scoped write discipline this endpoint's own doc
-// comment describes (§62 review finding C5's pattern, applied here from
+// comment describes (Step 62 review finding C5's pattern, applied here from
 // the start): arming auto-merge first, then separately arming
 // auto-retrigger-review, must never silently disarm auto-merge as a side
 // effect -- and the reverse.

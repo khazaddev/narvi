@@ -23,7 +23,7 @@
 // Postgres reads; ACTUALLY enqueueing one (step 4) needs a fresh,
 // live-fetched diff/head-sha (internal/app/reviewcontext.Fetch, the SAME
 // "diff provably anchored to a live GetPullRequest call" guarantee every
-// other review-trigger path already gets, §62 review finding C2's own
+// other review-trigger path already gets, Step 62 review finding C2's own
 // fix) -- a real outbound GitHub API call. This mirrors dispatch.go's own
 // established "plan inside a transact, real network call OUTSIDE any
 // transaction, result written back in a fresh transact" shape

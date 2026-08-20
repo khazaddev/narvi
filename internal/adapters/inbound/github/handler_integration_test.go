@@ -314,7 +314,7 @@ func pullRequestLabeledBody(repoFullName, cloneRepoName, cloneURL string, prNumb
 // fakeReviewContextFetcher is a test-only diffFetcher (the union
 // interface backing Config.DiffFetcher, handler.go) -- no real HTTP round
 // trip, satisfying GetPullRequest (also PullRequestResolver,
-// headresolve.go), GetCompareDiff (reviewcontext.Fetcher, §62 review
+// headresolve.go), GetCompareDiff (reviewcontext.Fetcher, Step 62 review
 // finding C2), and GetPullRequestDiff (prDiffFetcher,
 // pullrequestevent.go's sentinel-fix merge-gate -- unused by this file's
 // own tests today, stubbed only to satisfy the union interface) so one
@@ -322,7 +322,7 @@ func pullRequestLabeledBody(repoFullName, cloneRepoName, cloneURL string, prNumb
 // test that wires both to the same instance.
 //
 // diffOwner/diffRepo/diffBase/diffHead/diffToken (audit fix, test-coverage
-// finding, updated for §62 review finding C2) record GetCompareDiff's own
+// finding, updated for Step 62 review finding C2) record GetCompareDiff's own
 // last call args -- asserted against in
 // TestGitHubIntegration_InlineDiffAndStackPreFetched_FoldedIntoTurnPrompt
 // below, closing a confirmed gap where this fake used to ignore its own
@@ -664,7 +664,7 @@ func TestGitHubIntegration_InlineDiffAndStackPreFetched_FoldedIntoTurnPrompt(t *
 	fetcher := &fakeReviewContextFetcher{
 		pr: githubapi.PullRequest{
 			HeadRef: "feature-x",
-			// §62 review finding C2: HeadSHA/BaseRef are now REQUIRED on
+			// Step 62 review finding C2: HeadSHA/BaseRef are now REQUIRED on
 			// this fixture -- reviewcontext.Fetch pins the diff fetch to
 			// exactly these two values (GetCompareDiff), so a fixture
 			// that left them at their own zero value would silently
@@ -706,7 +706,7 @@ func TestGitHubIntegration_InlineDiffAndStackPreFetched_FoldedIntoTurnPrompt(t *
 		t.Errorf("prompt = %q, want it to contain the pre-fetched stack context block", prompt)
 	}
 
-	// Audit fix (test-coverage finding, updated for §62 review finding
+	// Audit fix (test-coverage finding, updated for Step 62 review finding
 	// C2): prove reviewcontext.Fetch's own GetCompareDiff call was
 	// actually made with THIS mention's own owner/repo/token AND -- the
 	// C2 fix's own core property -- pinned to EXACTLY pr.BaseRef/
@@ -720,7 +720,7 @@ func TestGitHubIntegration_InlineDiffAndStackPreFetched_FoldedIntoTurnPrompt(t *
 			fetcher.diffOwner, fetcher.diffRepo, fetcher.diffBase, fetcher.diffHead, fetcher.diffToken, "acme", "prefetch-repo", "main", "resolved-head-sha", "test-bot-token")
 	}
 
-	// §62 review finding C2: the turn's own persisted review_head_sha
+	// Step 62 review finding C2: the turn's own persisted review_head_sha
 	// must equal exactly the SHA the diff above was pinned to -- proving
 	// the fix end to end, through the real HTTP handler and real
 	// Postgres, not just reviewcontext.Fetch in isolation.

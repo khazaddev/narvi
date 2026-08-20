@@ -250,7 +250,7 @@ func PostReviewVerdict(
 			return
 		}
 
-		// §62 review finding C2 (CRITICAL, fixed): resolve the head SHA
+		// Step 62 review finding C2 (CRITICAL, fixed): resolve the head SHA
 		// THIS session's own CURRENTLY-PROCESSING turn was anchored to --
 		// never prSession.PendingHeadSha (github_pr_sessions' own shared,
 		// mutable per-(repo,PR) column, REMOVED by this fix; see
@@ -470,7 +470,7 @@ func PostReviewVerdict(
 				"repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
 		}
 
-		// verdictHeadSHA/reviewDepth (§62 review finding C2 / Step 68,
+		// verdictHeadSHA/reviewDepth (Step 62 review finding C2 / Step 68,
 		// §26.3) were both already resolved above, before
 		// ValidateVerdictInput ran -- see that block's own doc comment
 		// for the full "why" (the deep-path digest check needs
@@ -613,7 +613,7 @@ func PostReviewVerdict(
 		// Step 62 (§21.1): append one review_verdicts row, in the SAME
 		// transaction as the findings upserts/outbox write above -- pure
 		// storage of the verdict already computed above, forwarding
-		// head_sha verbatim from verdictHeadSHA (§62 review finding C2:
+		// head_sha verbatim from verdictHeadSHA (Step 62 review finding C2:
 		// resolved above from this session's own processing turn, never
 		// re-derived or asked of the agent). A missing head SHA (empty --
 		// e.g. a review turn whose own context fetch degraded to no diff

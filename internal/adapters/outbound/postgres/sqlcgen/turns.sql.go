@@ -49,7 +49,7 @@ type CreateTurnParams struct {
 // CreateTurnParams{...} literal omitting Effort -- keeps compiling and
 // behaving identically: the zero value, nil, "use the default").
 //
-// review_head_sha (migrations/000072_turns_review_head_sha.up.sql, §62
+// review_head_sha (migrations/000072_turns_review_head_sha.up.sql, Step 62
 // review finding C2) mirrors effort's own identical shape one column
 // further -- nil/absent for every non-review turn (every existing call
 // site), set exactly once, at creation, by the two review-turn-creation

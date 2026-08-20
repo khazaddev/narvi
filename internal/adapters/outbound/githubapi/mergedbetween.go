@@ -206,7 +206,7 @@ func (a *Adapter) fetchMergedPRDetail(ctx context.Context, owner, repo string, n
 // /repos/{owner}/{repo}/pulls/{number}/reviews response this adapter
 // needs (https://docs.github.com/rest/pulls/reviews#list-reviews-for-a-pull-request).
 // User identifies WHICH reviewer submitted this review -- needed by
-// listopenprs.go's own fetchReviewDecision (§60 review finding P1-1,
+// listopenprs.go's own fetchReviewDecision (Step 60 review finding P1-1,
 // second round) to reduce GitHub's own append-only review list down to
 // each reviewer's LATEST decision; fetchHasApprovingReview immediately
 // below has no analogous need for it (a bare "does at least one APPROVED
@@ -301,7 +301,7 @@ func (a *Adapter) branchRequiresApprovingReview(ctx context.Context, owner, repo
 // -- GitHub's own LEGACY Status API surface (statuses created via POST
 // .../statuses), state is one of "success"/"pending"/"failure"/"error".
 // TotalCount is GitHub's own documented count of individual statuses this
-// combined result rolls up (§60 review finding P0, second round): GitHub's
+// combined result rolls up (Step 60 review finding P0, second round): GitHub's
 // own docs for this exact endpoint state the rule verbatim -- "pending if
 // there are no statuses or a context is pending" -- so state=="pending"
 // ALONE can never be read as "a status is genuinely still in flight": a
@@ -357,7 +357,7 @@ var ciFailureConclusions = map[string]bool{
 // comment (internal/domain/review/manifestcheck.go) for why this is
 // deliberately NOT treated as a failure.
 //
-// # §15.2 RETROSPECTIVE AUDIT ONLY -- never a live pre-merge gate (§60 review finding A2)
+// # §15.2 RETROSPECTIVE AUDIT ONLY -- never a live pre-merge gate (Step 60 review finding A2)
 //
 // This function's own LENIENCY is only correct for its one real caller
 // below (buildMergedPR, auditing an ALREADY-MERGED PR at its own fixed,

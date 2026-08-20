@@ -8,7 +8,7 @@ import (
 )
 
 // This file (blastradius.go) is the path→tag classifier §21.2's own
-// sensitive-path criterion needs (C1, §62 review, CRITICAL, fixed): "no
+// sensitive-path criterion needs (C1, Step 62 review, CRITICAL, fixed): "no
 // sensitive path touched -- a configurable-per-repo list", checked against
 // the PR's own SERVER-FETCHED changed-file paths (ports.OpenPR.
 // ChangedFiles), never the reviewing model's own self-reported
@@ -43,7 +43,7 @@ import (
 // instead routing to a human (an inconvenience); the cost of a false
 // negative is a genuinely sensitive change (a real migration, a real
 // authz rewrite) silently auto-merging unattended (a safety incident).
-// §62's own review verdict names this exact asymmetry as the theme of the
+// Step 62's own review verdict names this exact asymmetry as the theme of the
 // whole round ("fail direction"). Every rule is intentionally simple
 // (path-segment/filename-prefix/extension checks, no per-repo tuning) --
 // a repo with unusual conventions this file's rules do not anticipate can

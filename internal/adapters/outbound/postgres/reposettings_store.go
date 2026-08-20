@@ -64,7 +64,7 @@ func NewRepoSettingsStore(pool *pgxpool.Pool) *RepoSettingsStore {
 // WithTx returns a RepoSettingsStore whose queries run on tx instead of the
 // pool this store was built with -- mirrors GitHubPRSessionStore.WithTx/
 // TurnStore.WithTx exactly (every other multi-column-write store in this
-// package already has this). §62 review findings C3/C5 are this store's
+// package already has this). Step 62 review findings C3/C5 are this store's
 // first real callers: C5's column-scoped upserts (PutAutoApprovalSettings/
 // PutAutoMergeToggle, httpapi/reposettings.go) don't themselves need a
 // shared transaction (each is already a single atomic UPDATE), but this
@@ -99,7 +99,7 @@ func (s *RepoSettingsStore) Upsert(ctx context.Context, repoFullName string, blo
 }
 
 // UpsertAutoMergeToggle idempotently creates-or-updates repoFullName's
-// §21.2 stage-2 auto-merge toggle -- §62 review finding C5 (MEDIUM but a
+// §21.2 stage-2 auto-merge toggle -- Step 62 review finding C5 (MEDIUM but a
 // privilege boundary, fixed): touches ONLY auto_merge_enabled, leaving
 // max_auto_approve_files_changed/sensitive_blast_radius_tags completely
 // untouched (see UpsertAutoMergeToggle's own generated doc comment for
@@ -115,7 +115,7 @@ func (s *RepoSettingsStore) UpsertAutoMergeToggle(ctx context.Context, repoFullN
 }
 
 // UpsertAutoApprovalEligibility idempotently creates-or-updates
-// repoFullName's §21.2 stage-1 eligibility config -- §62 review finding
+// repoFullName's §21.2 stage-1 eligibility config -- Step 62 review finding
 // C5's own column-scoped sibling: touches ONLY
 // max_auto_approve_files_changed/sensitive_blast_radius_tags, leaving
 // auto_merge_enabled completely untouched (see
@@ -138,7 +138,7 @@ func (s *RepoSettingsStore) UpsertAutoApprovalEligibility(ctx context.Context, r
 
 // UpsertAutoRetriggerReviewToggle idempotently creates-or-updates
 // repoFullName's §24.5 per-repo opt-in -- COLUMN-SCOPED (mirrors
-// UpsertAutoMergeToggle's own identical shape, §62 review finding C5's
+// UpsertAutoMergeToggle's own identical shape, Step 62 review finding C5's
 // pattern generalized to this further, independently-gated toggle):
 // touches ONLY auto_retrigger_review_enabled, leaving every other
 // repo_settings column completely untouched.
@@ -152,7 +152,7 @@ func (s *RepoSettingsStore) UpsertAutoRetriggerReviewToggle(ctx context.Context,
 // UpsertDescriptionAutofixToggle idempotently creates-or-updates
 // repoFullName's §26.2 per-repo opt-in -- COLUMN-SCOPED (mirrors
 // UpsertAutoMergeToggle/UpsertAutoRetriggerReviewToggle's own identical
-// shape, §62 review finding C5's pattern generalized to this further,
+// shape, Step 62 review finding C5's pattern generalized to this further,
 // independently-gated toggle): touches ONLY description_autofix_enabled,
 // leaving every other repo_settings column completely untouched.
 func (s *RepoSettingsStore) UpsertDescriptionAutofixToggle(ctx context.Context, repoFullName string, enabled bool) (sqlcgen.RepoSetting, error) {
@@ -165,7 +165,7 @@ func (s *RepoSettingsStore) UpsertDescriptionAutofixToggle(ctx context.Context, 
 // UpsertReviewDepthConfig idempotently creates-or-updates repoFullName's
 // §26.3 reviewDepth config -- COLUMN-SCOPED (mirrors
 // UpsertAutoMergeToggle/UpsertAutoRetriggerReviewToggle/
-// UpsertDescriptionAutofixToggle's own identical shape, §62 review
+// UpsertDescriptionAutofixToggle's own identical shape, Step 62 review
 // finding C5's pattern generalized to this further, independently-gated
 // config): touches ONLY review_depth_mode/review_depth_deep_paths,
 // leaving every other repo_settings column completely untouched.

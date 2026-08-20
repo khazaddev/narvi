@@ -4502,7 +4502,7 @@ refuses on the first unenrolled repo, in request order (stop-at-first-failure, m
 `validateCreateSessionRequest`'s own identical precedent). **Fail-closed** on every degraded read: an
 absent `repo_settings` row, any other Postgres read error, or a repo whose clone URL cannot be
 resolved to a trusted identity at all (§32.3) are all folded into `RepoAdmission.Enrolled == false`
-before `Decide` ever runs — §62 finding C3 already established that widening policy on a degraded
+before `Decide` ever runs — Step 62 finding C3 already established that widening policy on a degraded
 read is backwards, and this gate is no exception. This is nearly free here specifically: the read
 runs inside the SAME transaction that is about to insert the session two statements later, on the
 SAME Postgres connection — there is no real state where `repo_settings` is unreadable but that

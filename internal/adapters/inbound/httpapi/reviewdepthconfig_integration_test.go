@@ -139,7 +139,7 @@ func TestPutReviewDepthConfig_InvalidMode_BadRequest(t *testing.T) {
 
 // TestPutReviewDepthConfig_PreservesAutoMergeToggle_ColumnScoped proves
 // the column-scoped write discipline this endpoint's own doc comment
-// describes (§62 review finding C5's pattern): arming auto-merge first,
+// describes (Step 62 review finding C5's pattern): arming auto-merge first,
 // then separately configuring reviewDepth, must never silently disarm
 // auto-merge as a side effect -- and the reverse.
 func TestPutReviewDepthConfig_PreservesAutoMergeToggle_ColumnScoped(t *testing.T) {

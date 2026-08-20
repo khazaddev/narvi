@@ -18,7 +18,7 @@ import (
 // directly, with no adapter-side change beyond what this Step already adds
 // to it.
 //
-// GetCompareDiff (§62 review finding C2, CRITICAL, fixed) replaces the
+// GetCompareDiff (Step 62 review finding C2, CRITICAL, fixed) replaces the
 // PREVIOUS GetPullRequestDiff here -- see Fetch's own doc comment for the
 // full "why": GetPullRequestDiff always reflects a PR's CURRENT, moving
 // head, which is exactly the property that let Diff and HeadSHA
@@ -37,7 +37,7 @@ type Fetcher interface {
 // calls before building its own review turn's prompt via
 // review.RenderTurnPrompt.
 //
-// # §62 review finding C2 (CRITICAL, fixed): Diff and HeadSHA now come
+// # Step 62 review finding C2 (CRITICAL, fixed): Diff and HeadSHA now come
 // # from one dependency chain, never two independently-raceable reads
 //
 // BEFORE this fix, Diff (via GetPullRequestDiff, always reflecting a PR's

@@ -85,7 +85,7 @@ type ChildSessionOptions struct {
 	// access -- never a scoped prototyping environment").
 	ProvenanceTag *string
 
-	// ReviewHeadSHA (§62 review finding C2, CRITICAL, fixed) is
+	// ReviewHeadSHA (Step 62 review finding C2, CRITICAL, fixed) is
 	// unrelated to every other field on this struct (none of which this
 	// function's OWN doc comment's "parent/child" framing describes) --
 	// bundled into this SAME trailing-variadic options struct anyway,

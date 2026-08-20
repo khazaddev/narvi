@@ -308,7 +308,7 @@ type Registry struct {
 	// since handleReviewRetriggerDebounceTimer needs the SAME "diff
 	// providably anchored to a live-fetched head sha" guarantee every
 	// OTHER review-trigger path already gets via internal/app/
-	// reviewcontext.Fetch (§62 review finding C2's own fix) -- see that
+	// reviewcontext.Fetch (Step 62 review finding C2's own fix) -- see that
 	// package's own doc comment. *githubapi.Adapter (the SAME instance
 	// diffFetcher/sourceControl above already wire) satisfies this
 	// directly, with no adapter-side change. May be nil (tests that never

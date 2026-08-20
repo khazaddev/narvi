@@ -176,7 +176,7 @@ type openPRDetailResponse struct {
 // top doc comment for the full design (login resolution, candidate
 // discovery, cost).
 //
-// truncated (§60 review finding C1) is true iff at least one of the two
+// truncated (Step 60 review finding C1) is true iff at least one of the two
 // discovery queries below itself failed -- a genuine coverage gap, since
 // the SURVIVING query's own results are still returned (never blanked
 // out, this function's own established best-effort-per-query discipline,
@@ -341,7 +341,7 @@ func (a *Adapter) buildOpenPRFromDetail(ctx context.Context, owner, repo string,
 
 	ci := ports.CIConclusionUnknown
 	if detail.Head.SHA != "" {
-		// fetchCIConclusionLive, deliberately NOT fetchCIConclusion (§60
+		// fetchCIConclusionLive, deliberately NOT fetchCIConclusion (Step 60
 		// review finding A2) -- see that function's own doc comment for
 		// why a LIVE, pre-merge gate needs a STRICT conclusion, distinct
 		// from mergedbetween.go's retrospective-audit-only lenient one.
@@ -431,7 +431,7 @@ func (a *Adapter) buildOpenPRFromDetail(ctx context.Context, owner, repo string,
 
 		HasApprovingReview:  hasApproving,
 		HasChangesRequested: hasChangesRequested,
-		// §62 review finding C4: fetchReviewDecision's own third return --
+		// Step 62 review finding C4: fetchReviewDecision's own third return --
 		// see that field's own doc comment (ports.OpenPR) for the full
 		// "why" and which callers must fail closed on it.
 		ReviewDecisionDegraded: reviewDecisionDegraded,
@@ -466,7 +466,7 @@ func (a *Adapter) buildOpenPRFromDetail(ctx context.Context, owner, repo string,
 // trusted as authority"). See mergedbetween.go's fetchCIConclusion for the
 // RETROSPECTIVE §15.2 audit sibling this function is deliberately NOT --
 // that function's own doc comment now cross-references this one; the two
-// must never be merged back into one, and never share a caller (§60
+// must never be merged back into one, and never share a caller (Step 60
 // review finding A2).
 //
 // STRICT, unlike fetchCIConclusion's lenient "any confirmed success, no
@@ -487,7 +487,7 @@ func (a *Adapter) buildOpenPRFromDetail(ctx context.Context, owner, repo string,
 // specific, more useful fact to report when both are true at once).
 //
 // The combined-status "pending" branch below additionally requires
-// TotalCount > 0 before treating it as an incomplete signal (§60 review
+// TotalCount > 0 before treating it as an incomplete signal (Step 60 review
 // finding P0, second round) -- see combinedStatusResponse's own doc
 // comment (mergedbetween.go) and the inline comment at that branch for
 // the full "why": GitHub reports state=="pending" both for a genuinely
@@ -508,7 +508,7 @@ func (a *Adapter) fetchCIConclusionLive(ctx context.Context, owner, repo, headSH
 			case "success":
 				sawSuccess = true
 			case "pending":
-				// §60 review finding P0 (BLOCKER, second round). The
+				// Step 60 review finding P0 (BLOCKER, second round). The
 				// comment previously here claimed "pending" was "the
 				// combined-status surface's exact analogue of the Checks
 				// API's Conclusion == nil below" -- factually wrong:
@@ -561,7 +561,7 @@ func (a *Adapter) fetchCIConclusionLive(ctx context.Context, owner, repo, headSH
 					// Also never green for a live gate, unlike
 					// fetchCIConclusion's own lenient rule, which leaves a
 					// cancelled run contributing to neither sawFailure nor
-					// sawSuccess at all (§60 review finding A2's own
+					// sawSuccess at all (Step 60 review finding A2's own
 					// "cancelled is likewise ignored" text).
 					sawIncomplete = true
 				case "success", "neutral":
@@ -604,8 +604,8 @@ func (a *Adapter) fetchOpenPRDetail(ctx context.Context, owner, repo string, num
 // page, per_page=100, mirroring fetchHasApprovingReview's own identical
 // bound) and reduces it to each REVIEWER's own LATEST decision before
 // reporting whether at least one carries state APPROVED and whether at
-// least one carries state CHANGES_REQUESTED (§62 review finding C4's own
-// third return, degraded, added below; §60 review finding P1-1,
+// least one carries state CHANGES_REQUESTED (Step 62 review finding C4's own
+// third return, degraded, added below; Step 60 review finding P1-1,
 // second round -- replacing this function's own previous "any
 // CHANGES_REQUESTED review exists, ever" rule). GitHub's own review list
 // is APPEND-ONLY: a reviewer who requested changes and later re-reviewed
@@ -634,7 +634,7 @@ func (a *Adapter) fetchOpenPRDetail(ctx context.Context, owner, repo string, num
 // commented has not thereby withdrawn that decision; only a LATER
 // APPROVED or CHANGES_REQUESTED review from that SAME reviewer does.
 //
-// degraded (§62 review finding C4, BLOCKER, fixed) is true iff this fetch
+// degraded (Step 62 review finding C4, BLOCKER, fixed) is true iff this fetch
 // itself failed (transient HTTP error OR a response that did not decode) --
 // BEFORE this fix, either failure silently returned (false, false),
 // indistinguishable from a genuine, confirmed "nobody has requested

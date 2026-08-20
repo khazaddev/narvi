@@ -422,7 +422,7 @@ const (
 //
 // The fix: internal/app/reviewcontext.Fetch already calls GetPullRequest
 // with the bot's own credential on EVERY review turn (to resolve
-// HeadSHA/BaseRef/Stack, §62/§17.6) -- the exact endpoint that already
+// HeadSHA/BaseRef/Stack, Step 62/§17.6) -- the exact endpoint that already
 // returns "title"/"body" too (githubapi.PullRequest.Title/Body). Fetch
 // carries those onto PreFetchedContext.Title/Body (this file, above), and
 // RenderTurnPrompt below renders them into their own delimited,

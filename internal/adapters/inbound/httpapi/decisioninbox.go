@@ -123,7 +123,7 @@ func decisionInboxItemToDTO(it decisioninbox.Item) restdtos.DecisionInboxItem {
 		// ciGreen/findings/isHandoff/hasApprovingReview/hasChangesRequested
 		// are PR-shaped fields, gated on "is this row a PR at all"
 		// (it.Provenance is set unconditionally by buildPROpenItem for
-		// EVERY PR row) -- deliberately NOT on Kind (§60 review finding
+		// EVERY PR row) -- deliberately NOT on Kind (Step 60 review finding
 		// C4): Kind alone cannot distinguish a handoff PR
 		// (KindAwaitingApproval, Provenance non-nil) from an ordinary
 		// plan-approval row (KindAwaitingApproval, Provenance nil), so the
@@ -133,7 +133,7 @@ func decisionInboxItemToDTO(it decisioninbox.Item) restdtos.DecisionInboxItem {
 		dto.CiGreen = &ciGreen
 		// findings renders null, never it.Findings' own internal
 		// fail-closed sentinel value, whenever the count itself could not
-		// be determined (§60 review finding P3-3, second round) -- see
+		// be determined (Step 60 review finding P3-3, second round) -- see
 		// Item.FindingsUnknown's own doc comment: that sentinel exists
 		// ONLY to fail the eligibility computation closed, and must never
 		// be presented on the wire as an honest, real findings count.
@@ -185,7 +185,7 @@ func decisionInboxItemToDTO(it decisioninbox.Item) restdtos.DecisionInboxItem {
 // human-merged... The Merge button re-validates CI, approval state, and
 // RBAC server-side at click time; the rendered queue is never trusted as
 // authority"). Sequence: decode + validate the request, a CHEAP role-only
-// authz pre-check (§60 review finding A5, below), resolve the caller's
+// authz pre-check (Step 60 review finding A5, below), resolve the caller's
 // own decrypted GitHub token, LIVE-revalidate (decisioninbox.
 // RevalidateForMerge -- never the cache), THEN the SAME authz.Authorize
 // call AGAIN -- now authoritative (ActionMergePR, OwnedOrJoined=true --
@@ -199,7 +199,7 @@ func decisionInboxItemToDTO(it decisioninbox.Item) restdtos.DecisionInboxItem {
 // never claim otherwise" discipline).
 //
 // The "approval state" mockups.html's own decision 33 says this endpoint
-// re-validates (§60 review finding A4) is SPECIFICALLY GitHub's own
+// re-validates (Step 60 review finding A4) is SPECIFICALLY GitHub's own
 // HasChangesRequested fact, enforced inside RevalidateForMerge -- a hard
 // block, since nobody should one-click merge a PR a human explicitly
 // requested changes on. It is NOT GitHub's own HasApprovingReview: §16.1
@@ -248,7 +248,7 @@ func MergePullRequest(deps decisioninbox.Deps, sourceControl ports.SourceControl
 			return
 		}
 
-		// Cheap, role-only authz PRE-CHECK (§60 review finding A5) --
+		// Cheap, role-only authz PRE-CHECK (Step 60 review finding A5) --
 		// short-circuits a viewer (denied ActionMergePR unconditionally,
 		// regardless of OwnedOrJoined -- see authz.Authorize's own
 		// matrix, internal/domain/authz/authorize.go) at ZERO I/O, before
@@ -311,7 +311,7 @@ func MergePullRequest(deps decisioninbox.Deps, sourceControl ports.SourceControl
 		}
 
 		// RBAC -- a DEFENSIVE re-assertion, NOT where a member's own PR
-		// ownership is actually enforced (§60 review finding P3-2, second
+		// ownership is actually enforced (Step 60 review finding P3-2, second
 		// round, correcting this comment: the previous text here claimed
 		// this call's own OwnedOrJoined "becomes true, FOR REAL, once live
 		// revalidation has itself confirmed" assignment, and called this
@@ -373,7 +373,7 @@ func MergePullRequest(deps decisioninbox.Deps, sourceControl ports.SourceControl
 			return
 		}
 
-		// §62 review finding T1/M5 (fixed): this is the human 1-click
+		// Step 62 review finding T1/M5 (fixed): this is the human 1-click
 		// merge-completion path §21.2 stage 2's own contradiction-rate
 		// metric names as ONE of its two 'confirmed' producers ("the
 		// engine's own judgment stood") -- outcomes.go's own

@@ -328,7 +328,7 @@ type SessionCoalescer struct {
 // avoid. Reused verbatim, never recaptured: both categories classify the
 // EXACT same raw mention text.
 //
-// reviewHeadSHA (§62 review finding C2, CRITICAL, fixed) is the commit
+// reviewHeadSHA (Step 62 review finding C2, CRITICAL, fixed) is the commit
 // SHA handler.go's own reviewcontext.Fetch call just anchored req.Prompt's
 // own pre-fetched diff to (empty when that fetch failed/never ran) --
 // threaded through to whichever of the two branches below actually

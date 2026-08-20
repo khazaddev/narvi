@@ -188,7 +188,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		// call later in EXECUTION order, while keeping it the LAST
 		// prepend before RenderTurnPrompt, preserves its own existing
 		// FIRST position in the text exactly.
-		// reviewHeadSHA (§62 review finding C2, CRITICAL, fixed) is
+		// reviewHeadSHA (Step 62 review finding C2, CRITICAL, fixed) is
 		// captured here and threaded into CreateTurnCore below via
 		// CreateTurnOptions.ReviewHeadSHA -- persisted onto THIS turn's
 		// own row (turns.review_head_sha, set once at creation), never

@@ -122,7 +122,7 @@ func (notImplementedFixMerger) CherryPickAndMerge(context.Context, string, strin
 // its OWN small interface (mirroring PullRequestResolver's own identical
 // "small interface over a real outbound call" precedent this file already
 // cites) rather than continuing to reuse reviewcontext.Fetcher for
-// convenience: §62 review finding C2 narrowed THAT interface to exactly
+// convenience: Step 62 review finding C2 narrowed THAT interface to exactly
 // what review-turn-context assembly needs (GetPullRequest/GetCompareDiff),
 // which no longer includes GetPullRequestDiff at all -- this call site's
 // own need was always genuinely different, and borrowing a neighboring
