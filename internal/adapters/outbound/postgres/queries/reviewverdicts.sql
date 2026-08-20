@@ -1,4 +1,4 @@
--- Queries backing ReviewVerdictStore (Step 62, §21.1) -- see
+-- Queries backing ReviewVerdictStore (§21.1) -- see
 -- migrations/000067_review_verdicts.up.sql's own doc comment for the
 -- table's full append-only design.
 
@@ -8,9 +8,9 @@
 -- httpapi.PostReviewVerdict (reviewverdict.go), inside the SAME
 -- transaction as that handler's existing review_findings upserts and
 -- outbox write. digest_summary/digest_arch_decisions/digest_stack_risks/
--- digest_unverified_limits (Step 66, §26.1, migrations/
+-- digest_unverified_limits (§26.1, migrations/
 -- 000077_review_verdicts_digest.up.sql) and digest_description_adequacy/
--- digest_adequacy_explanation/digest_proposed_body (Step 67, §26.2,
+-- digest_adequacy_explanation/digest_proposed_body (§26.2,
 -- migrations/000078_review_verdicts_description_adequacy.up.sql) forward
 -- internal/domain/reviewpost.Digest verbatim -- see those migrations' own
 -- doc comments for why all seven stay nullable at the schema level
@@ -18,7 +18,7 @@
 -- digest_adequacy_explanation being APPLICATION-required on every new
 -- post.
 --
--- review_path (Step 68, §26.3, migrations/
+-- review_path (§26.3, migrations/
 -- 000081_review_verdicts_review_path.up.sql) forwards turns.review_depth
 -- verbatim -- nullable, NULL for a verdict posted before this Step
 -- existed, or whose own turn never had a resolvable depth (the SAME
@@ -26,7 +26,7 @@
 -- already has, reviewverdict.go).
 --
 -- counter_review/fact_check/fact_check_killed/digest_contested_points
--- (Step 69, §26.4/§26.6, migrations/
+-- (§26.4/§26.6, migrations/
 -- 000084_review_verdicts_counter_review.up.sql) forward internal/domain/
 -- review.CounterReviewStatus, internal/domain/reviewpost.FactCheckStatus/
 -- FactCheckKilled/Digest.ContestedPoints verbatim -- see that migration's

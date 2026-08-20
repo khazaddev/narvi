@@ -1,4 +1,4 @@
--- Queries backing FalsePositivePatternStore (Step 63, "review: learned
+-- Queries backing FalsePositivePatternStore ("review: learned
 -- false-positive patterns", §22.2/§22.4) -- see
 -- migrations/000073_review_false_positive_patterns.up.sql's own doc
 -- comment for the table's full design.

@@ -1,4 +1,4 @@
--- Queries backing AutoApprovalOutcomeStore (Step 62, §21.2 stage 2) -- see
+-- Queries backing AutoApprovalOutcomeStore (§21.2 stage 2) -- see
 -- migrations/000070_auto_approval_outcomes.up.sql's own doc comment for
 -- the contradiction-rate calibration read model's full design.
 

@@ -1,4 +1,4 @@
--- Queries backing LinearAgentSessionStore (Step 34, "Linear ingress",
+-- Queries backing LinearAgentSessionStore ("Linear ingress",
 -- §8.10 -- migrations/000030_linear_agent_sessions.up.sql's own doc
 -- comment has the full "why this table exists at all" writeup).
 
@@ -39,10 +39,10 @@ SELECT * FROM linear_agent_sessions
 WHERE agent_session_id = $1;
 
 -- name: GetLinearAgentSessionBySessionID :one
--- The REVERSE lookup Step 35 ("outbox delivery") needs: given a
+-- The REVERSE lookup §5.1 ("outbox delivery") needs: given a
 -- session_id, which agent_session_id/organization_id does it back? Backed
 -- by migrations/000030_linear_agent_sessions.up.sql's own already-existing
--- linear_agent_sessions_session_id_idx (Step 34 added this index up
+-- linear_agent_sessions_session_id_idx (added up
 -- front). A pgx.ErrNoRows result means this session was never created via
 -- a Linear agent session -- the caller skips enqueuing a Linear
 -- notification entirely rather than fabricating one.

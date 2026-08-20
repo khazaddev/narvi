@@ -20,7 +20,7 @@ SELECT * FROM identities
 WHERE provider = $1 AND external_id = $2;
 
 -- name: GetIdentityByUserAndProvider :one
--- Step 21 ("e2e happy path")'s own scm-credentials endpoint uses this to
+-- §9.3 ("e2e happy path")'s own scm-credentials endpoint uses this to
 -- find a session's created_by user's GitHub identity (to decrypt its
 -- access_token_encrypted) -- the OAuth callback's own lookup above goes
 -- the other direction (provider+external_id -> user).
@@ -33,7 +33,7 @@ SET access_token_encrypted = $2
 WHERE id = $1
 RETURNING *;
 
--- Step 39 ("identities + full RBAC", §13.2/§13.3) additions --
+-- §13.2 ("identities + full RBAC", §13.2/§13.3) additions --
 -- ListVerifiedIdentityUserIDsByEmail is the auto-link algorithm's own
 -- "match against ... verified identity emails" half (the OTHER half,
 -- users.primary_email, is GetUserByPrimaryEmail in users.sql);

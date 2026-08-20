@@ -1,4 +1,4 @@
--- Queries backing RepoSettingsStore (§8.2/Step 47, §21.2): a small,
+-- Queries backing RepoSettingsStore (§8.2, §21.2): a small,
 -- extensible table of admin-configured, per-repo policy flags -- see
 -- migrations/000044_repo_settings.up.sql's own doc comment for the full
 -- "one shared table, not one bespoke table per toggle" design rationale.
@@ -15,7 +15,7 @@ SELECT * FROM repo_settings WHERE repo_full_name = $1;
 -- the full, current desired value rather than patching a delta, so a
 -- concurrent double-submit from the same admin settles on whichever write
 -- lands last, never a non-deterministic partial merge. sentinel_autofix_
--- enabled (Step 48, §17.1) is this SAME table's own further admin-only,
+-- enabled (§17.1) is this SAME table's own further admin-only,
 -- per-repo boolean, exactly as migrations/000044's own doc comment
 -- anticipated -- see migrations/000048_repo_settings_sentinel_autofix.up.sql.
 INSERT INTO repo_settings (repo_full_name, block_on_high_risk, sentinel_autofix_enabled, updated_at)
@@ -24,8 +24,8 @@ ON CONFLICT (repo_full_name)
 DO UPDATE SET block_on_high_risk = EXCLUDED.block_on_high_risk, sentinel_autofix_enabled = EXCLUDED.sentinel_autofix_enabled, updated_at = now()
 RETURNING *;
 
--- UpsertAutoApprovalSettings (Step 62, §21.2) is REMOVED as of §62
--- review finding C5 (MEDIUM but a privilege boundary, fixed) -- it wrote
+-- UpsertAutoApprovalSettings (§21.2) is REMOVED (an adversarial-review
+-- fix, MEDIUM but a privilege boundary) -- it wrote
 -- all three auto-approval/auto-merge columns together, even though the
 -- TWO REST endpoints that ever called it (PutAutoApprovalSettings,
 -- gated by ActionConfigureAutoApprove; PutAutoMergeToggle, admin-only
@@ -46,7 +46,7 @@ RETURNING *;
 -- read-then-preserve convention a future edit could easily forget.
 
 -- name: UpsertAutoMergeToggle :one
--- §62 review finding C5's own fix: idempotent create-or-update of ONLY
+-- Idempotent create-or-update of ONLY
 -- auto_merge_enabled (migrations/000069_repo_settings_auto_approval.up.sql)
 -- -- mirrors UpsertRWXPreviewSettings' own identical "touches ONLY these
 -- columns, ON CONFLICT leaves every other column untouched" shape.
@@ -61,7 +61,7 @@ DO UPDATE SET auto_merge_enabled = EXCLUDED.auto_merge_enabled, updated_at = now
 RETURNING *;
 
 -- name: UpsertAutoApprovalEligibility :one
--- §62 review finding C5's own fix: idempotent create-or-update of ONLY
+-- Idempotent create-or-update of ONLY
 -- max_auto_approve_files_changed/sensitive_blast_radius_tags -- the
 -- column-scoped sibling of UpsertAutoMergeToggle immediately above (see
 -- that query's own doc comment for the full "why"). auto_merge_enabled
@@ -75,12 +75,12 @@ DO UPDATE SET max_auto_approve_files_changed = EXCLUDED.max_auto_approve_files_c
 RETURNING *;
 
 -- name: UpsertAutoRetriggerReviewToggle :one
--- Step 65's own admin-only, per-repo opt-in (§24.5, migrations/
+-- §24's own admin-only, per-repo opt-in (§24.5, migrations/
 -- 000076_repo_settings_auto_retrigger_review.up.sql) -- idempotent
 -- create-or-update of ONLY auto_retrigger_review_enabled, mirroring
 -- UpsertAutoMergeToggle's own identical column-scoped shape immediately
--- above (§62 review finding C5's fix, generalized to this further,
--- independently-gated toggle): every other repo_settings column is left
+-- above (the same
+-- independently-gated-toggle pattern): every other repo_settings column is left
 -- COMPLETELY untouched, so a concurrent write to any of them (an admin's
 -- PutRepoSettings, PutAutoMergeToggle, or PutAutoApprovalSettings call)
 -- can never race with this one at the database level.
@@ -91,12 +91,12 @@ DO UPDATE SET auto_retrigger_review_enabled = EXCLUDED.auto_retrigger_review_ena
 RETURNING *;
 
 -- name: UpsertDescriptionAutofixToggle :one
--- Step 67's own admin-only, per-repo opt-in (§26.2, migrations/
+-- §26.2's own admin-only, per-repo opt-in (§26.2, migrations/
 -- 000079_repo_settings_description_autofix.up.sql) -- idempotent
 -- create-or-update of ONLY description_autofix_enabled, mirroring
 -- UpsertAutoMergeToggle/UpsertAutoRetriggerReviewToggle's own identical
--- column-scoped shape above (§62 review finding C5's fix, generalized to
--- this further, independently-gated toggle): every other repo_settings
+-- column-scoped shape above (the same independently-gated-toggle
+-- pattern): every other repo_settings
 -- column is left COMPLETELY untouched, so a concurrent write to any of
 -- them can never race with this one at the database level.
 INSERT INTO repo_settings (repo_full_name, description_autofix_enabled, updated_at)
@@ -106,13 +106,13 @@ DO UPDATE SET description_autofix_enabled = EXCLUDED.description_autofix_enabled
 RETURNING *;
 
 -- name: UpsertReviewDepthConfig :one
--- Step 68's own admin-only, per-repo reviewDepth config (§26.3,
+-- §26.3's own admin-only, per-repo reviewDepth config (§26.3,
 -- migrations/000082_repo_settings_review_depth.up.sql) -- idempotent
 -- create-or-update of ONLY review_depth_mode/review_depth_deep_paths,
 -- mirroring UpsertAutoMergeToggle/UpsertAutoRetriggerReviewToggle/
 -- UpsertDescriptionAutofixToggle's own identical column-scoped shape
--- above (§62 review finding C5's fix, generalized to this further,
--- independently-gated config): every other repo_settings column is left
+-- above (the same independently-gated-config pattern): every other
+-- repo_settings column is left
 -- COMPLETELY untouched, so a concurrent write to any of them can never
 -- race with this one at the database level.
 INSERT INTO repo_settings (repo_full_name, review_depth_mode, review_depth_deep_paths, updated_at)
@@ -122,13 +122,13 @@ DO UPDATE SET review_depth_mode = EXCLUDED.review_depth_mode, review_depth_deep_
 RETURNING *;
 
 -- name: UpsertReviewCostBudget :one
--- Step 69's own admin-only, per-repo reviewCostBudget config (§26.7,
+-- §26.4's own admin-only, per-repo reviewCostBudget config (§26.7,
 -- migrations/000085_repo_settings_review_cost_budget.up.sql) -- idempotent
 -- create-or-update of ONLY review_cost_budget_light_usd/
 -- review_cost_budget_deep_usd, mirroring UpsertReviewDepthConfig's own
--- identical column-scoped shape immediately above (§62 review finding
--- C5's fix, generalized to this further, independently-gated config):
--- every other repo_settings column is left COMPLETELY untouched, so a
+-- identical column-scoped shape immediately above (the same
+-- independently-gated-config pattern): every other repo_settings column
+-- is left COMPLETELY untouched, so a
 -- concurrent write to any of them can never race with this one at the
 -- database level.
 INSERT INTO repo_settings (repo_full_name, review_cost_budget_light_usd, review_cost_budget_deep_usd, updated_at)
@@ -138,12 +138,12 @@ DO UPDATE SET review_cost_budget_light_usd = EXCLUDED.review_cost_budget_light_u
 RETURNING *;
 
 -- name: UpsertSessionsEnabled :one
--- Step 76's own cohort-rollout enrollment gate (§10 Phase 6, §32) --
+-- §10's own cohort-rollout enrollment gate (§10 Phase 6, §32) --
 -- idempotent create-or-update of ONLY sessions_enabled, mirroring
 -- UpsertAutoMergeToggle/UpsertAutoRetriggerReviewToggle/
 -- UpsertDescriptionAutofixToggle's own identical column-scoped shape
--- above (§62 review finding C5's fix, generalized to this further,
--- independently-gated toggle): every other repo_settings column is left
+-- above (the same
+-- independently-gated-toggle pattern): every other repo_settings column is left
 -- COMPLETELY untouched, so a concurrent write to any of them can never
 -- race with this one at the database level. Written ONLY by the seed
 -- tool in v1 (§32: "seed-manifest-only") -- no REST route calls this yet.
@@ -165,7 +165,7 @@ RETURNING *;
 SELECT * FROM repo_settings WHERE auto_merge_enabled = true;
 
 -- name: UpsertRWXPreviewSettings :one
--- Step 57 ("RWX provider + previews", §4.1.2 point 1): idempotent
+-- §4.1 ("RWX provider + previews", §4.1.2 point 1): idempotent
 -- create-or-update of ONLY the three RWX-preview columns (migrations/
 -- 000059_repo_settings_rwx_preview.up.sql), keyed on repo_full_name --
 -- deliberately independent of UpsertRepoSettings above: block_on_high_risk/

@@ -2,7 +2,7 @@
 -- session mechanism, migrations/000017_auth_v1.up.sql). CreateUserSession
 -- mints a fresh row -- the plaintext token itself, and hashing it, are the
 -- caller's own job (internal/platform.GenerateToken / HashToken, reused
--- unchanged from Step 19's ws-token mechanism), this query only ever sees
+-- unchanged from §6.2's ws-token mechanism), this query only ever sees
 -- the already-hashed value. GetUserSessionByHash is the auth middleware's
 -- own verify-by-hash lookup on every gated request.
 -- DeleteUserSession is logout's own real revocation -- a genuine DELETE,

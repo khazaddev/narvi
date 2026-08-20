@@ -1,5 +1,5 @@
--- Queries backing ImageBuildStore (Step 26, "image builds", §8.5-note/
--- §10-P2; Step 41, "warm boot: shared fingerprint", §19.1). See
+-- Queries backing ImageBuildStore ("image builds", §8.5-note/
+-- §10-P2; "warm boot: shared fingerprint", §19.1). See
 -- migrations/000024_image_builds.up.sql and
 -- migrations/000039_image_builds_shared_fingerprint.up.sql for the
 -- table's own doc comments (why base/repo_urls/runtime_version are
@@ -125,7 +125,7 @@ WHERE fingerprint = $1 AND status = 'building'
 RETURNING *;
 
 -- name: ListReadyImageBuilds :many
--- Step 42's own freshness-pump poll query (§19.2): every SHARED (repo-
+-- §19.2's own freshness-pump poll query (§19.2): every SHARED (repo-
 -- bearing) 'ready' row -- a base-only row (repo_urls = '{}') is never
 -- stale in the sense this design cares about (there is no repo tip to
 -- drift from), so it is excluded here at the SQL level rather than making

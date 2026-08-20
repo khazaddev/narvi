@@ -1,4 +1,4 @@
--- Queries backing contract_drift_snapshots (Step 27, "mocking + contract
+-- Queries backing contract_drift_snapshots ("mocking + contract
 -- drift", §14.3, migrations/000025_mock_config_contract_drift.up.sql). See
 -- that migration's own doc comment for the table's shape and the
 -- last_contracts_fingerprint=="" sentinel meaning. Written/read ONLY by

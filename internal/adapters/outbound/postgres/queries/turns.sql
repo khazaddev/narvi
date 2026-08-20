@@ -3,14 +3,14 @@
 -- turns_one_processing_per_session partial unique index (§3.3).
 
 -- name: CreateTurn :one
--- prompt/model_id/plan_mode (migrations/000018_session_repos.up.sql, Step
--- 21) are the turn's own dispatch-time inputs -- prompt/model_id are
+-- prompt/model_id/plan_mode (migrations/000018_session_repos.up.sql,
+-- §9.3) are the turn's own dispatch-time inputs -- prompt/model_id are
 -- nullable and plan_mode defaults false, so every EXISTING call site
 -- (every prior Step's `CreateTurnParams{SessionID, Status}`) keeps
 -- compiling and behaving identically: the zero-value nil/nil/false it
 -- already implicitly got before this Step's own columns existed.
 --
--- effort (migrations/000063_turn_session_effort.up.sql, Step 59, §29.8)
+-- effort (migrations/000063_turn_session_effort.up.sql, §29.8)
 -- mirrors model_id's own shape exactly, one column over -- plain
 -- positional param like model_id itself (this query's own existing style
 -- for a nullable column; sqlc generates a keyed struct either way, so
@@ -18,7 +18,7 @@
 -- CreateTurnParams{...} literal omitting Effort -- keeps compiling and
 -- behaving identically: the zero value, nil, "use the default").
 --
--- review_head_sha (migrations/000072_turns_review_head_sha.up.sql, §62
+-- review_head_sha (migrations/000072_turns_review_head_sha.up.sql, §21
 -- review finding C2) mirrors effort's own identical shape one column
 -- further -- nil/absent for every non-review turn (every existing call
 -- site), set exactly once, at creation, by the two review-turn-creation
@@ -27,20 +27,20 @@
 -- diff was anchored to. See that migration's own doc comment for the
 -- full "why".
 --
--- answer_only (migrations/000074_plan_followup.up.sql, Step 64, §23.2)
+-- answer_only (migrations/000074_plan_followup.up.sql, §23.2)
 -- mirrors review_head_sha's own identical shape one column further --
 -- nil/absent for every existing call site (every CreateTurnParams
 -- literal that predates this Step), set exactly once, at creation, by
 -- createTurnLocked's own plan_followup gate (turn.go). See that
 -- migration's own doc comment for the full "why NULL vs FALSE" split.
 --
--- review_depth (migrations/000080_turns_review_depth.up.sql, Step 68,
+-- review_depth (migrations/000080_turns_review_depth.up.sql,
 -- §26.3) mirrors review_head_sha's own identical shape one column
 -- further -- nil/absent for every non-review turn, set exactly once, at
 -- creation, by every review-turn-creation path.
 --
 -- review_depth_decision (migrations/000083_turns_review_depth_decision.up.sql,
--- Step 68, §18.4's own precedent) is review_depth's own richer sibling --
+-- §18.4's own precedent) is review_depth's own richer sibling --
 -- the full internal/domain/reviewtriage.DecisionRecord, JSON-marshaled by
 -- the caller (this query does no encoding of its own).
 INSERT INTO turns (session_id, status, prompt, model_id, plan_mode, effort, review_head_sha, answer_only, review_depth, review_depth_decision)
@@ -59,8 +59,8 @@ WHERE id = $1;
 -- each is set at most once, at the (from, trigger) transition that
 -- reaches Dispatched or a terminal state respectively).
 --
--- dispatched_sandbox_gen (migration 000026_turn_dispatch_gen.up.sql, Step
--- 28 "turn recovery") is stamped by TWO distinct call sites sharing this
+-- dispatched_sandbox_gen (migration 000026_turn_dispatch_gen.up.sql,
+-- §3.3 "turn recovery") is stamped by TWO distinct call sites sharing this
 -- SAME query, both at the moment a Prompt payload is built and about to be
 -- sent: tryPlanDispatch (internal/app/sessionactor/dispatch.go), alongside
 -- the SAME status=dispatched write that already sets dispatched_at, for
@@ -74,7 +74,7 @@ WHERE id = $1;
 -- dispatched_event_id (migrations/000089_turns_dispatched_event_id.up.sql)
 -- is stamped by those SAME two call sites, in the SAME write, from
 -- MaxEventIDForSession (queries/events.sql): the events-log high-water
--- mark at the instant of dispatch, which the Step 71 corroboration
+-- mark at the instant of dispatch, which the §26.4 corroboration
 -- queries use as their lower bound instead of a timestamp. It follows the
 -- identical sqlc.narg + COALESCE "absent argument leaves the column
 -- untouched" convention as the three columns above it.
@@ -112,7 +112,7 @@ SET progress_notified_at = $2
 WHERE id = $1 AND progress_notified_at IS NULL;
 
 -- name: GetProcessingTurnForSession :one
--- Step 61 ("builder epistemic pre-action check", §20.2) own epistemic-
+-- §20 ("builder epistemic pre-action check", §20.2) own epistemic-
 -- outcome-posting endpoint's first read -- mirrors WorkflowStore's own
 -- GetRunningRunForSession/GetLiveStepRunForRun precedent (queries/
 -- workflows.sql): the caller (a sandbox-authenticated POST naming no turn

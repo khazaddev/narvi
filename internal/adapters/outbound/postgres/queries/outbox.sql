@@ -1,5 +1,5 @@
 -- Queries backing Outbox (§4.3, §5.1). CreateOutboxEntry/GetOutboxEntry
--- prove the pipeline end to end (Step 31); the next five back Step 35's
+-- prove the pipeline end to end (§5.1); the next five back §5.1's
 -- ("outbox delivery") own claim/attempt/record delivery-worker loop
 -- (internal/app/outboxworker), mirroring internal/adapters/outbound/
 -- postgres/queries/image_builds.sql's own ListDue/Claim/RecordSuccess/
@@ -173,7 +173,7 @@ SELECT COUNT(*) FROM outbox
 WHERE status = 'pending';
 
 -- name: ListDeadLetterOutboxEntries :many
--- Step 60 ("decision inbox: read model + API", §16.1)'s own
+-- §16 ("decision inbox: read model + API", §16.1)'s own
 -- needs_attention row source: every outbox row that exhausted retries
 -- (MarkOutboxEntryDeadLetter above), bounded by $1 (§21.1's own "bounded
 -- from day one" discipline). Ordered by created_at, NOT a dedicated

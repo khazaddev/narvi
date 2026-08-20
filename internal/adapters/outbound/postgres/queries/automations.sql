@@ -1,10 +1,10 @@
--- Queries backing AutomationStore (Step 51, "automations: engine", §3.5;
--- Step 52, "automations: triggers & extras", §8.4), migrations/
+-- Queries backing AutomationStore ("automations: engine", §3.5;
+-- "automations: triggers & extras", §8.4), migrations/
 -- 000051_automations.up.sql, migrations/
 -- 000055_automations_triggers_and_extras.up.sql.
 
 -- name: CreateAutomation :one
--- Step 52's own real caller: httpapi.CreateAutomation (POST
+-- §8.4's own real caller: httpapi.CreateAutomation (POST
 -- /api/automations). trigger_type/trigger_config/webhook_token_hash back
 -- this Step's own condition builder; sandbox_path_scope/
 -- sandbox_mock_configured/sandbox_contracts_path back §8.4's own
@@ -35,7 +35,7 @@ SELECT * FROM automations
 WHERE webhook_token_hash = $1;
 
 -- name: ListAutomations :many
--- Backs GET /api/automations (Step 52, §8.4's own "creator/status
+-- Backs GET /api/automations (§8.4's own "creator/status
 -- filters"). Both filters are OPTIONAL and independent -- sqlc.narg's own
 -- "IS NULL OR" idiom means an absent (nil) filter matches every row, a
 -- present one narrows -- so this single query serves "all automations",
@@ -183,7 +183,7 @@ RETURNING *;
 
 -- name: ResumeAutomation :one
 -- Backs automation.TriggerResume (internal/domain/automation) -- no HTTP
--- caller exists yet in this Step (Step 52/76 own the actual "Resume"
+-- caller exists yet in this Step (§8.4/§10 own the actual "Resume"
 -- button, mockups.html's own Automations view), reserved so that surface
 -- needs no store-layer change to use it. Guarded by "AND status =
 -- 'paused'" so a non-paused automation's own resume attempt affects zero

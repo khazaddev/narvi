@@ -1,4 +1,4 @@
--- Queries backing AutomationRunStore (Step 51, "automations: engine",
+-- Queries backing AutomationRunStore ("automations: engine",
 -- §3.5), migrations/000053_automation_runs.up.sql.
 
 -- name: CreateAutomationRun :one

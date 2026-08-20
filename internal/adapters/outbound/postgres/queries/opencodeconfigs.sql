@@ -1,4 +1,4 @@
--- Queries backing OpenCodeConfigStore (Step 72, "sandbox secrets &
+-- Queries backing OpenCodeConfigStore ("sandbox secrets &
 -- opencode config", §27.2) -- migrations/000091_opencode_configs.up.sql.
 -- document is plaintext JSONB end to end -- unlike sandboxsecrets.sql/
 -- providercredentials.sql, nothing here ever touches

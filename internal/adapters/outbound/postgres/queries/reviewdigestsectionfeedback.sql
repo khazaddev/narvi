@@ -1,4 +1,4 @@
--- Queries backing ReviewDigestSectionFeedbackStore (Step 69, §26.5) -- see
+-- Queries backing ReviewDigestSectionFeedbackStore (§26.5) -- see
 -- migrations/000086_review_digest_section_feedback.up.sql's own doc
 -- comment for the table's full design.
 

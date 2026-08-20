@@ -1,4 +1,4 @@
--- Queries backing ProviderCredentialStore (Step 53, "provider credential
+-- Queries backing ProviderCredentialStore ("provider credential
 -- injection", §25.1/§25.3) -- migrations/000056_provider_credentials.up.sql.
 -- value_encrypted is ciphertext (platform.EncryptToken output) end to
 -- end here; nothing in this file, or the Go store wrapping it, ever
@@ -46,7 +46,7 @@ RETURNING *;
 DELETE FROM provider_credentials WHERE id = $1;
 
 -- name: UpsertOAuthProviderCredential :one
--- Step 59's own ChatGPT-account-OAuth link/relink flow (§29.3/§29.4),
+-- §8.8's own ChatGPT-account-OAuth link/relink flow (§29.3/§29.4),
 -- internal/app/chatgptlink. Always scope='user', kind='oauth' -- the ONLY
 -- creating path for either value (§29.4: "v1 creates user-scope rows ONLY
 -- via the link flow"). The ON CONFLICT arbiter matches provider_
@@ -156,7 +156,7 @@ RETURNING *;
 -- could possibly apply to one session -- the global row for each
 -- provider (always included), any repo-scoped row for one of this
 -- session's own repo_full_names, the environment-scoped row for this
--- session's own environment_id (if any), and -- Step 59, §29.4's own
+-- session's own environment_id (if any), and -- §29.4's own
 -- "resolution keys on sessions.created_by" rule -- the user-scoped row for
 -- the session's own creator (if any). repo_full_names may be an empty
 -- array (matches nothing, never an error); environment_id/user_id are
@@ -172,14 +172,14 @@ RETURNING *;
 -- and runs internal/domain/providercredential.Resolve over each group.
 --
 -- The trailing AND (kind <> 'oauth' OR oauth_needs_relink = false) is
--- Step 59's own addition (§29.5: "a terminal refresh failure ... the row
+-- §8.8's own addition (§29.5: "a terminal refresh failure ... the row
 -- stops being served"): a needs-relink oauth row is excluded from the
 -- candidate set entirely, so Resolve simply never sees it -- exactly as
 -- if no credential were configured for that provider at that scope,
 -- falling through to whatever OTHER scope might still resolve. A no-op
 -- for every api_key row (oauth_needs_relink is NEVER true for kind <>
 -- 'oauth', enforced by provider_credentials_kind_oauth_shape), so this
--- changes nothing for Step 53's own existing static-key resolution.
+-- changes nothing for §25.1's own existing static-key resolution.
 SELECT * FROM provider_credentials
 WHERE (scope = 'global'
    OR (scope = 'repo' AND scope_target_id = ANY(sqlc.arg('repo_full_names')::text[]))
