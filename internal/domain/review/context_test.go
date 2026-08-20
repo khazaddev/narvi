@@ -304,7 +304,7 @@ func TestRenderTurnPrompt_VerdictToolInstructionsAlwaysLast(t *testing.T) {
 // TestRenderTurnPrompt_DeepPathRequiresDigestFields pins D2's own fix: on
 // the light path (DeepPath false, the zero value) the three deep-path
 // digest fields still read "REQUESTED, not required", exactly as every
-// pre-Step-68 review turn's prompt always has -- but on the deep path
+// pre-existing review turn's prompt always has -- but on the deep path
 // (DeepPath true) the SAME three fields now read as REQUIRED, matching
 // reviewpost.ValidateVerdictInput's own deep-path digest-completeness
 // check to the letter. A mutation that hardcodes verdictToolInstructions
@@ -391,7 +391,7 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 		string(restdtos.PostedFindingSeverityLow), string(restdtos.PostedFindingSeverityMedium), string(restdtos.PostedFindingSeverityHigh),
 		// (§26.1): "digest" (and its own per-field object) was
 		// completely absent from this template before this Step -- an agent
-		// following only the pre-Step-66 template could never emit a
+		// following only the pre-existing template could never emit a
 		// digest at all, and PostReviewVerdictRequest.digest is now
 		// REQUIRED (unlike findings above), so every such call would be
 		// rejected 400 by reviewpost.ValidateVerdictInput's own
@@ -401,7 +401,7 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 		// (§26.2): "descriptionAdequacy"/"adequacyExplanation"
 		// (REQUIRED)/"proposedBody" (REQUESTED) were completely absent from
 		// this template before this Step -- an agent following only the
-		// pre-Step-67 template could never emit them, and
+		// pre-existing template could never emit them, and
 		// PostReviewVerdictRequest.digest.descriptionAdequacy/
 		// adequacyExplanation are now REQUIRED, so every such call would be
 		// rejected 400 by reviewpost.ValidateVerdictInput's own
@@ -411,7 +411,7 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 		// (§26.4/§26.6): "factCheck"/"factCheckKilled" (REQUIRED,
 		// both paths) and "counterReview" (deep-path only) were completely
 		// absent from this template before this Step -- an agent following
-		// only the pre-Step-69 template could never emit them, and
+		// only the pre-existing template could never emit them, and
 		// PostReviewVerdictRequest.factCheck/factCheckKilled are now
 		// REQUIRED, so every such call would be rejected 400 by
 		// reviewpost.ValidateVerdictInput's own ErrInvalidFactCheck.

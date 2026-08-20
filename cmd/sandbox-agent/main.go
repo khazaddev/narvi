@@ -92,7 +92,7 @@
 // StartTurn (adapter.go invokes it immediately once resolveSession
 // resolves a real id, well before the rest of a turn's own, possibly-
 // minutes-long execution), calling h.bridge.SetConversationID from inside
-// that callback -- replacing the old Step-17 wiring, which only ever read
+// that callback -- replacing the old §7 wiring, which only ever read
 // StartTurn's own RETURN value, meaning the first report of a real
 // conversation id used to happen only after a turn had basically already
 // ended. wsbridge.Bridge.SetConversationID itself (internal/sandboxagent/
@@ -138,7 +138,7 @@
 // Spawn's own filtered base environment. Deliberately best-effort: the
 // overwhelming common case (nothing configured for this session) resolves
 // to nil, and any fetch failure degrades the SAME way, changing nothing
-// about this binary's own pre-Step-53 behavior.
+// about this binary's own pre-existing behavior.
 package main
 
 import (
@@ -396,7 +396,7 @@ func (h *commandHandler) HandlePrompt(_ context.Context, cmd sandboxws.Prompt) {
 		// report the conversation id to the bridge THE INSTANT StartTurn
 		// itself resolves it (adapter.go's own resolveSession, called
 		// long before the rest of a turn's own, possibly-minutes-long
-		// execution) via this callback -- moved out of its old Step-17
+		// execution) via this callback -- moved out of its old §7
 		// position of reading StartTurn's own RETURN value only after the
 		// whole call completed (which meant the FIRST report of a real
 		// conversation id used to only ever happen after a turn had
@@ -1773,7 +1773,7 @@ func logRepoMissingFromManifest(manifest boot.ImageManifest, currentSHAs map[str
 // already-built sandboxSecretEnv slice -- passed straight through to
 // boot.RunBoot, which threads it on into every hook/services.yml spawn.
 // nil is a correct, safe input (every existing test call site already
-// passes nil, matching this parameter's own pre-Step-72 absence).
+// passes nil, matching this parameter's own pre-existing absence).
 //
 // degradeNotes (§27.1, adversarial-review LOW fix) is run()'s own
 // bootDegradeNotes slice -- zero or more human-readable notes about a
@@ -1826,7 +1826,7 @@ func runBootSequence(
 		// preserves a working tree's sparse-checkout config" would
 		// silently carry over the WRONG session's scope (or a full,
 		// unscoped checkout) rather than enforce this session's own. This
-		// is more load-bearing than it was pre-Step-41: URL-keyed images
+		// is more load-bearing than it was pre-existing: URL-keyed images
 		// are shared far more broadly than SHA-keyed ones were, so more
 		// sessions with differing path_scope can land on one image. Both
 		// switch cases below therefore need pathScope: CloneAll applies it
@@ -1857,7 +1857,7 @@ func runBootSequence(
 			// does not yet know about -- boot.Load()'s own ParseBootMode has
 			// already rejected anything outside the four §6.4 values by the
 			// time cfg reaches here, so falling through to the existing,
-			// pre-Step-29 behavior is the correct, conservative default).
+			// pre-existing behavior is the correct, conservative default).
 			results, cloneErr := gitclone.CloneAll(ctx, sup, cfg.WorkspaceDir, cfg.SessionConfig.Repos, pathScope,
 				timeouts.RepoCloneTimeout, timeouts.ProcessStopGracePeriod)
 			if cloneErr != nil {
@@ -1893,7 +1893,7 @@ func runBootSequence(
 			"repo_shas", postCloneFingerprint.RepoSHAs,
 		)
 
-		// §19.4 (Step 42)'s own workspaceMoved computation: read
+		// §19.4's own workspaceMoved computation: read
 		// /narvi/image-manifest.json ONCE per boot (never per-repo -- one
 		// manifest covers every repo in the image, §19.1 point 4) and
 		// compare each repo's just-collected post-clone/-sync checked-out
@@ -1913,7 +1913,7 @@ func runBootSequence(
 		logImageManifest(cfg.BootMode, manifest, manifestFound, manifestErr, postCloneFingerprint.RepoSHAs)
 		workspaceMoved = boot.ComputeWorkspaceMoved(manifest, manifestFound, postCloneFingerprint.RepoSHAs)
 
-		// §19.6 (Step 43)'s own graduated setup-rerun ladder: computed
+		// §19.6's own graduated setup-rerun ladder: computed
 		// uniformly right alongside workspaceMoved (same manifest, same
 		// postCloneFingerprint.RepoSHAs, same "costs nothing to compute for
 		// every mode even though only repo_image ever consults it"
@@ -1935,7 +1935,7 @@ func runBootSequence(
 		setupRerunLadder = boot.ComputeSetupRerunLadder(manifest, manifestFound, len(pathScope) > 0, cfg.WorkspaceDir, postCloneFingerprint.RepoSHAs, timeouts.RepoSHADiscoveryTimeout)
 	}
 
-	// §27.5 (Step 74): dockerd is supervised ONCE per boot, before RunBoot's
+	// §27.5: dockerd is supervised ONCE per boot, before RunBoot's
 	// own per-repo loop -- a session-level daemon, not scoped to any one
 	// repo, so a repo's own services.yml (started inside RunBoot below)
 	// can rely on it already being up if its own commands need Docker.

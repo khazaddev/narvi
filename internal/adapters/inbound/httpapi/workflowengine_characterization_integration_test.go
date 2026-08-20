@@ -5,7 +5,7 @@
 // engine-mediated dispatch path (createTurnLocked, now wired through
 // internal/app/workflowengine.ResolveStepForNewTurn) produces a BYTE-FOR-
 // BYTE/FIELD-FOR-FIELD identical sandboxws.Prompt to what the OLD, direct
-// (pre-Step-55) dispatch path would have produced, for the zero-config
+// (pre-existing) dispatch path would have produced, for the zero-config
 // case (no custom WorkflowBinding for a repo, so the seeded global
 // built-in applies) -- for every lane this Step actually flips onto the
 // engine (review, request, and the plan lane's own first turn; see

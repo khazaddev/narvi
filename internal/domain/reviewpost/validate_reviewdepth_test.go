@@ -126,7 +126,7 @@ func TestValidateVerdictInput_DeepPath(t *testing.T) {
 // light-path invariant explicitly (§26.1: "the light path requests the
 // full digest but does not hard-require it") -- an empty ArchDecisions/
 // StackRisks/UnverifiedLimits on a light-path (or ReviewDepth=="",
-// pre-Step-68) verdict must still validate cleanly. Mutating
+// pre-existing) verdict must still validate cleanly. Mutating
 // ValidateVerdictInput's own `in.ReviewDepth == reviewtriage.DepthDeep`
 // guard into an unconditional check must fail this test.
 func TestValidateVerdictInput_LightPathNeverRequiresFullDigest(t *testing.T) {
@@ -141,7 +141,7 @@ func TestValidateVerdictInput_LightPathNeverRequiresFullDigest(t *testing.T) {
 }
 
 // TestValidateVerdictInput_UnresolvedDepthNeverRequiresFullDigest covers
-// the ReviewDepth == "" case explicitly (a pre-Step-68 caller, or a turn
+// the ReviewDepth == "" case explicitly (a pre-existing caller, or a turn
 // whose depth could not be resolved) -- must degrade like the light path,
 // never like the deep path.
 func TestValidateVerdictInput_UnresolvedDepthNeverRequiresFullDigest(t *testing.T) {

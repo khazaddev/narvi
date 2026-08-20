@@ -512,7 +512,7 @@ func TestRetriggerReview_AlreadyAnsweredFacts_RetiresFindingWhoseFileLeftTheDiff
 // parameter at all (removed by this fix), so CreateTurnCore is always
 // called with a literal nil intentSvc here, which -- per createTurnLocked's
 // own nil-safe "skip classification entirely" contract (turn.go) --
-// degrades this endpoint to the SAME safe, deterministic pre-Step-64
+// degrades this endpoint to the SAME safe, deterministic pre-existing
 // "always decline while a plan is awaiting approval" outcome, structurally
 // incapable of ever promoting a re-trigger into a plan-revision turn based
 // on a misread of manualRetriggerPromptText or the pre-fetched diff. This

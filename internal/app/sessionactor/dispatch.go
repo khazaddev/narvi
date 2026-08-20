@@ -529,7 +529,7 @@ func (a *Actor) planReenqueueOrRespawn(
 	if !hasInFlight {
 		// No turn at all, or every turn is already terminal -- nothing
 		// for this session to do this round, exactly like planDispatch's
-		// own pre-Step-28 early return.
+		// own pre-existing early return.
 		return nil, nil, nil
 	}
 
@@ -2000,7 +2000,7 @@ func (a *Actor) failDispatchedTurn(ctx context.Context, turnID pgtype.UUID, reas
 // (workflowengine_characterization_integration_test.go) can call the EXACT
 // same function real dispatch uses to build the wire payload from a turn row,
 // for BOTH a turn built via today's engine-mediated createTurnLocked and a
-// hand-constructed turn simulating the pre-Step-55 direct-dispatch shape
+// hand-constructed turn simulating the pre-existing direct-dispatch shape
 // -- proving the two produce byte-identical sandboxws.Prompt JSON is the
 // whole point of that test, so it must call the real function, never a
 // re-derived approximation of it. Mirrors CreateSessionCore/CreateTurnCore's

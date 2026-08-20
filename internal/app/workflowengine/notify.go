@@ -45,7 +45,7 @@ import (
 // HTTP decide endpoint (internal/adapters/inbound/httpapi) need to actually
 // carry out a workflow.NextStep verdict (advance.go's ApplyStepOutcome) --
 // every field MUST already be scoped to the caller's own open transaction
-// (store.WithTx(tx)), mirroring how OnTurnCompleted's pre-Step-56 signature
+// (store.WithTx(tx)), mirroring how OnTurnCompleted's pre-existing signature
 // already required its lone `workflows *postgres.WorkflowStore` parameter
 // to be pre-scoped that way: §5.1's own "written in the same tx as the
 // state change" applies to the outbox enqueue here exactly like it does to

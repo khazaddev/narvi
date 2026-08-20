@@ -11,8 +11,8 @@
 //     verbatim -- "setup.sh runs only in fresh/build (fatal only in
 //     build); start.sh runs in all non-build modes (primary repo fatal,
 //     secondaries warn)" -- as an explicit decision function, not left to
-//     inference at every call site. Amended by §19.4 (Step 42, workspaceMoved)
-//     and §19.6 (Step 43, the optional HookDelta "sync.sh" script) -- see
+//     inference at every call site. Amended by §19.4 (workspaceMoved)
+//     and §19.6 (the optional HookDelta "sync.sh" script) -- see
 //     hook.go's own doc comments for both.
 //   - BootFingerprint (fingerprint.go): the plain data shape §5.3 requires
 //     sandbox-agent log first, before any other line ("binary version,

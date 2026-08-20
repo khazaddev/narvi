@@ -93,7 +93,7 @@ type opsMetrics struct {
 
 	// watchdogFalseAlarm is §5.3's "(and how many were false alarms --
 	// target: ~0)": incremented every time a Suspect sandbox recovers
-	// DURING its own terminal_grace window (sandboxevent.go's own Step-24
+	// DURING its own terminal_grace window (sandboxevent.go's own
 	// Suspect-recovery-during-grace branch, §3.2's "any liveness signal
 	// during grace returns to previous state") -- proof, after the fact,
 	// that the watchdog that suspected it was WRONG: the sandbox was

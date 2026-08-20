@@ -265,7 +265,7 @@ func postWebhook(t *testing.T, rig testRig, body []byte, deliveryID string) int 
 }
 
 // postWebhookEventType is postWebhook's own generalization (
-// "review sessions", §8.2): every pre-Step-46 test in this file only ever
+// "review sessions", §8.2): every pre-existing test in this file only ever
 // posts an "issue_comment" event, so postWebhook itself stays a thin,
 // unchanged wrapper around this -- this Step's own new tests below need to
 // post a "pull_request" event instead (the label-retrigger lane), which

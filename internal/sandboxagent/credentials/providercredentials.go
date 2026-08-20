@@ -52,7 +52,7 @@ type ProviderCredentialsFetcher interface {
 // AuthValue mirrors internal/adapters/inbound/httpapi's own (unexported)
 // credentialAuthValue byte-for-byte (§29.6) -- independently
 // declared here, reconciled by hand, exactly like providerCredentials
-// Response's own pre-Step-59 doc comment already established for this
+// Response's own pre-existing doc comment already established for this
 // sibling endpoint (scmcredentials.go's identical precedent). Has
 // structurally NO field for a refresh token, in either variant -- see
 // that same doc comment's full chain for why this is deliberate, not an

@@ -404,9 +404,9 @@ const (
 //
 // # Adversarial-review fix: the PR's title/body are now PRE-FETCHED, never agent-fetched
 //
-// Step 67, as originally shipped, instructed the agent to look at the PR's
+// §26.2, as originally shipped, instructed the agent to look at the PR's
 // own title+body ITSELF via its own tool use ("e.g. `gh pr view`") -- an
-// adversarial review (post-Step-67) found this data source unreachable in
+// adversarial review found this data source unreachable in
 // practice: no GitHub credential reaches the sandbox an agent runs in (the
 // sandbox bearer token is deliberately stripped before an agent process
 // starts, opencodeproc/spawn.go; the git credential helper is passed
@@ -620,7 +620,7 @@ func verdictToolInstructions(deep bool, costBudgetUSD float64, costBudgetSafetyM
 // exactly this Step's own reason for existing.
 //
 // This is still a considered, explicitly-named design call, not an
-// oversight, in the SAME sense the pre-Step-70 text already was: unlike
+// oversight, in the SAME sense the pre-existing text already was: unlike
 // Shippable, which the server always recomputes because a model's
 // self-report could be gamed toward an UNSAFE outcome, a self-reported
 // budget-driven skip can NEVER be gamed unsafely here -- CounterReview:

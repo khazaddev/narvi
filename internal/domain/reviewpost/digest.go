@@ -135,7 +135,7 @@ type Digest struct {
 	// are this Step's own addition, placed here rather than as new fields
 	// on review.Verdict for the SAME reason ArchDecisions/StackRisks/
 	// UnverifiedLimits already are (this type's own top doc comment):
-	// review's own doc.go pins Verdict at exactly its seven Step-45-named
+	// review's own doc.go pins Verdict at exactly its seven named
 	// fields, and this content is thematically continuous with the rest
 	// of Digest -- the adequacy check's own reference text IS Digest.
 	// Summary (§26.2's own words: "compares its own diff-derived Digest.

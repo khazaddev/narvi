@@ -89,7 +89,7 @@ func recordFromRow(row sqlcgen.ReviewVerdict) reviewverdict.Record {
 
 // counterReviewFromRow reads row's own counter_review column (
 // §26.4) into review.CounterReviewStatus -- row.CounterReview == nil (a
-// pre-Step-69 row, or any light-path row -- §26.9) degrades to the zero
+// pre-existing row, or any light-path row -- §26.9) degrades to the zero
 // value, mirroring reviewPathFromRow's own identical "absent column ->
 // zero value" precedent immediately above.
 func counterReviewFromRow(row sqlcgen.ReviewVerdict) review.CounterReviewStatus {
@@ -100,7 +100,7 @@ func counterReviewFromRow(row sqlcgen.ReviewVerdict) review.CounterReviewStatus 
 }
 
 // factCheckFromRow reads row's own fact_check column (§26.6)
-// into reviewpost.FactCheckStatus -- row.FactCheck == nil (a pre-Step-69
+// into reviewpost.FactCheckStatus -- row.FactCheck == nil (a pre-existing
 // row) degrades to the zero value, mirroring counterReviewFromRow's own
 // identical precedent immediately above.
 func factCheckFromRow(row sqlcgen.ReviewVerdict) reviewpost.FactCheckStatus {
@@ -111,7 +111,7 @@ func factCheckFromRow(row sqlcgen.ReviewVerdict) reviewpost.FactCheckStatus {
 }
 
 // factCheckKilledFromRow reads row's own fact_check_killed column (Step
-// 69, §26.6) -- row.FactCheckKilled == nil (a pre-Step-69 row) degrades
+// 69, §26.6) -- row.FactCheckKilled == nil (a pre-existing row) degrades
 // to 0, indistinguishable from a real fact-check pass that killed
 // nothing (the SAME "0 either way" ambiguity §26.6's own FactCheckKilled
 // doc comment already accepts for a skipped pass -- neither case is a
@@ -124,7 +124,7 @@ func factCheckKilledFromRow(row sqlcgen.ReviewVerdict) int {
 }
 
 // reviewPathFromRow reads row's own review_path column (§26.3)
-// into reviewtriage.ReviewDepth -- row.ReviewPath == nil (a pre-Step-68
+// into reviewtriage.ReviewDepth -- row.ReviewPath == nil (a pre-existing
 // row, or a verdict whose own turn never resolved a depth) degrades to
 // the zero value ReviewDepth(""), mirroring digestFromRow's own identical
 // "absent column -> zero value" precedent immediately above, never a
@@ -146,7 +146,7 @@ func reviewPathFromRow(row sqlcgen.ReviewVerdict) reviewtriage.ReviewDepth {
 // check is live) "no digest recorded" -- either way this returns the
 // zero-value reviewpost.Digest{}, exactly like unmarshalTags' own
 // "malformed/absent degrades to an empty, safe value" precedent
-// immediately above. row.DigestDescriptionAdequacy == nil (a pre-Step-67
+// immediately above. row.DigestDescriptionAdequacy == nil (a pre-existing
 // row) degrades to review.DescriptionAdequacy(""), the SAME zero value
 // AdequacyFloor's own documented fail-conservative policy already treats
 // as ranking with DescriptionAdequacyMisleading -- never silently read as

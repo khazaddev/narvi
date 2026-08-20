@@ -157,7 +157,7 @@ type testRig struct {
 
 	// positionResolver (§22.1.1) is review/verdict's own
 	// relocation-fallback dependency -- nil by default (this rig's own
-	// pre-Step-63 tests never care about it, and a nil resolver is a
+	// pre-existing tests never care about it, and a nil resolver is a
 	// fully nil-safe, legitimate value: findingposition.ResolveAll's own
 	// doc comment). A test that specifically wants to prove the
 	// relocation fallback's own wiring overrides this via newTestRig's

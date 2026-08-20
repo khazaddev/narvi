@@ -202,7 +202,7 @@ const (
 	// sensitive_blast_radius_tags, migrations/000069_repo_settings_auto_
 	// approval.up.sql -- internal/adapters/inbound/httpapi/reposettings.go's
 	// own PutRepoSettings). Originally reserved (Step 47) for a label-
-	// driven auto-approve rule config that §21.2 (Step 62) supersedes
+	// driven auto-approve rule config that §21.2 supersedes
 	// entirely -- see internal/domain/review's own doc comment on why
 	// auto-approval is now a deterministic, criteria-driven engine with
 	// no per-PR human label in the loop at all; the CONFIGURATION of that

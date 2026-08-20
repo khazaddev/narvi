@@ -169,7 +169,7 @@
 //   - a real, enabled, non-viewer creator whose token genuinely cannot
 //     read the repo (CheckRepoAccess returns false, nil): denied -- the
 //     actual attack case this batch exists to close. This degrades to
-//     exactly the pre-Step-41 property: cold boot on the base image, and
+//     exactly the pre-existing property: cold boot on the base image, and
 //     that same user's own credentials still fail naturally at CloneAll
 //     (fatal boot for the primary repo) if they try anyway.
 //   - CheckRepoAccess itself fails to even answer the question (network

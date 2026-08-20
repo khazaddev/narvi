@@ -91,7 +91,7 @@ func TestBuildPromptPayload(t *testing.T) {
 		}
 		// (§29.8): turns.effort now threads through end to end,
 		// mirroring model_id's own assertion immediately above -- this
-		// replaces the pre-Step-59 hardcoded-nil assertion this test used
+		// replaces the pre-existing hardcoded-nil assertion this test used
 		// to make here.
 		if got.Effort == nil || *got.Effort != effort {
 			t.Errorf("Effort = %v, want %q", got.Effort, effort)

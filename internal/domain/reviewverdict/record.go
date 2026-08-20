@@ -35,7 +35,7 @@ type Record struct {
 	// CreatedAt already are: Digest is a persistence-layer fact review.
 	// Verdict's own closed seven-field contract never grows to hold
 	// (review/doc.go's own design call #4; reviewpost.Digest's own doc
-	// comment). The zero value (Digest{}) is what a pre-Step-66 row reads
+	// comment). The zero value (Digest{}) is what a pre-existing row reads
 	// back as -- every field empty/nil, indistinguishable from "requested
 	// but the agent reported nothing", by construction (this migration's
 	// own doc comment).
@@ -43,7 +43,7 @@ type Record struct {
 	// ReviewPath is §26.3's own light/deep routing decision (§26.3),
 	// persisted verbatim from the posting turn's own turns.review_depth
 	// column (migrations/000081_review_verdicts_review_path.up.sql) --
-	// the zero value (empty ReviewDepth("")) is what a pre-Step-68 row
+	// the zero value (empty ReviewDepth("")) is what a pre-existing row
 	// reads back as, or a verdict whose own turn never resolved a depth
 	// at all, mirroring Digest's own identical "zero value means not yet
 	// recorded" precedent immediately above.
@@ -52,7 +52,7 @@ type Record struct {
 	// (§26.4), persisted verbatim from the posting VerdictInput's own
 	// CounterReview field (migrations/000084_review_verdicts_counter_
 	// review.up.sql) -- the zero value (review.CounterReviewStatus(""))
-	// is what a pre-Step-69 row, or any light-path row (§26.9: this field
+	// is what a pre-existing row, or any light-path row (§26.9: this field
 	// has no meaning there), reads back as.
 	CounterReview review.CounterReviewStatus
 	// FactCheck/FactCheckKilled are §26.4's own diff-only fact-check

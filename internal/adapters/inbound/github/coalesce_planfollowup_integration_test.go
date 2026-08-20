@@ -51,7 +51,7 @@ import (
 // output schema (schema.go's target/mode/confidence/reasoning vs.
 // schema_planfollowup.go's target/confidence/reasoning) -- "answer" is a
 // valid plan_followup Target and is simply ignored as an unrecognized
-// Step-36 Target (harmless: this test asserts nothing about the WINNER
+// §8.3 Target (harmless: this test asserts nothing about the WINNER
 // call's own decision outcome).
 type capturingIntentLLM struct {
 	mu       sync.Mutex

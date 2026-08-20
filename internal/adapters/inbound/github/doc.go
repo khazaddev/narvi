@@ -6,13 +6,13 @@
 // session (reusing it via a new turn rather than spawning a duplicate),
 // and get a session/turn genuinely created and dispatched -- laying the
 // groundwork Phase 4's actual code-review logic (verdict posting,
-// risk-map, sentinels -- §8.2's fuller feature list, Steps 40+) builds on
-// later. This Step deliberately does NOT implement any of that later
+// risk-map, sentinels -- §8.2's fuller feature list) builds on
+// later. This work deliberately does NOT implement any of that later
 // logic, and does NOT touch internal/domain/automation (confirmed an
-// empty stub, Step 46/47's own job, Phase 4) -- the plan row's own
+// empty stub, §8.2's own job, Phase 4) -- the plan row's own
 // "events -> automations" phrase is aspirational/forward-looking (where
-// this ingress eventually plugs in once a later Step builds the
-// automations engine), not a concrete Step-32 deliverable.
+// this ingress eventually plugs in once later work builds the
+// automations engine), not a concrete §8.2 deliverable.
 //
 // # Route
 //

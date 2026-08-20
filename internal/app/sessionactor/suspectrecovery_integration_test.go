@@ -356,7 +356,7 @@ func TestHandleSandboxEvent_SuspectNoPreSuspectStatus_NoRecoveryAttempted(t *tes
 	}
 	// The plain, unmodified UpdateStatus query (not UpdateStatusToSuspect)
 	// -- deliberately leaves pre_suspect_status NULL, exactly like every
-	// pre-Step-24 caller of it always has.
+	// pre-existing caller of it always has.
 	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
 		SessionID: sessionID,
 		Status:    sqlcgen.SandboxStatusSuspect,

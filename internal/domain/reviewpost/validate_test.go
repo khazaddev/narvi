@@ -252,7 +252,7 @@ func TestValidateVerdictInput_FieldOrder(t *testing.T) {
 // per this function's own doc comment) -- a payload with BOTH an empty
 // top-level Summary AND an empty Digest.Summary must still report
 // ErrEmptySummary, never ErrEmptyDigestSummary, so this Step never changes
-// which error an already-malformed pre-Step-66 payload reports.
+// which error an already-malformed pre-existing payload reports.
 func TestValidateVerdictInput_DigestSummaryCheckedLastAmongExisting(t *testing.T) {
 	in := validInput()
 	in.Summary = ""
@@ -270,7 +270,7 @@ func TestValidateVerdictInput_DigestSummaryCheckedLastAmongExisting(t *testing.T
 // function's own doc comment) -- a payload with BOTH an empty
 // Digest.Summary AND a garbled Digest.DescriptionAdequacy must still
 // report ErrEmptyDigestSummary, never ErrInvalidDescriptionAdequacy, so
-// this Step never changes which error an already-malformed pre-Step-67
+// this Step never changes which error an already-malformed pre-existing
 // payload reports.
 func TestValidateVerdictInput_AdequacyCheckedAfterDigestSummary(t *testing.T) {
 	in := validInput()

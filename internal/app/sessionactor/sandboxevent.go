@@ -69,7 +69,7 @@
 // A Suspect row with no pre_suspect_status set is a defensive,
 // practically-unreachable case (transitionSandboxToSuspect always sets it
 // in the SAME write that enters Suspect) -- handled as a safe no-op,
-// falling through to the pre-Step-24 behavior (persisted, liveness
+// falling through to the pre-existing behavior (persisted, liveness
 // bumped, left Suspect, no recovery transition attempted). Likewise, a
 // pre_suspect_status naming an illegal recovery target (should never
 // happen: it is only ever written from a state TriggerSuspect's own

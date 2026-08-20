@@ -97,9 +97,9 @@ const manualRetriggerPromptText = "Manual re-review requested via the web review
 // now always called with a literal nil intentSvc below, which -- per that
 // function's own nil-safe contract (turn.go's own doc comment: "a nil
 // intentSvc ... skips classification entirely and falls back to the
-// pre-Step-64 'always decline' awaiting-plan gate behavior") -- degrades
+// pre-existing 'always decline' awaiting-plan gate behavior") -- degrades
 // this endpoint to the SAME safe, deterministic "decline while a plan is
-// awaiting approval" outcome every pre-Step-64 caller already got, with no
+// awaiting approval" outcome every pre-existing caller already got, with no
 // outbound LLM call spent classifying text that was never a reply to
 // begin with (the fail-safe direction §23's own review batch requires:
 // "when in doubt, skip classification rather than guess").
@@ -350,7 +350,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		// comment ("No intentSvc parameter") for the full "why": a manual
 		// re-review click carries no human reply for the plan_followup
 		// classifier to legitimately read, so this path always falls open
-		// to the safe, deterministic pre-Step-64 "decline while a plan is
+		// to the safe, deterministic pre-existing "decline while a plan is
 		// awaiting approval" behavior instead of guessing from
 		// manualRetriggerPromptText/the pre-fetched diff.
 		created, _, cerr := CreateTurnCore(ctx, pool, sessions, turns, plans, nil, auditLog, registry, sessionID, prompt, triageModelID, false, false, actorUserID, AlwaysQueue, CreateTurnOptions{ReviewHeadSHA: reviewHeadSHA, Effort: triageEffort, ReviewDepth: &reviewDepthStr, ReviewDepthDecision: triageRecordJSON})

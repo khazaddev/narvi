@@ -34,7 +34,7 @@ const narviReservedPrefix = "NARVI_"
 // OpenCodeReservedPrefix reserves the ENTIRE "OPENCODE_" env-var namespace
 // -- adversarial-review CRITICAL fix: §27.2's own injection owns
 // OPENCODE_CONFIG (OpenCode's documented "custom config" slot env var,
-// cmd/sandbox-agent/opencodeconfig.go), and a Step-72-child engine
+// cmd/sandbox-agent/opencodeconfig.go), and a future engine
 // version could grow OPENCODE_CONFIG_CONTENT (OpenCode's documented
 // "inline config" slot, ABOVE even the project slot in OpenCode's own
 // precedence -- see opencodeconfig.go's own top doc comment). Before this

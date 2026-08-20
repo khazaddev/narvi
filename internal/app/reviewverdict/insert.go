@@ -160,7 +160,7 @@ func nonEmptyStringPtr(s string) *string {
 // therefore always means "a real INSERT recorded zero kills" (fact_check
 // == 'skipped', or a 'done' pass that happened to remove nothing), never
 // "no value was ever recorded" -- that latter case is what a genuine SQL
-// NULL (a pre-Step-69 row, this column simply not existing yet) means
+// NULL (a pre-existing row, this column simply not existing yet) means
 // instead.
 func factCheckKilledPtr(n int) *int32 {
 	v := int32(n)

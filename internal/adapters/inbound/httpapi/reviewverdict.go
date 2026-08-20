@@ -264,7 +264,7 @@ func PostReviewVerdict(
 		// row can ever exist.
 		//
 		// Moved here (§26.3 -- one step EARLIER than the
-		// Step-63-era "before §22.1.1's own position-resolution step"
+		// previous "before §22.1.1's own position-resolution step"
 		// position this fetch previously held) so reviewDepth, below, is
 		// available BEFORE ValidateVerdictInput runs: the deep-path
 		// digest-completeness check (validate.go, this Step's own
@@ -474,7 +474,7 @@ func PostReviewVerdict(
 		// ValidateVerdictInput ran -- see that block's own doc comment
 		// for the full "why" (the deep-path digest check needs
 		// reviewDepth before validation, and this is simply the earliest
-		// point verdictHeadSHA's own pre-existing Step-63-era move
+		// point verdictHeadSHA's own pre-existing move
 		// already established).
 		//
 		// §22.1.1's own content-anchored positioning: resolved ONCE, here,

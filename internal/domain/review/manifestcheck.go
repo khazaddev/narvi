@@ -161,7 +161,7 @@ type MergedPR struct {
 // about the PR currently under review, and never sentinel-auto-fix-
 // eligible (§17.1's own SentinelKind vocabulary is unrelated and
 // unaffected) -- see doc.go's design call #4 for why no general Finding
-// type ships in this package at all; this is a narrower, Step-50-specific
+// type ships in this package at all; this is a narrower, §15-specific
 // shape, not an attempt to satisfy that broader gap.
 type ManifestFindingKind string
 

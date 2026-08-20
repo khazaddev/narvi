@@ -570,7 +570,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		// Nil-safe: cfg.DiffFetcher == nil (this package's own handler_test.go,
 		// or any other minimal wiring that doesn't care about this Step)
 		// simply skips the fetch entirely, leaving m.CommentBody as the
-		// turn's own prompt verbatim -- today's pre-Step-46 behavior.
+		// turn's own prompt verbatim -- today's pre-existing behavior.
 		// (§22.1)/(§22.1.2 retirement, this Step): prepend
 		// this PR's own already-answered facts BEFORE the diff/stack/
 		// tool-instructions blocks below -- prepended to, never replacing,

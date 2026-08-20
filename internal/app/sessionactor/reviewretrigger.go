@@ -419,7 +419,7 @@ func (a *Actor) readReviewRetriggerState(ctx context.Context) (*reviewRetriggerD
 		} else {
 			verdictHeadSHA = latest.HeadSha
 			verdictRiskLevel = latest.RiskLevel
-			// (§26.3): review_path is nullable (a pre-Step-68
+			// (§26.3): review_path is nullable (a pre-existing
 			// row, or a verdict whose own turn never resolved a depth)
 			// -- degrades to "", the SAME "nothing to floor against"
 			// reading as no prior verdict at all.

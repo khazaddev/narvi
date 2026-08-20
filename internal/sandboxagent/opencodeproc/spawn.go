@@ -55,7 +55,7 @@ type Result struct {
 // one in exec.Cmd's own documented Env semantics). Nil/empty is the
 // overwhelming common case (no provider credential configured at any scope
 // for this session) and changes NOTHING about this function's own
-// pre-Step-53 behavior -- every existing call site keeps compiling and
+// pre-existing behavior -- every existing call site keeps compiling and
 // behaving identically by simply passing nil.
 //
 // sandboxSecretEnv ("sandbox secrets & opencode config", §27.1/

@@ -543,7 +543,7 @@ func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.
 // intentSvc (§23.1/§23.2) is this function's own plan_followup
 // classifier collaborator -- nil-safe exactly like plans immediately
 // above (a nil intentSvc, or a nil plans, skips classification entirely
-// and falls back to the pre-Step-64 "always decline" awaiting-plan gate
+// and falls back to the pre-existing "always decline" awaiting-plan gate
 // behavior, never a panic). Every real production caller
 // (cmd/control-plane/main.go) passes the SAME, real *intentclassifier.
 // Service every OTHER intentSvc-consuming caller in this codebase does

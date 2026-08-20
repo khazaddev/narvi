@@ -27,7 +27,7 @@ import (
 //
 // Returns nil when ctx is canceled (an OS signal, from main.go's own
 // signal.NotifyContext) -- deliberately nil, not ctx.Err(), so this reads
-// as an ordinary, successful shutdown trigger exactly like the pre-Step-16
+// as an ordinary, successful shutdown trigger exactly like the pre-existing
 // `<-ctx.Done()` it replaces. Returns ErrShutdownRequested when a
 // (non-stale-gen) "shutdown" command is received. Returns
 // *FatalConnectError when the handshake itself returns 401/403/404/410 --

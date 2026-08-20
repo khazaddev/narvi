@@ -38,7 +38,7 @@ func workspaceMovedFor(moved map[string]bool, repoName string) bool {
 // defaults to the SAME conservative floor ComputeSetupRerunLadder itself
 // produces for a missing manifest: DependencySkipIneligible and
 // DeltaEligible: false, i.e. "fall all the way through to full setup.sh" --
-// today's exact pre-Step-43 behavior, never a spurious skip or a
+// today's exact pre-existing behavior, never a spurious skip or a
 // spuriously-preferred delta script.
 func ladderFor(ladder map[string]SetupRerunLadder, repoName string) SetupRerunLadder {
 	v, ok := ladder[repoName]
@@ -118,7 +118,7 @@ type RepoInfo struct {
 // resolved via the calling process's ambient PATH) never at risk from a
 // resolved secret's own name/value. Nil/empty (the overwhelming common
 // case: no sandbox secret configured at any scope for this session)
-// changes nothing from this parameter's own pre-Step-72 absence.
+// changes nothing from this parameter's own pre-existing absence.
 func RunHooks(
 	ctx context.Context,
 	sup *supervisor.Supervisor,
@@ -191,7 +191,7 @@ func runRepoHooks(
 			continue
 		}
 
-		// §19.6 (Step 43): the ONE cell this graduated ladder replaces --
+		// §19.6: the ONE cell this graduated ladder replaces --
 		// repo_image's own HookSetup rerun, already known ShouldRun here.
 		// Every other (mode, hook) combination -- including repo_image's
 		// OWN HookStart, and HookSetup under every OTHER mode -- falls

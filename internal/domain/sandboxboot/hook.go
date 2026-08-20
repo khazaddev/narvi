@@ -1,7 +1,7 @@
 package sandboxboot
 
 // Hook names one of the boot-sequence scripts §6.4 defines (setup.sh,
-// start.sh) plus §19.6's own Step-43 addition, the optional delta script
+// start.sh) plus §19.6's own addition, the optional delta script
 // (sync.sh). This is a closed vocabulary controlled entirely by this
 // package and its caller (internal/sandboxagent/boot's hook runner) -- no
 // external input ever supplies a raw Hook value.
@@ -34,8 +34,8 @@ type HookOutcome struct {
 	FatalOnFailure bool
 }
 
-// EvaluateHook implements §6.4's hook policy, AMENDED by §19.4 (Step 42,
-// warm-boot shared images) -- this amendment is a BREAKING CHANGE to the
+// EvaluateHook implements §6.4's hook policy, AMENDED by §19.4 (warm-boot
+// shared images) -- this amendment is a BREAKING CHANGE to the
 // §6.4 contract, carrying the Conventional-Commits `!` marker on the
 // commit that lands it: "setup.sh runs only in fresh/build (fatal only in
 // build), OR in repo_image when workspaceMoved; start.sh runs in all

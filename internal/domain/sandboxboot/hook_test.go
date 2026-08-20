@@ -138,7 +138,7 @@ func TestEvaluateHook_WorkspaceMovedIgnoredEverywhereElse(t *testing.T) {
 	}
 }
 
-// TestEvaluateHook_HookDelta_TruthTable proves §19.6's own new Step-43
+// TestEvaluateHook_HookDelta_TruthTable proves §19.6's own new
 // policy row (HookDelta, "sync.sh"): eligible under the EXACT SAME envelope
 // as HookSetup's own repo_image branch (mode == BootModeRepoImage &&
 // workspaceMoved), for both primary values, and FatalOnFailure always

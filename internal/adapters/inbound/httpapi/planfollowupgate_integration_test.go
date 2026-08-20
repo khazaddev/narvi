@@ -115,7 +115,7 @@ func TestCreateTurnCore_PlanFollowup_ConfidentAmend_PromotesToRevisionTurn(t *te
 
 // TestCreateTurnCore_PlanFollowup_ConfidentAnswer_StillBlocked proves a
 // confident "answer" classification still declines exactly like the
-// pre-Step-64 gate always did: 409, ErrPlanAwaitingApproval, no turn row
+// pre-existing gate always did: 409, ErrPlanAwaitingApproval, no turn row
 // inserted at all.
 func TestCreateTurnCore_PlanFollowup_ConfidentAnswer_StillBlocked(t *testing.T) {
 	ctx := context.Background()
@@ -176,7 +176,7 @@ func TestCreateTurnCore_PlanFollowup_ClassifierError_FailsOpenToBlocked(t *testi
 
 // TestCreateTurnCore_PlanFollowup_NilClassifier_FailsOpenToBlocked proves
 // a nil intentSvc (never true in production wiring, but every pre-existing
-// test in this package passes it) degrades to EXACTLY the pre-Step-64
+// test in this package passes it) degrades to EXACTLY the pre-existing
 // "always decline" behavior -- never a panic, never a silent dispatch.
 func TestCreateTurnCore_PlanFollowup_NilClassifier_FailsOpenToBlocked(t *testing.T) {
 	ctx := context.Background()
@@ -257,7 +257,7 @@ func TestCreateTurnCore_PlanFollowup_NoAwaitingPlan_NeverClassifies(t *testing.T
 // decline" test above needs -- mirrors the exact 409/ErrPlanAwaitingApproval
 // shape TestCreateTurnCore_OpenTurnDuringAwaitingApproval_BusyWins (this
 // package) already asserts for the pre-existing gate, one level up: no
-// turn created, the SAME sentinel/status/message every pre-Step-64 caller
+// turn created, the SAME sentinel/status/message every pre-existing caller
 // already recognizes.
 func assertAwaitingApprovalDecline(t *testing.T, wasCreated bool, cerr *CreateTurnError) {
 	t.Helper()

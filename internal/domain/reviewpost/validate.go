@@ -439,7 +439,7 @@ func ValidateVerdictInput(in VerdictInput) error {
 	// Digest.ArchDecisions/StackRisks/UnverifiedLimits (§26.3,
 	// via §26.1's own forward reference): schema-required ONLY on the
 	// deep path -- checked LAST, after every field the light path already
-	// requires, so a light-path or pre-Step-68 (ReviewDepth == "") caller
+	// requires, so a light-path or pre-existing (ReviewDepth == "") caller
 	// keeps failing on exactly the SAME first error it always did (this
 	// function's own "fixed order" discipline, top doc comment). The
 	// posting endpoint's own reject-don't-repair posture (§26.1) means

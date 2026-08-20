@@ -14,8 +14,8 @@
 // allowed to be used, right now" staleness recheck (§13.3 viewer guard).
 // An audit sweep (cross-step, cross-package finding) found FOUR call sites
 // that each mint or use a session creator's token long after session
-// creation -- pushpr.go's own createPRBestEffort (the original,
-// Step-39-era check), internal/adapters/inbound/httpapi/scmcredentials.go's
+// creation -- pushpr.go's own createPRBestEffort (the original
+// check), internal/adapters/inbound/httpapi/scmcredentials.go's
 // ScmCredentials (a DIFFERENT package, added its own inline copy of the
 // identical check first, see that file's own doc comment), and this same
 // audit sweep's own two further findings: contractdrift.go's
