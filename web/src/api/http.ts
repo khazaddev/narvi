@@ -101,5 +101,21 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     return undefined as T
   }
 
-  return (await response.json()) as T
+  // Guarded for the same reason the !response.ok branch above guards its own
+  // json() call, and the asymmetry between them was a real defect: a 200
+  // whose body is not JSON is exactly what a reverse proxy, a captive
+  // portal, a maintenance page or a misrouted request returns, and an
+  // unguarded parse here throws past every caller into the error boundary.
+  // That lands hardest on the very first request the app makes -- a visitor
+  // could not even reach the sign-in screen. Surfaced as a typed ApiError so
+  // callers treat it as a failed request rather than a crash.
+  try {
+    return (await response.json()) as T
+  } catch {
+    throw new ApiError(
+      response.status,
+      `request succeeded with a non-JSON body: ${response.status} ${response.statusText}`,
+      undefined,
+    )
+  }
 }

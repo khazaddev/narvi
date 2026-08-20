@@ -2,9 +2,12 @@
 // static bundle (`npm run build`), which cmd/control-plane embeds via
 // go:embed and serves on the SAME port as the REST/WS API (see
 // internal/adapters/inbound/webui's own doc comment for the embed side).
-// No dev-server proxy to a Go backend is configured here yet -- that lands
-// with the real data layer (§12.1's "WS transport -> event log -> reducer"),
-// not this bootstrap.
+// The dev server proxies /api, /auth and /ws to a locally-running control
+// plane. Without it `npm run dev` cannot reach a backend at all: Vite answers
+// every unmatched path with index.html, so the app's first /api/me call gets
+// HTML where JSON was expected. §12.1's single-port story is a PRODUCTION
+// property (go:embed into the binary); dev needs this proxy to reproduce it.
+// NARVI_DEV_BACKEND overrides the target for a non-default local port.
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -15,7 +18,19 @@ import react from '@vitejs/plugin-react'
 const here = path.dirname(fileURLToPath(import.meta.url))
 
 // https://vite.dev/config/
+const devBackend = process.env.NARVI_DEV_BACKEND ?? 'http://localhost:8080'
+
 export default defineConfig({
+  server: {
+    proxy: {
+      // The three prefixes the SPA actually calls. Deliberately NOT a
+      // catch-all: Vite must keep serving the app's own routes itself, and
+      // proxying everything would send them to a backend that answers 404.
+      '/api': { target: devBackend, changeOrigin: true },
+      '/auth': { target: devBackend, changeOrigin: true },
+      '/ws': { target: devBackend, changeOrigin: true, ws: true },
+    },
+  },
   plugins: [
     // Must run BEFORE @vitejs/plugin-react (TanStack Router's own documented
     // ordering requirement): it rewrites src/routes/**/*.tsx into route
