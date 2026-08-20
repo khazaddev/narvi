@@ -682,6 +682,36 @@ func (e *InvalidCloudIdentityIssuerURLError) Error() string {
 	return fmt.Sprintf("invalid %s=%q: %s", cloudIdentityIssuerURLEnvVarName, e.Value, e.Reason)
 }
 
+// otlpEndpointEnvVarName is the env var Load reads for Config.OTLPEndpoint
+// (§33: "control-plane OTLP export"). Follows objectStoreEndpointEnvVarName's
+// own "absent = feature off" precedent exactly, one field deep instead of a
+// whole typed sub-config: an EMPTY value is not a boot-time error, it is the
+// off switch -- Config.OTLPEndpoint stays "", platform.SetupOTel keeps
+// building the stdouttrace/stdoutmetric exporters it always has, and every
+// existing deployment that never sets this var is byte-identical to before
+// §33 shipped. A NON-empty value gets real shape validation
+// (InvalidOTLPEndpointError below, canonicalOTLPEndpointURL), mirroring
+// cloudIdentityIssuerURLEnvVarName's own reasoning for the same choice: a
+// malformed collector address would otherwise surface as a confusing runtime
+// export failure (or, worse, a silently-never-exporting process) rather than
+// a loud boot-time refusal.
+const otlpEndpointEnvVarName = "NARVI_OTLP_ENDPOINT"
+
+// InvalidOTLPEndpointError is returned by Load when NARVI_OTLP_ENDPOINT is
+// set but is not a well-formed absolute http(s) URL with no path/query/
+// fragment -- platform.SetupOTel's own OTLP exporters each append their
+// well-known "/v1/traces"/"/v1/metrics" suffix to this SAME base URL (the
+// OTel spec's own "general endpoint" behavior), so a value already carrying
+// a path would produce a doubled-up URL no real collector could match.
+type InvalidOTLPEndpointError struct {
+	Value  string
+	Reason string
+}
+
+func (e *InvalidOTLPEndpointError) Error() string {
+	return fmt.Sprintf("invalid %s=%q: %s", otlpEndpointEnvVarName, e.Value, e.Reason)
+}
+
 // objectStoreEndpointEnvVarName, objectStorePublicEndpointEnvVarName,
 // objectStoreRegionEnvVarName, objectStoreBucketEnvVarName,
 // objectStoreAccessKeyIDEnvVarName, objectStoreSecretAccessKeyEnvVarName,
@@ -952,6 +982,44 @@ func canonicalCloudIdentityIssuerURL(raw string) (string, error) {
 	}
 	if parsed.RawQuery != "" || parsed.Fragment != "" {
 		return "", &InvalidCloudIdentityIssuerURLError{Value: raw, Reason: "must not carry a query string or fragment"}
+	}
+	canonical := url.URL{Scheme: parsed.Scheme, Host: parsed.Host}
+	return canonical.String(), nil
+}
+
+// canonicalOTLPEndpointURL enforces the URL shape Config.OTLPEndpoint needs
+// to be safely usable as the shared base URL platform.SetupOTel hands to
+// BOTH otlptracehttp.WithEndpointURL and otlpmetrichttp.WithEndpointURL
+// (§33): a well-formed absolute URL, http or https scheme (which also
+// selects TLS vs. plaintext for the exporter's own HTTP client), non-empty
+// host, and no path of its own -- not even a bare trailing slash. Mirrors
+// canonicalCloudIdentityIssuerURL's own reasoning one concatenation over:
+// both OTLP HTTP exporters append their own fixed "/v1/traces"/"/v1/metrics"
+// suffix to whatever base URL they are given (the OTel spec's own "general
+// endpoint" behavior, doc.go's own "target base URL (\"/v1/traces\" is
+// appended)"), so a value already carrying a path -- including a trailing
+// slash, a real path segment as far as that suffix logic is concerned --
+// would silently double up against it and never reach a real collector's
+// actual route. Returns the canonicalized "scheme://host" string built from
+// parsed.Scheme/parsed.Host alone, exactly like canonicalCloudIdentityIssuerURL,
+// so the raw env value never reaches Config.OTLPEndpoint and no downstream
+// caller needs to remember to normalize it itself.
+func canonicalOTLPEndpointURL(raw string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", &InvalidOTLPEndpointError{Value: raw, Reason: fmt.Sprintf("not a valid URL: %v", err)}
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", &InvalidOTLPEndpointError{Value: raw, Reason: "scheme must be http or https"}
+	}
+	if parsed.Host == "" {
+		return "", &InvalidOTLPEndpointError{Value: raw, Reason: "must include a host"}
+	}
+	if parsed.Path != "" {
+		return "", &InvalidOTLPEndpointError{Value: raw, Reason: "must not carry a path, including a bare trailing slash -- each OTLP exporter appends its own fixed /v1/traces or /v1/metrics suffix by concatenation, so a trailing slash here would double up against it"}
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", &InvalidOTLPEndpointError{Value: raw, Reason: "must not carry a query string or fragment"}
 	}
 	canonical := url.URL{Scheme: parsed.Scheme, Host: parsed.Host}
 	return canonical.String(), nil
@@ -1243,6 +1311,27 @@ type Config struct {
 	// externally (a customer-side federation error Narvi never sees)
 	// rather than loudly at boot.
 	CloudIdentityIssuerURL string
+
+	// OTLPEndpoint is §33's ("metrics export path") control-plane-only OTLP
+	// opt-in: platform.SetupOTel's own endpoint parameter, threaded through
+	// by cmd/control-plane/main.go alone (never cmd/sandbox-agent, which
+	// hardcodes an empty string at its own call site regardless of anything
+	// this process's environment carries -- see that call site's own doc
+	// comment for why sandbox-agent structurally cannot reach this field
+	// even by accident: §27.6's server-appended egress allowlist floor
+	// admits the control-plane host plus the session's git hosts, never a
+	// collector, and this is the property that keeps it that way rather
+	// than widening it).
+	//
+	// Empty means the feature is OFF -- SetupOTel keeps building the
+	// stdouttrace/stdoutmetric exporters it always has, byte-identical to
+	// every deployment before §33 (objectStoreEndpointEnvVarName's own
+	// "absent = feature off" precedent, one field instead of a whole typed
+	// sub-config). A non-empty value is always the canonical
+	// "scheme://host" string canonicalOTLPEndpointURL returns, never the
+	// raw env value -- see otlpEndpointEnvVarName's own doc comment for the
+	// full gating rule and every validation detail.
+	OTLPEndpoint string
 
 	// ObjectStorage is §8.6's ("uploads, blob storage & the in-sandbox
 	// download_file tool", §28.7) typed, boot-validated object-storage
@@ -1606,6 +1695,23 @@ func Load() (*Config, error) {
 		}
 	}
 
+	// otlpEndpoint (§33): DELIBERATELY OPTIONAL, one field rather than a
+	// whole typed sub-config -- see otlpEndpointEnvVarName's own doc
+	// comment for the full "off when unset" gating rule and
+	// canonicalOTLPEndpointURL's own doc comment for why a non-empty value
+	// gets real URL-shape validation. Assigned the CANONICAL string
+	// canonicalOTLPEndpointURL returns, never the raw env value, mirroring
+	// cloudIdentityIssuerURL's own identical assignment immediately above.
+	otlpEndpoint := ""
+	if raw := os.Getenv(otlpEndpointEnvVarName); raw != "" {
+		canonical, err := canonicalOTLPEndpointURL(raw)
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			otlpEndpoint = canonical
+		}
+	}
+
 	// Object storage (§28.7): feature-flagged on objectStoreEndpointEnvVarName
 	// alone -- see that const's own doc comment for the full gating rule.
 	// Every other NARVI_OBJECT_STORE_* var is read and validated ONLY
@@ -1736,6 +1842,8 @@ func Load() (*Config, error) {
 		IntentClassifierActiveSurfaces: intentClassifierActiveSurfaces,
 
 		CloudIdentityIssuerURL: cloudIdentityIssuerURL,
+
+		OTLPEndpoint: otlpEndpoint,
 
 		ObjectStorage: objectStorage,
 	}, nil

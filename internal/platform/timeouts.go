@@ -1580,28 +1580,42 @@ type Timeouts struct {
 	// for hours.
 	ImageRefreshClaimStaleAfter time.Duration
 
-	// --- Audit-remediation batch B7 addition: bounds cmd/sandbox-agent's
-	// own OTel shutdown/flush (see main.go's own shutdownOTel deferred
+	// --- Audit-remediation batch B7 addition: bounds each binary's own
+	// deferred OTel shutdown/flush (see each main.go's own shutdownOTel
 	// call). No ordering relationship with any invariant chain above -- a
 	// standalone field, matching every other standalone addition's own
 	// precedent.
 
-	// OTelShutdownTimeout bounds cmd/sandbox-agent's own deferred
-	// shutdownOTel(ctx) call -- the metric/trace flush platform.SetupOTel's
-	// own returned shutdown func performs against the stdout exporter.
-	// Unlike cmd/control-plane's own IDENTICAL shutdownOTel call (which this
-	// field deliberately does NOT apply to -- see main.go's own doc comment),
-	// sandbox-agent is a single boot+session process for which this really
-	// is "the last chance before the process exits", not one flush among
-	// many periodic ones a long-running daemon would get regardless. Without
-	// a bound of its own, a backpressured os.Stdout (a slow/blocked log
-	// collector, a full pipe buffer under load, ...) would let
-	// metric.NewPeriodicReader/tracerProvider.Shutdown's own synchronous
-	// write block this deferred call indefinitely, hanging sandbox teardown
-	// past whatever grace period the orchestrator expects. Not specified in
-	// the plan; chosen as 10s, matching ShutdownGracePeriod/
-	// ProcessStopGracePeriod's own "not specified; chosen" precedent for a
-	// bounded-but-generous final-teardown wait.
+	// OTelShutdownTimeout bounds platform.SetupOTel's own returned shutdown
+	// func wherever either binary calls it: cmd/sandbox-agent's own
+	// deferred shutdownSandboxAgentOTel(ctx) call, and (as of §33)
+	// cmd/control-plane's own deferred shutdownControlPlaneOTel(ctx) call --
+	// each against a fresh background context, never that binary's own
+	// long-lived one (see either main.go's own doc comment: by the time
+	// either deferred call runs, that context may already be canceled).
+	//
+	// Originally scoped to sandbox-agent alone: a single boot+session
+	// process for which this really is "the last chance before the process
+	// exits", unlike control-plane's own identical-looking call, which was
+	// deliberately left UNBOUNDED at the time -- a long-running daemon gets
+	// another periodic export anyway even if one flush is somehow missed,
+	// and a bare stdout write essentially never hangs. §33 removes that
+	// asymmetry: once control-plane can point SetupOTel at a real OTLP
+	// endpoint (Config.OTLPEndpoint), its own shutdown flush becomes a
+	// genuine network call to an operator's collector, with a real hang
+	// mode a stdout write never had -- a down/unreachable collector must
+	// not be allowed to block that long-running daemon's own graceful exit
+	// past its configured grace period either. This field now bounds both
+	// calls identically. Without a bound, a backpressured stdout exporter
+	// (a slow/blocked log collector, a full pipe buffer under load, ...) or
+	// an unreachable OTLP collector would let metric.NewPeriodicReader/
+	// tracerProvider.Shutdown's own synchronous flush block a deferred call
+	// indefinitely, hanging process teardown past whatever grace period the
+	// orchestrator expects. Not specified in the plan; chosen as 10s,
+	// matching ShutdownGracePeriod/ProcessStopGracePeriod's own "not
+	// specified; chosen" precedent for a bounded-but-generous final-
+	// teardown wait -- generous enough for either an in-process stdout
+	// write or one bounded network flush attempt.
 	OTelShutdownTimeout time.Duration
 
 	// --- Batch fix/deny-unlinked-github-actors addition: bounds the
