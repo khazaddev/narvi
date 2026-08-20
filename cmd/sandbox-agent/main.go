@@ -1620,7 +1620,7 @@ func run() error {
 	// near-duplicate timeout. budgetSrvGroup.Wait() afterward drains
 	// budgetServer's own Serve goroutine (Shutdown makes it return
 	// promptly) -- never left running past this function's own return, the
-	// same "no orphaned listener/goroutine" bar Step 171 already set for a
+	// same "no orphaned listener/goroutine" bar Step 13 already set for a
 	// different subsystem.
 	if budgetServer != nil {
 		if err := budgetServer.Shutdown(shutdownCtx); err != nil {

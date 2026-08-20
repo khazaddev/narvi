@@ -73,7 +73,7 @@ import (
 // fatal WS handshake status), and shut it down cleanly as part of the SAME
 // bounded teardown sequence sup.StopAll already uses -- never a second,
 // independently-tracked process class that could become a new orphan to
-// force-kill (the exact class of leak Step 171 closed for a different
+// force-kill (the exact class of leak Step 13 closed for a different
 // subsystem; this Step does not reintroduce it for a new one).
 type reviewCostBudgetServer struct {
 	listener net.Listener
