@@ -1,4 +1,4 @@
-// Package releasereview implements Step 50's own ("release PR review",
+// Package releasereview implements §15's own ("release PR review",
 // §15) app-layer orchestration: the manifest check (§15.2), which "ALWAYS
 // runs" once a release PR is detected. Impure fetch/persist here, pure
 // decision in internal/domain/review (manifestcheck.go, aggregatereview.go)

@@ -2,7 +2,7 @@ package intent
 
 import "path"
 
-// This file (release.go) implements Step 50's own ("release PR review",
+// This file (release.go) implements §15's own ("release PR review",
 // §15.1) release-PR detection: "a PR is treated as a release review when
 // it matches a configurable pattern: originates from/targets a
 // release/* branch, or carries a release label." Pure per §11.

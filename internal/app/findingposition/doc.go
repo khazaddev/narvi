@@ -1,5 +1,5 @@
 // Package findingposition implements §22.1.1's own relocation fallback
-// (Step 63, "review: learned false-positive patterns"): when internal/
+// (§22, "review: learned false-positive patterns"): when internal/
 // domain/reviewpost.MatchPosition's pure sliding-window match fails to
 // anchor a finding, this package makes ONE small, structured, NON-AGENTIC
 // call through the existing ports.LLM port (§4.3) -- the same

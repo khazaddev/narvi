@@ -12,7 +12,7 @@
 // Config.HMACBotsSecret / Config.HMACWebhookSecret), not this file's. This
 // file only implements the shared signing/verification mechanism once.
 //
-// NOTE (Step 31, "webhook toolkit"): "webhook ingress" in that §5.2
+// NOTE (§5.1, "webhook toolkit"): "webhook ingress" in that §5.2
 // sentence means Narvi's OWN webhook-shaped internal use (e.g. a future
 // generic user-configured automation trigger, IMPLEMENTATION_PLAN.md's
 // Step 47), NOT real third-party provider webhooks (GitHub/Slack/Linear).

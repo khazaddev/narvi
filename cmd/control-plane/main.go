@@ -274,7 +274,7 @@ func serve() error {
 	imageCacheVersionStore := postgres.NewImageCacheVersionStore(pool)
 
 	// automationStore/automationInvocationStore/automationRunStore are
-	// Step 51's ("automations: engine", §3.5) own three tables -- see
+	// §3.5's ("automations: engine", §3.5) own three tables -- see
 	// internal/app/automation's own doc.go for the full engine writeup.
 	// Constructed here, alongside every other core store, so the engine
 	// below (and any future Step 52 trigger-evaluation caller) can share
@@ -283,13 +283,13 @@ func serve() error {
 	automationInvocationStore := postgres.NewAutomationInvocationStore(pool)
 	automationRunStore := postgres.NewAutomationRunStore(pool)
 
-	// planStore/participantStore are Step 37's ("plan mode, web", §8.1)
+	// planStore/participantStore are §8.1's ("plan mode, web", §8.1)
 	// own additions, backing the two new approve/reject REST endpoints
 	// below (internal/adapters/inbound/httpapi/planapprove.go).
 	planStore := postgres.NewPlanStore(pool)
 	participantStore := postgres.NewParticipantStore(pool)
 
-	// auditLogStore is Step 39's ("identities + full RBAC", §13.3) own
+	// auditLogStore is §13.2's ("identities + full RBAC", §13.3) own
 	// addition -- every Authorize-gated state change (CreateSession,
 	// CreateTurn, ApprovePlan/RejectPlan below) writes one audit_log row
 	// on the SAME transaction as the change itself; threaded into every
@@ -300,7 +300,7 @@ func serve() error {
 
 	// outboxStore/linearAgentSessionStore are constructed here (rather than
 	// down where the outbox delivery worker/Linear ingress blocks live
-	// below) because Step 38's ("plan mode, cross-channel", §8.1/§13.3) own
+	// below) because §8.1's ("plan mode, cross-channel", §8.1/§13.3) own
 	// httpapi.DecidePlanOnTx -- shared by the /api/sessions plan approve/
 	// reject routes immediately below AND by internal/adapters/inbound/
 	// {slack,linear}'s own new plan-decision entry points -- needs both, to
@@ -505,7 +505,7 @@ func serve() error {
 	// below).
 	githubActorLinkNoticeStore := postgres.NewGitHubActorLinkNoticeStore(pool)
 
-	// intentClassifierSvc is Step 36's own real classifier (§8.3, §18):
+	// intentClassifierSvc is §8.3's own real classifier (§8.3, §18):
 	// llm.New resolves cfg.IntentClassifierProvider against this
 	// codebase's own small provider registry (internal/adapters/outbound/
 	// llm's own doc.go) -- Anthropic is the one real adapter this Step
@@ -532,7 +532,7 @@ func serve() error {
 		cfg.IntentClassifierActiveSurfaces,
 	)
 
-	// findingRelocationResolver is Step 63's own §22.1.1 relocation
+	// findingRelocationResolver is §22's own §22.1.1 relocation
 	// fallback (internal/app/findingposition) -- reuses intentLLM (the
 	// SAME already-constructed ports.LLM client/config intentClassifierSvc
 	// above uses, never a second, independently-configured adapter) and
@@ -543,7 +543,7 @@ func serve() error {
 	// provider/model configuration surface for it.
 	findingRelocationResolver := findingposition.New(intentLLM, cfg.IntentClassifierProvider, cfg.IntentClassifierModel)
 
-	// recon is Step 25's ("reconciler + GC", §5.3) process-wide
+	// recon is §5.3's ("reconciler + GC", §5.3) process-wide
 	// provider-reconciliation/orphan-GC loop, run below via the errgroup
 	// exactly once per process -- constructed from the SAME sandboxStore/
 	// sandboxProvider/cfg.Timeouts already built above for everything
@@ -555,12 +555,12 @@ func serve() error {
 		return fmt.Errorf("construct reconciler: %w", err)
 	}
 
-	// builder is Step 26's ("image builds", §8.5-note/§10-P2) own
+	// builder is §8.5's ("image builds", §8.5-note/§10-P2) own
 	// process-wide background image-build loop, run below via the
 	// errgroup exactly once per process -- constructed from the SAME
 	// sandboxProvider/cfg.Timeouts already built above, mirroring recon's
 	// own construction immediately above exactly. See internal/app/
-	// imagebuild's own doc.go for what it does and why. Step 42 ("warm
+	// imagebuild's own doc.go for what it does and why. §19.2 ("warm
 	// boot: refresh pump + hook policy", §19.2) adds the trailing
 	// sourceControl/cfg.GitHubImageBuildToken pair: the SAME *githubapi.
 	// Adapter instance already constructed above (for CreatePR/
@@ -582,7 +582,7 @@ func serve() error {
 		return fmt.Errorf("construct image builder: %w", err)
 	}
 
-	// automationEngine is Step 51's ("automations: engine", §3.5) own
+	// automationEngine is §3.5's ("automations: engine", §3.5) own
 	// process-wide background automation engine, run below via the
 	// errgroup exactly once per process -- constructed from the SAME
 	// sessionStore/turnStore/environmentStore/auditLogStore/registry/pool
@@ -600,14 +600,14 @@ func serve() error {
 		cfg.RolloutMode, repoSettingsStore,
 	)
 
-	// The 3 stores backing Step 20's ("auth v1", §13.1/§13.4) own GitHub
+	// The 3 stores backing §13.1's ("auth v1", §13.1/§13.4) own GitHub
 	// OAuth login, backend-issued session cookies, and route middleware --
 	// see internal/adapters/inbound/auth's own doc.go for the full writeup.
 	userStore := postgres.NewUserStore(pool)
 	identityStore := postgres.NewIdentityStore(pool)
 	userSessionStore := postgres.NewUserSessionStore(pool)
 
-	// identityLinkPromptStore/appIdentityLinkDeps are Step 39's own
+	// identityLinkPromptStore/appIdentityLinkDeps are §13.2's own
 	// ("identities + full RBAC", §13.2) auto-linking wiring -- threaded
 	// into every Slack/Linear ingress Deps struct below (so a first event
 	// from an unknown provider identity auto-links or creates a magic-link
@@ -821,7 +821,7 @@ func serve() error {
 		Deliveries:   webhookDeliveryStore,
 		Threads:      slackThreadSessionStore,
 		AuditLog:     auditLogStore,
-		// Plans (Step 37/38 follow-up fix, §8.1): the SAME planStore
+		// Plans (a follow-up fix, §8.1): the SAME planStore
 		// instance every other caller above already uses -- handleEvent's
 		// own awaiting-plan gate/verdict/revise-prefix check (handler.go)
 		// needs this to find a mapped session's own awaiting_approval plan,
@@ -890,7 +890,7 @@ func serve() error {
 		AuditLog:            auditLogStore,
 		IdentityLink:        appIdentityLinkDeps,
 		// Participants ("identities + full RBAC", §13.2/§13.3):
-		// the SAME participantStore instance Step 37's own REST plan
+		// the SAME participantStore instance §8.1's own REST plan
 		// approve/reject endpoints already use (constructed once, above),
 		// never a second, independently-constructed copy.
 		Participants: participantStore,
@@ -925,12 +925,12 @@ func serve() error {
 			// Identities/Users/Participants (batch fix/audit-github-actor-
 			// rbac): the SAME identityStore/userStore/participantStore
 			// instances every other caller above already uses (§13.1's
-			// own auth wiring, Step 37's own plan approve/reject
+			// own auth wiring, §8.1's own plan approve/reject
 			// endpoints), never a second, independently-constructed copy.
 			Identities:   identityStore,
 			Users:        userStore,
 			Participants: participantStore,
-			// Plans (Step 37/38 follow-up fix, §8.1): the SAME planStore
+			// Plans (a follow-up fix, §8.1): the SAME planStore
 			// instance every other caller above already uses -- threaded
 			// through to CreateTurnForBot's own awaiting-plan gate.
 			Plans: planStore,
@@ -1005,7 +1005,7 @@ func serve() error {
 			// with, never a per-commenter credential.
 			BotToken:     cfg.GitHubBotToken,
 			PullRequests: sourceControl,
-			// Comments (Step 37/38 follow-up fix, Finding 1; also posts
+			// Comments (a follow-up fix, Finding 1; also posts
 			// batch fix/deny-unlinked-github-actors' own "please sign in"
 			// reply): the SAME *githubapi.Adapter instance as
 			// PullRequests/sourceControl above -- never a second,
@@ -1211,7 +1211,7 @@ func serve() error {
 		r.Post("/", httpapi.UpsertIntentTemplate(pool, promptTemplateStore, auditLogStore))
 	})
 
-	// REST routes the UI needs (§6.3, Step 19's own plan row: "create/get/
+	// REST routes the UI needs (§6.3, §6.2's own plan row: "create/get/
 	// events/artifacts", + ws-token named separately by §6.2), all gated
 	// behind auth.Middleware as of Step 20 — see
 	// internal/adapters/inbound/httpapi/doc.go's own updated writeup. This
@@ -1541,7 +1541,7 @@ func serve() error {
 	})
 
 	// /api/automations ("automations: triggers & extras", §8.4):
-	// the CRUD surface Step 51 ("automations: engine") never built --
+	// the CRUD surface §3.5 ("automations: engine") never built --
 	// automationStore is the SAME instance automationEngine (constructed
 	// above) already uses, never a second, independently-constructed copy.
 	// Create/Pause/Resume/RotateAutomationWebhookToken/
@@ -1631,7 +1631,7 @@ func serve() error {
 		Outbox: outboxStore,
 		// AuditLog/IdentityLink/Participants ("identities + full
 		// RBAC", §13.2/§13.3): Participants is the SAME participantStore
-		// instance Step 37's own REST plan approve/reject endpoints already
+		// instance §8.1's own REST plan approve/reject endpoints already
 		// use (constructed once, above), never a second, independently-
 		// constructed copy.
 		AuditLog:     auditLogStore,
@@ -1717,12 +1717,12 @@ func serve() error {
 		ports.NotificationKindSentinelAutoFix:   sentinelAutoFixNotifier,
 		ports.NotificationKindHandoffSentinel:   handoffNotifier,
 		ports.NotificationKindReleaseManifest:   releaseManifestNotifier,
-		// Step 67 ("review digest: description adequacy + graduated
+		// §26.2 ("review digest: description adequacy + graduated
 		// remediation", §26.2): re-verifies Narvi-authorship and this
 		// repo's own descriptionAutofix flag, fresh, at delivery time,
 		// then rewrites a Narvi-authored PR's own body.
 		ports.NotificationKindGitHubDescriptionAutofix: descriptionAutofixNotifier,
-		// Step 56 ("workflow HITL gate + circuit breaker", §25.9): a
+		// §25.9 ("workflow HITL gate + circuit breaker", §25.9): a
 		// workflow step awaiting decision, or a run escalating to
 		// needs_review, notifies a human via whichever of these three the
 		// originating session supports (internal/app/workflowengine's own
@@ -1736,7 +1736,7 @@ func serve() error {
 		ports.NotificationKindSlackWorkflowDecision:  planSlackNotifier,
 		ports.NotificationKindLinearWorkflowDecision: linearNotifier,
 		ports.NotificationKindGitHubWorkflowDecision: githubNotifier,
-		// Step 62 ("review verdict persistence, analytics, digest &
+		// §21 ("review verdict persistence, analytics, digest &
 		// automated approval", §21.3): the deterministic daily digest's
 		// own two outbox kinds. digestSlackNotifier reuses the SAME
 		// *slackapi.Client every other Slack notifier above already
@@ -1851,7 +1851,7 @@ func serve() error {
 		return nil
 	})
 
-	// Step 25 ("reconciler + GC", §5.3): started/shut down through this
+	// §5.3 ("reconciler + GC", §5.3): started/shut down through this
 	// SAME errgroup as every other background loop above -- no naked
 	// goroutine (§11) -- with the identical context.Canceled carve-out
 	// RunTimerPump/RunExpiredTokenCleanup already establish for normal
@@ -1863,7 +1863,7 @@ func serve() error {
 		return nil
 	})
 
-	// Step 26 ("image builds"): started/shut down through this SAME
+	// §8.5 ("image builds"): started/shut down through this SAME
 	// errgroup as every other background loop above -- no naked goroutine
 	// (§11) -- with the identical context.Canceled carve-out RunTimerPump/
 	// RunExpiredTokenCleanup/recon.Run each already establish for normal
@@ -1875,7 +1875,7 @@ func serve() error {
 		return nil
 	})
 
-	// Step 35 ("outbox delivery", §5.1): started/shut down through this
+	// §5.1 ("outbox delivery", §5.1): started/shut down through this
 	// SAME errgroup as every other background loop above -- no naked
 	// goroutine (§11) -- with the identical context.Canceled carve-out
 	// RunTimerPump/RunExpiredTokenCleanup/recon.Run/builder.Run each
@@ -1904,7 +1904,7 @@ func serve() error {
 		return nil
 	})
 
-	// Step 51 ("automations: engine", §3.5): started/shut down through
+	// §3.5 ("automations: engine", §3.5): started/shut down through
 	// this SAME errgroup as every other background loop above -- no naked
 	// goroutine (§11) -- with the identical context.Canceled carve-out
 	// every other background loop already establishes for normal
@@ -1942,7 +1942,7 @@ func serve() error {
 		return nil
 	})
 
-	// Step 58 ("uploads, blob storage & the in-sandbox download_file
+	// §8.6 ("uploads, blob storage & the in-sandbox download_file
 	// tool", §28.4): uploadSweeper is nil when cfg.ObjectStorage is absent
 	// (feature off) -- started/shut down through this SAME errgroup as
 	// every other background loop above -- no naked goroutine (§11) --
@@ -1957,7 +1957,7 @@ func serve() error {
 		})
 	}
 
-	// Step 59 ("models: Codex via ChatGPT-account OAuth", §29.5):
+	// §8.8 ("models: Codex via ChatGPT-account OAuth", §29.5):
 	// chatGPTRefreshPump is the single control-plane refresher for every
 	// linked ChatGPT account -- unconditional (unlike uploadSweeper above,
 	// this needs no optional external dependency to be configured; it is

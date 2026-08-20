@@ -182,7 +182,7 @@ SELECT DISTINCT user_id FROM identities
 WHERE email_verified = true AND lower(email) = lower($1)
 `
 
-// Step 39 ("identities + full RBAC", §13.2/§13.3) additions --
+// §13.2 ("identities + full RBAC", §13.2/§13.3) additions --
 // ListVerifiedIdentityUserIDsByEmail is the auto-link algorithm's own
 // "match against ... verified identity emails" half (the OTHER half,
 // users.primary_email, is GetUserByPrimaryEmail in users.sql);

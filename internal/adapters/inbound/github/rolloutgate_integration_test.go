@@ -1,6 +1,6 @@
 //go:build integration
 
-// This file proves Step 76's own per-channel refusal contract (§10 Phase
+// This file proves §10's own per-channel refusal contract (§10 Phase
 // 6, §32) for GitHub specifically: a rollout refusal must take the
 // permanent-denial idiom -- acknowledge (200) WITHOUT releasing the
 // webhook-delivery claim, and post NO reply on the PR thread at all,

@@ -1136,7 +1136,7 @@ func TestSyncAll_StashPopFailure_StillReAppliesSparseCheckout(t *testing.T) {
 	}
 }
 
-// --- §19.3 (Step 40, "warm boot: fetch-aware git sync") tests below ---
+// --- §19.3 (§19.3, "warm boot: fetch-aware git sync") tests below ---
 //
 // newLocalOrigin/addOriginBranch create a real, local, non-bare git
 // repository to act as this Step's new boot-time fetch step's own remote

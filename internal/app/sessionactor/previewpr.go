@@ -1,4 +1,4 @@
-// This file (previewpr.go) implements Step 57's own ("RWX provider +
+// This file (previewpr.go) implements §4.1's own ("RWX provider +
 // previews", §4.1.2 point 1) PR preview link enqueue: for each pushed
 // repo whose per-repo RWX preview setting ({dispatchKey, endpointTemplate,
 // orgSlug}) is present, one small fresh transact writes a "preview"-typed

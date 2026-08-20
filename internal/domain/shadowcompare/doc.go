@@ -1,4 +1,4 @@
-// Package shadowcompare is Step 59's own "shadow-comparison tooling for
+// Package shadowcompare is §8.8's own "shadow-comparison tooling for
 // review" deliverable (IMPLEMENTATION_PLAN.md Step 59 row), reusing
 // §9.4/§18.5's own shadow-mode discipline ("the same mechanism is used
 // again for every future model swap, prompt change, or new surface, not

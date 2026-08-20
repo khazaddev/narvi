@@ -432,7 +432,7 @@ type CreateTurnOptions struct {
 // this function's own pre-transaction existence check below -- see that
 // function's own doc comment for why.
 //
-// actorUserID is Step 39's own addition, for the audit_log row
+// actorUserID is §13.2's own addition, for the audit_log row
 // createTurnLocked writes on the SAME tx as the turn insert (§13.3): a
 // real authenticated caller's id from CreateTurn (the REST handler above,
 // which ALSO already ran authz.Authorize against this same actor before
@@ -576,7 +576,7 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 		reviewDepthDecision = opts[0].ReviewDepthDecision
 	}
 
-	// Step 64 ("plan mode: follow-up intent classification", §23.1/§23.2):
+	// §23 ("plan mode: follow-up intent classification", §23.1/§23.2):
 	// plan_followup classification, gated STRICTLY on "planMode is false
 	// AND sessionID currently has a plan sitting in plan.
 	// StatusAwaitingApproval" (§23.1: "the classifier is never invoked for
@@ -757,7 +757,7 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 		}
 	}
 
-	// Step 55 ("workflow execution engine", §25.6): resolve which
+	// §25.6 ("workflow execution engine", §25.6): resolve which
 	// WorkflowDefinition/StepDefinition governs this new turn, and use its
 	// PromptTemplate/ModelID to build it -- internal/app/workflowengine's
 	// own doc.go documents the full design and its fail-open contract in
@@ -780,7 +780,7 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	// UNCHANGED, exactly as if this Step did not exist -- rather than
 	// failing turn creation over what is fundamentally an engine
 	// bookkeeping concern.
-	// Step 58 ("uploads, blob storage & the in-sandbox download_file
+	// §8.6 ("uploads, blob storage & the in-sandbox download_file
 	// tool", §28.5): validate attachmentIDs INSIDE this same locked
 	// transaction -- every id must be a status='ready' upload artifact of
 	// THIS session, else a structured 4xx; a failed or foreign upload can

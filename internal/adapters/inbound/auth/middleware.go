@@ -18,7 +18,7 @@ import (
 // gating at the ROUTE level (that stays a coarse "authenticated or not"
 // check, exactly per §13.3's own "HTTP middleware handles the coarse
 // route-level gate"). platform.AuthenticatedUser.Role IS now real,
-// load-bearing data, though: Step 39 ("identities + full RBAC") reads it
+// load-bearing data, though: §13.2 ("identities + full RBAC") reads it
 // straight out of context (platform.UserFromContext) in every
 // state-changing REST handler downstream (internal/adapters/inbound/
 // httpapi) to build a domain/authz.Actor and render the real §13.3

@@ -11,7 +11,7 @@ import (
 
 // AuditLogStore is a thin, pass-through wrapper around the sqlc-generated
 // audit_log query (§13.3, migrations/000013_audit_log.up.sql). No
-// caching, no retries, no business rules -- Step 39 ("identities + full
+// caching, no retries, no business rules -- §13.2 ("identities + full
 // RBAC") is the first caller of Record, and every call site uses
 // WithTx(tx), never the pool-scoped form directly, since §13.3 requires
 // the audit row be "written in the same transaction as the change".
@@ -46,7 +46,7 @@ func (s *AuditLogStore) Record(ctx context.Context, arg sqlcgen.CreateAuditLogEn
 
 // List returns up to limit audit_log rows, newest first, skipping offset
 // rows -- backs the members API's own read endpoint over the audit log
-// (§13.3: "surfaced in Settings -> Members ('Audit log')", Step 39's own
+// (§13.3: "surfaced in Settings -> Members ('Audit log')", §13.2's own
 // second half). Always the pool-scoped form (never WithTx) -- a read has
 // no transactional-consistency requirement with any in-flight write the
 // way Record's own callers do.

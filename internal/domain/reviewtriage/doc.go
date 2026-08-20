@@ -1,6 +1,6 @@
-// Package reviewtriage implements Step 68's own light/deep review-depth
+// Package reviewtriage implements §26.3's own light/deep review-depth
 // routing decision (§26.3): "the depth decision is made in the single
-// funnel (Step 46's creation/dispatch path), deterministic-first -- the
+// funnel (§8.2's creation/dispatch path), deterministic-first -- the
 // same posture as everywhere else in this system (the server does not
 // trust agent judgment for routing; deterministic fallbacks throughout,
 // §18)." Every function here is pure per CLAUDE.md/§11: no I/O, no
@@ -56,7 +56,7 @@
 // be a worse plan-fidelity failure than the recap sentence's own
 // "otherwise" wording tension) and additionally treats the PR's existing
 // review:needs-human label (internal/domain/reviewpost.LabelNeedsHuman,
-// Step 47's own maintainer escape hatch) as a fifth trigger: routing an
+// §8.2's own maintainer escape hatch) as a fifth trigger: routing an
 // already-flagged-needs-human PR through the MORE rigorous deep path is
 // strictly the safer direction, consistent with §26.9's own invariant
 // ("the router may only ever add depth, never subtract rigor"). This

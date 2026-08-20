@@ -1,4 +1,4 @@
-// Package clusterbinding implements the pure vocabulary around Step 73b's
+// Package clusterbinding implements the pure vocabulary around §27.4's
 // own ("cloud identity: sandbox-side consumption + kubeconfig injection",
 // §27.4) cluster_bindings table: the 3 recognized AuthKind values (in
 // §27.4's own preference order, cloud > oidc > static), structural

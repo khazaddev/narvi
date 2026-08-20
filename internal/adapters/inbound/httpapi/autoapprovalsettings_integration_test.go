@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 62's own (§21.2) auto-approval-settings/
+// Integration tests for §21's own (§21.2) auto-approval-settings/
 // auto-merge REST routes (reposettings.go's own PutAutoApprovalSettings/
 // PutAutoMergeToggle), against a real Postgres instance -- sharing this
 // package's own testRig (httpapi_integration_test.go).

@@ -98,14 +98,14 @@ var (
 	// fix, see that constant's own doc comment for the full "why".
 	ErrNameReservedOpenCodeNamespace = errors.New("sandboxsecret: name is in the reserved OPENCODE_ namespace")
 	// ErrNameReservedProviderCredential means name is exactly one of
-	// providercredential.AllEnvVarNames -- already owned by Step 53's
+	// providercredential.AllEnvVarNames -- already owned by §25.1's
 	// provider-credential injection mechanism. §27.1's own "one owning
 	// mechanism per env-var name" rule: this collision is refused, never
 	// silently shadowed by whichever mechanism happens to write its env
 	// entry last.
 	ErrNameReservedProviderCredential = errors.New("sandboxsecret: name is already owned by provider credential injection")
 	// ErrNameReservedCloudIdentity means name is exactly one of
-	// cloudidentity.ReservedEnvVarNames -- already owned by Step 73b's own
+	// cloudidentity.ReservedEnvVarNames -- already owned by §27.4's own
 	// §27.3 cloud-identity-consumption mechanism (AWS_WEB_IDENTITY_TOKEN_
 	// FILE, AWS_ROLE_ARN, AWS_ROLE_SESSION_NAME, GOOGLE_APPLICATION_
 	// CREDENTIALS, AZURE_FEDERATED_TOKEN_FILE, AZURE_CLIENT_ID,
@@ -118,7 +118,7 @@ var (
 	ErrNameReservedCloudIdentity = errors.New("sandboxsecret: name is already owned by cloud identity injection")
 	// ErrNameReservedClusterBinding means name is exactly
 	// clusterbinding.EnvVarKubeconfig ("KUBECONFIG") -- already owned by
-	// Step 73b's own §27.4 kubeconfig-injection mechanism, for the
+	// §27.4's own §27.4 kubeconfig-injection mechanism, for the
 	// identical "one owning mechanism per env-var name" reason
 	// ErrNameReservedCloudIdentity's own doc comment gives.
 	ErrNameReservedClusterBinding = errors.New("sandboxsecret: name is already owned by kubeconfig injection")
@@ -129,7 +129,7 @@ var (
 // the reserved NARVI_* namespace, not in the reserved OPENCODE_* namespace
 // (adversarial-review CRITICAL fix -- see OpenCodeReservedPrefix's own doc
 // comment), not one of the names providercredential.EnvVarNames already
-// owns, not one of Step 73b's own §27.3 cloud-identity names
+// owns, not one of §27.4's own §27.3 cloud-identity names
 // (cloudidentity.ReservedEnvVarNames), and not §27.4's own KUBECONFIG
 // (clusterbinding.ReservedEnvVarNames) -- the SAME "one owning mechanism
 // per env-var name" rule extended to this Step's own two injected

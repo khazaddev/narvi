@@ -3,7 +3,7 @@
 // covers Linear, in a separate package/worktree in parallel). One route,
 // wired in cmd/control-plane/main.go: POST /webhooks/slack.
 //
-// Step 38 ("plan mode, cross-channel", §8.1/§13.3) adds a SECOND route to
+// §8.1 ("plan mode, cross-channel", §8.1/§13.3) adds a SECOND route to
 // this package, POST /webhooks/slack/interactive -- Slack's own
 // structurally different Interactivity payload shape (real Block Kit
 // button clicks / modal submissions on the plan-approval-request message),
@@ -142,7 +142,7 @@
 // repo). Real per-channel repo routing is left to a future Step (most
 // naturally automations, §8.4).
 //
-// # In-thread acks -- scoping decision (Step 33's own row, "in-thread
+// # In-thread acks -- scoping decision (§8.10's own row, "in-thread
 // acks")
 //
 // internal/app/ports has no Notifier port yet, and the outbox table

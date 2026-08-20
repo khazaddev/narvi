@@ -1,10 +1,10 @@
-// Package authz implements Step 39's ("identities + full RBAC", §13.3)
+// Package authz implements §13.2's ("identities + full RBAC", §13.3)
 // own central deliverable: a table-driven Authorize(actor, action,
 // resource) error the matrix below lives in as DATA, with exhaustive
 // tests over every (role, action) pair — no I/O, no time.Now(), no
 // randomness (§11), so this package is safe to call from anywhere
 // (an HTTP handler, a session actor mailbox command, a future Slack/
-// Linear entry point once Step 39's own auto-linking resolves a real
+// Linear entry point once §13.2's own auto-linking resolves a real
 // user_id for those channels) without dragging in any adapter dependency.
 //
 // # The matrix (§13.3, verbatim)

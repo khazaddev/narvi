@@ -1,4 +1,4 @@
-// This file (users.go) implements Step 39's ("identities + full RBAC",
+// This file (users.go) implements §13.2's ("identities + full RBAC",
 // §13.2) own auto-link algorithm need: "Fetch the actor's profile email
 // from the provider API." -- a real users.info call against Slack's Web
 // API, verified against Slack's own current documentation

@@ -1,6 +1,6 @@
-// This file (reviewretrigger.go) implements Step 65's ("review: automatic
+// This file (reviewretrigger.go) implements §24's ("review: automatic
 // re-review on new commits", §24) own SECOND, automatic trigger for a
-// review session's own turns -- alongside, never replacing, Step 46's
+// review session's own turns -- alongside, never replacing, §8.2's
 // existing manual label/button re-trigger (internal/adapters/inbound/
 // httpapi/reviewretrigger.go), which this file's own logic never touches.
 //
@@ -140,7 +140,7 @@ type reviewRetriggerDecision struct {
 	// "no prior verdict" zero-value convention immediately above.
 	latestVerdictReviewPath string
 
-	// The four fields below are Step 68's own computed OUTPUT (§26.3),
+	// The four fields below are §26.3's own computed OUTPUT (§26.3),
 	// set by handleReviewRetriggerDebounceTimer between phase 2 (fetch)
 	// and phase 3 (finish/insert) -- never set by readReviewRetriggerState
 	// itself, which only ever reads latestVerdictReviewPath above as an
@@ -681,7 +681,7 @@ func (a *Actor) composeAutoRetriggerPrompt(ctx context.Context, repoFullName str
 }
 
 // insertAutoRetriggerTurn is §24.3 step 4's own turn creation -- CANNOT
-// call httpapi.CreateTurnForBot (Step 46's manual path): internal/app/
+// call httpapi.CreateTurnForBot (§8.2's manual path): internal/app/
 // sessionactor cannot import internal/adapters/inbound/httpapi (httpapi
 // already imports sessionactor throughout its bot/create/turn/plan files;
 // the reverse would be a compile-time import cycle), and createTurnLocked
@@ -783,7 +783,7 @@ func (a *Actor) insertAutoRetriggerTurn(ctx context.Context, tx pgx.Tx, decision
 
 // enqueueAutoRetriggerBudgetExhaustedNotice is §24.6's own one-time
 // notice -- posted through the SAME verdict-posting mechanism every
-// OTHER review-session write to a PR already goes through (Step 47's
+// OTHER review-session write to a PR already goes through (§8.2's
 // raw-comment blocking: this is the sanctioned way review-session content
 // ever reaches a PR at all), never a raw comment. This is NOT a real
 // review.Verdict -- no risk assessment happened -- so, deliberately

@@ -15,7 +15,7 @@ type CircuitBreakerState struct {
 	// FailureCount is the number of consecutive spawn failures counted
 	// against the breaker.
 	//
-	// CONTRACT for the future caller (Step 12's SandboxProvider /
+	// CONTRACT for the future caller (§4.1's SandboxProvider /
 	// ProviderError -- this package does not itself see provider errors):
 	// only PERMANENT provider failures may increment this counter. §3.2:
 	// "Unknown provider errors default to transient, never permanent -- a

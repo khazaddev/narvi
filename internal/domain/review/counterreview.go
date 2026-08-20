@@ -54,7 +54,7 @@ const (
 
 // CounterReviewFloor is the FOURTH raise-only floor's single exported pure
 // function (§26.4, composing alongside CoverageFloor/PremiseFloor/
-// AdequacyFloor via the existing max(rank) in ComputeShippable, Step 45's
+// AdequacyFloor via the existing max(rank) in ComputeShippable, §8.2's
 // own exactly-one-pure-function-per-floor pattern, extended once already by
 // §26.2 and now again by this Step): given the deep path's own
 // CounterReviewStatus, it returns the MOST CONSERVATIVE Shippable value

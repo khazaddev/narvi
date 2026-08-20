@@ -3,7 +3,7 @@ package plan
 import "testing"
 
 // TestMatchVerdict is table-driven (§11) over the exact chosen keyword set
-// (Step 38, "plan mode, cross-channel") -- approve variants, reject
+// (§8.1, "plan mode, cross-channel") -- approve variants, reject
 // variants, case/whitespace insensitivity, and confirms any other text
 // (including a superstring containing a keyword) does NOT match, matching
 // this file's own doc comment on why substring matching is deliberately

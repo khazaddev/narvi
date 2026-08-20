@@ -86,7 +86,7 @@
 // trip and its one honest, documented failure-reporting gap (no NACK
 // event exists on the wire for a failed snapshot attempt).
 //
-// Step 28 ("turn recovery", §3.3) fixes commandHandler.HandlePrompt's own
+// §3.3 ("turn recovery", §3.3) fixes commandHandler.HandlePrompt's own
 // conversation-id reporting to genuinely happen "at turn start... never
 // lazily": it now passes a ports.ConversationIDReporter callback into
 // StartTurn (adapter.go invokes it immediately once resolveSession
@@ -100,7 +100,7 @@
 // first time it observes a genuinely new, non-nil id, rather than waiting
 // for its own next regular tick.
 //
-// Step 29 ("gitstate in-sandbox", §3.4) gives runBootSequence real
+// §3.4 ("gitstate in-sandbox", §3.4) gives runBootSequence real
 // boot-mode-aware dispatch: BootModeBuild/BootModeFresh keep calling
 // gitclone.CloneAll (a fresh clone into an empty directory) unchanged;
 // BootModeRepoImage/BootModeSnapshotRestore instead call the new
@@ -124,7 +124,7 @@
 // repo_image/snapshot_restore boot needs this every bit as much as a fresh
 // clone does.
 //
-// Step 53 ("provider credential injection", §25.1/§25.3) closes the
+// §25.1 ("provider credential injection", §25.1/§25.3) closes the
 // long-standing gap named in every prior Step's own opencodeproc.Spawn
 // call: no ANTHROPIC_API_KEY/OPENAI_API_KEY/Google-equivalent was ever
 // wired into the spawned `opencode serve` process for ANY provider, even
@@ -317,7 +317,7 @@ type commandHandler struct {
 	timeouts platform.Timeouts
 	sup      *supervisor.Supervisor
 
-	// reviewCostBudgetURL is Step 70's own addition (§26.7/§26.9): the
+	// reviewCostBudgetURL is §26.5's own addition (§26.7/§26.9): the
 	// real, already-bound http://127.0.0.1:<port>/review-cost-budget URL
 	// this sandbox's own loopback budget server resolved at startup (run(),
 	// via budgetServer.URL()) -- empty exactly when cfg.SessionConfig was
@@ -348,7 +348,7 @@ func (h *commandHandler) HandlePrompt(_ context.Context, cmd sandboxws.Prompt) {
 		return
 	}
 
-	// Step 47 ("server-side verdict", §8.2/§5.2): a review turn's own text
+	// §8.2 ("server-side verdict", §8.2/§5.2): a review turn's own text
 	// (internal/domain/review.RenderTurnPrompt) carries FIXED placeholder
 	// tokens in place of this turn's real verdict-posting-tool URL/bearer/
 	// gen -- see reviewverdicttoolprompt.go's own top doc comment for why
@@ -392,7 +392,7 @@ func (h *commandHandler) HandlePrompt(_ context.Context, cmd sandboxws.Prompt) {
 			}
 		}
 
-		// Step 28 ("turn recovery"), §3.3 "at turn start... never lazily":
+		// §3.3 ("turn recovery"), §3.3 "at turn start... never lazily":
 		// report the conversation id to the bridge THE INSTANT StartTurn
 		// itself resolves it (adapter.go's own resolveSession, called
 		// long before the rest of a turn's own, possibly-minutes-long
@@ -884,7 +884,7 @@ func providerCredentialSpawnEnv(resolved map[string]credentials.AuthValue) []str
 }
 
 // providerCredentialOAuthSets returns every "oauth"-kind entry in
-// resolved, unchanged -- Step 59's own new split (§29.6): the caller
+// resolved, unchanged -- §8.8's own new split (§29.6): the caller
 // (run(), below) PUTs each to OpenCode's own auth store via
 // agentRuntime.SetOAuthAuth, sequenced after Spawn reports healthy and
 // before the WS bridge accepts its first command.
@@ -1006,7 +1006,7 @@ func run() error {
 	// exist by then -- see this file's own package doc comment for the
 	// full reasoning.
 	var agentRuntime *opencode.Adapter
-	// budgetServer/reviewCostBudgetURL are Step 70's own addition (§26.7/
+	// budgetServer/reviewCostBudgetURL are §26.5's own addition (§26.7/
 	// §26.9): budgetServer is sandbox-agent's own FIRST HTTP server (a
 	// tiny, loopback-only listener serving GET /review-cost-budget,
 	// reviewcostbudgetserver.go) -- nil exactly when cfg.SessionConfig is
@@ -1164,7 +1164,7 @@ func run() error {
 			}
 		}
 
-		// Step 72 ("sandbox secrets & opencode config", §27.1/§27.2):
+		// §27.1 ("sandbox secrets & opencode config", §27.1/§27.2):
 		// resolve this session's own general sandbox secrets and OpenCode
 		// config documents BEFORE spawning `opencode serve` and BEFORE the
 		// boot sequence's own first hook run (runBootSequence, below) --
@@ -1253,7 +1253,7 @@ func run() error {
 			}
 		}
 
-		// Step 53 ("provider credential injection", §25.1/§25.3): resolve
+		// §25.1 ("provider credential injection", §25.1/§25.3): resolve
 		// this session's own provider credentials (repo/environment/global/
 		// user scoped, most-specific-wins) BEFORE spawning `opencode serve`
 		// -- see fetchProviderCredentials' own doc comment for why this is
@@ -1756,7 +1756,7 @@ func logRepoMissingFromManifest(manifest boot.ImageManifest, currentSHAs map[str
 // boot.RunBoot's own documented, correct no-op on an empty repo list
 // handles that unchanged from Step 14.
 //
-// Step 29 ("gitstate in-sandbox", §3.4) splits "prepare every repo" on
+// §3.4 ("gitstate in-sandbox", §3.4) splits "prepare every repo" on
 // cfg.BootMode, the exact, principled dispatch point internal/domain/
 // sandboxboot.BootMode already names: BootModeBuild/BootModeFresh mean "no
 // prior image/snapshot to build on" -- the workspace does NOT yet exist on
@@ -1974,7 +1974,7 @@ func runBootSequence(
 		return fmt.Errorf("boot: %w", err)
 	}
 
-	// §3.4 ("Image builds must snapshot a clean tree") / Step 29's own
+	// §3.4 ("Image builds must snapshot a clean tree") / §3.4's own
 	// Part E: ONLY for a BootModeBuild boot, and ONLY once RunBoot itself
 	// has already returned successfully -- a failed setup.sh in build mode
 	// is already fatal per BootModeBuild's own existing primary-fatal

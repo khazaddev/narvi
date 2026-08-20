@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 64's own plan_followup classification block
+// Integration tests for §23's own plan_followup classification block
 // inside createTurnLocked (turn.go, §23.1/§23.2/§23.3) -- the classify-
 // then-consult sequencing that replaces the interim awaiting-plan gate's
 // unconditional "always decline" for the unprefixed (planMode == false)

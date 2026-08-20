@@ -1,6 +1,6 @@
 //go:build integration
 
-// This file (createcore_substrate_integration_test.go) proves Step 74's
+// This file (createcore_substrate_integration_test.go) proves §27.5's
 // own up-front half of the "fail-closed, twice" rule (§27.5/§27.6, brief
 // point A): CreateSessionCore refuses a docker-required or
 // enforced-egress session outright, BEFORE any Postgres write, when the

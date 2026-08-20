@@ -83,7 +83,7 @@ type Bridge struct {
 	convMu         sync.Mutex
 	conversationID *string
 
-	// forceHeartbeat is Step 28's ("turn recovery") own out-of-band
+	// forceHeartbeat is §3.3's ("turn recovery") own out-of-band
 	// signal: SetConversationID sends on it (non-blocking) the first time
 	// it is called with a genuinely NEW, non-nil conversation id (§3.3:
 	// "at turn start... never lazily") -- heartbeatLoop's own select

@@ -1,4 +1,4 @@
-// This file (planrecord.go) implements Step 37's ("plan mode, web",
+// This file (planrecord.go) implements §8.1's ("plan mode, web",
 // §8.1/§12.2 item 3) own plan-row-creation half: hooked into the SAME
 // transaction pushpr.go's own completeProcessingTurn already writes a
 // turn's terminal state in (recordPlanIfNeeded is called right after that
@@ -74,7 +74,7 @@ import (
 // where no plan should be recorded: a non-plan-mode turn, or a plan-mode
 // turn that didn't genuinely complete (failed/cancelled).
 //
-// Step 38 ("plan mode, cross-channel", §8.1/§13.3) update: now returns the
+// §8.1 ("plan mode, cross-channel", §8.1/§13.3) update: now returns the
 // newly-created plan row (rather than nothing) when one was recorded --
 // enqueueOutboxNotification (outboxenqueue.go), called AFTER this function
 // by completeProcessingTurn, needs the plan's own id/version to route a

@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration test for Step 36's ("intent classifier", §8.3/§18) own
+// Integration test for §8.3's ("intent classifier", §8.3/§18) own
 // GitHub ingress wiring, against a real Postgres instance -- gated behind
 // the "integration" build tag, reusing newTestPool/testWebhookSecret/
 // testBotHandleIntegration/sign/issueCommentBody/postWebhook/testRig from

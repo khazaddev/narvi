@@ -96,7 +96,7 @@ const (
 	ackBusyText          = "Still working on the previous message in this thread — this one wasn't queued, please try again once it's done."
 	ackNotConfiguredText = "Slack ingress isn't configured with a default repo yet, so I can't start new work from a mention. A reply on an existing thread still works."
 
-	// ackNotAuthorizedText is Step 39's own addition ("identities + full
+	// ackNotAuthorizedText is §13.2's own addition ("identities + full
 	// RBAC", §13.2/§13.3): posted instead of ackNewSessionText when the
 	// acting user isn't authorized to create a session -- mirrors the REST
 	// API's own 403 semantics ("not authorized to perform this action",
@@ -193,7 +193,7 @@ type Deps struct {
 	Deliveries   *postgres.WebhookDeliveryStore
 	Threads      *postgres.SlackThreadSessionStore
 
-	// Plans (Step 37/38 follow-up fix, §8.1) -- handleEvent's own
+	// Plans (a follow-up fix, §8.1) -- handleEvent's own
 	// awaiting-plan gate/verdict/revise-prefix check (below) needs this to
 	// find a mapped session's own awaiting_approval plan, if any, mirroring
 	// Linear's identical Deps.Plans (webhook.go). nil-safe: a nil Plans
@@ -218,7 +218,7 @@ type Deps struct {
 	Outbox              *postgres.OutboxStore
 	LinearAgentSessions *postgres.LinearAgentSessionStore
 
-	// AuditLog is Step 39's own addition (§13.3) -- threaded through to
+	// AuditLog is §13.2's own addition (§13.3) -- threaded through to
 	// httpapi.CreateSessionCore below exactly like Environments already
 	// is, so a Slack-originated session creation gets the SAME audit_log
 	// row every other CreateSessionCore caller now gets. actor_user_id is
@@ -239,7 +239,7 @@ type Deps struct {
 	// second, independently-constructed copy.
 	Participants *postgres.ParticipantStore
 
-	// IdentityLink/SlackClient are Step 39's own auto-linking wiring
+	// IdentityLink/SlackClient are §13.2's own auto-linking wiring
 	// (§13.2): resolveSlackActor (identity.go) uses SlackClient.
 	// GetUserEmail to fetch ev.User's own profile email (with retry, via
 	// Timeouts.IdentityEmailFetch*), then IdentityLink.Resolve to
@@ -259,7 +259,7 @@ type Deps struct {
 	// below (TimestampWindow, AckTimeout), left untouched.
 	Timeouts platform.Timeouts
 
-	// IntentClassifier is Step 36's own wiring point (§8.3/§18): classify
+	// IntentClassifier is §8.3's own wiring point (§8.3/§18): classify
 	// + record runs ONCE, on the brand-new-thread's own first real turn
 	// (decided_at_stage="first_prompt" -- a bare session is created with
 	// no prompt at all, see resolveOrClaimSession; the real text only
@@ -582,7 +582,7 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	key := ev.threadKey()
 	prompt := normalizeMrkdwn(ev.Text)
 
-	// Step 39 ("identities + full RBAC", §13.2) update: resolve the REAL
+	// §13.2 ("identities + full RBAC", §13.2) update: resolve the REAL
 	// actor behind ev.User ONCE, regardless of whether this event ends up
 	// starting a brand-new thread or replying to an existing one --
 	// resolveSlackActor itself is called on every event (session-creating
@@ -661,7 +661,7 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	// never merely a prompt that also happens to fall through into an
 	// ordinary turn.
 	//
-	// Step 37/38 follow-up fix (§8.1), unchanged by this batch: a plain-text
+	// a follow-up fix (§8.1), unchanged by this batch: a plain-text
 	// reply matching plandomain.RevisePrefix instead is a deterministic
 	// "request changes" reply -- route it through as a REAL plan_mode=true
 	// turn (the prompt becomes the stripped feedback) instead of an ordinary
@@ -786,7 +786,7 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 		}
 	}
 
-	// Step 36 ("intent classifier", §8.3/§18): classify + record ONCE, on
+	// §8.3 ("intent classifier", §8.3/§18): classify + record ONCE, on
 	// the brand-new thread's own first real turn only -- IntentDecisionRecord
 	// is a per-SESSION record (§18.4), and every Slack-originated session
 	// gets its first (and, per this thread's own res.IsNewThread gate,
@@ -991,7 +991,7 @@ func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logge
 		return sessionResolution{Skip: true}, true
 	}
 
-	// Step 39 ("identities + full RBAC", §13.2/§13.3) update: creator is
+	// §13.2 ("identities + full RBAC", §13.2/§13.3) update: creator is
 	// no longer trusted unconditionally just because it resolved to a
 	// REAL, linked user_id -- that user's own role must still pass
 	// domain/authz.Authorize(ActionCreateSession), exactly like the REST

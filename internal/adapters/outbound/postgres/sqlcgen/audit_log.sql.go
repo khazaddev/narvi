@@ -81,7 +81,7 @@ type ListAuditLogEntriesParams struct {
 }
 
 // Backs the members API's own read endpoint over audit_log (§13.3:
-// "surfaced in Settings -> Members ('Audit log')") -- Step 39's own
+// "surfaced in Settings -> Members ('Audit log')") -- §13.2's own
 // second half, the first Get/List query this table ever gets. Newest
 // first (an audit trail is read backwards from "what just happened"),
 // offset/limit paginated -- a plain, small page size, not a cursor: this

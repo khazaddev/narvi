@@ -1,4 +1,4 @@
-// This file (cloudidentityconfig.go) implements Step 73b's own ("cloud
+// This file (cloudidentityconfig.go) implements §27.4's own ("cloud
 // identity: sandbox-side consumption + kubeconfig injection", §27.3/§27.4)
 // sandbox-agent-side client half of CP's POST /sessions/{id}/
 // cloud-identity-config delivery endpoint (internal/adapters/inbound/

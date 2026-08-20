@@ -138,7 +138,7 @@ import (
 // defaultBaseImage is the CreateSpec.Image value every spawn/restore falls
 // back to whenever no real, ready, matching built image exists yet for its
 // own fingerprint (§10 Phase 2: "always fall back to base image on any
-// miss -- never block a session") -- renamed from Step 21's own
+// miss -- never block a session") -- renamed from §9.3's own
 // placeholderBaseImage (its doc comment: "the CreateSpec.Image value used
 // until Step 26 ... makes real per-session image construction a thing")
 // now that §8.5 ("image builds") is genuinely that thing: this is no
@@ -215,7 +215,7 @@ type spawnPlan struct {
 
 	// restore is true when this plan is a Stopped/Failed/Stale ->
 	// Spawning RESTORE (§3.2: "stopped|stale + snapshot -> restore (new
-	// gen)"), as opposed to a plain fresh spawn (Step 22, "snapshots &
+	// gen)"), as opposed to a plain fresh spawn (§3.2, "snapshots &
 	// restore", design decision 6). handleEnsureDispatched dispatches
 	// restore==true to executeRestore instead of executeSpawn. Mutually
 	// exclusive with resume (below) -- EvaluateSpawnDecision's own
@@ -316,7 +316,7 @@ type dispatchPlan struct {
 // planDispatch's own transact. See imageresolve.go's own doc comment for
 // the full "never block a spawn" design.
 //
-// Step 27 ("mocking + contract drift", §14.3) adds checkContractDrift
+// §14.3 ("mocking + contract drift", §14.3) adds checkContractDrift
 // immediately alongside resolveAndSetImage, on the SAME spawn/restore
 // branches, at the SAME hook point, for the SAME reason: it is ALSO
 // network-bound (a GitHub API call per repo, plus a Postgres read/best-
@@ -396,7 +396,7 @@ func (a *Actor) planDispatch(ctx context.Context) (*spawnPlan, *dispatchPlan, er
 		entries := toQueueEntries(turns)
 		pendingID, hasPending := turn.NextToDispatch(entries)
 		if !hasPending {
-			// Step 28 ("turn recovery", §9.3 scenario #2): no dispatchable
+			// §3.3 ("turn recovery", §9.3 scenario #2): no dispatchable
 			// Pending turn -- but there may still be an in-flight
 			// (Dispatched/Processing) turn whose prompt was sent to a
 			// PREVIOUS sandbox incarnation that has since died (a respawn
@@ -489,7 +489,7 @@ func (a *Actor) planDispatch(ctx context.Context) (*spawnPlan, *dispatchPlan, er
 	return spawn, dispatch, err
 }
 
-// planReenqueueOrRespawn implements Step 28's ("turn recovery", §9.3
+// planReenqueueOrRespawn implements §3.3's ("turn recovery", §9.3
 // scenario #2) own extension to planDispatch: called ONLY when
 // NextToDispatch reported no dispatchable Pending turn, this checks
 // whether there is instead an in-flight (Dispatched/Processing) turn that
@@ -694,7 +694,7 @@ func (a *Actor) tryPlanSpawn(
 		// nothing re-triggers EnsureDispatched on a plain timeout with no
 		// other sandbox activity at all -- a later EnsureDispatched (the
 		// next sandbox event, or a future session) tries again. A
-		// genuinely timer-driven retry is Step 30's own resilience-suite
+		// genuinely timer-driven retry is §9.3's own resilience-suite
 		// job (§9.3 #8), not this one's.
 		a.logger.Warn("sessionactor: spawn circuit breaker open; skipping spawn this round",
 			"wait", cbDecision.WaitTime.String())
@@ -734,7 +734,7 @@ func (a *Actor) tryPlanSpawn(
 		SpawningTimeout: a.timeouts.SpawnStuckTimeout,
 	}, now, false, caps.Resume)
 
-	// Step 74's own dispatch-time half of the "fail-closed, twice" rule
+	// §27.5's own dispatch-time half of the "fail-closed, twice" rule
 	// (§27.5/§27.6, brief point A) -- deliberately gated to ONLY the
 	// three action kinds that are actually about to attempt a REAL
 	// provider call (Spawn/Restore/Resume): an ordinary Skip/Wait (a
@@ -752,7 +752,7 @@ func (a *Actor) tryPlanSpawn(
 			return nil, err
 		}
 
-		// Step 76's own dispatch-time half of the "fail-closed, twice"
+		// §10's own dispatch-time half of the "fail-closed, twice"
 		// rule (§10 Phase 6, §32) -- mirrors refuseIfSubstrateUnsupported's
 		// own identical gating to ONLY Spawn/Restore/Resume immediately
 		// above, for the identical reason (a Skip/Wait is not itself
@@ -820,7 +820,7 @@ func (a *Actor) tryPlanSpawn(
 	}
 }
 
-// refuseIfSubstrateUnsupported implements Step 74's own dispatch-time
+// refuseIfSubstrateUnsupported implements §27.5's own dispatch-time
 // half of the "fail-closed, twice" rule (§27.5/§27.6, brief point A):
 // re-checked HERE, immediately before tryPlanSpawn is about to attempt a
 // REAL spawn/restore/resume against a.provider, using the SAME pure
@@ -999,7 +999,7 @@ func (a *Actor) rolloutDecisionForSession(ctx context.Context, repoSettings *pos
 	return decision, transient, nil
 }
 
-// refuseIfRolloutUnenrolled implements Step 76's own dispatch-time half
+// refuseIfRolloutUnenrolled implements §10's own dispatch-time half
 // of the "fail-closed, twice" rule (§10 Phase 6, §32): re-checked HERE,
 // immediately before tryPlanSpawn is about to attempt a REAL
 // spawn/restore/resume against a.provider, using the SAME pure decision
@@ -1768,7 +1768,7 @@ func (a *Actor) tryPlanDispatch(
 // transact, already committed) -- on success there is nothing further to
 // do; on failure, failDispatchedTurn fails it forward.
 //
-// Step 76's own SECOND, independent placement of the "fail-closed, twice"
+// §10's own SECOND, independent placement of the "fail-closed, twice"
 // rollout re-check (§10 Phase 6, §32) -- closing the gap an adversarial
 // review found: refuseIfRolloutUnenrolled (tryPlanSpawn, above) already
 // re-checks before a fresh spawn/restore/resume, but that check runs ONLY

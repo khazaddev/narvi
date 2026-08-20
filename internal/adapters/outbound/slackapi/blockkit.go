@@ -1,4 +1,4 @@
-// This file (blockkit.go) implements Step 38's ("plan mode, cross-channel",
+// This file (blockkit.go) implements §8.1's ("plan mode, cross-channel",
 // §8.1/§13.3) own Slack-specific additions: real interactive Block Kit
 // messages for a plan awaiting approval, chat.update to reflect a rendered
 // decision on that same message (whichever channel actually decided), and
@@ -493,7 +493,7 @@ type postEphemeralRequest struct {
 }
 
 // PostEphemeral posts text into channel via chat.postEphemeral, visible
-// ONLY to userID -- Step 39's own security-remediation addition
+// ONLY to userID -- §13.2's own security-remediation addition
 // ("identities + full RBAC", §13.2): a confirmed review finding proved
 // that appending the magic-link identity-link notice to this package's
 // own whole-channel-visible UpdateMessage/PostPlanApprovalMessage text let

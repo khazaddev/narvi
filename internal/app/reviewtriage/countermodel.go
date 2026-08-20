@@ -8,10 +8,10 @@ import (
 )
 
 // counterReviewerProviderPreference is the fixed, deterministic order this
-// function walks Step 59's own model catalog in when picking the counter-
+// function walks §8.8's own model catalog in when picking the counter-
 // reviewer sub-task's own opposing-model-family override (§26.4: "family
 // opposed to the PR's authoring model... via the engine's own per-sub-
-// agent model selection, using Step 53's credential injection + Step 59's
+// agent model selection, using §25.1's credential injection + §8.8's
 // model catalog"). Exactly the three providers Step 53 already wires
 // credential injection for (internal/app/modelcatalog/doc.go: "the 3
 // providers Step 53 already wires credential injection for

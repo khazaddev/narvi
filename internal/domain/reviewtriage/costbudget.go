@@ -1,7 +1,7 @@
 package reviewtriage
 
 // CostBudget is §26.7's own per-repo-tunable per-path cost ceiling
-// (Step 69, "per-review cost budget with look-ahead"): "reviewCostBudget:
+// (§26.4, "per-review cost budget with look-ahead"): "reviewCostBudget:
 // {light: <usd>, deep: <usd>} joins §26.3's reviewDepth config on the SAME
 // per-repo settings row". Zero (the Go zero value for both fields) means
 // "no ceiling configured for this path" -- ShouldSkipOptionalPass below

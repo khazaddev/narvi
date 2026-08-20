@@ -109,7 +109,7 @@ func TestValidate_CatchesEachBrokenLink(t *testing.T) {
 			wantChain: "AutomationCronCatchUpWindow > AutomationEnginePumpInterval",
 		},
 		{
-			// Step 58 ("uploads, blob storage & the in-sandbox
+			// §8.6 ("uploads, blob storage & the in-sandbox
 			// download_file tool", §28.4): UploadPendingSweepAfter must
 			// stay at least MinTimeoutMargin above
 			// UploadAbandonmentSweepInterval, or a pending row could cross
@@ -394,7 +394,7 @@ func TestDefaultTimeouts_OpenCodeTurnCompletionStandaloneFields(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step44StandaloneField proves Step 44's ("OpenCode
+// TestDefaultTimeouts_Step44StandaloneField proves §7.2's ("OpenCode
 // adapter: context-overflow compaction retry", §7.2) own addition --
 // OpenCodeSummarizeTimeout -- ships with a sensible, non-zero default,
 // deliberately more generous than OpenCodeRequestTimeout (the field it
@@ -617,7 +617,7 @@ func TestDefaultTimeouts_Step33StandaloneField(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step35StandaloneFields proves Step 35's ("outbox
+// TestDefaultTimeouts_Step35StandaloneFields proves §5.1's ("outbox
 // delivery", §5.1) own additions -- OutboxPumpInterval, OutboxBackoffBase,
 // OutboxBackoffMax, OutboxDeliveryTimeout, OutboxClaimDuration -- are
 // populated with sensible defaults and that Validate() still returns nil.
@@ -726,7 +726,7 @@ func TestDefaultTimeouts_Step38StandaloneField(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step36StandaloneField proves Step 36's ("intent
+// TestDefaultTimeouts_Step36StandaloneField proves §8.3's ("intent
 // classifier", §8.3/§18) own addition -- IntentClassifierLLMTimeout -- is
 // populated with a sensible default and does not disturb either invariant
 // chain, matching every other standalone addition's own test precedent
@@ -751,7 +751,7 @@ func TestDefaultTimeouts_Step36StandaloneField(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step39StandaloneFields proves Step 39's ("identities
+// TestDefaultTimeouts_Step39StandaloneFields proves §13.2's ("identities
 // + full RBAC", §13.2) own additions -- the identity profile-email fetch
 // retry knobs and the identity-link-prompt TTL -- are populated with
 // sensible defaults and do not disturb either invariant chain.
@@ -947,7 +947,7 @@ func TestDefaultTimeouts_GitHubPRPayloadCorrectnessStandaloneField(t *testing.T)
 	}
 }
 
-// TestDefaultTimeouts_Step40StandaloneField proves Step 40's ("warm boot:
+// TestDefaultTimeouts_Step40StandaloneField proves §19.3's ("warm boot:
 // fetch-aware git sync", §19.3) own addition -- GitFetchStepTimeout -- ships
 // with a sane, non-zero default matching its own documented value (§19.3's
 // own explicit "propose 90s"), and that adding it did not disturb either
@@ -1013,7 +1013,7 @@ func TestDefaultTimeouts_WarmBootAccessGateStandaloneFields(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step42StandaloneField proves Step 42's ("warm boot:
+// TestDefaultTimeouts_Step42StandaloneField proves §19.2's ("warm boot:
 // refresh pump + hook policy", §19.2) own addition -- ImageRefreshCheckInterval
 // -- ships with a sane, non-zero default matching its own documented value
 // (§19.2's own explicit "propose 10 min"), and that adding it did not
@@ -1106,7 +1106,7 @@ func TestDefaultTimeouts_ImageRefreshClaimStaleAfter(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step58StandaloneFields proves Step 58's ("uploads,
+// TestDefaultTimeouts_Step58StandaloneFields proves §8.6's ("uploads,
 // blob storage & the in-sandbox download_file tool", §28) own additions --
 // UploadPresignPutTTL, UploadPresignGetTTL, UploadPendingSweepAfter,
 // UploadAbandonmentSweepInterval, ObjectStoreHTTPClientTimeout -- ship with

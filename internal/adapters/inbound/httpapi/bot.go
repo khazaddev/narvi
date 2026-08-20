@@ -92,7 +92,7 @@ func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *post
 // carries no authorization meaning here, exactly like every other
 // createTurnLocked caller.
 //
-// plans (Step 37/38 follow-up fix, §8.1) is threaded through to
+// plans (a follow-up fix, §8.1) is threaded through to
 // createTurnLocked's own awaiting-plan gate exactly like every other
 // caller -- see that function's own doc comment (turn.go) for the nil-safe
 // "skips the gate" contract this shares with them.
@@ -145,7 +145,7 @@ func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *post
 func CreateTurnForBot(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, intentSvc *intentclassifier.Service, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, epistemicCheckDefault bool, actorUserID pgtype.UUID, reviewHeadSHA *string, classifyText *string, effort *string, reviewDepth *string, reviewDepthDecision []byte) (sqlcgen.Turn, error) {
 	created, _, cerr := createTurnLocked(ctx, pool, sessions, turns, plans, intentSvc, auditLog, registry, sessionID, prompt, modelID, planMode, epistemicCheckDefault, actorUserID, AlwaysQueue, CreateTurnOptions{ReviewHeadSHA: reviewHeadSHA, ClassifyText: classifyText, Effort: effort, ReviewDepth: reviewDepth, ReviewDepthDecision: reviewDepthDecision})
 	if cerr != nil {
-		// %w, NOT %s (Step 37/38 follow-up fix, Finding 1): cerr's own
+		// %w, NOT %s (a follow-up fix, Finding 1): cerr's own
 		// Error() method returns exactly cerr.Message, so this produces the
 		// IDENTICAL string as the old fmt.Errorf("...: %s", cerr.Message) --
 		// but %w additionally preserves the error CHAIN, so a caller

@@ -117,7 +117,7 @@ type Deps struct {
 	Installations *postgres.LinearInstallationStore
 	LinearClient  *linearapi.Client
 
-	// Plans/Outbox are Step 38's ("plan mode, cross-channel", §8.1/§13.3)
+	// Plans/Outbox are §8.1's ("plan mode, cross-channel", §8.1/§13.3)
 	// own additions -- handlePrompted's new plan-verdict keyword check
 	// (below) needs Plans to find this session's own awaiting_approval
 	// plan (if any) and, alongside AgentSessions/Registry above, to call
@@ -126,7 +126,7 @@ type Deps struct {
 	Plans  *postgres.PlanStore
 	Outbox *postgres.OutboxStore
 
-	// Participants is Step 39's own addition ("identities + full RBAC",
+	// Participants is §13.2's own addition ("identities + full RBAC",
 	// §13.2/§13.3) -- identity.go's own authorizeSessionAction/ownedOrJoined
 	// need this to resolve a `member` actor's own "own/joined" carve-out
 	// exactly like httpapi's canActOnPlan/CreateTurn already do, so a
@@ -135,7 +135,7 @@ type Deps struct {
 	// (actor, session).
 	Participants *postgres.ParticipantStore
 
-	// AuditLog is Step 39's own addition (§13.3) -- threaded through to
+	// AuditLog is §13.2's own addition (§13.3) -- threaded through to
 	// httpapi.CreateSessionCore/DecidePlan below exactly like Plans/Outbox
 	// already are, so a Linear-originated session creation or plan
 	// decision gets the SAME audit_log row every other caller of those two
@@ -145,7 +145,7 @@ type Deps struct {
 	// bot-attribution precedent.
 	AuditLog *postgres.AuditLogStore
 
-	// IdentityLink is Step 39's own auto-linking wiring (§13.2): resolves
+	// IdentityLink is §13.2's own auto-linking wiring (§13.2): resolves
 	// a Linear user id (AgentSession.CreatorID for a `created` event,
 	// AgentActivity.UserID for a `prompted` one) to a real Narvi user_id,
 	// auto-linking or creating a magic-link prompt the first time this
@@ -154,7 +154,7 @@ type Deps struct {
 	// package's previous unconditional bot-attribution behavior.
 	IdentityLink identitylink.Deps
 
-	// IntentClassifier is Step 36's own wiring point (§8.3/§18): classify
+	// IntentClassifier is §8.3's own wiring point (§8.3/§18): classify
 	// + record runs ONCE, right after a `created` AgentSessionEvent's own
 	// winning claim creates the backing session (decided_at_stage="create"
 	// -- the full prompt text is already available at that point, via
@@ -438,7 +438,7 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 		},
 	}
 
-	// Step 39 ("identities + full RBAC", §13.2) update: creator is no
+	// §13.2 ("identities + full RBAC", §13.2) update: creator is no
 	// longer unconditionally invalid -- resolveActor auto-links (or
 	// creates a magic-link prompt for) payload.AgentSession.CreatorID the
 	// first time this package sees it, and reports back whichever
@@ -452,7 +452,7 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 	}
 	creator, notice := deps.resolveActor(ctx, logger, payload.OrganizationID, creatorID)
 
-	// Step 39 ("identities + full RBAC", §13.2/§13.3) update: a creator
+	// §13.2 ("identities + full RBAC", §13.2/§13.3) update: a creator
 	// that resolved to a REAL, linked user_id must still pass domain/authz.
 	// Authorize(ActionCreateSession) -- exactly what the REST /api/sessions
 	// handler already requires (create.go's own authorize call). Resource{}
@@ -571,7 +571,7 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 			"error", err, "agent_session_id", payload.AgentSession.ID, "session_id", created.ID.String())
 	}
 
-	// Step 36 ("intent classifier", §8.3/§18): classify + record ONCE,
+	// §8.3 ("intent classifier", §8.3/§18): classify + record ONCE,
 	// right here -- IntentDecisionRecord is a per-SESSION record (§18.4),
 	// and every Linear-originated session is created exactly here, with
 	// its full prompt text already in hand. Runs entirely OUTSIDE any
@@ -605,7 +605,7 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 // creating a second one), unless the event carries Linear's own "stop"
 // signal.
 //
-// Step 38 ("plan mode, cross-channel", §8.1/§13.3) update: BEFORE the
+// §8.1 ("plan mode, cross-channel", §8.1/§13.3) update: BEFORE the
 // existing unconditional turn-creation below, this now checks whether
 // sessionID currently has an awaiting_approval plan and, if so, matches
 // the reply's own trimmed/lower-cased text against plandomain.MatchVerdict
@@ -682,7 +682,7 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 	}
 	sessionID := row.SessionID
 
-	// Step 39 ("identities + full RBAC", §13.2) update: resolve the REAL
+	// §13.2 ("identities + full RBAC", §13.2) update: resolve the REAL
 	// actor behind this activity ONCE, regardless of which branch below
 	// ends up handling it -- the auto-link algorithm runs "on first event
 	// from an unknown provider identity" (§13.2), not only on plan-verdict
@@ -693,7 +693,7 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 	// real external id to look up here.
 	actorUserID, notice := deps.resolveActor(ctx, logger, payload.OrganizationID, payload.AgentActivity.UserID)
 
-	// prompt/planMode are overridden below (Step 37/38 follow-up fix, §8.1)
+	// prompt/planMode are overridden below (a follow-up fix, §8.1)
 	// when this reply is a deterministic revise:-prefixed "request changes"
 	// reply -- everything else about the ordinary-reply path below (the
 	// authorize check, the shared CreateTurnCore call, its busy/gated
@@ -741,7 +741,7 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 				// into the same release-the-claim-and-retry path.
 				return deps.handlePlanVerdict(ctx, logger, sessionID, planID, verdict, actorUserID, notice, payload.OrganizationID, payload.AgentSession.ID)
 			}
-			// Step 37/38 follow-up fix (§8.1): a reply matching neither a
+			// a follow-up fix (§8.1): a reply matching neither a
 			// verdict keyword NOR this deterministic revise: prefix falls
 			// through unchanged below -- httpapi.CreateTurnCore's own
 			// awaiting-plan gate (turn.go) is what actually declines that
@@ -765,7 +765,7 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 		}
 	}
 
-	// Step 39 ("identities + full RBAC", §13.2/§13.3) update: this
+	// §13.2 ("identities + full RBAC", §13.2/§13.3) update: this
 	// fallthrough IS "request changes" for Linear (this function's own top
 	// doc comment) -- the same state-changing command POST .../turns
 	// itself gates behind ActionPromptSession (turn.go's own authorize
@@ -858,7 +858,7 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 	createdTurn, wasCreated, cerr := httpapi.CreateTurnCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.IntentClassifier, deps.AuditLog, deps.Registry, sessionID, prompt, nil, planMode, deps.EpistemicCheckDefault, actorUserID, httpapi.DropIfOpen)
 	if cerr != nil {
 		if errors.Is(cerr, httpapi.ErrPlanAwaitingApproval) {
-			// Step 37/38 follow-up fix (§8.1): honest reply, never a hard
+			// a follow-up fix (§8.1): honest reply, never a hard
 			// failure -- mirrors the !wasCreated busy-reply branch just
 			// below for the analogous open-turn case (M6 audit fix).
 			logger.Info("linear: ordinary reply blocked by awaiting-approval plan", "session_id", sessionID.String())
@@ -943,7 +943,7 @@ func (deps Deps) findAwaitingApprovalPlanID(ctx context.Context, logger *slog.Lo
 }
 
 // handlePlanVerdict calls the shared httpapi.DecidePlan with decidedBy --
-// Step 39's ("identities + full RBAC", §13.2) own resolveActor result
+// §13.2's ("identities + full RBAC", §13.2) own resolveActor result
 // (Valid iff the replying Linear user is already linked, or was just
 // auto-linked this call; invalid/bot-attribution otherwise, matching this
 // package's own PREVIOUS unconditional-bot-attribution precedent for the
@@ -964,7 +964,7 @@ func (deps Deps) findAwaitingApprovalPlanID(ctx context.Context, logger *slog.Lo
 // something this fix's own narrow scope (authorizeSessionAction's
 // conflation specifically) touches.
 func (deps Deps) handlePlanVerdict(ctx context.Context, logger *slog.Logger, sessionID, planID pgtype.UUID, verdict string, decidedBy pgtype.UUID, identityNotice, organizationID, agentSessionID string) bool {
-	// Step 39 ("identities + full RBAC", §13.2/§13.3) update: a decidedBy
+	// §13.2 ("identities + full RBAC", §13.2/§13.3) update: a decidedBy
 	// that resolved to a REAL, linked user_id must still pass domain/authz.
 	// Authorize(ActionApprovePlan) -- exactly what the REST approve/reject
 	// endpoints already require via canActOnPlan (planauthz.go).

@@ -247,7 +247,7 @@ func TestCreateTurnForBot_WritesAuditLogRowWithActor(t *testing.T) {
 }
 
 // TestCreateTurnForBot_PlanAwaitingApproval_PreservesSentinel is Finding
-// 1's own regression test (Step 37/38 follow-up fix): before this fix,
+// 1's own regression test (a follow-up fix): before this fix,
 // CreateTurnForBot re-wrapped createTurnLocked's own *CreateTurnError via
 // fmt.Errorf's "%s" verb, which discarded the error chain entirely --
 // errors.Is(err, ErrPlanAwaitingApproval) could never succeed for ANY

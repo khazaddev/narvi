@@ -1,6 +1,6 @@
 //go:build integration
 
-// This file proves Step 38's ("plan mode, cross-channel", §8.1/§13.3) own
+// This file proves §8.1's ("plan mode, cross-channel", §8.1/§13.3) own
 // Linear text-verdict parsing: handlePrompted's new check, ahead of its
 // existing unconditional turn-creation, against a REAL Postgres instance
 // -- mirrors webhook_integration_test.go's own newTestPool/newHandlerDeps/
@@ -107,7 +107,7 @@ func TestWebhookHandler_Prompted_ApproveKeyword_DecidesPlan(t *testing.T) {
 }
 
 // TestWebhookHandler_Prompted_NonKeywordNonReviseText_BlockedByAwaitingPlan
-// is this batch's own regression test for the Step 37/38 follow-up fix
+// is this batch's own regression test for the follow-up fix
 // (§8.1): a reply matching NEITHER a verdict keyword NOR the revise:
 // prefix, while a plan IS awaiting approval, must be BLOCKED -- not
 // dispatched as an ordinary build turn the human never approved (the exact
@@ -202,7 +202,7 @@ func TestWebhookHandler_Prompted_NonKeywordNonReviseText_BlockedByAwaitingPlan(t
 
 // TestWebhookHandler_Prompted_RevisePrefix_CreatesPlanModeTurnWithStrippedFeedback
 // is this batch's own regression test for the deterministic revise: path
-// (Step 37/38 follow-up fix, §8.1): a reply STARTING with the revise:
+// (a follow-up fix, §8.1): a reply STARTING with the revise:
 // prefix, while a plan is awaiting approval, creates a REAL plan_mode=true
 // turn carrying the stripped feedback as its prompt -- the already-
 // documented request-changes flow, newly reachable from chat (before this

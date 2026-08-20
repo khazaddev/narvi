@@ -1,4 +1,4 @@
-// This file (providercredentials.go) implements Step 53's own ("provider
+// This file (providercredentials.go) implements §25.1's own ("provider
 // credential injection", §25.1/§25.3) CP-side MANAGEMENT surface over
 // provider_credentials (migrations/000056_provider_credentials.up.sql) --
 // this codebase's first generic secret-storage table. Mirrors

@@ -1,4 +1,4 @@
-// This file (outboxenqueue.go) implements Step 35's ("outbox delivery",
+// This file (outboxenqueue.go) implements §5.1's ("outbox delivery",
 // §5.1) own enqueue-side half: writing exactly one outbox row for a
 // non-'web'-origin session's turn completion, in the SAME transaction as
 // the turn's own terminal state write -- §5.1's own explicit requirement:
@@ -25,7 +25,7 @@
 // route it to and what payload to enqueue for that channel's own
 // ports.Notifier implementation to later consume.
 //
-// Step 47 ("server-side verdict", §8.2/§5.2) amendment: sessions.
+// §8.2 ("server-side verdict", §8.2/§5.2) amendment: sessions.
 // spawn_source == 'github' now ALSO enqueues nothing via this generic
 // path -- a github-origin session is always a review session
 // (github_pr_sessions, Step 32, is the only mechanism that ever creates
@@ -63,7 +63,7 @@ import (
 // actually accepted (this file's own doc comment on plandomain.
 // ApproveKeywords explains why both live off that one shared list).
 //
-// Step 37/38 follow-up fix (§8.1) addition: also names
+// a follow-up fix (§8.1) addition: also names
 // plandomain.RevisePrefix -- BEFORE this fix, Linear (a chat-only surface,
 // with no "Request changes" button the way Slack's Block Kit message has)
 // gave a user no way to request changes at all beyond an ordinary reply,
@@ -137,7 +137,7 @@ func outcomeText(trig turn.Trigger, failureReason turn.FailureReason) string {
 // defensive against any future gap) also enqueues nothing, logged as a
 // warning, never a hard failure of the whole turn completion.
 //
-// Step 38 ("plan mode, cross-channel", §8.1/§13.3) update: plan is the
+// §8.1 ("plan mode, cross-channel", §8.1/§13.3) update: plan is the
 // SAME (possibly nil) plan row recordPlanIfNeeded (planrecord.go) just
 // returned, moments earlier in completeProcessingTurn's own sequencing --
 // non-nil iff processing was a plan_mode=true turn that just genuinely
@@ -186,7 +186,7 @@ func (a *Actor) enqueueOutboxNotification(ctx context.Context, tx pgx.Tx, sessio
 		}
 
 	case sqlcgen.SessionSpawnSourceGithub:
-		// Step 47 ("server-side verdict", §8.2/§5.2) RAW-COMMENT BLOCKING:
+		// §8.2 ("server-side verdict", §8.2/§5.2) RAW-COMMENT BLOCKING:
 		// a github-origin session is, by construction, a review session --
 		// github_pr_sessions (Step 32) is the ONLY mechanism that ever
 		// creates one (internal/adapters/inbound/github/doc.go). Before

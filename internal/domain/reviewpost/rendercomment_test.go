@@ -452,7 +452,7 @@ func TestRenderVerdictComment_DigestSectionsBeforeAppendix(t *testing.T) {
 }
 
 // TestRenderVerdictComment_DescriptionAdequacyHeaderBullet proves §26.2/
-// Step 67's own new header bullet renders BOTH digest.DescriptionAdequacy
+// §26.2's own new header bullet renders BOTH digest.DescriptionAdequacy
 // and digest.AdequacyExplanation, immediately after the Premise bullet
 // (the same structural position a closed-vocabulary, Shippable-flooring
 // assessment already occupies) and before the Shippable bullet.

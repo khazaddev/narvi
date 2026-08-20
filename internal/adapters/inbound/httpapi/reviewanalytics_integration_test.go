@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 62's own (§21.1) read-only analytics route
+// Integration tests for §21's own (§21.1) read-only analytics route
 // (reviewanalytics.go's own GetReviewAnalytics), against a real Postgres
 // instance -- sharing this package's own testRig (httpapi_integration_test.go).
 package httpapi_test

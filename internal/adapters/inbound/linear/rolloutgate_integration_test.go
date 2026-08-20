@@ -1,6 +1,6 @@
 //go:build integration
 
-// This file proves Step 76's own per-channel refusal contract (§10 Phase
+// This file proves §10's own per-channel refusal contract (§10 Phase
 // 6, §32) for Linear specifically: a rollout refusal must take the SAME
 // terminal, authz-denial shape handleCreated's own `if !authorize(...)`
 // branch immediately above it already uses (webhook.go) -- acknowledge,

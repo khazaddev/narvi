@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 69's own §26.5 capture command against a
+// Integration tests for §26.4's own §26.5 capture command against a
 // real Postgres instance -- mirrors falsepositivecapture_integration_test.go's
 // own established conventions (newTestRig, postWebhook, sign,
 // createLinkedGitHubUser), gated behind the "integration" build tag. Run

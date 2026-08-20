@@ -1407,7 +1407,7 @@ func TestPumpOnce_FailureStreak_FiresAtThresholdNotBefore(t *testing.T) {
 }
 
 // TestPumpOnce_RepoBearingRow_NoCredentialConfigured_DegradesCleanly proves
-// Step 42's own degrade-cleanly design for the deliberately-optional
+// §19.2's own degrade-cleanly design for the deliberately-optional
 // platform credential (§19.2): a missing/invalid credential is logged and
 // recorded as a failed attempt via the same retry/backoff path any other
 // resolution failure uses -- never a crash, never something that blocks
@@ -1490,7 +1490,7 @@ func TestPumpOnce_RepoBearingRow_NoCredentialConfigured_DegradesCleanly(t *testi
 }
 
 // TestPumpOnce_RepoBearingRow_CredentialConfigured_ResolvesSHAsAndBuilds
-// proves Step 42's own headline claim-time SHA resolution (§19.1/§19.2/
+// proves §19.2's own headline claim-time SHA resolution (§19.1/§19.2/
 // §19.9): with a real platform credential AND SourceControl configured, a
 // claimed row naming a repo now DOES build for real -- ResolveBranchSHA is
 // called once per named repo (with an empty Branch, resolving the repo's

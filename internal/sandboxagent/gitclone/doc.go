@@ -25,14 +25,14 @@
 //
 // A nil Repo.Branch (§3.4's own documented "nil means the repo's own
 // default branch") means CloneAll passes NO --branch flag at all -- it
-// never invents or creates a branch; that is explicitly Step 29's
+// never invents or creates a branch; that is explicitly §3.4's
 // (internal/domain/gitstate's) job, not this package's.
 //
 // WriteAgentsManifest's exact markdown shape is this Step's own invented,
 // documented convention -- no contracts/ schema governs it, exactly like
 // Step 14 documented its own invented Readiness.Health shape.
 //
-// Step 29 ("gitstate in-sandbox", §3.4) adds SyncAll (sync.go) -- the
+// §3.4 ("gitstate in-sandbox", §3.4) adds SyncAll (sync.go) -- the
 // counterpart to CloneAll for a boot whose workspace ALREADY has a real
 // git repo on disk (a BootModeRepoImage/BootModeSnapshotRestore boot,
 // baked into the image or restored from a snapshot), never invoked

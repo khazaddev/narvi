@@ -4,7 +4,7 @@
 // for every actual decision -- this file's own job is orchestration
 // (reading current state, calling the right decision function, writing
 // the result back transactionally) and never reimplementing a decision
-// those packages already make. Step 65 ("review: automatic re-review on
+// those packages already make. §24 ("review: automatic re-review on
 // new commits", §24) adds a 6th named timer, review_retrigger_debounce --
 // its own fire handler, handleReviewRetriggerDebounceTimer, is dispatched
 // from the SAME switch below but implemented in reviewretrigger.go, not
@@ -492,7 +492,7 @@ func (a *Actor) handleTurnDeadlineTimer(ctx context.Context) error {
 			return err
 		}
 
-		// Step 35 ("outbox delivery", §5.1): a turn that fails HERE, on its
+		// §5.1 ("outbox delivery", §5.1): a turn that fails HERE, on its
 		// own turn_deadline, needs the same outbound notification a turn
 		// that fails via a real execution_complete already gets
 		// (completeProcessingTurn, pushpr.go). Before this fix, only that
@@ -523,7 +523,7 @@ func (a *Actor) handleTurnDeadlineTimer(ctx context.Context) error {
 // step every watchdog-style timer (inactivity, connecting_deadline,
 // liveness_check) performs identically on timeout, per §3.2's two-phase
 // design: "a watchdog never writes failed directly. It writes suspect and
-// arms terminal_grace." Step 24 ("two-phase terminalization") extends this
+// arms terminal_grace." §3.2 ("two-phase terminalization") extends this
 // shared step to ALSO persist row.Status -- the live state being left,
 // always one of the five states TriggerSuspect's own transition-table
 // entries allow (Spawning/Connecting/Booting/Ready/Snapshotting) -- as

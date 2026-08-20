@@ -13,7 +13,7 @@ import (
 // OutboxStore is a thin, pass-through wrapper around the sqlc-generated
 // outbox queries (§4.3 Outbox, §5.1 outbox pattern). No caching, no
 // retries, no business rules -- the claim/attempt/record delivery loop
-// lives in internal/app/outboxworker (Step 35, "outbox delivery").
+// lives in internal/app/outboxworker (§5.1, "outbox delivery").
 type OutboxStore struct {
 	q *sqlcgen.Queries
 }

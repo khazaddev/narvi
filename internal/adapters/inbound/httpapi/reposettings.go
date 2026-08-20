@@ -1,4 +1,4 @@
-// This file (reposettings.go) implements Step 47's ("server-side
+// This file (reposettings.go) implements §8.2's ("server-side
 // verdict", §8.2/§21.2) own admin-facing settings surface: GET/PUT
 // /api/repos/{owner}/{repo}/settings, backing repo_settings (migrations/
 // 000044_repo_settings.up.sql). Today this holds exactly one flag --
@@ -224,7 +224,7 @@ func logUnknownRepoRefusal(r *http.Request, repoFullName string) {
 // yet" is not an error condition for a policy flag that always has a
 // well-defined value.
 // authorizeAny is helpers.go's own authorize, generalized to "allowed if
-// ANY one of actions succeeds" -- Step 62's own first need for this shape
+// ANY one of actions succeeds" -- §21's own first need for this shape
 // (GetRepoSettings below): a maintainer who can configure auto-approval
 // eligibility (authz.ActionConfigureAutoApprove, §13.3 row 5) must still
 // be able to READ this repo's own settings, even though the admin-only

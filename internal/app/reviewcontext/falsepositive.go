@@ -10,7 +10,7 @@ import (
 	"github.com/khazaddev/narvi/internal/domain/falsepositive"
 )
 
-// This file implements Step 63's own §22.3 advisory-injection half:
+// This file implements §22's own §22.3 advisory-injection half:
 // "injected into every review pass (first pass and re-review alike) as an
 // explicitly-untrusted, advisory content block." FetchFalsePositivePatterns
 // is this package's OWN impure fetch, mirroring FetchAlreadyAnswered's own

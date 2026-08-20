@@ -12,7 +12,7 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// ComputeDecision is Step 68's own "never-throw" entry point (§26.3: "ANY
+// ComputeDecision is §26.3's own "never-throw" entry point (§26.3: "ANY
 // triage error fails open to light -- a review must never be blocked by
 // its own router"), mirroring internal/app/intentclassifier.Service.
 // ClassifyAndRecord's own identical "the caller never sees an error, only

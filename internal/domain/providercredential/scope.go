@@ -45,7 +45,7 @@ const (
 	// user-scoped row of any other kind (§29.4).
 	ScopeUser Scope = "user"
 	// ScopeAutomation means scope_target_id is an automations.id,
-	// stringified -- Step 72's own addition (§27.1), exclusively for
+	// stringified -- §27.1's own addition (§27.1), exclusively for
 	// sandbox_secrets (provider_credentials has no automation scope and
 	// never will: §25.3 scopes that table to repo/environment/global/user
 	// only). The MOST specific level for sandbox_secrets' own

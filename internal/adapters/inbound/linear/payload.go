@@ -82,7 +82,7 @@ type agentSessionWebhookPayload struct {
 	// CreatorID is Linear's own "ID of human user; unset if
 	// automation-initiated" (AgentSessionWebhookPayload.creatorId,
 	// verified against Linear's real, current GraphQL schema during this
-	// Step's investigation) -- Step 39's ("identities + full RBAC", §13.2)
+	// Step's investigation) -- §13.2's ("identities + full RBAC", §13.2)
 	// own auto-linking wiring: the external_id a `created` event's own
 	// session-creation actor resolves against. Nil/empty means no
 	// responsible human at all (a purely automation-initiated session) --
@@ -123,7 +123,7 @@ type agentActivityWebhookPayload struct {
 	// nullable creatorId, every individual activity has a real
 	// originating user; §8.10's own payload.go doc comment already notes
 	// "An agent cannot generate a prompt type activity", i.e. a
-	// `prompted` event's own activity is always human-authored). Step 39's
+	// `prompted` event's own activity is always human-authored). §13.2's
 	// ("identities + full RBAC", §13.2) own auto-linking wiring: the
 	// external_id a `prompted` event's own actor (a plan verdict, or an
 	// ordinary reply) resolves against -- distinct from, and potentially a

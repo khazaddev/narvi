@@ -288,7 +288,7 @@ type UpsertPendingRetriggerHeadSHAParams struct {
 // TurnStore.GetProcessingTurnForSession, never a shared per-(repo,PR)
 // column any later, unrelated turn's own context-fetch could overwrite.
 // See that migration's own doc comment for the full "why".
-// Queries backing Step 65's ("review: automatic re-review on new
+// Queries backing §24's ("review: automatic re-review on new
 // commits", §24) trailing-edge debounce + per-PR budget -- see
 // migrations/000075_github_pr_sessions_retrigger.up.sql's own doc comment
 // for the three columns below, including why pending_retrigger_head_sha

@@ -1,6 +1,6 @@
 package review
 
-// This file (manifestcheck.go) implements Step 50's own ("release PR
+// This file (manifestcheck.go) implements §15's own ("release PR
 // review", §15.2) manifest check: extends this package with
 // ReleaseManifestCheck-shaped logic, distinct from the per-PR risk-map
 // Verdict (verdict.go) above. Every function here is pure per §11 (no
@@ -30,7 +30,7 @@ package review
 // # off a label string itself
 //
 // §15.3's "team's own PR-tiering" is, in this codebase, the review:*-risk
-// label vocabulary Step 47's verdict-posting tool already syncs onto a PR
+// label vocabulary §8.2's verdict-posting tool already syncs onto a PR
 // (internal/domain/reviewpost.LabelHighRisk et al., reviewpost/label.go).
 // This package cannot import reviewpost (reviewpost already imports
 // review -- the reverse dependency would be a cycle), and per doc.go's

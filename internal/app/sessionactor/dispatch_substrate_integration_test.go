@@ -1,6 +1,6 @@
 //go:build integration
 
-// This file proves Step 74's own dispatch-time half of the "fail-closed,
+// This file proves §27.5's own dispatch-time half of the "fail-closed,
 // twice" rule (§27.5/§27.6, brief point A): tryPlanSpawn (dispatch.go's
 // own refuseIfSubstrateUnsupported) refuses to spawn a docker-required or
 // enforced-egress session against a provider that does not support it --

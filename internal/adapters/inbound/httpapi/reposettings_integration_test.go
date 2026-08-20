@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 47's ("server-side verdict", §8.2/§21.2) own
+// Integration tests for §8.2's ("server-side verdict", §8.2/§21.2) own
 // admin repo-settings REST routes (reposettings.go), against a real
 // Postgres instance -- gated behind the "integration" build tag, sharing
 // this package's own testRig (httpapi_integration_test.go).

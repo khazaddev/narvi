@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 65's ("review: automatic re-review on new
+// Integration tests for §24's ("review: automatic re-review on new
 // commits", §24.1) new `pull_request`/`synchronize` ingress lane -- posted
 // through the FULL, real HTTP handler (NewHandler, package github_test,
 // mirroring handler_integration_test.go's own established convention),

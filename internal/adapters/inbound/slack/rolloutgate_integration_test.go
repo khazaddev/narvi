@@ -1,6 +1,6 @@
 //go:build integration
 
-// This file proves Step 76's own per-channel refusal contract (§10 Phase
+// This file proves §10's own per-channel refusal contract (§10 Phase
 // 6, §32) for Slack specifically: a rollout refusal must take the SAME
 // terminal in-thread ack idiom ackNotAuthorizedText's own branch already
 // uses (resolveOrClaimSession, handler.go) -- post ackNotEnrolledText,

@@ -657,7 +657,7 @@ func TestPlanActionResponseRoundTrip(t *testing.T) {
 	})
 }
 
-// TestMintUploadRequestRoundTrip covers Step 58's (§28.4/§28.5) upload-mint
+// TestMintUploadRequestRoundTrip covers §8.6's (§28.4/§28.5) upload-mint
 // request DTO -- review-fix coverage addition (FIX H): this file had ZERO
 // round-trip coverage for any of the three upload DTOs before this batch.
 func TestMintUploadRequestRoundTrip(t *testing.T) {
@@ -1014,7 +1014,7 @@ func TestMergePullRequestResponseRoundTrip(t *testing.T) {
 	})
 }
 
-// TestRepoSettingsRoundTrip covers Step 62's own (§21.1/§21.2) extension
+// TestRepoSettingsRoundTrip covers §21's own (§21.1/§21.2) extension
 // of this DTO -- two variants, mirroring this file's own established
 // "one t.Run per distinct nullable-field combination" discipline
 // (TestDecisionInboxItemRoundTrip's own doc comment): a repo with every

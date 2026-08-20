@@ -1,4 +1,4 @@
-// This file (uploadconfirm.go) implements the confirm half of Step 58's
+// This file (uploadconfirm.go) implements the confirm half of §8.6's
 // upload lifecycle (§28.4/§28.6): POST .../uploads/{uploadId}/complete, in
 // both auth variants. Confirm Stats the object and verifies existence +
 // actual size == declared, re-checks both size/quota limits NOW (the

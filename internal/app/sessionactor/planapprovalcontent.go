@@ -1,4 +1,4 @@
-// This file (planapprovalcontent.go) implements Step 38's ("plan mode,
+// This file (planapprovalcontent.go) implements §8.1's ("plan mode,
 // cross-channel", §8.1/§13.3) own best-effort extraction of a plan's
 // rendered content (the numbered steps/scope the producing turn's own
 // assistant text laid out) for use in the Slack/Linear plan-approval-

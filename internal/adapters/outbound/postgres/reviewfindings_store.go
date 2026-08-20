@@ -116,7 +116,7 @@ func (s *ReviewFindingStore) MarkFixApplied(ctx context.Context, repoFullName st
 
 // ListStatusesInWindow returns the status column of every finding first
 // seen for repoFullName after sinceTime, oldest-first, bounded by limit
-// -- Step 62's own "Review finding outcomes" analytics KPI (§21.1).
+// -- §21's own "Review finding outcomes" analytics KPI (§21.1).
 func (s *ReviewFindingStore) ListStatusesInWindow(ctx context.Context, repoFullName string, sinceTime pgtype.Timestamptz, limit int32) ([]string, error) {
 	return s.q.ListReviewFindingStatusesInWindow(ctx, sqlcgen.ListReviewFindingStatusesInWindowParams{
 		RepoFullName: repoFullName,

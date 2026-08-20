@@ -1,4 +1,4 @@
-// Package providercredential implements Step 53's own ("provider
+// Package providercredential implements §25.1's own ("provider
 // credential injection", §25.1/§25.3) pure domain vocabulary: which
 // providers/scopes this codebase's first secret-storage table
 // (provider_credentials, migrations/000056_provider_credentials.up.sql)

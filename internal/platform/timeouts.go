@@ -1784,7 +1784,7 @@ type Timeouts struct {
 	// RunStatusRunning, is swept the same way. §3.5, explicit.
 	AutomationRunRunningOrphanThreshold time.Duration
 
-	// AutomationCronGranularity is Step 52's own ("automations: triggers &
+	// AutomationCronGranularity is §8.4's own ("automations: triggers &
 	// extras", §8.4) cron-trigger evaluation bucket size: internal/domain/
 	// automation.CronMatches evaluates a schedule against a whole UTC
 	// minute, and internal/app/automation's own trigger pump (triggerpump.go)
@@ -1994,7 +1994,7 @@ type Timeouts struct {
 	// same-datacenter Postgres/internal-service call's is.
 	ChatGPTOAuthHTTPClientTimeout time.Duration
 
-	// --- Step 60 ("decision inbox: read model + API", §16) standalone
+	// --- §16 ("decision inbox: read model + API", §16) standalone
 	// additions: no ordering relationship with any invariant chain above,
 	// matching every other standalone addition's own precedent.
 
@@ -2068,7 +2068,7 @@ type Timeouts struct {
 	// notimeliteral check treats them all alike.
 	DecisionInboxLatencyWindow time.Duration
 
-	// -- Step 62 ("review verdict persistence, analytics, digest &
+	// -- §21 ("review verdict persistence, analytics, digest &
 	// automated approval", §21) --
 
 	// ReviewVerdictAnalyticsWindow bounds every §21.1 analytics rollup
@@ -2151,7 +2151,7 @@ type Timeouts struct {
 	// synchronous request path well short of a full minute.
 	FindingPositionResolveAllTimeout time.Duration
 
-	// -- Step 65 ("review: automatic re-review on new commits", §24) --
+	// -- §24 ("review: automatic re-review on new commits", §24) --
 	// no ordering relationship with either invariant chain above (or with
 	// any prior Step's standalone additions), so -- per those additions'
 	// own precedent -- a plain field with a sensible default, not wired
@@ -2176,7 +2176,7 @@ type Timeouts struct {
 	// visible cause.
 	ReviewRetriggerDebounce time.Duration
 
-	// -- Step 70 ("review: wire the cost budget", §26.7/§26.9) -- no
+	// -- §26.5 ("review: wire the cost budget", §26.7/§26.9) -- no
 	// ordering relationship with either invariant chain above (or with any
 	// prior Step's standalone additions), so -- per those additions' own
 	// precedent -- a plain field with a sensible default, not wired into a
@@ -2752,7 +2752,7 @@ func (t Timeouts) Validate() error {
 	check("ReleaseManifestCheckTimeout > GitHubListMergedBetweenTimeout",
 		"ReleaseManifestCheckTimeout", t.ReleaseManifestCheckTimeout, "GitHubListMergedBetweenTimeout", t.GitHubListMergedBetweenTimeout)
 
-	// Step 51 ("automations: engine", §3.5): AutomationSweepInterval must
+	// §3.5 ("automations: engine", §3.5): AutomationSweepInterval must
 	// stay at least MinTimeoutMargin below EACH of the two orphan
 	// thresholds it polls for, or a run that just crosses one could sit
 	// unswept for much longer than that threshold's own name implies --
@@ -2776,7 +2776,7 @@ func (t Timeouts) Validate() error {
 	check("AutomationCronCatchUpWindow > AutomationEnginePumpInterval",
 		"AutomationCronCatchUpWindow", t.AutomationCronCatchUpWindow, "AutomationEnginePumpInterval", t.AutomationEnginePumpInterval)
 
-	// Step 57 ("RWX provider + previews", §4.1.1): RWXSandboxInactivityTimeout
+	// §4.1 ("RWX provider + previews", §4.1.1): RWXSandboxInactivityTimeout
 	// must stay at least MinTimeoutMargin above ActorIdleTTL, or RWX's own
 	// `--inactivity-timeout` auto-stop could fire BEFORE Narvi's own
 	// session-idle authority ever gets a chance to decide idleness first —
@@ -2788,7 +2788,7 @@ func (t Timeouts) Validate() error {
 	check("RWXSandboxInactivityTimeout > ActorIdleTTL",
 		"RWXSandboxInactivityTimeout", t.RWXSandboxInactivityTimeout, "ActorIdleTTL", t.ActorIdleTTL)
 
-	// Step 58 ("uploads, blob storage & the in-sandbox download_file
+	// §8.6 ("uploads, blob storage & the in-sandbox download_file
 	// tool", §28.4): UploadPendingSweepAfter must stay at least
 	// MinTimeoutMargin above UploadAbandonmentSweepInterval, or a pending
 	// row could cross the abandonment threshold and still sit unswept for

@@ -43,7 +43,7 @@ import (
 // that case distinctly ("still working on the previous message") rather
 // than silently queuing a second turn behind it.
 //
-// planMode (Step 37/38 follow-up fix, §8.1) lets handleEvent (handler.go)
+// planMode (a follow-up fix, §8.1) lets handleEvent (handler.go)
 // route a revise:-prefixed reply through as a real plan_mode=true
 // "request changes" turn instead of always hardcoding false -- see that
 // function's own doc comment. err is a plain *httpapi.CreateTurnError

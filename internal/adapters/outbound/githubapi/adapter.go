@@ -267,7 +267,7 @@ type commitResponse struct {
 // ports.SourceControl's own doc comment for why neither method invents a
 // transient/permanent classification). Originally named
 // ResolveBranchSHAError (§8.5, "image builds") back when ResolveBranchSHA
-// was doGet's only caller; generalized here (Step 27, "mocking + contract
+// was doGet's only caller; generalized here (§14.3, "mocking + contract
 // drift") once ResolveContractsFingerprint became doGet's second caller --
 // a small, mechanical, internal-only rename (this type is never part of any
 // wire contract), preferred over adding a second, near-duplicate error

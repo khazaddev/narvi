@@ -28,7 +28,7 @@ type Record struct {
 	// defaulted by this package (no Clock -- CLAUDE.md/§11); the caller
 	// supplies it from the row it already fetched.
 	CreatedAt time.Time
-	// Digest is Step 66's own merge-readout content (§26.1), persisted
+	// Digest is §26.1's own merge-readout content (§26.1), persisted
 	// alongside Verdict above on the SAME review_verdicts row (migrations/
 	// 000077_review_verdicts_digest.up.sql) -- carried here, on Record,
 	// rather than on Verdict itself, for the exact same reason HeadSHA/
@@ -40,7 +40,7 @@ type Record struct {
 	// but the agent reported nothing", by construction (this migration's
 	// own doc comment).
 	Digest reviewpost.Digest
-	// ReviewPath is Step 68's own light/deep routing decision (§26.3),
+	// ReviewPath is §26.3's own light/deep routing decision (§26.3),
 	// persisted verbatim from the posting turn's own turns.review_depth
 	// column (migrations/000081_review_verdicts_review_path.up.sql) --
 	// the zero value (empty ReviewDepth("")) is what a pre-Step-68 row
@@ -48,14 +48,14 @@ type Record struct {
 	// at all, mirroring Digest's own identical "zero value means not yet
 	// recorded" precedent immediately above.
 	ReviewPath reviewtriage.ReviewDepth
-	// CounterReview is Step 69's own structural-enforcement signal
+	// CounterReview is §26.4's own structural-enforcement signal
 	// (§26.4), persisted verbatim from the posting VerdictInput's own
 	// CounterReview field (migrations/000084_review_verdicts_counter_
 	// review.up.sql) -- the zero value (review.CounterReviewStatus(""))
 	// is what a pre-Step-69 row, or any light-path row (§26.9: this field
 	// has no meaning there), reads back as.
 	CounterReview review.CounterReviewStatus
-	// FactCheck/FactCheckKilled are Step 69's own diff-only fact-check
+	// FactCheck/FactCheckKilled are §26.4's own diff-only fact-check
 	// pass outcome (§26.6), persisted verbatim -- unlike CounterReview,
 	// schema-required UNCONDITIONALLY at the posting endpoint (both
 	// paths), so the zero value here means only "posted before Step 69

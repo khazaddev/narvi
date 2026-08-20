@@ -1,4 +1,4 @@
-// Package reviewcontext implements Step 46's ("review sessions", §8.2) own
+// Package reviewcontext implements §8.2's ("review sessions", §8.2) own
 // inline-pre-fetched-context assembly: given a PR identity (owner/repo/
 // number) and its own reviewing event's current head, fetch the PR's
 // current diff and (when present) its GitHub-native stack context

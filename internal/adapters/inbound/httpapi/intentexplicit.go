@@ -11,7 +11,7 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// recordExplicitIntentDecision persists Step 36's own §18.4 "explicit"
+// recordExplicitIntentDecision persists §8.3's own §18.4 "explicit"
 // source decision record for a WEB session: a human's own explicit
 // plan/build toggle (restdtos.CreateSessionRequest.PlanMode) is a real,
 // architecturally-known signal the moment a session is created --

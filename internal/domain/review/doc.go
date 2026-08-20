@@ -164,7 +164,7 @@
 //     hash/text of the finding stored at the moment the verdict that
 //     raised it was posted — §8.2's structured type already
 //     carries this data; storing it is not new capture, just retention")
-//     both describe Step 45's verdict type as already carrying
+//     both describe §8.2's verdict type as already carrying
 //     per-finding content. But IMPLEMENTATION_PLAN.md's own Step 45 row
 //     — the authoritative, dedicated description of this Step's scope —
 //     enumerates exactly seven fields (RiskLevel, PremiseState,

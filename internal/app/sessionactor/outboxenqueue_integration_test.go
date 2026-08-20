@@ -20,7 +20,7 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// This file proves Step 35's ("outbox delivery", §5.1) own enqueue-side
+// This file proves §5.1's ("outbox delivery", §5.1) own enqueue-side
 // wiring: a slack/github/linear-origin session's turn completion writes
 // exactly one correctly-shaped outbox row, and a web-origin session's
 // completion writes none -- see outboxenqueue.go's own doc comment for the
@@ -138,7 +138,7 @@ func TestCompleteProcessingTurn_SlackOrigin_EnqueuesExactlyOneSlackOutboxRow(t *
 // proves a github-origin session's FAILED turn completion enqueues NO
 // outbox row at all any more.
 //
-// Step 47 ("server-side verdict", §8.2/§5.2) audit fix -- RAW-COMMENT
+// §8.2 ("server-side verdict", §8.2/§5.2) audit fix -- RAW-COMMENT
 // BLOCKING: a github-origin session is, by construction, a review
 // session (github_pr_sessions is the ONLY mechanism that ever creates
 // one, internal/adapters/inbound/github/doc.go) -- so this generic,
@@ -271,7 +271,7 @@ func TestCompleteProcessingTurn_LinearOrigin_EnqueuesExactlyOneLinearOutboxRow(t
 //
 // Table-driven across all four spawn_source values, since the correct
 // answer genuinely differs per origin and each case must be pinned
-// independently: slack/linear DO get a row, github does NOT (Step 47's own
+// independently: slack/linear DO get a row, github does NOT (§8.2's own
 // raw-comment blocking, §8.2/§5.2 -- see the github case in
 // outboxenqueue.go), and web does NOT (no external channel at all).
 func TestTurnDeadlineTimeout_EnqueuesOutboxNotificationPerOrigin(t *testing.T) {

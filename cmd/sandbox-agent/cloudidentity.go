@@ -1,11 +1,11 @@
-// This file (cloudidentity.go) implements Step 73b's own ("cloud
+// This file (cloudidentity.go) implements §27.4's own ("cloud
 // identity: sandbox-side consumption + kubeconfig injection", §27.3) IN-
-// SANDBOX consumption half of Step 73a's control-plane OIDC issuer:
+// SANDBOX consumption half of §27.3's control-plane OIDC issuer:
 // discovering which cloud_identity_bindings apply to this session (via
 // the new POST /sessions/{id}/cloud-identity-config delivery endpoint,
 // internal/sandboxagent/credentials/cloudidentityconfig.go), minting a
 // short-lived token per binding (POST /sessions/{id}/cloud-identity-token,
-// §27.3a's own endpoint, credentials/cloudidentitytoken.go), writing
+// §27.3's own endpoint, credentials/cloudidentitytoken.go), writing
 // each to its own file under cloudIdentityDir, and returning the standard,
 // cloud-SDK-documented env vars (internal/domain/cloudidentity.
 // ReservedEnvVarNames' own exact names) ready to thread into every

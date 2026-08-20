@@ -1,6 +1,6 @@
 //go:build integration
 
-// This file proves Step 74's own resolution of §27.8's genuinely
+// This file proves §27.5's own resolution of §27.8's genuinely
 // unresolved point D ("Capabilities() is flat... a provider whose
 // snapshot support differs by runtime (Modal gVisor vs VM runtime)
 // cannot express that today"): triggerSnapshotBestEffort

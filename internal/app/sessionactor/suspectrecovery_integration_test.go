@@ -19,7 +19,7 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// This file proves Step 24's ("two-phase terminalization") own recovery
+// This file proves §3.2's ("two-phase terminalization") own recovery
 // half: §3.2's "any liveness signal during grace returns to previous
 // state" rule, wired into handleSandboxEvent (sandboxevent.go) -- see that
 // file's own top comment for the full mechanics this exercises.
@@ -216,7 +216,7 @@ func TestHandleSandboxEvent_SuspectRecovery_RearmsLivenessAndInactivityWatchdogs
 }
 
 // TestHandleSandboxEvent_LateExecutionComplete_RecoversSandboxTurnAndSession
-// is THE scenario Step 24 ("two-phase terminalization") exists for,
+// is THE scenario §3.2 ("two-phase terminalization") exists for,
 // matching §9.3 scenario #4's own literal description ("execution_complete
 // arrives AFTER terminalization -> state reconciled"): a Processing turn +
 // a sandbox already driven to Suspect (directly seeded with a real
@@ -244,7 +244,7 @@ func TestHandleSandboxEvent_SuspectRecovery_RearmsLivenessAndInactivityWatchdogs
 // same row. Choosing a non-Ready pre-suspect status keeps
 // triggerSnapshotBestEffort's own guard a deterministic no-op regardless
 // of timing, isolating §3.2's own recovery+reconciliation behavior from
-// Step 22's.
+// §3.2's.
 func TestHandleSandboxEvent_LateExecutionComplete_RecoversSandboxTurnAndSession(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)

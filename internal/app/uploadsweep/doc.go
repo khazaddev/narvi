@@ -1,4 +1,4 @@
-// Package uploadsweep implements Step 58's ("uploads, blob storage & the
+// Package uploadsweep implements §8.6's ("uploads, blob storage & the
 // in-sandbox download_file tool", §28.4) abandonment sweep: a `pending`
 // upload artifact row older than platform.Timeouts.UploadPendingSweepAfter
 // (a browser or sandbox that minted and never transferred/confirmed) is

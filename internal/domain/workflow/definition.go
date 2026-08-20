@@ -66,7 +66,7 @@ const (
 	// ExecutionScopeChildSession dispatches the step in a child session
 	// -- reserved for steps needing real isolation (§25.6: "the
 	// audit-fix loop's fix step alone, never the audit step itself"),
-	// following Step 48's provenance-tag restriction discipline, never a
+	// following §8.2's provenance-tag restriction discipline, never a
 	// numeric-depth mechanism.
 	ExecutionScopeChildSession ExecutionScope = "child_session"
 )

@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 69's own (§26.7) per-repo cost-budget config
+// Integration tests for §26.4's own (§26.7) per-repo cost-budget config
 // REST route (reposettings.go's own PutReviewCostBudget), against a real
 // Postgres instance -- sharing this package's own testRig (httpapi_
 // integration_test.go), mirroring reviewdepthconfig_integration_test.go's

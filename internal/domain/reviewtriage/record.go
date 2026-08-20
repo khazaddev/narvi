@@ -1,6 +1,6 @@
 package reviewtriage
 
-// DecisionRecord is Step 68's own version of §18.4's per-session routing
+// DecisionRecord is §26.3's own version of §18.4's per-session routing
 // decision record (IntentDecisionRecord, internal/domain/intent/
 // record.go) -- persisted verbatim, write-once, onto
 // turns.review_depth_decision (migrations/

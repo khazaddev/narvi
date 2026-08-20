@@ -1,4 +1,4 @@
-// Package auth implements Step 20 ("auth v1", §13.1/§13.4): GitHub OAuth
+// Package auth implements §13.1 ("auth v1", §13.1/§13.4): GitHub OAuth
 // login, backend-issued host-scoped session cookies, the first-sign-in
 // allowlist gate, and the "must be logged in" route middleware. Every
 // piece of state/API-client logic this package depends on (the 3 new
@@ -92,7 +92,7 @@
 //     convenience -- every test in this package exercises the REAL
 //     cookie-issuing code path.
 //
-// # Step 39 ("identities + full RBAC", §13.2) second-half additions
+// # §13.2 ("identities + full RBAC", §13.2) second-half additions
 //
 //   - Authenticate (middleware.go): Middleware's own 4-step check
 //     (cookie present -> hash found -> not expired -> user not disabled),
@@ -122,7 +122,7 @@
 // own §13.4 phasing for the owning Step)
 //
 //   - The full four-role permission matrix, a real domain/authz package,
-//     the viewer guard, and audit-log WRITES ARE now real -- Step 39's own
+//     the viewer guard, and audit-log WRITES ARE now real -- §13.2's own
 //     RBAC half (§13.3) landed as internal/domain/authz (a table-driven
 //     Authorize(actor, action, resource) error), wired into every
 //     state-changing REST handler in internal/adapters/inbound/httpapi
@@ -134,7 +134,7 @@
 //     identical "must be logged in" gate it always was.
 //   - Actually USING the stored, encrypted GitHub access token for
 //     anything (creating a PR, pushing a branch, minting a git
-//     credential) -- Step 21's own SourceControl adapter job ("createPR,
+//     credential) -- §9.3's own SourceControl adapter job ("createPR,
 //     credential minting", §8.11). This package only obtains and stores
 //     it.
 //   - Wiring authenticated-user identity into internal/app/sessionactor or

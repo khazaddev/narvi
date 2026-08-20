@@ -55,7 +55,7 @@ func (s *OIDCSigningKeyStore) ListPublishable(ctx context.Context, now time.Time
 	return s.q.ListPublishableOIDCSigningKeys(ctx, pgtype.Timestamptz{Time: cutoff, Valid: true})
 }
 
-// Rotate performs §27.3a's own admin-triggered rotation (see
+// Rotate performs §27.3's own admin-triggered rotation (see
 // internal/domain/oidckey's own doc comment for the full "why manual,
 // admin-triggered" design decision): inside a single transaction, retires
 // whatever key is currently active (a no-op, not an error, when there is

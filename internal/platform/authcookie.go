@@ -1,5 +1,5 @@
 // This file (authcookie.go) implements the Set-Cookie construction for
-// Step 20's ("auth v1") backend-issued user session (§13.1: "Sessions:
+// §13.1's ("auth v1") backend-issued user session (§13.1: "Sessions:
 // backend-issued, host-scoped cookies (HttpOnly, SameSite=Lax; never a
 // default cookie name on a shared parent domain — a colliding cookie from
 // a sibling app on the parent domain is a classic random-logout cause)").

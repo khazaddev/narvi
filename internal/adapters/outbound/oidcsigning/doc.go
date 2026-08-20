@@ -1,4 +1,4 @@
-// Package oidcsigning implements Step 73a's own ("cloud identity: OIDC
+// Package oidcsigning implements §27.3's own ("cloud identity: OIDC
 // issuer, bindings, minting", §27.3) RS256 key generation, JWK
 // marshaling, and JWT sign/verify -- the one place in this codebase that
 // touches RSA key material or randomness for this feature (§11: key

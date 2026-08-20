@@ -8,7 +8,7 @@ import (
 	"github.com/khazaddev/narvi/internal/domain/reviewpost"
 )
 
-// This file implements Step 48's own ("sentinels + suggestions", §22.1)
+// This file implements §8.2's own ("sentinels + suggestions", §22.1)
 // re-review reconciliation half: "feeding re-review reconciliation as
 // deterministic 'already answered' facts prepended to (not replacing) the
 // prose fallback." FetchAlreadyAnswered is this package's OWN impure
@@ -43,7 +43,7 @@ type FindingsFetcher interface {
 //
 // changedPaths (§22.1.2's own "determinable fact" refinement) is the
 // CURRENT diff's own changed-path list -- review.PreFetchedContext.
-// ChangedPaths, Step 68's reviewtriage.ExtractChangedPaths -- forwarded
+// ChangedPaths, §26.3's reviewtriage.ExtractChangedPaths -- forwarded
 // verbatim to reviewpost.RenderAlreadyAnsweredFacts, this function's own
 // pure render half, which uses it to mark (never drop, see that
 // function's own doc comment for the full "why") a finding whose

@@ -87,7 +87,7 @@ func (s *PlanStore) RejectIfAwaitingApproval(ctx context.Context, planID, sessio
 	})
 }
 
-// Get fetches a plan row by id -- Step 38's ("plan mode, cross-channel",
+// Get fetches a plan row by id -- §8.1's ("plan mode, cross-channel",
 // §8.1/§13.3) own addition, used by httpapi.DecidePlanOnTx to re-fetch a
 // plan's own current state (status, slack_channel_id/slack_message_ts)
 // after its own guarded UPDATE, whether that UPDATE won or lost. Returns

@@ -1,7 +1,7 @@
 //go:build integration
 
 // New §9.3-class resilience scenario (§19.3/§19.9's own "fetch-fail
-// boot" addition): Step 40's fetch-aware SyncAll degrade policy, exercised
+// boot" addition): §19.3's fetch-aware SyncAll degrade policy, exercised
 // through a REAL, FULL boot sequence (runBootSequence -> gitclone.SyncAll ->
 // boot.RunBoot -> hooks) -- not just gitclone's own unit tests (internal/
 // sandboxagent/gitclone/sync_test.go's own TestSyncAll_FetchFails_* table),

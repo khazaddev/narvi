@@ -14,7 +14,7 @@
 // 3 -- see handleSnapshotReadyEvent below), and now Suspect-recovery
 // (§3.2, "two-phase terminalization" -- see the section right below).
 //
-// # Suspect-state recovery-during-grace (Step 24, "two-phase terminalization")
+// # Suspect-state recovery-during-grace (§3.2, "two-phase terminalization")
 //
 // §3.2: "Any liveness signal during grace returns to previous state." A
 // Suspect sandbox reconnecting through this handler is correctly ALLOWED
@@ -464,7 +464,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 				return err
 			}
 		case "git_sync":
-			// Step 29 ("gitstate in-sandbox", §3.4 design section 6): a
+			// §3.4 ("gitstate in-sandbox", §3.4 design section 6): a
 			// git_sync event needs no DB-side mutation of its own at all --
 			// the generic appendRawEvent persist+broadcast above already
 			// covers "CP durably stores it and the browser UI can show it
@@ -518,7 +518,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 	}
 
 	if err == nil {
-		// Step 22 ("snapshots & restore"), design decision 1 -- CORRECTED
+		// §3.2 ("snapshots & restore"), design decision 1 -- CORRECTED
 		// per independent review: §3.3's own governing rule is "On
 		// terminal event: complete turn, trigger snapshot, re-derive
 		// session status, dispatch next pending" -- i.e. the snapshot

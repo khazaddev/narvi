@@ -1,4 +1,4 @@
-// This file (planapprove.go) implements Step 37's ("plan mode, web",
+// This file (planapprove.go) implements §8.1's ("plan mode, web",
 // §8.1/§12.2 item 3) two new REST endpoints: POST
 // /api/sessions/:id/plans/:planId/approve and its reject twin. Both
 // follow CreateTurn's own exact pattern (turn.go) -- open a tx, lock the

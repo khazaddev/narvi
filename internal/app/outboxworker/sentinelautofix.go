@@ -21,7 +21,7 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// This file implements Step 48's own ("sentinels + suggestions", §17.2)
+// This file implements §8.2's own ("sentinels + suggestions", §17.2)
 // sentinel-auto-fix notifier: ports.NotificationKindSentinelAutoFix's own
 // real Deliver -- spawning the child session §17.2 describes. Lives in
 // internal/app/outboxworker, NOT internal/app/sessionactor, for the exact
@@ -59,7 +59,7 @@ import (
 const sentinelFixBranchPrefix = "narvi/sentinel-fix/"
 
 // errRolloutRefused is spawnClaimedChildSession's own sentinel for "the
-// origin PR's own repo is not enrolled in Step 76's cohort rollout" (§10
+// origin PR's own repo is not enrolled in §10's cohort rollout" (§10
 // Phase 6, §32: CreateSessionError.RolloutRefusal, checked structurally,
 // never by string-matching). Deliver checks for this specifically and
 // maps it to the existing terminal-skip precedent (descriptionautofix.go:

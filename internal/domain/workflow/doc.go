@@ -1,4 +1,4 @@
-// Package workflow holds Step 54's own ("domain/workflow + loopguard +
+// Package workflow holds §25.4's own ("domain/workflow + loopguard +
 // schema", §25.4) pure domain model for the configurable per-lane
 // workflow engine: the Lane vocabulary and its LaneFor mapping over the
 // intent classifier's own existing (target, mode) vocabulary, the

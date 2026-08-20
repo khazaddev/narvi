@@ -19,7 +19,7 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// This file proves Step 49's ("handoff-readiness sentinel", §14.4) own
+// This file proves §14.4's ("handoff-readiness sentinel", §14.4) own
 // end-to-end wiring: pushpr.go's own createPRBestEffort, extended by
 // handoffsentinel.go's runHandoffSentinelBestEffort, against a REAL
 // Postgres instance -- mirroring contractdrift_integration_test.go's own

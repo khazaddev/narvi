@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration test for Step 48's ("sentinels + suggestions", §17.2) own
+// Integration test for §8.2's ("sentinels + suggestions", §17.2) own
 // sentinel-auto-fix notifier (sentinelautofix.go), against a real Postgres
 // instance -- gated behind the "integration" build tag, reusing this
 // package's own newTestPool helper (builder_integration_test.go).

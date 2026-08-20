@@ -13,7 +13,7 @@
 // and for the container/pool this now shares with every other test in
 // this package.
 //
-// As of Step 20 ("auth v1"), every route in this file is mounted behind
+// As of §13.1 ("auth v1"), every route in this file is mounted behind
 // internal/adapters/inbound/auth.Middleware, exactly like cmd/
 // control-plane/main.go's own real wiring -- every request below now goes
 // through a REAL session (createAuthenticatedUser constructs one directly
@@ -94,13 +94,13 @@ type testRig struct {
 	registry     *sessionactor.Registry
 	server       *httptest.Server
 
-	// plans/participants are Step 37's ("plan mode, web", §8.1) own
+	// plans/participants are §8.1's ("plan mode, web", §8.1) own
 	// additions, backing this rig's own approve/reject plan routes below
 	// (planapprove_integration_test.go).
 	plans        *narvipg.PlanStore
 	participants *narvipg.ParticipantStore
 
-	// outbox/linearAgentSessions are Step 38's ("plan mode, cross-channel",
+	// outbox/linearAgentSessions are §8.1's ("plan mode, cross-channel",
 	// §8.1/§13.3) own additions -- DecidePlanOnTx's own cross-channel-notify
 	// dependencies (decideplan.go), now threaded through the approve/reject
 	// routes below exactly like production wiring (cmd/control-plane/
@@ -108,7 +108,7 @@ type testRig struct {
 	outbox              *narvipg.OutboxStore
 	linearAgentSessions *narvipg.LinearAgentSessionStore
 
-	// auditLog is Step 39's ("identities + full RBAC", §13.3) own
+	// auditLog is §13.2's ("identities + full RBAC", §13.3) own
 	// addition -- threaded through to CreateSession/CreateTurn/
 	// ApprovePlan/RejectPlan below exactly like production wiring
 	// (cmd/control-plane/main.go).
@@ -135,7 +135,7 @@ type testRig struct {
 	// snapshot-mint route below.
 	provider *fakeSnapshotProvider
 
-	// prSessions is Step 46's ("review sessions", §8.2) own addition --
+	// prSessions is §8.2's ("review sessions", §8.2) own addition --
 	// backing this rig's own manual re-review REST button route
 	// (reviewretrigger_integration_test.go). diffFetcher/botToken default
 	// nil/"" (RetriggerReview's own nil-safe "skip the fetch" contract,

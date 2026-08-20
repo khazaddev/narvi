@@ -1,4 +1,4 @@
-// This file (imageresolve.go) implements Step 26's ("image builds",
+// This file (imageresolve.go) implements §8.5's ("image builds",
 // §8.5-note/§10-P2) own real per-spawn image selection: dispatch.go's
 // planFreshSpawn/planRestore both build their CreateSpec with
 // Image=defaultBaseImage (unconditionally, exactly as before this Step),
@@ -8,7 +8,7 @@
 // fingerprint -- immediately before executeSpawn/executeRestore ever calls
 // the real provider.
 //
-// # Step 41 ("warm boot: shared fingerprint + spawn-path simplification",
+// # §19.1 ("warm boot: shared fingerprint + spawn-path simplification",
 // §19.1) rewrite -- what changed and why
 //
 // Before Step 41, computing a fingerprint here required a per-repo

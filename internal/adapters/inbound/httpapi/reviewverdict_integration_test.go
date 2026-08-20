@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 47's ("server-side verdict", §8.2/§5.2/§21.2)
+// Integration tests for §8.2's ("server-side verdict", §8.2/§5.2/§21.2)
 // own verdict-posting tool (reviewverdict.go), against a real Postgres
 // instance -- gated behind the "integration" build tag, sharing this
 // package's own testRig (httpapi_integration_test.go).
@@ -323,7 +323,7 @@ func TestPostReviewVerdict_Success_EnqueuesGitHubVerdictOutboxRow(t *testing.T) 
 }
 
 // TestPostReviewVerdict_PersistsReviewVerdictRow_WhenReviewHeadSHAKnown
-// is Step 62's own (§21.1, updated for) end-to-end
+// is §21's own (§21.1, updated for) end-to-end
 // persistence test: when the session's own CURRENTLY-PROCESSING turn
 // carries a review_head_sha (set here exactly the way turn-creation
 // itself sets it in production -- turns.Create's own ReviewHeadSha
@@ -380,7 +380,7 @@ func TestPostReviewVerdict_PersistsReviewVerdictRow_WhenReviewHeadSHAKnown(t *te
 	}
 }
 
-// TestPostReviewVerdict_PersistsDigestColumns is Step 66's own (§26.1)
+// TestPostReviewVerdict_PersistsDigestColumns is §26.1's own (§26.1)
 // persistence proof: digest_summary/digest_arch_decisions/
 // digest_stack_risks/digest_unverified_limits (migrations/
 // 000077_review_verdicts_digest.up.sql) are all populated from the

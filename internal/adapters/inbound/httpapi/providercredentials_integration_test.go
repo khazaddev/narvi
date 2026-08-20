@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 53's own ("provider credential injection",
+// Integration tests for §25.1's own ("provider credential injection",
 // §25.1/§25.3) CP-side management CRUD surface (providercredentials.go),
 // against a real Postgres instance -- sharing this package's own testRig
 // (httpapi_integration_test.go).

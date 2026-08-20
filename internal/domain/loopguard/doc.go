@@ -1,4 +1,4 @@
-// Package loopguard is Step 54's own ("domain/workflow + loopguard +
+// Package loopguard is §25.4's own ("domain/workflow + loopguard +
 // schema", §25.5) generic, pure circuit breaker for bounded retry loops:
 // Evaluate(State{AttemptCount}, Config{MaxAttempts}) Decision
 // {ShouldProceed, ShouldEscalate}. No I/O, no time.Now(), no randomness

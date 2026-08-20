@@ -1,4 +1,4 @@
-// Package reviewtriage is the app-layer half of Step 68's own light/deep
+// Package reviewtriage is the app-layer half of §26.3's own light/deep
 // review-depth routing decision (§26.3) -- it aggregates Postgres (never
 // itself I/O-free, unlike its sibling pure package internal/domain/
 // reviewtriage, which this package calls but never duplicates the

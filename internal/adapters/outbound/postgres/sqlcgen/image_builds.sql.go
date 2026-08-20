@@ -229,7 +229,7 @@ type ListReadyImageBuildsParams struct {
 	StaleClaimCutoff pgtype.Timestamptz `json:"stale_claim_cutoff"`
 }
 
-// Step 42's own freshness-pump poll query (§19.2): every SHARED (repo-
+// §19.2's own freshness-pump poll query (§19.2): every SHARED (repo-
 // bearing) 'ready' row -- a base-only row (repo_urls = '{}') is never
 // stale in the sense this design cares about (there is no repo tip to
 // drift from), so it is excluded here at the SQL level rather than making

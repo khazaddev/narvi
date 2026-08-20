@@ -117,7 +117,7 @@ SELECT id, session_id, status, conversation_id, created_at, dispatched_at, compl
 WHERE session_id = $1 AND status = 'processing'
 `
 
-// Step 61 ("builder epistemic pre-action check", §20.2) own epistemic-
+// §20 ("builder epistemic pre-action check", §20.2) own epistemic-
 // outcome-posting endpoint's first read -- mirrors WorkflowStore's own
 // GetRunningRunForSession/GetLiveStepRunForRun precedent (queries/
 // workflows.sql): the caller (a sandbox-authenticated POST naming no turn

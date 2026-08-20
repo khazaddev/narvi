@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 46's ("review sessions", §8.2) own manual
+// Integration tests for §8.2's ("review sessions", §8.2) own manual
 // re-trigger-via-BUTTON REST endpoint (reviewretrigger.go), against a real
 // Postgres instance -- gated behind the "integration" build tag, sharing
 // this package's own testRig (httpapi_integration_test.go).
@@ -360,7 +360,7 @@ func TestRetriggerReview_ConcurrentClicks_AllSucceedNoDeadlock(t *testing.T) {
 }
 
 // TestRetriggerReview_AlreadyAnsweredFacts_PrependedNeverReplacingProse is
-// Step 48's own explicitly required test (§22.1): an already-open
+// §8.2's own explicitly required test (§22.1): an already-open
 // review_findings row for this PR renders as a deterministic "already
 // answered" fact block PREPENDED to -- never replacing -- the manual
 // re-trigger's own fixed prose text (manualRetriggerPromptText,

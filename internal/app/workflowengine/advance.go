@@ -1,4 +1,4 @@
-// This file (advance.go) implements Step 56's ("workflow HITL gate +
+// This file (advance.go) implements §25.9's ("workflow HITL gate +
 // circuit breaker", §25.9) own central authority for what happens after a
 // workflow.NextStep verdict: ApplyStepOutcome is called from BOTH
 // OnTurnCompleted's own ordinary (agent-driven) advance path (completion.go)
@@ -32,7 +32,7 @@
 //
 // # Auto-dispatch closes §25.6's own documented gap
 //
-// Step 55's OnTurnCompleted shipped with NextAdvance creating the next
+// §25.6's OnTurnCompleted shipped with NextAdvance creating the next
 // attempt's bookkeeping row but never dispatching a turn for it ("ready for
 // whichever future Step ... adds the actual auto-continuation dispatch") --
 // this Step is that future Step. dispatchNextAttempt below creates the

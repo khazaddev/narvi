@@ -153,7 +153,7 @@ func OnTurnCompleted(ctx context.Context, deps Deps, sessionRow sqlcgen.Session,
 			logger.Error("workflowengine: mark step run awaiting decision failed", "step_run_id", stepRun.ID.String(), "error", err)
 			return
 		}
-		// Step 56's own addition (§25.9): notify a human that this step
+		// §25.9's own addition (§25.9): notify a human that this step
 		// now needs a decision -- best-effort, logged, never allowed to
 		// undo the awaiting_decision transition that just committed.
 		if err := enqueueWorkflowNotice(ctx, deps, sessionRow, awaitingDecisionNoticeText(runRow.ID, markedRun.ID)); err != nil {

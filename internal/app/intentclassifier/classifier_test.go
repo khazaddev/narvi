@@ -199,7 +199,7 @@ func TestService_Classify_NeverThrows(t *testing.T) {
 	}
 }
 
-// TestService_Classify_FallbackHonorsDeterministicTarget is Step 47's own
+// TestService_Classify_FallbackHonorsDeterministicTarget is §8.2's own
 // audit fix (§5.2/§18.2): a fallback decision must still carry
 // input.DeterministicTarget when the caller supplied one, across EVERY
 // fallback branch (template fetch, template assemble, LLM error, invalid

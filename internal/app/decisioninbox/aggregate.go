@@ -486,7 +486,7 @@ func buildPROpenItem(ctx context.Context, deps Deps, pr ports.OpenPR, repoFullNa
 
 // computeRealEligibility runs §21.2 stage 1's real auto-approval
 // eligibility engine (internal/domain/autoapproval.ComputeEligible) for
-// pr -- replacing Step 60's own interim internal/domain/decisioninbox.
+// pr -- replacing §16's own interim internal/domain/decisioninbox.
 // ComputeAutoApprovalEligible (deleted by this Step). Fails CLOSED
 // (returns false) on every degraded path: no verdict ever posted for
 // this PR (reviewverdict.GetLatest's own ok=false), or a genuine store

@@ -41,7 +41,7 @@ var ErrActorNotAuthorized = errors.New("github: actor not authorized")
 
 // ErrRolloutNotEnrolled is CreateOrJoin's own sentinel for "the WINNER
 // path's own httpapi.CreateSessionOnTx call refused because a named repo
-// is not enrolled in Step 76's cohort rollout" (§10 Phase 6, §32:
+// is not enrolled in §10's cohort rollout" (§10 Phase 6, §32:
 // CreateSessionError.RolloutRefusal, checked structurally, never by
 // string-matching cerr.Message). Deliberately DISTINCT from every other
 // CreateOrJoin error, mirroring ErrActorNotAuthorized's own identical
@@ -73,7 +73,7 @@ var ErrRolloutNotEnrolled = errors.New("github: repo not enrolled in cohort roll
 // this package ever hands it; Environments is simply threaded through
 // unused on this path.
 //
-// IntentClassifier is Step 36's own wiring point (§8.3/§18): classify+
+// IntentClassifier is §8.3's own wiring point (§8.3/§18): classify+
 // record runs ONCE, on the WINNER (brand-new session) path only -- see
 // CreateOrJoin's own doc comment below for why the REUSE path never
 // re-classifies. Optional (nil-safe): a nil IntentClassifier simply skips
@@ -88,14 +88,14 @@ type SessionCoalescer struct {
 	Registry         *sessionactor.Registry
 	IntentClassifier *intentclassifier.Service
 
-	// Plans (Step 37/38 follow-up fix, §8.1) is threaded through to the
+	// Plans (a follow-up fix, §8.1) is threaded through to the
 	// REUSE path's own httpapi.CreateTurnForBot call below, exactly like
 	// every other createTurnLocked caller now gets -- see that function's
 	// own doc comment (httpapi/turn.go) for the nil-safe "skips the
 	// awaiting-plan gate" contract a nil value here keeps.
 	Plans *postgres.PlanStore
 
-	// AuditLog is Step 39's own addition (§13.3): threaded through to the
+	// AuditLog is §13.2's own addition (§13.3): threaded through to the
 	// WINNER path's own httpapi.CreateSessionOnTx call below, exactly like
 	// Environments already is, so a GitHub-originated session creation
 	// gets the SAME audit_log row every other CreateSessionOnTx caller now
@@ -644,7 +644,7 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 		httpapi.TriggerDispatch(ctx, c.Registry, created.ID)
 	}
 
-	// Step 36 ("intent classifier", §8.3/§18): classify + record ONCE, on
+	// §8.3 ("intent classifier", §8.3/§18): classify + record ONCE, on
 	// this winner (brand-new session) path only -- IntentDecisionRecord
 	// is a per-SESSION record (§18.4), and every GitHub-originated session
 	// is created exactly here, so there is no gap left by never
@@ -671,7 +671,7 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 		// Text is classifyText, deliberately NOT *req.Prompt (audit fix,
 		// §5.2/§18.5) -- see this function's own doc comment on the
 		// classifyText parameter, above, for the full "why": req.Prompt is
-		// this SAME mention text with Step 46's own inline pre-fetched
+		// this SAME mention text with §8.2's own inline pre-fetched
 		// diff/stack context already folded in (handler.go, BEFORE
 		// CreateOrJoin is ever called), which for a real PR can run to
 		// several MB -- feeding that whole diff into the classifier's LLM

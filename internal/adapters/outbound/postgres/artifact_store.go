@@ -13,7 +13,7 @@ import (
 // ArtifactStore is a thin, pass-through wrapper around the sqlc-generated
 // artifacts queries (§4.3, §6.3 GET /api/sessions/:id/artifacts and the
 // client WS hub's own SubscribedPayload.artifacts, §6.2). No caching, no
-// retries, no business rules. Create is Step 21's ("e2e happy path") own
+// retries, no business rules. Create is §9.3's ("e2e happy path") own
 // addition -- app/sessionactor's own createPRBestEffort (pushpr.go) is its
 // first real caller, recording a "pr"-typed artifact once
 // ports.SourceControl.CreatePR succeeds; previews (Step 48) and uploads
@@ -48,7 +48,7 @@ func (s *ArtifactStore) ListForSession(ctx context.Context, sessionID pgtype.UUI
 }
 
 // CreateUpload inserts a new 'upload'-typed artifact row in status
-// 'pending' (Step 58's own mint, §28.4) and returns it.
+// 'pending' (§8.6's own mint, §28.4) and returns it.
 func (s *ArtifactStore) CreateUpload(ctx context.Context, arg sqlcgen.CreateUploadArtifactParams) (sqlcgen.Artifact, error) {
 	return s.q.CreateUploadArtifact(ctx, arg)
 }

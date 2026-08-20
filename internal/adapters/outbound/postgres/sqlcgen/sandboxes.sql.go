@@ -76,7 +76,7 @@ WHERE status IN ('spawning', 'connecting', 'booting', 'ready', 'snapshotting', '
   AND provider_id IS NOT NULL
 `
 
-// Step 25 ("reconciler + GC", §5.3): the reconciler's own "expected still
+// §5.3 ("reconciler + GC", §5.3): the reconciler's own "expected still
 // alive" set -- the provider_id of every sandbox row currently in a LIVE
 // status, across ALL sessions. Unlike every OTHER query in this file
 // (each scoped to one session_id via WHERE session_id = $1), this one
@@ -458,7 +458,7 @@ type UpsertSandboxForSpawnParams struct {
 	TokenHash *string     `json:"token_hash"`
 }
 
-// Step 21 ("e2e happy path"), design decision 3a: creates the sandbox row
+// §9.3 ("e2e happy path"), design decision 3a: creates the sandbox row
 // (gen=1) if none exists yet, or bumps gen/resets status to 'spawning'/
 // rotates token_hash if one already does (§3.2: "every spawn/restore
 // increments sandbox.gen" -- paraphrased above, not a verbatim quote).

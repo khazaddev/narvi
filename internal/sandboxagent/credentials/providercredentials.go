@@ -1,4 +1,4 @@
-// This file (providercredentials.go) implements Step 53's own ("provider
+// This file (providercredentials.go) implements §25.1's own ("provider
 // credential injection", §25.1/§25.3) sandbox-agent-side client half of
 // CP's POST /sessions/{id}/provider-credentials delivery endpoint
 // (internal/adapters/inbound/httpapi/providercredentialsdelivery.go) --

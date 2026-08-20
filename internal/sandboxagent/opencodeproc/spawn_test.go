@@ -168,7 +168,7 @@ func TestSpawn_EnvExcludesSessionConfig(t *testing.T) {
 	}
 }
 
-// TestSpawn_ProviderCredentialEnvAppended proves Step 53's own
+// TestSpawn_ProviderCredentialEnvAppended proves §25.1's own
 // ("provider credential injection", §25.1/§25.3) providerCredentialEnv
 // parameter actually reaches the spawned opencode process's own
 // environment -- the ACTUAL injection point this Step exists to build.

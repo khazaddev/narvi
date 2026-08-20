@@ -228,7 +228,7 @@ type UpsertAutoRetriggerReviewToggleParams struct {
 	AutoRetriggerReviewEnabled bool   `json:"auto_retrigger_review_enabled"`
 }
 
-// Step 65's own admin-only, per-repo opt-in (§24.5, migrations/
+// §24's own admin-only, per-repo opt-in (§24.5, migrations/
 // 000076_repo_settings_auto_retrigger_review.up.sql) -- idempotent
 // create-or-update of ONLY auto_retrigger_review_enabled, mirroring
 // UpsertAutoMergeToggle's own identical column-scoped shape immediately
@@ -276,7 +276,7 @@ type UpsertDescriptionAutofixToggleParams struct {
 	DescriptionAutofixEnabled bool   `json:"description_autofix_enabled"`
 }
 
-// Step 67's own admin-only, per-repo opt-in (§26.2, migrations/
+// §26.2's own admin-only, per-repo opt-in (§26.2, migrations/
 // 000079_repo_settings_description_autofix.up.sql) -- idempotent
 // create-or-update of ONLY description_autofix_enabled, mirroring
 // UpsertAutoMergeToggle/UpsertAutoRetriggerReviewToggle's own identical
@@ -325,7 +325,7 @@ type UpsertRWXPreviewSettingsParams struct {
 	RwxPreviewOrgSlug          *string `json:"rwx_preview_org_slug"`
 }
 
-// Step 57 ("RWX provider + previews", §4.1.2 point 1): idempotent
+// §4.1 ("RWX provider + previews", §4.1.2 point 1): idempotent
 // create-or-update of ONLY the three RWX-preview columns (migrations/
 // 000059_repo_settings_rwx_preview.up.sql), keyed on repo_full_name --
 // deliberately independent of UpsertRepoSettings above: block_on_high_risk/
@@ -427,7 +427,7 @@ type UpsertReviewCostBudgetParams struct {
 	ReviewCostBudgetDeepUsd  pgtype.Numeric `json:"review_cost_budget_deep_usd"`
 }
 
-// Step 69's own admin-only, per-repo reviewCostBudget config (§26.7,
+// §26.4's own admin-only, per-repo reviewCostBudget config (§26.7,
 // migrations/000085_repo_settings_review_cost_budget.up.sql) -- idempotent
 // create-or-update of ONLY review_cost_budget_light_usd/
 // review_cost_budget_deep_usd, mirroring UpsertReviewDepthConfig's own
@@ -476,7 +476,7 @@ type UpsertReviewDepthConfigParams struct {
 	ReviewDepthDeepPaths []byte  `json:"review_depth_deep_paths"`
 }
 
-// Step 68's own admin-only, per-repo reviewDepth config (§26.3,
+// §26.3's own admin-only, per-repo reviewDepth config (§26.3,
 // migrations/000082_repo_settings_review_depth.up.sql) -- idempotent
 // create-or-update of ONLY review_depth_mode/review_depth_deep_paths,
 // mirroring UpsertAutoMergeToggle/UpsertAutoRetriggerReviewToggle/
@@ -524,7 +524,7 @@ type UpsertSessionsEnabledParams struct {
 	SessionsEnabled bool   `json:"sessions_enabled"`
 }
 
-// Step 76's own cohort-rollout enrollment gate (§10 Phase 6, §32) --
+// §10's own cohort-rollout enrollment gate (§10 Phase 6, §32) --
 // idempotent create-or-update of ONLY sessions_enabled, mirroring
 // UpsertAutoMergeToggle/UpsertAutoRetriggerReviewToggle/
 // UpsertDescriptionAutofixToggle's own identical column-scoped shape

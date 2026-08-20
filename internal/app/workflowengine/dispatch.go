@@ -103,7 +103,7 @@ func passthrough(callerPrompt string, callerModelID, callerEffort *string) Resol
 //  2. A run IS running, and its own live (running/awaiting_decision)
 //     step-run's status is 'awaiting_decision': a HITLAfter-gated step
 //     waiting on a human. No BUILT-IN workflow reaches this case as of
-//     migration 000088_plan_builtin_passthrough (Step 56's own corrective
+//     migration 000088_plan_builtin_passthrough (§25.9's own corrective
 //     follow-up, §25.8/§25.9: the built-in plan workflow's original
 //     hitl_after step 1 + needs_fix self-loop, migration 000057's seed,
 //     was a genuine design incoherence -- it silently double-parked a

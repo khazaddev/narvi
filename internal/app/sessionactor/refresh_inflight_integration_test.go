@@ -16,7 +16,7 @@ import (
 )
 
 // TestResilienceScenario_RefreshInFlightSpawn_StillGetsOldReadyImage is
-// this Step's own new §9.3-class resilience scenario (§19.2, Step 42's
+// this Step's own new §9.3-class resilience scenario (§19.2, §19.2's
 // own "refresh-in-flight spawn" addition to the resilience suite): a NEW
 // session spawn, targeting a fingerprint whose 'ready' image_builds row is
 // GENUINELY mid-refresh (a real internal/app/imagebuild.Builder.

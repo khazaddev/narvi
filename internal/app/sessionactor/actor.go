@@ -88,25 +88,25 @@ type Actor struct {
 	// e.g. the resilience test).
 	sourceControl ports.SourceControl
 
-	// githubBotToken is Step 48's ("sentinels + suggestions", §17.2) own
+	// githubBotToken is §8.2's ("sentinels + suggestions", §17.2) own
 	// addition -- see Registry's own identical field doc comment
 	// (registry.go) for the full rationale; createSentinelFixPRBestEffort
 	// (pushpr.go) is this Actor's own one use of it. May be empty (tests
 	// that never exercise the sentinel-fix PR path).
 	githubBotToken string
 
-	// reviewModelDeep is Step 68's own addition (§26.3) -- see
+	// reviewModelDeep is §26.3's own addition (§26.3) -- see
 	// RegistryOptions.ReviewModelDeep's own doc comment.
 	reviewModelDeep string
 
-	// diffFetcher is Step 49's ("handoff-readiness sentinel", §14.4) own
+	// diffFetcher is §14.4's ("handoff-readiness sentinel", §14.4) own
 	// addition -- see Registry's own identical field doc comment
 	// (registry.go) for the full rationale; handoffsentinel.go's own
 	// runHandoffSentinelBestEffort is this Actor's own one use of it. May
 	// be nil (tests that never exercise the handoff-sentinel path).
 	diffFetcher PRDiffFetcher
 
-	// reviewDiffFetcher/githubBotHandle are Step 65's ("review: automatic
+	// reviewDiffFetcher/githubBotHandle are §24's ("review: automatic
 	// re-review on new commits", §24) own additions -- see Registry's own
 	// identical field doc comments (registry.go) for the full rationale;
 	// reviewretrigger.go's own handleReviewRetriggerDebounceTimer is this
@@ -132,7 +132,7 @@ type Actor struct {
 	// never exercise the image-resolution path).
 	openCodeRuntimeVersion string
 
-	// contractDriftDetected is Step 27's ("mocking + contract drift",
+	// contractDriftDetected is §14.3's ("mocking + contract drift",
 	// §14.3) own OTel counter -- the SAME instance every Actor this
 	// Registry hydrates shares, constructed exactly once by NewRegistry
 	// and threaded through at hydration time (hydrate.go), never
@@ -140,7 +140,7 @@ type Actor struct {
 	// own checkContractDrift.
 	contractDriftDetected metric.Int64Counter
 
-	// opsMetrics is Step 77's ("ops: dashboards, alerts, runbooks", §5.3)
+	// opsMetrics is §5.3's ("ops: dashboards, alerts, runbooks", §5.3)
 	// own bundle of five OTel instruments -- the SAME instance every Actor
 	// this Registry hydrates shares, constructed exactly once by
 	// NewRegistry and threaded through at hydration time (hydrate.go),

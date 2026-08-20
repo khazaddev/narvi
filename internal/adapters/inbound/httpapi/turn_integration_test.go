@@ -30,7 +30,7 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// Step 28 ("turn recovery", §8.7 "relaunch-and-resume"): integration tests
+// §3.3 ("turn recovery", §8.7 "relaunch-and-resume"): integration tests
 // for POST /api/sessions/{sessionID}/turns (turn.go's own CreateTurn),
 // mirroring this package's own established house style (newTestRig,
 // createAuthenticatedUser, doJSON) for the happy path/409/404 cases, and a
@@ -510,7 +510,7 @@ func TestCreateTurn_CarriesExistingConversationID(t *testing.T) {
 	}
 }
 
-// --- Step 61 ("domain/turn: builder epistemic pre-action check", §20) --
+// --- §20 ("domain/turn: builder epistemic pre-action check", §20) --
 // end-to-end coverage for the devil's-advocate preamble's own injection
 // into a dispatched turn's REAL Prompt.Text, proven the SAME way
 // TestCreateTurn_CarriesExistingConversationID above proves conversation-id

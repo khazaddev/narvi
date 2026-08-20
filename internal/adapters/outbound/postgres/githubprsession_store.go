@@ -87,7 +87,7 @@ func (s *GitHubPRSessionStore) GetBySessionID(ctx context.Context, sessionID pgt
 // migration's own doc comment for the full "why a shared, mutable
 // per-(repo,PR) column was the wrong place for this fact".
 
-// UpsertPendingRetriggerHeadSHA is Step 65's own actor-bypassing write
+// UpsertPendingRetriggerHeadSHA is §24's own actor-bypassing write
 // (§24.1's 4th cost item, internal/adapters/inbound/github/
 // pullrequestsynchronize.go): guarded on session_id IS NOT NULL, so
 // pgx.ErrNoRows (unwrapped) means exactly "no row, or a row with

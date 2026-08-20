@@ -1,4 +1,4 @@
-// Package seed implements Step 75's ("config/data seeding", §10-P6,
+// Package seed implements §10's ("config/data seeding", §10-P6,
 // §13.4) per-install seeding tool: it reads an operator-authored
 // internal/domain/seedmanifest.Manifest and reconciles it against a live
 // Postgres database via the SAME stores (internal/adapters/outbound/
@@ -112,7 +112,7 @@
 //     pair obtained through a live, human-driven consent redirect
 //     (internal/adapters/inbound/linear/callback.go). No manifest file
 //     can fabricate that exchange -- there is no "value" an operator
-//     could paste in. This tool's own answer to Step 75's "integrations"
+//     could paste in. This tool's own answer to §10's "integrations"
 //     checklist item is therefore RWX preview settings
 //     (repo_settings.rwx_preview_*, §4.1.2): static,
 //     operator-known config (a dispatch key + endpoint template + org

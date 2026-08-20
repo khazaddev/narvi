@@ -1,5 +1,5 @@
 // Package llm holds the Anthropic LLM adapter implementing ports.LLM
-// (§4.3, §8.3/§18) -- Step 36's own real, first implementation. A future
+// (§4.3, §8.3/§18) -- §8.3's own real, first implementation. A future
 // OpenAI adapter (PR-50, §8, §8.8: "Models: Anthropic + OpenAI/Codex")
 // remains an untouched stub in its own sibling package,
 // internal/adapters/outbound/openai, mirroring internal/adapters/outbound/

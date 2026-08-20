@@ -192,7 +192,7 @@ ORDER BY updated_at DESC
 LIMIT $1
 `
 
-// Step 60 ("decision inbox: read model + API", §16.1)'s own
+// §16 ("decision inbox: read model + API", §16.1)'s own
 // needs_attention row source: every session currently 'failed' -- §3.2's
 // own resume/recreate lanes make every failed session resume-eligible in
 // SOME form (recreate-from-scratch at minimum, via conversation replay --
@@ -306,7 +306,7 @@ type UpdateSessionIntentDecisionIfNullParams struct {
 	IntentDecision []byte      `json:"intent_decision"`
 }
 
-// Step 36's ("intent classifier", §18.4) write-once guarded update:
+// §8.3's ("intent classifier", §18.4) write-once guarded update:
 // "UPDATE sessions SET intent_decision = ... WHERE intent_decision IS
 // NULL" -- NOT read-then-write, first decision wins, no application-level
 // lock needed. RowsAffected (via :execrows) is the caller's own win/lose

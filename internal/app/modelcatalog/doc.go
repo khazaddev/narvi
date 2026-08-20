@@ -1,4 +1,4 @@
-// Package modelcatalog is Step 59's own "Catalog" deliverable
+// Package modelcatalog is §8.8's own "Catalog" deliverable
 // (IMPLEMENTATION_PLAN.md Step 59 row; §8 item 8; §29; §25.2's own "GET
 // /provider catalog is the source of truth for providers/models/variants/
 // cost" framing).

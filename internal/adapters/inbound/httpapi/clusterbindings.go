@@ -1,4 +1,4 @@
-// This file (clusterbindings.go) implements Step 73b's own ("cloud
+// This file (clusterbindings.go) implements §27.4's own ("cloud
 // identity: sandbox-side consumption + kubeconfig injection", §27.4)
 // CP-side MANAGEMENT surface over cluster_bindings (migrations/
 // 000094_cluster_bindings.up.sql):

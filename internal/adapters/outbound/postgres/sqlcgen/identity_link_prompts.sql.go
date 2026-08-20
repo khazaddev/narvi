@@ -152,7 +152,7 @@ SELECT id, provider, external_id, nonce_hash, expires_at, created_at FROM identi
 ORDER BY created_at DESC
 `
 
-// Backs the members API's own overview endpoint (§13.2/§13.3, Step 39's
+// Backs the members API's own overview endpoint (§13.2/§13.3, §13.2's
 // own "linked identities incl. pending-link state" requirement) -- every
 // row currently in this table IS still pending (there is no soft-delete;
 // a consumed/superseded prompt is row-deleted, see

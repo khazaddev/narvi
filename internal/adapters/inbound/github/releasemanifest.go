@@ -1,4 +1,4 @@
-// This file (releasemanifest.go) wires Step 50's own ("release PR
+// This file (releasemanifest.go) wires §15's own ("release PR
 // review", §15) release-PR detection (§15.1) and manifest-check
 // enqueueing (§15.2) into this package's own webhook handler --
 // handler.go's own top-level call site, right after CreateOrJoin

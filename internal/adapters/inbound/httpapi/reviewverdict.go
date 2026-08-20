@@ -1,4 +1,4 @@
-// This file (reviewverdict.go) implements Step 47's ("server-side
+// This file (reviewverdict.go) implements §8.2's ("server-side
 // verdict", §8.2/§5.2/§21.2) own VERDICT-POSTING TOOL: POST
 // /sessions/{sessionID}/review/verdict. This is the ONLY sanctioned way a
 // review session's output reaches its pull request as a comment or formal
@@ -118,7 +118,7 @@ import (
 //     (internal/adapters/outbound/githubapi.VerdictNotifier delivers it:
 //     the formal review, then the label sync).
 //
-// Step 48 ("sentinels + suggestions", §17/§22.1) extends this handler,
+// §8.2 ("sentinels + suggestions", §17/§22.1) extends this handler,
 // never replaces it: after building the verdict, it ALSO builds
 // []reviewpost.Finding from req.Findings (optional, additive -- see
 // restdtos.PostReviewVerdictRequest's own doc comment), computes each

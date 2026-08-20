@@ -264,7 +264,7 @@ func TestPlanSlackNotifier_DeliverApproval_RejectedBetweenEnqueueAndDelivery_Ski
 }
 
 // TestPlanSlackNotifier_Deliver_WorkflowDecision_PostsPlainMessage proves
-// Step 56's own addition ("workflow HITL gate + circuit breaker", §25.9):
+// §25.9's own addition ("workflow HITL gate + circuit breaker", §25.9):
 // ports.NotificationKindSlackWorkflowDecision forwards to n.client.Deliver
 // UNCHANGED (planslacknotifier.go's own updated Deliver switch) -- a plain
 // slackapi.Payload posts via an ordinary chat.postMessage call, with no

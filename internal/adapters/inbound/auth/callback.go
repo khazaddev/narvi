@@ -118,7 +118,7 @@ func NewCallbackHandler(
 		// so it can never be replayed.
 		http.SetCookie(w, expiredCookie(oauthStateCookieName, secureCookies))
 
-		// Step 39 ("identities + full RBAC", §13.2) update: read and clear
+		// §13.2 ("identities + full RBAC", §13.2) update: read and clear
 		// the optional next-redirect cookie (login.go's own doc comment)
 		// the SAME way, right alongside the state cookie -- read ONCE,
 		// here, before any of this handler's own early-rejection paths

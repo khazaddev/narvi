@@ -593,7 +593,7 @@ func TestCreateTurnCore_NoAwaitingPlan_OrdinaryTurn_Unaffected(t *testing.T) {
 }
 
 // TestCreateTurnCore_OpenTurnDuringAwaitingApproval_BusyWins is Finding 3's
-// own regression test (Step 37/38 follow-up fix, gate-ordering audit
+// own regression test (a follow-up fix, gate-ordering audit
 // finding): internal/app/sessionactor/planrecord.go's own
 // recordPlanIfNeeded only supersedes the OLD awaiting_approval plan row at
 // the END of a revise turn's (plan_mode=true) own processing, not at that

@@ -1,6 +1,6 @@
 //go:build integration
 
-// This file (rolloutgate_integration_test.go) proves Step 76's own
+// This file (rolloutgate_integration_test.go) proves §10's own
 // primary, session-creation-time gate (§10 Phase 6, §32): checkRolloutGate
 // (rolloutgate.go), exercised indirectly through the real, exported
 // CreateSessionOnTx entry point -- deliberately in package httpapi (not

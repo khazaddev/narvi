@@ -17,7 +17,7 @@ import (
 // happens later, on Engine's own background pump, entirely decoupled from
 // whatever caller decided this automation should fire right now).
 //
-// Step 52 ("automations: triggers & extras", §8.4) owns the actual trigger-
+// §8.4 ("automations: triggers & extras", §8.4) owns the actual trigger-
 // condition evaluation that decides WHEN to call this; this Step's own
 // callers are its integration tests. targets is validated (automation.
 // ValidateTargets, §3.5's own "fan-out ≤10" cap) before anything is

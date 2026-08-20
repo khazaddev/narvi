@@ -1,4 +1,4 @@
-// This file (decideplan.go) implements Step 38's ("plan mode,
+// This file (decideplan.go) implements §8.1's ("plan mode,
 // cross-channel", §8.1/§13.3) own central deliverable: the shared,
 // transport-agnostic "decide a plan" function every entry point (the
 // existing REST approve/reject endpoints, planapprove.go; the new Slack

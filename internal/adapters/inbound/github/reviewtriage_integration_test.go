@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 68's ("review: light/deep triage", §26.3) own
+// Integration tests for §26.3's ("review: light/deep triage", §26.3) own
 // wiring through this package's webhook ingress -- against a real Postgres
 // instance, gated behind the "integration" build tag, sharing this
 // package's own newTestPool/testWebhookSecret/testBotHandleIntegration/

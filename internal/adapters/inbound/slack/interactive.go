@@ -1,7 +1,7 @@
-// This file (interactive.go) implements Step 38's ("plan mode,
+// This file (interactive.go) implements §8.1's ("plan mode,
 // cross-channel", §8.1/§13.3) own new Slack ingress route: POST
 // /webhooks/slack/interactive, a STRUCTURALLY DIFFERENT payload shape from
-// this package's existing POST /webhooks/slack (handler.go, Step 33's
+// this package's existing POST /webhooks/slack (handler.go, §8.10's
 // Events API ingress) -- Slack's own real Interactivity payload arrives
 // form-encoded (Content-Type: application/x-www-form-urlencoded) with a
 // single "payload" field carrying URL-encoded JSON, never the Events API's
@@ -112,7 +112,7 @@ type InteractiveDeps struct {
 	Registry            *sessionactor.Registry
 	SlackClient         *slackapi.Client
 
-	// Participants is Step 39's own addition ("identities + full RBAC",
+	// Participants is §13.2's own addition ("identities + full RBAC",
 	// §13.2/§13.3) -- authorizeSessionAction below (identity.go's own
 	// ownedOrJoined) needs this to resolve a `member` actor's own
 	// "own/joined" carve-out exactly like httpapi's canActOnPlan/CreateTurn
@@ -121,7 +121,7 @@ type InteractiveDeps struct {
 	// would for the same (actor, session).
 	Participants *postgres.ParticipantStore
 
-	// AuditLog is Step 39's own addition (§13.3) -- threaded through to
+	// AuditLog is §13.2's own addition (§13.3) -- threaded through to
 	// httpapi.DecidePlan/CreateTurnCore below exactly like Plans/Outbox
 	// already are, so a Slack-decided plan verdict or a Slack "Request
 	// changes" turn gets the SAME audit_log row every other caller of
@@ -131,7 +131,7 @@ type InteractiveDeps struct {
 	// of the old unconditional bot-attribution precedent.
 	AuditLog *postgres.AuditLogStore
 
-	// IdentityLink is Step 39's own auto-linking wiring (§13.2) --
+	// IdentityLink is §13.2's own auto-linking wiring (§13.2) --
 	// resolveSlackActor (identity.go) uses this handler's own SlackClient
 	// above (already present, for chat.update/views.open) to fetch the
 	// clicking/submitting Slack user's own profile email, then this to
@@ -175,7 +175,7 @@ type blockActionsPayload struct {
 	} `json:"actions"`
 	// User is Slack's own real top-level "the user who clicked" field,
 	// present on every block_actions payload (verified against Slack's
-	// current reference docs) -- Step 39's ("identities + full RBAC",
+	// current reference docs) -- §13.2's ("identities + full RBAC",
 	// §13.2) own auto-linking wiring: the Slack user id
 	// decideAndUpdateMessage resolves against.
 	User struct {
@@ -319,7 +319,7 @@ func (deps InteractiveDeps) handleBlockActions(ctx context.Context, logger *slog
 	}
 }
 
-// slackPlanForbiddenText/slackPromptForbiddenErrorText are Step 39's own
+// slackPlanForbiddenText/slackPromptForbiddenErrorText are §13.2's own
 // additions ("identities + full RBAC", §13.2/§13.3): posted/shown instead
 // of proceeding when the acting user isn't authorized -- mirroring the
 // REST API's own 403 semantics ("not authorized to ...",
@@ -523,7 +523,7 @@ func (deps InteractiveDeps) decideAndUpdateMessage(ctx context.Context, logger *
 	decideCtx, cancel := context.WithTimeout(ctx, deps.Timeouts.SlackInteractivityAckTimeout)
 	defer cancel()
 
-	// Step 39 ("identities + full RBAC", §13.2) update: decidedBy is no
+	// §13.2 ("identities + full RBAC", §13.2) update: decidedBy is no
 	// longer unconditionally invalid -- resolveSlackActorSingleAttempt
 	// auto-links (or creates a magic-link prompt for) the clicking Slack
 	// user the first time this package sees them, WITHOUT the general
@@ -549,7 +549,7 @@ func (deps InteractiveDeps) decideAndUpdateMessage(ctx context.Context, logger *
 		}
 	}
 
-	// Step 39 ("identities + full RBAC", §13.2/§13.3) update: a decidedBy
+	// §13.2 ("identities + full RBAC", §13.2/§13.3) update: a decidedBy
 	// that resolved to a REAL, linked user_id must still pass domain/authz.
 	// Authorize(ActionApprovePlan) -- exactly what the REST approve/reject
 	// endpoints already require via canActOnPlan (planauthz.go) -- before
@@ -694,7 +694,7 @@ func (deps InteractiveDeps) openRequestChangesModal(ctx context.Context, logger 
 // rejecting a view_submission with an inline validation error rather than
 // silently closing the modal (docs.slack.dev/surfaces/modals's own
 // "Responding to a view_submission" — "response_action": "errors" plus a
-// block_id -> message map) -- used here for Step 39's own ("identities +
+// block_id -> message map) -- used here for §13.2's own ("identities +
 // full RBAC", §13.2/§13.3) "reply with a clear denial message" fix: this
 // payload type has no channel/thread to post an ordinary message into at
 // all (see handleViewSubmission's own doc comment on why an identity
@@ -792,7 +792,7 @@ func (deps InteractiveDeps) handleViewSubmission(ctx context.Context, w http.Res
 		return
 	}
 
-	// Step 39 ("identities + full RBAC", §13.2) update: actorUserID is no
+	// §13.2 ("identities + full RBAC", §13.2) update: actorUserID is no
 	// longer unconditionally invalid -- resolveSlackActorSingleAttempt
 	// (identity.go) auto-links (or creates a magic-link prompt for) the
 	// submitting Slack user the first time this package sees them,
@@ -815,7 +815,7 @@ func (deps InteractiveDeps) handleViewSubmission(ctx context.Context, w http.Res
 	// message-ts back up instead of relying on one being handed in here.
 	actorUserID, notice := resolveSlackActorSingleAttempt(ctx, logger, deps.SlackClient, deps.IdentityLink, deps.Timeouts.SlackInteractivityIdentityFetchTimeout, payload.User.ID)
 
-	// Step 39 ("identities + full RBAC", §13.2/§13.3) update: a resolved,
+	// §13.2 ("identities + full RBAC", §13.2/§13.3) update: a resolved,
 	// linked actorUserID must still pass domain/authz.
 	// Authorize(ActionPromptSession) -- this "Request changes" turn is
 	// exactly the same state-changing command POST .../turns itself gates

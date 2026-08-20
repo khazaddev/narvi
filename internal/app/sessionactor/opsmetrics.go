@@ -1,4 +1,4 @@
-// This file (opsmetrics.go) is Step 77's ("ops: dashboards, alerts,
+// This file (opsmetrics.go) is §5.3's ("ops: dashboards, alerts,
 // runbooks", §5.3) own instrumentation fix: before this Step, §5.3's own
 // metric list -- "spawn latency, boot phase durations, liveness gaps,
 // watchdog activations (and how many were false alarms -- target: ~0),
@@ -198,7 +198,7 @@ func newOpsMetrics(meter metric.Meter) (opsMetrics, error) {
 
 	rolloutRefused, err := meter.Int64Counter(
 		"session_rollout_refused_total",
-		metric.WithDescription("Count of every session-creation attempt, spawn/restore/resume attempt, or turn dispatch refused by Step 76's cohort-rollout gate (§32) because a named repo was not enrolled (repo_settings.sessions_enabled) -- the SAME instrument httpapi.checkRolloutGate registers (internal/adapters/inbound/httpapi/rolloutgate.go), incremented here too for this package's own two dispatch-time re-checks (refuseIfRolloutUnenrolled, rolloutRefusalForDispatch). Tagged by spawn_source. Only a genuine, DEMONSTRATED policy refusal increments this -- a refusal caused by a transient repo_settings read error never does, mirroring checkRolloutGate's own identical fail-closed-vs-terminal discipline (§32.5)."),
+		metric.WithDescription("Count of every session-creation attempt, spawn/restore/resume attempt, or turn dispatch refused by §10's cohort-rollout gate (§32) because a named repo was not enrolled (repo_settings.sessions_enabled) -- the SAME instrument httpapi.checkRolloutGate registers (internal/adapters/inbound/httpapi/rolloutgate.go), incremented here too for this package's own two dispatch-time re-checks (refuseIfRolloutUnenrolled, rolloutRefusalForDispatch). Tagged by spawn_source. Only a genuine, DEMONSTRATED policy refusal increments this -- a refusal caused by a transient repo_settings read error never does, mirroring checkRolloutGate's own identical fail-closed-vs-terminal discipline (§32.5)."),
 		metric.WithUnit("{refusal}"),
 	)
 	if err != nil {

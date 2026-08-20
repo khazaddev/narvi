@@ -695,7 +695,7 @@ type CloudIdentityBinding struct {
 
 	// The EXACT `sub` claim string (narvi:environment:<environment_id>) a customer
 	// must paste into their cloud-side trust policy for this binding to take effect
-	// -- §27.3a's own gap-4 resolution: the management API surfaces this directly
+	// -- §27.3's own gap-4 resolution: the management API surfaces this directly
 	// rather than making the customer construct the string format themselves.
 	// Non-null only for scope=environment (a single, fixed, well-defined
 	// Environment); null for scope=global, since a global-scope binding's own token
@@ -778,7 +778,7 @@ func (j *CloudIdentityBindingScope) UnmarshalJSON(value []byte) error {
 
 // The EXACT `sub` claim string (narvi:environment:<environment_id>) a customer
 // must paste into their cloud-side trust policy for this binding to take effect --
-// §27.3a's own gap-4 resolution: the management API surfaces this directly
+// §27.3's own gap-4 resolution: the management API surfaces this directly
 // rather than making the customer construct the string format themselves. Non-null
 // only for scope=environment (a single, fixed, well-defined Environment); null for
 // scope=global, since a global-scope binding's own token carries a DIFFERENT sub
@@ -1381,7 +1381,7 @@ func (j *CreateProviderCredentialRequest) UnmarshalJSON(value []byte) error {
 // scope/scopeTarget are never body fields). Gated by
 // authz.ActionManageRepoSecrets/ActionManageEnvSecrets/ActionManageGlobalSecrets
 // respectively -- the SAME 3 already-reserved actions ProviderCredential's own
-// routes use (§27.1: 'Step 53's idioms reused throughout'). A duplicate (scope,
+// routes use (§27.1: '§25.1's idioms reused throughout'). A duplicate (scope,
 // scopeTarget, name) is rejected 409 -- rotate the existing secret via PUT instead
 // of creating a second row for it.
 type CreateSandboxSecretRequest struct {
@@ -1967,7 +1967,7 @@ func (j *CreateTurnResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Step 60 ('decision inbox: read model + API', §16): one decision-inbox row. Only
+// §16 ('decision inbox: read model + API', §16): one decision-inbox row. Only
 // the fields relevant to `kind` are populated -- every OTHER field is present but
 // null, matching this schema's own established nullability convention (this file's
 // own top doc comment: 'nullable means a required key whose value may be JSON
@@ -2361,7 +2361,7 @@ func (j *DecisionInboxItem) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Step 66's own additive extension (§26.1, 'review digest: verdict as merge
+// §26.1's own additive extension (§26.1, 'review digest: verdict as merge
 // readout'): the merge-readout's typed content -- 'what this PR does',
 // architecture choices, and risks to the stack -- that fronts the rendered
 // verdict, ahead of the pre-existing findings/coverage/docs-drift content (now
@@ -2383,7 +2383,7 @@ func (j *DecisionInboxItem) UnmarshalJSON(value []byte) error {
 // application-level enforced rule. proposedBody remains requested but never
 // required, on every path.
 type Digest struct {
-	// Step 67's own addition (§26.2): the tri-state's own required one-line
+	// §26.2's own addition (§26.2): the tri-state's own required one-line
 	// explanation of WHY descriptionAdequacy is what it is -- REQUIRED non-blank,
 	// mirroring summary's own 'a verdict with no human-readable explanation at all
 	// defeats the point' treatment.
@@ -2398,7 +2398,7 @@ type Digest struct {
 	// exact conditional rule this schema alone cannot express.
 	ArchDecisions []ArchDecision `json:"archDecisions,omitempty,omitzero" yaml:"archDecisions,omitempty" mapstructure:"archDecisions,omitempty"`
 
-	// Step 69's own addition (§26.4, 'the deep path: adversarial counter-review'):
+	// §26.4's own addition (§26.4, 'the deep path: adversarial counter-review'):
 	// free-text prose naming where the primary reviewer's own findings/digest and the
 	// counter-reviewer sub-task's own adjudication genuinely disagreed --
 	// 'inter-agent disagreement is precisely the signal that a human must decide'.
@@ -2407,7 +2407,7 @@ type Digest struct {
 	// disagree with anything (§26.9).
 	ContestedPoints DigestContestedPoints `json:"contestedPoints,omitempty,omitzero" yaml:"contestedPoints,omitempty" mapstructure:"contestedPoints,omitempty"`
 
-	// Step 67's own addition (§26.2): the agent's own comparison of THIS SAME
+	// §26.2's own addition (§26.2): the agent's own comparison of THIS SAME
 	// digest's summary (written from the diff) against the pull request's own
 	// title+body -- which stay untrusted input throughout, consumed by this
 	// comparison, never obeyed by it. Matches
@@ -2417,7 +2417,7 @@ type Digest struct {
 	// 'ok'/'drift' impose no floor of their own.
 	DescriptionAdequacy DigestDescriptionAdequacy `json:"descriptionAdequacy" yaml:"descriptionAdequacy" mapstructure:"descriptionAdequacy"`
 
-	// Step 67's own addition (§26.2): the agent's OWN optional rewrite proposal for
+	// §26.2's own addition (§26.2): the agent's OWN optional rewrite proposal for
 	// the pull request's body -- 'the agent MAY rewrite the PR body'. OPTIONAL, not
 	// validation-enforced: most reviews propose no rewrite at all. Rendered as a
 	// suggestion in the digest for every PR regardless of authorship; ALSO delivered
@@ -2446,7 +2446,7 @@ type Digest struct {
 	UnverifiedLimits DigestUnverifiedLimits `json:"unverifiedLimits,omitempty,omitzero" yaml:"unverifiedLimits,omitempty" mapstructure:"unverifiedLimits,omitempty"`
 }
 
-// Step 69's own addition (§26.4, 'the deep path: adversarial counter-review'):
+// §26.4's own addition (§26.4, 'the deep path: adversarial counter-review'):
 // free-text prose naming where the primary reviewer's own findings/digest and the
 // counter-reviewer sub-task's own adjudication genuinely disagreed -- 'inter-agent
 // disagreement is precisely the signal that a human must decide'. OPTIONAL, not
@@ -2487,7 +2487,7 @@ func (j *DigestDescriptionAdequacy) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Step 67's own addition (§26.2): the agent's OWN optional rewrite proposal for
+// §26.2's own addition (§26.2): the agent's OWN optional rewrite proposal for
 // the pull request's body -- 'the agent MAY rewrite the PR body'. OPTIONAL, not
 // validation-enforced: most reviews propose no rewrite at all. Rendered as a
 // suggestion in the digest for every PR regardless of authorship; ALSO delivered
@@ -3392,7 +3392,7 @@ func (j *MintUploadResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Response body for GET /api/models -- Step 59's own 'Catalog' deliverable
+// Response body for GET /api/models -- §8.8's own 'Catalog' deliverable
 // (IMPLEMENTATION_PLAN.md Step 59 row; §8 item 8; §29; §25.2). STRUCTURAL
 // DECISION, named here since §29 leaves it open: sourced from a
 // control-plane-embedded snapshot of OpenCode's own GET /provider catalog
@@ -4084,7 +4084,7 @@ func (j *PostEpistemicOutcomeResponse) UnmarshalJSON(value []byte) error {
 // which this endpoint always recomputes server-side (review.ComputeShippable) and
 // NEVER accepts from a caller -- see that package's own Verdict.Shippable doc
 // comment (verdict.go) for why. factCheck/factCheckKilled and counterReview are
-// Step 69's own additions (§26.4/§26.6, 'review deep path: adversarial
+// §26.4's own additions (§26.4/§26.6, 'review deep path: adversarial
 // counter-review + readout measurement') -- see those two properties' own doc
 // comments below.
 type PostReviewVerdictRequest struct {
@@ -4092,7 +4092,7 @@ type PostReviewVerdictRequest struct {
 	// empty array is legal (the reviewer found no tagged area touched).
 	BlastRadius []PostReviewVerdictRequestBlastRadiusElem `json:"blastRadius" yaml:"blastRadius" mapstructure:"blastRadius"`
 
-	// Step 69's own addition (§26.4, 'the deep path: adversarial counter-review'):
+	// §26.4's own addition (§26.4, 'the deep path: adversarial counter-review'):
 	// whether the primary reviewer's orchestration spawned and adjudicated the
 	// counter-reviewer sub-task (§7.1's engine-native fan-out) before posting this
 	// verdict. One of 'done'/'skipped' when present, matching
@@ -4119,7 +4119,7 @@ type PostReviewVerdictRequest struct {
 	// Matches internal/domain/review.DocsDriftState's own three values exactly.
 	DocsDrift PostReviewVerdictRequestDocsDrift `json:"docsDrift" yaml:"docsDrift" mapstructure:"docsDrift"`
 
-	// Step 69's own addition (§26.6, 'diff-only fact-check pass, both paths'):
+	// §26.4's own addition (§26.6, 'diff-only fact-check pass, both paths'):
 	// whether the primary reviewer's orchestration spawned the diff-only fact-check
 	// sub-task (§7.1's engine-native fan-out, no tool access) before posting this
 	// verdict. Matches internal/domain/reviewpost.FactCheckStatus's own two values
@@ -4131,7 +4131,7 @@ type PostReviewVerdictRequest struct {
 	// below).
 	FactCheck PostReviewVerdictRequestFactCheck `json:"factCheck" yaml:"factCheck" mapstructure:"factCheck"`
 
-	// Step 69's own addition (§26.6): the count of findings the fact-check pass
+	// §26.4's own addition (§26.6): the count of findings the fact-check pass
 	// actually removed as provably wrong from the diff alone. REQUIRED
 	// UNCONDITIONALLY, alongside factCheck above -- MUST be 0 when factCheck is
 	// 'skipped' (a skipped pass, by construction, removed nothing;
@@ -4142,7 +4142,7 @@ type PostReviewVerdictRequest struct {
 	// FilesChanged corresponds to the JSON schema field "filesChanged".
 	FilesChanged int `json:"filesChanged" yaml:"filesChanged" mapstructure:"filesChanged"`
 
-	// Step 48's own additive extension (§8.2/§17/§22.1): zero or more per-finding
+	// §8.2's own additive extension (§8.2/§17/§22.1): zero or more per-finding
 	// typed fields, alongside the verdict's own aggregate fields above. OPTIONAL --
 	// absent/empty means this verdict reports no individual findings, exactly like
 	// every verdict posted before this Step. See
@@ -4214,7 +4214,7 @@ func (j *PostReviewVerdictRequestBlastRadiusElem) UnmarshalJSON(value []byte) er
 	return nil
 }
 
-// Step 69's own addition (§26.4, 'the deep path: adversarial counter-review'):
+// §26.4's own addition (§26.4, 'the deep path: adversarial counter-review'):
 // whether the primary reviewer's orchestration spawned and adjudicated the
 // counter-reviewer sub-task (§7.1's engine-native fan-out) before posting this
 // verdict. One of 'done'/'skipped' when present, matching
@@ -5076,7 +5076,7 @@ func (j *PutClusterBindingRequest) UnmarshalJSON(value []byte) error {
 // scope, maintainer+ -- the §13.3 row that owns environments/env secrets) /
 // authz.ActionManageGlobalSecrets (global scope, admin only -- the §13.3 row that
 // owns integrations/global secrets), reusing the SAME 2 already-reserved actions
-// rather than a new OpenCode-config-specific action (§27.1's 'Step 53's idioms
+// rather than a new OpenCode-config-specific action (§27.1's '§25.1's idioms
 // reused throughout' extended to §27.2).
 type PutOpenCodeConfigRequest struct {
 	// Same validation as OpenCodeConfig.document: must parse as a JSON object;
@@ -5132,8 +5132,8 @@ func (j *RebutFindingRequest) UnmarshalJSON(value []byte) error {
 
 // GET/PUT /api/repos/{owner}/{repo}/settings response body (§8.2/§21.2)
 // -- an admin, per-repo policy-flag row (migrations/000044_repo_settings.up.sql).
-// Deliberately a small, extensible shape: Step 62's auto-merge toggle, Step 65's
-// automatic-re-review opt-in (§24.5), and Step 67's description-autofix toggle
+// Deliberately a small, extensible shape: §21's auto-merge toggle, §24's
+// automatic-re-review opt-in (§24.5), and §26.2's description-autofix toggle
 // (§26.2) each added a further boolean property here, never a bespoke DTO of their
 // own -- future toggles are expected to follow the same pattern.
 type RepoSettings struct {
@@ -6333,7 +6333,7 @@ func (j *Session) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Response body for GET /api/admin/shadow-compare (Step 59's own
+// Response body for GET /api/admin/shadow-compare (§8.8's own
 // 'shadow-comparison tooling for review' deliverable, IMPLEMENTATION_PLAN.md Step
 // 59 row, reusing §9.4/§18.5's shadow-mode discipline: 'the same mechanism is used
 // again for every future model swap'). §29 has no dedicated design subsection for
@@ -6785,7 +6785,7 @@ func (j *UpdateProviderCredentialRequest) UnmarshalJSON(value []byte) error {
 // blockOnHighRisk keeps compiling/working unchanged; PutRepoSettings' own 'always
 // the full desired state' semantics mean an old caller that omits this key simply
 // (re)sets it to its own safe default (false) alongside whatever it DOES specify,
-// never a partial-patch surprise. Step 62's own §21.2 fields
+// never a partial-patch surprise. §21's own §21.2 fields
 // (autoMergeEnabled/maxAutoApproveFilesChanged/sensitiveBlastRadiusTags) are
 // DELIBERATELY NOT on this shared request: this endpoint's own handler requires
 // EVERY permission its fields collectively need (PutRepoSettings' own doc comment,
@@ -7326,7 +7326,7 @@ type WorkflowRun struct {
 	SessionId string `json:"sessionId" yaml:"sessionId" mapstructure:"sessionId"`
 
 	// Matches Postgres workflow_run_status exactly. The owning transition table ships
-	// with Step 55's engine (§11: every state transition through the machine's table)
+	// with §25.6's engine (§11: every state transition through the machine's table)
 	// -- the vocabulary is fixed here so the wire contract never has to change under
 	// it.
 	Status WorkflowRunStatus `json:"status" yaml:"status" mapstructure:"status"`

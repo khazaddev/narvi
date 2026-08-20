@@ -1,4 +1,4 @@
-// This file (opencodeconfig.go) implements Step 72's own ("sandbox
+// This file (opencodeconfig.go) implements §27.1's own ("sandbox
 // secrets & opencode config", §27.2) sandbox-agent-side FETCH + WRITE of
 // OpenCode config documents into OpenCode's own documented config slots.
 //
@@ -6,7 +6,7 @@
 //
 // §27.2's own design claim is that occupying OpenCode's global + custom
 // slots (rather than its project slot) keeps a repo's own committed
-// opencode.json AND Step 48's sentinel-fix capability-restriction write
+// opencode.json AND §8.2's sentinel-fix capability-restriction write
 // (opencode/sentinelfixagent.go, which targets the WORKSPACE opencode.json
 // -- OpenCode's "project" slot) structurally above anything this Step
 // injects. CONFIRMED against OpenCode's own current public documentation

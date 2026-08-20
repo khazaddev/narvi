@@ -216,7 +216,7 @@ const (
 	// ActionToggleSentinelAutoFix's own identical split from this row.
 	ActionConfigureAutoApprove Action = "configure_auto_approve"
 	// ActionTeachFalsePositivePattern covers §22.2's own capture command
-	// (Step 63, "review: learned false-positive patterns"): a maintainer+
+	// (§22, "review: learned false-positive patterns"): a maintainer+
 	// teaches a repo-scoped false-positive pattern via an explicit
 	// `false positive: <reason>` PR-thread command
 	// (internal/domain/falsepositive.Match), dispatched BEFORE the
@@ -285,7 +285,7 @@ const (
 	// ActionManageGlobalSecrets covers org-wide (non-repo/env-scoped)
 	// secret management.
 	ActionManageGlobalSecrets Action = "manage_global_secrets"
-	// ActionManageCloudIdentityKeys covers Step 73a's own ("cloud
+	// ActionManageCloudIdentityKeys covers §27.3's own ("cloud
 	// identity: OIDC issuer, bindings, minting", §27.3) admin-triggered
 	// OIDC signing-key rotation (POST /api/cloud-identity/signing-keys/
 	// rotate) -- admin only, in THIS row, deliberately NOT the same row
@@ -365,12 +365,12 @@ const (
 	// actions are. Unlike ActionToggleAutoMerge, arming this toggle alone
 	// never merges or approves anything by itself (§24.5: "this
 	// automation never auto-approves anything on its own") -- it only
-	// ever enqueues an ordinary review turn through Step 46's existing
+	// ever enqueues an ordinary review turn through §8.2's existing
 	// dispatch, but the "changes what runs unattended" reasoning for
 	// admin-only placement applies identically regardless of that
 	// downstream distinction.
 	ActionToggleAutoRetriggerReview Action = "toggle_auto_retrigger_review"
-	// ActionToggleDescriptionAutofix covers Step 67's own per-repo opt-in
+	// ActionToggleDescriptionAutofix covers §26.2's own per-repo opt-in
 	// (§26.2, "review digest: description adequacy + graduated
 	// remediation") for automatically rewriting a Narvi-authored PR's own
 	// body when the reviewing agent's description-adequacy check finds it
@@ -397,7 +397,7 @@ const (
 	// human PRs only ever get a rendered suggestion, never a write) --
 	// this action governs ONLY the Narvi-authored, unattended-write path.
 	ActionToggleDescriptionAutofix Action = "toggle_description_autofix"
-	// ActionConfigureReviewDepth covers Step 68's own per-repo reviewDepth
+	// ActionConfigureReviewDepth covers §26.3's own per-repo reviewDepth
 	// config (§26.3: "reviewDepth: {mode: auto|always_light|always_deep,
 	// deepPaths: [...]}", repo_settings.review_depth_mode/
 	// review_depth_deep_paths, migrations/
@@ -421,7 +421,7 @@ const (
 	// comment on that action) -- "changes unattended behavior" is the
 	// admin-only trigger here, not "necessarily makes things riskier".
 	ActionConfigureReviewDepth Action = "configure_review_depth"
-	// ActionConfigureReviewCostBudget covers Step 69's own per-repo
+	// ActionConfigureReviewCostBudget covers §26.4's own per-repo
 	// reviewCostBudget config (§26.7: "reviewCostBudget: {light: <usd>,
 	// deep: <usd>} joins §26.3's reviewDepth config on the SAME per-repo
 	// settings row", repo_settings.review_cost_budget_light_usd/

@@ -1,5 +1,5 @@
 // This file (verdictpost.go) extends Adapter with the two real GitHub
-// REST capabilities Step 47's ("server-side verdict", §8.2) verdict-
+// REST capabilities §8.2's ("server-side verdict", §8.2) verdict-
 // posting tool needs beyond what this package already had (PostIssueComment,
 // adapter.go): submitting a FORMAL pull request review (the "formal-review
 // gate", §8.2's own "submitting an actual GitHub PR review rather

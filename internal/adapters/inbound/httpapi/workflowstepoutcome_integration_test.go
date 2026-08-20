@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 55's ("workflow execution engine", §25.6) own
+// Integration tests for §25.6's ("workflow execution engine", §25.6) own
 // generic step-outcome-posting tool (workflowstepoutcome.go), against a
 // real Postgres instance -- sharing this package's own testRig
 // (httpapi_integration_test.go), mirroring reviewverdict_integration_test.go's

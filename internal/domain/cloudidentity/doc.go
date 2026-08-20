@@ -1,4 +1,4 @@
-// Package cloudidentity implements the pure vocabulary around Step 73a's
+// Package cloudidentity implements the pure vocabulary around §27.3's
 // own ("cloud identity: OIDC issuer, bindings, minting", §27.3)
 // cloud_identity_bindings table and the claims a minted token carries: the
 // 4 recognized Kind values, the 2 recognized binding Scope values (a

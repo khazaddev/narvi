@@ -1,4 +1,4 @@
-// This file (childsession.go) implements Step 48's own ("sentinels +
+// This file (childsession.go) implements §8.2's own ("sentinels +
 // suggestions", §17.2) "child session" mechanism -- the plan text at
 // §14.4/§17.2 describes this as an "existing mechanism", but it is not:
 // this Step is the first one that actually builds it (see this Step's own

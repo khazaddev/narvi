@@ -104,7 +104,7 @@ func newTestRig(t *testing.T, mutate ...func(*githubingress.Config)) testRig {
 		Environments: narvipg.NewEnvironmentStore(pool),
 		Registry:     registry,
 		AuditLog:     narvipg.NewAuditLogStore(pool),
-		// Plans (Step 37/38 follow-up fix, Finding 1): wired unconditionally
+		// Plans (a follow-up fix, Finding 1): wired unconditionally
 		// for every test in this file, mirroring cmd/control-plane/main.go's
 		// own production wiring -- harmless for every EXISTING test here
 		// (none of them ever seed a plan row, so ListSummariesForSession
@@ -365,7 +365,7 @@ func (f *fakeReviewContextFetcher) GetPullRequestDiff(context.Context, string, s
 }
 
 // TestGitHubIntegration_ConcurrentMentionAndLabelRetriggerCoalesceToOneSession
-// is Step 46's ("review sessions", §8.2) own headline concurrency proof for
+// is §8.2's ("review sessions", §8.2) own headline concurrency proof for
 // the NEW label-retrigger lane: N concurrent triggers on the SAME brand-new
 // PR, split evenly between the EXISTING @mention (comment) trigger and the
 // NEW label-retrigger trigger, must still coalesce onto exactly ONE
@@ -652,7 +652,7 @@ func TestGitHubIntegration_SecondMention_NeverGetsEpistemicPreamble(t *testing.T
 }
 
 // TestGitHubIntegration_InlineDiffAndStackPreFetched_FoldedIntoTurnPrompt
-// is Step 46's ("review sessions", §8.2/§17.6) own end-to-end proof that
+// is §8.2's ("review sessions", §8.2/§17.6) own end-to-end proof that
 // the pre-fetched diff AND GitHub-native stack context are actually folded
 // into the resulting turn's own persisted prompt -- via the real handler
 // and real Postgres, not just internal/domain/review's own unit-tested
@@ -1080,7 +1080,7 @@ func TestGitHubIntegration_IssueCommentGetPullRequestFailureFallsBack(t *testing
 }
 
 // TestGitHubIntegration_AwaitingPlanBlocksReuseTurn_HonestReplyNoRelease is
-// Finding 1's own end-to-end regression test (Step 37/38 follow-up fix): a
+// Finding 1's own end-to-end regression test (a follow-up fix): a
 // second mention landing on a PR whose review session already has a plan
 // in StatusAwaitingApproval hits the SAME awaiting-plan gate Slack/Linear
 // ingress hit (httpapi/turn.go's createTurnLocked, reached here via

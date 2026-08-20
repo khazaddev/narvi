@@ -32,7 +32,7 @@ func NewSandboxSecretStore(pool *pgxpool.Pool) *SandboxSecretStore {
 // the pool this store was built with -- mirrors every other store's own
 // identical WithTx convention (EnvironmentStore, RepoSettingsStore,
 // AutomationStore, UserStore, IdentityStore, AuditLogStore). No existing
-// caller needed this before Step 75 ("config/data seeding", §13.4):
+// caller needed this before §10 ("config/data seeding", §13.4):
 // internal/adapters/inbound/httpapi/sandboxsecrets.go's own
 // createSandboxSecret writes a row with no accompanying audit-log entry
 // in the same transaction (see that file's own top doc comment -- it has

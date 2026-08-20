@@ -13,7 +13,7 @@ import (
 
 // WorkflowStore is a thin, pass-through wrapper around the sqlc-generated
 // workflow_* queries ("workflow execution engine", §25.6/§25.7/
-// §25.8) -- the first real reader/writer of Step 54's own dark schema
+// §25.8) -- the first real reader/writer of §25.4's own dark schema
 // (migrations/000057_workflows.up.sql). No caching, no retries, no
 // business rules: definition/binding resolution, run/step-run lifecycle
 // decisions, and every workflow.NextStep consultation live in
@@ -152,7 +152,7 @@ func (s *WorkflowStore) AttachTurn(ctx context.Context, stepRunID, turnID pgtype
 }
 
 // MarkAwaitingDecision transitions stepRunID to 'awaiting_decision'
-// (§25.9's HITL gate -- the actual decision mechanics are Step 56's own
+// (§25.9's HITL gate -- the actual decision mechanics are §25.9's own
 // job, but a HITLAfter-gated step's own attempt must still land here, not
 // 'completed', once its turn finishes) -- outcomeStatus is recorded via
 // COALESCE so an outcome ALREADY posted via the step-outcome tool during
@@ -188,13 +188,13 @@ func (s *WorkflowStore) CompleteRun(ctx context.Context, runID pgtype.UUID) (sql
 // EscalateRun transitions runID to 'needs_review' -- workflow.NextEscalate's
 // own consequence (§25.4/§25.9): non-terminal (finished_at stays NULL),
 // parked for a human decision. Posting an actual notice about this
-// escalation is Step 56's own job (§25.9: "one notice, never repeated");
+// escalation is §25.9's own job (§25.9: "one notice, never repeated");
 // this method only ever flips the status column.
 func (s *WorkflowStore) EscalateRun(ctx context.Context, runID pgtype.UUID) (sqlcgen.WorkflowRun, error) {
 	return s.q.EscalateWorkflowRun(ctx, runID)
 }
 
-// FailRun transitions runID to 'failed' and stamps finished_at -- Step 56's
+// FailRun transitions runID to 'failed' and stamps finished_at -- §25.9's
 // own ("workflow HITL gate + circuit breaker", §25.9) consequence of a
 // winning HITL reject verdict: mirrors CompleteRun's own shape exactly,
 // landing on 'failed' instead of 'completed' (a human's reject IS the run's
@@ -223,7 +223,7 @@ func (s *WorkflowStore) SetStepRunOutcome(ctx context.Context, stepRunID pgtype.
 	})
 }
 
-// GetStepRun fetches one workflow_step_runs row by id -- Step 56's own
+// GetStepRun fetches one workflow_step_runs row by id -- §25.9's own
 // ("workflow HITL gate + circuit breaker", §25.9) decide endpoint's first
 // read (mirrors PlanStore.Get's identical role in decideplan.go): resolves
 // the target attempt the caller named (POST /api/workflow-runs/:runId/

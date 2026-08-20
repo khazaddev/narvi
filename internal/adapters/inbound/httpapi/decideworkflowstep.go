@@ -1,4 +1,4 @@
-// This file (decideworkflowstep.go) implements Step 56's ("workflow HITL
+// This file (decideworkflowstep.go) implements §25.9's ("workflow HITL
 // gate + circuit breaker", §25.9/§25.10/§25.11) own decide endpoint: POST
 // /api/workflow-runs/:runId/steps/:stepRunId/decide -- the SAME shape
 // discipline as decideplan.go's approve/reject (contracts/rest/v1/

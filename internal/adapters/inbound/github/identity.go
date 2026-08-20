@@ -1,6 +1,6 @@
 // This file (identity.go) closes the H4 audit finding this batch
 // (fix/audit-github-actor-rbac) fixes: GitHub ingress was the only ingress
-// surface Step 39's ("identities + full RBAC", §13.2/§13.3) own RBAC work
+// surface §13.2's ("identities + full RBAC", §13.2/§13.3) own RBAC work
 // never gated -- it did zero actor resolution and never called domain/
 // authz.Authorize before creating sessions/turns, even though Slack and
 // Linear ingress already enforce exactly that (internal/adapters/inbound/

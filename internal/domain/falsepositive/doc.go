@@ -1,4 +1,4 @@
-// Package falsepositive implements Step 63's own §22.2-§22.4 pure domain
+// Package falsepositive implements §22's own §22.2-§22.4 pure domain
 // logic (docs/TECHNICAL_PLAN.md §22): the deterministic `false positive:
 // <reason>` PR-thread command a maintainer+ uses to teach a repo-scoped
 // false-positive pattern (§22.2), and the advisory content block that

@@ -73,7 +73,7 @@ func EnvVarNames(p Provider) []string {
 // AllEnvVarNames returns the UNION of every recognized Provider's own
 // EnvVarNames, across AllProviders, in AllProviders' own declaration
 // order (google's 3 names, then anthropic's 1, then openai's 1) --
-// exported specifically for Step 72's own sandbox_secrets name-validation
+// exported specifically for §27.1's own sandbox_secrets name-validation
 // rule (§27.1: "the exact names providercredential.EnvVarNames covers...
 // rejected too, so every env-var name has exactly one owning mechanism").
 // A caller validating a NEW env-var-shaped name (internal/domain/

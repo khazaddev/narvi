@@ -1,4 +1,4 @@
-// This file (notify.go) implements Step 56's ("workflow HITL gate +
+// This file (notify.go) implements §25.9's ("workflow HITL gate +
 // circuit breaker", §25.9) own notification delivery: enqueueWorkflowNotice
 // posts ONE already-rendered, human-readable notice to whichever channel
 // sessionRow's own spawn_source resolves to -- reused for BOTH §25.9

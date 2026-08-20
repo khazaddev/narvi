@@ -1,9 +1,9 @@
-// This file (handoffsentinel.go) implements Step 49's own ("handoff-
+// This file (handoffsentinel.go) implements §14.4's own ("handoff-
 // readiness sentinel", §14.4/§14.5) app-layer orchestration: given a PR
 // createPRBestEffort (pushpr.go) just successfully created, decide whether
 // this session's provenance_tag marks it as coming from a scoped
 // Environment (§14.1) and, if so, whether there is anything worth telling
-// an engineer about -- reusing Step 27's already-merged contract-drift
+// an engineer about -- reusing §14.3's already-merged contract-drift
 // signal (internal/domain/contractdrift.HasDrifted, never a second
 // endpoint scanner) and this Step's own new backend-TODO diff scan
 // (internal/domain/handoff.ScanTODOs).
@@ -31,7 +31,7 @@
 // never builds a review.Verdict, and never writes review_findings.
 // §14.4's own text is explicit that this sentinel runs "alongside or
 // INSTEAD OF a normal risk verdict" -- a scoped-session PR is not
-// necessarily (and today, is never) also a review session (Step 46's
+// necessarily (and today, is never) also a review session (§8.2's
 // mention-triggered claim is a completely separate, independent trigger).
 // Piping handoff findings through the verdict-posting tool would also
 // require a SentinelKind value for them (reviewpost.Finding's own

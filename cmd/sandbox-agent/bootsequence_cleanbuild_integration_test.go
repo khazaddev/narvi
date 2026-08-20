@@ -1,6 +1,6 @@
 //go:build integration
 
-// Adversarial-review test, added to independently verify Step 29's
+// Adversarial-review test, added to independently verify §3.4's
 // ("gitstate in-sandbox", §3.4) own claim that runBootSequence's
 // BootModeBuild-only clean-tree-before-snapshot step (main.go, guarded by
 // "if cfg.BootMode == sandboxboot.BootModeBuild") actually runs as part of

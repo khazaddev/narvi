@@ -1,5 +1,5 @@
 // Package identitylink is the inbound HTTP adapter backing §13.2 step 4's
-// own magic link ("connect your account") -- Step 39's ("identities +
+// own magic link ("connect your account") -- §13.2's ("identities +
 // full RBAC") second half. One route, mounted OUTSIDE auth.Middleware
 // entirely (cmd/control-plane/main.go):
 //

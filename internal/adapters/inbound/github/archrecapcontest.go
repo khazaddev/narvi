@@ -1,4 +1,4 @@
-// This file implements Step 69's own §26.5 capture command: an explicit
+// This file implements §26.4's own §26.5 capture command: an explicit
 // `arch recap wrong: <reason>` PR-thread comment contests the deep path's
 // own architecture-recap digest section. Handled DISPATCH-BEFORE-ROUTER,
 // exactly mirroring falsepositivecapture.go's own identical `false

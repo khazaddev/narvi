@@ -33,7 +33,7 @@
 //
 //   - A stale-epoch takeover rolled back the ONLY write that would have
 //     recorded a just-created/just-resumed provider object (see
-//     app/sessionactor/dispatch.go's own "Step 25's reconciler" comments,
+//     app/sessionactor/dispatch.go's own "§5.3's reconciler" comments,
 //     and §9.3 scenario 5: "two concurrent spawns ... loser sandbox
 //     reaped by GC") -- Postgres has zero trace of that attempt, so there
 //     is no row to correct, only a live cloud resource with no Postgres

@@ -257,7 +257,7 @@ const (
 // imports) runs at TURN-CREATION time, in the control plane, before any
 // sandbox even exists for a brand-new review session, and before ANY
 // respawn (a NEW gen, and per §5.2 a NEW rotated token) of an EXISTING
-// one -- Step 46's own per-PR session-reuse means the SAME persisted turn
+// one -- §8.2's own per-PR session-reuse means the SAME persisted turn
 // text built here can later be dispatched to any number of different
 // gens, each with its own distinct token, over that session's lifetime.
 // There is therefore no live secret this package could ever legitimately
@@ -560,7 +560,7 @@ func verdictToolInstructions(deep bool, costBudgetUSD float64, costBudgetSafetyM
 		"A 201 response confirms the verdict was recorded and posted; the server -- never you -- computes the authoritative shippable classification, the formal GitHub review event, the synced review:*-risk label, and (when \"findings\" names a sentinelKind and this repo's own sentinel-auto-fix toggle is on) whether an automated fix session is triggered, from these fields."
 }
 
-// subAgentOrchestrationInstructions is Step 69's own addition (§26.4/
+// subAgentOrchestrationInstructions is §26.4's own addition (§26.4/
 // §26.6/§26.7): the primary reviewer's own orchestration guidance for the
 // engine-native sub-task fan-out (§7.1, already shipped Step 17) --
 // spawned via OpenCode's own "task" tool (VERIFIED LIVE input shape:

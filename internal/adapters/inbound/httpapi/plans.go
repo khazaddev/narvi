@@ -1,6 +1,6 @@
 // This file (plans.go) implements the audit-fix batch's own completeness
 // fix (M3): GET /api/sessions/:id/plans -- the endpoint that closes the gap
-// Step 37 ("plan mode, web", §8.1/§12.2 item 3) left open by shipping plan
+// §8.1 ("plan mode, web", §8.1/§12.2 item 3) left open by shipping plan
 // mode write-only (approve/reject, planapprove.go) with no way for a web
 // client to ever discover a planId to approve in the first place.
 //

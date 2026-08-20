@@ -127,7 +127,7 @@ type ListReviewFindingStatusesInWindowParams struct {
 	Limit        int32              `json:"limit"`
 }
 
-// Step 62's own "Review finding outcomes" analytics KPI (§21.1/§12.2
+// §21's own "Review finding outcomes" analytics KPI (§21.1/§12.2
 // item 6) -- every finding FIRST seen for repoFullName after sinceTime,
 // bounded by limit (§21.1's own "bounded from day one" discipline). Only
 // the status column is selected: internal/domain/reviewverdict.

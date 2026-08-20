@@ -17,7 +17,7 @@ import (
 // defensively even though nothing populates participants yet, see
 // ParticipantStore's own doc comment) and then renders the REAL §13.3
 // verdict via domain/authz.Authorize(authz.ActionApprovePlan, ...) -- this
-// function is no longer its own bespoke rule set (Step 37's own stopgap,
+// function is no longer its own bespoke rule set (§8.1's own stopgap,
 // see git history for that version): it is now a thin adapter translating
 // this package's own (sessionRow, actorUserID, actorRole string) shape
 // into authz.Actor/authz.Resource and back into the (bool, error) shape

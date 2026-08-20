@@ -1,6 +1,6 @@
 package reviewtriage
 
-// EffortHigh is the fixed reasoning-effort variant string Step 68's own
+// EffortHigh is the fixed reasoning-effort variant string §26.3's own
 // deep path forces (§26.3: "deep = frontier tier + high effort") --
 // mirrors sandboxws.Prompt.Effort's own already-shipped, free-form
 // per-model "variant" string (§29.8: "valid values owned per-
@@ -19,7 +19,7 @@ const EffortHigh = "high"
 // ITSELF is a separate claim -- §26.3 is explicit that no such mechanism
 // predates this Step at all (§8 item 2 names it only as a feature-set
 // line, never a built one, before now) -- Step 68 is what introduces it,
-// as an optional operator override layered on top of Step 59's own
+// as an optional operator override layered on top of §8.8's own
 // pre-existing threading. Both return values
 // are nil for anything other than DepthDeep -- the light path leaves
 // BOTH completely unset, preserving §26.9's own invariant to the letter:

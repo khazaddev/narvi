@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// This file (params.go) is Step 73b's own ("cloud identity: sandbox-side
+// This file (params.go) is §27.4's own ("cloud identity: sandbox-side
 // consumption + kubeconfig injection", §27.3) typed vocabulary for a
 // cloud_identity_bindings row's own per-Kind params shape -- §27.3's own
 // migration comment (000093_cloud_identity_bindings.up.sql) names each

@@ -1,4 +1,4 @@
-// This file implements Step 63's own §22.4 lifecycle surface (audit view
+// This file implements §22's own §22.4 lifecycle surface (audit view
 // + retire) for review_false_positive_patterns -- shipped in the SAME
 // Step as the capture command (§22.2, internal/adapters/inbound/github's
 // own dispatch-before-router handler), never a deferred follow-up: "a

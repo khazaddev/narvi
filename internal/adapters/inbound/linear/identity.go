@@ -1,4 +1,4 @@
-// This file (identity.go) implements Step 39's ("identities + full RBAC",
+// This file (identity.go) implements §13.2's ("identities + full RBAC",
 // §13.2) own auto-linking wiring for Linear ingress: replacing this
 // package's PREVIOUS unconditional bot-attribution (an always-invalid
 // decidedBy/creator pgtype.UUID, every prior Step's own explicit

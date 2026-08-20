@@ -153,7 +153,7 @@ type Builder struct {
 // provider (the real ports.SandboxProvider whose BuildImage this builder
 // drives), timeouts (for ImageBuildPumpInterval/ImageRefreshCheckInterval/
 // backoff config, consulted by Run/PumpOnce/RefreshOnce), sourceControl
-// (Step 42's own claim-time/freshness-pump SHA resolution, §19.2 -- may be
+// (§19.2's own claim-time/freshness-pump SHA resolution, §19.2 -- may be
 // nil), gitHubImageBuildToken (the new platform-level credential,
 // platform.Config.GitHubImageBuildToken -- may be empty), and
 // cacheVersionStore (Step 43(c)'s own immutable-cache-version bookkeeping,
@@ -466,7 +466,7 @@ func (b *Builder) claimBatch(ctx context.Context) ([]sqlcgen.ImageBuild, error) 
 // outcome-record call) is logged and returns -- it never propagates, so
 // one row's problem can never abort the rest of PumpOnce's own batch.
 //
-// # Step 42's own claim-time SHA resolution (§19.1/§19.2/§19.9)
+// # §19.2's own claim-time SHA resolution (§19.1/§19.2/§19.9)
 //
 // row.RepoUrls (§19.1's redefined image_builds column) carries the
 // fingerprint's own URL-keyed inputs (repo name -> normalized clone URL),

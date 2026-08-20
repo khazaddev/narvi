@@ -1,6 +1,6 @@
 package turn
 
-// This file implements Step 61's ("domain/turn: builder epistemic
+// This file implements §20's ("domain/turn: builder epistemic
 // pre-action check", §20) own devil's-advocate preamble and the config
 // threading that decides whether a given build turn gets one.
 //

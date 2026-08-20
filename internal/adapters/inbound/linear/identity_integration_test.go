@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests proving Step 39's ("identities + full RBAC", §13.2)
+// Integration tests proving §13.2's ("identities + full RBAC", §13.2)
 // own auto-linking wiring actually fires from a REAL POST /webhooks/linear
 // request -- mirrors webhook_integration_test.go's own conventions
 // exactly (testcontainers Postgres, a real linear.NewWebhookHandler,

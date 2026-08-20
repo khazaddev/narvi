@@ -12,7 +12,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/ports"
 )
 
-// Step 48 ("sentinels + suggestions", §12.2 item 2, §17.2/§17.6): GetFileContent/
+// §8.2 ("sentinels + suggestions", §12.2 item 2, §17.2/§17.6): GetFileContent/
 // UpdateFileContent (apply-suggestion) and RegisterPRStack (sentinel-auto-fix
 // stack registration) against a fake httptest server, mirroring this
 // package's own established real-request/fake-server test convention

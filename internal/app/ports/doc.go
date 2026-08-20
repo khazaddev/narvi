@@ -42,7 +42,7 @@
 // internal/adapters/outbound/gitlabapi remains an untouched stub for a
 // future Step).
 //
-// Notifier (notifier.go) is the FIFTH port, added at Step 35 ("outbox
+// Notifier (notifier.go) is the FIFTH port, added at §5.1 ("outbox
 // delivery", §5.1/§5.4): a single Deliver(ctx, Notification) method,
 // implemented by THREE real adapters (internal/adapters/outbound/
 // slackapi, linearapi, githubapi) -- see notifier.go's own doc comment for
@@ -64,7 +64,7 @@
 // implements against LLM.
 //
 // BlobStore (blobstore.go, blobstoreerror.go) is the EIGHTH port, added at
-// Step 58 ("uploads, blob storage & the in-sandbox download_file tool",
+// §8.6 ("uploads, blob storage & the in-sandbox download_file tool",
 // §28): PresignPut/PresignGet/Stat/Delete against S3-compatible object
 // storage, implemented by internal/adapters/outbound/objstore. Mirrors
 // SandboxProvider/ProviderError's own "complete interface + typed

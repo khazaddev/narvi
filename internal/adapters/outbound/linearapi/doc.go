@@ -1,7 +1,7 @@
 // Package linearapi holds direct, narrow calls against Linear's real
 // public API (https://api.linear.app) -- Linear's own OAuth2 token
 // endpoint (oauth.go) and its GraphQL API (graphql.go), both verified
-// live against Linear's current developer documentation during Step 34's
+// live against Linear's current developer documentation during §8.10's
 // ("Linear ingress", §8.10) own investigation.
 //
 // Scope note (Step 34): this package deliberately does NOT implement the

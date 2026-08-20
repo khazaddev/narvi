@@ -346,7 +346,7 @@ type ListProviderCredentialsForResolutionParams struct {
 // and runs internal/domain/providercredential.Resolve over each group.
 //
 // The trailing AND (kind <> 'oauth' OR oauth_needs_relink = false) is
-// Step 59's own addition (§29.5: "a terminal refresh failure ... the row
+// §8.8's own addition (§29.5: "a terminal refresh failure ... the row
 // stops being served"): a needs-relink oauth row is excluded from the
 // candidate set entirely, so Resolve simply never sees it -- exactly as
 // if no credential were configured for that provider at that scope,
@@ -501,7 +501,7 @@ type UpsertOAuthProviderCredentialParams struct {
 	OauthExpiresAt pgtype.Timestamptz         `json:"oauth_expires_at"`
 }
 
-// Step 59's own ChatGPT-account-OAuth link/relink flow (§29.3/§29.4),
+// §8.8's own ChatGPT-account-OAuth link/relink flow (§29.3/§29.4),
 // internal/app/chatgptlink. Always scope='user', kind='oauth' -- the ONLY
 // creating path for either value (§29.4: "v1 creates user-scope rows ONLY
 // via the link flow"). The ON CONFLICT arbiter matches provider_

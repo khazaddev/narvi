@@ -1,4 +1,4 @@
-// This file (sandboxsecretsdelivery.go) implements Step 72's own
+// This file (sandboxsecretsdelivery.go) implements §27.1's own
 // ("sandbox secrets & opencode config", §27.1) CP-side DELIVERY endpoint
 // for sandbox-agent: POST /sessions/{sessionID}/sandbox-secrets (note: no
 // /api prefix, exactly like scm-credentials/provider-credentials/

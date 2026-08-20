@@ -201,7 +201,7 @@ func (e *InvalidHMACSecretError) Error() string {
 }
 
 // gitHubClientIDEnvVarName, gitHubClientSecretEnvVarName, and
-// publicBaseURLEnvVarName are the env vars Load reads for Step 20's
+// publicBaseURLEnvVarName are the env vars Load reads for §13.1's
 // ("auth v1", §13.1) GitHub OAuth wiring. All three are required in every
 // stage — never defaulted, matching the 3 HMAC secrets' own "never a
 // baked-in default" convention.
@@ -212,7 +212,7 @@ const (
 )
 
 // gitHubWebhookSecretEnvVarName and gitHubBotHandleEnvVarName configure
-// Step 32's ("GitHub ingress", §8.2) own webhook adapter --
+// §8.2's ("GitHub ingress", §8.2) own webhook adapter --
 // internal/adapters/inbound/github. gitHubWebhookSecretEnvVarName is
 // DELIBERATELY DISTINCT from hmacWebhookSecretEnvVarName above: that
 // secret backs Narvi's OWN internal bearer HMAC scheme (a later, unrelated
@@ -234,7 +234,7 @@ const (
 	gitHubBotHandleEnvVarName     = "NARVI_GITHUB_BOT_HANDLE"
 )
 
-// gitHubBotTokenEnvVarName configures Step 35's ("outbox delivery", §5.1)
+// gitHubBotTokenEnvVarName configures §5.1's ("outbox delivery", §5.1)
 // own GitHub Notifier adapter (internal/adapters/outbound/githubapi's new
 // issue-comment-posting method) -- read from NARVI_GITHUB_BOT_TOKEN.
 // Required in every stage -- never defaulted, matching every other secret
@@ -263,7 +263,7 @@ const (
 // per-commenter OAuth token either).
 const gitHubBotTokenEnvVarName = "NARVI_GITHUB_BOT_TOKEN"
 
-// gitHubImageBuildTokenEnvVarName configures Step 42's ("warm boot:
+// gitHubImageBuildTokenEnvVarName configures §19.2's ("warm boot:
 // refresh pump + hook policy", §19.2) own platform-level GitHub
 // credential, read from NARVI_GITHUB_IMAGE_BUILD_TOKEN. §19.2's own
 // words: "the freshness pump needs GitHub credentials belonging to no
@@ -322,7 +322,7 @@ const gitHubImageBuildTokenEnvVarName = "NARVI_GITHUB_IMAGE_BUILD_TOKEN"
 // silently-ignored env var precisely so this codebase never carries two
 // rotation mechanisms side by side, one live and one vestigial.
 
-// reviewModelDeepEnvVarName configures Step 68's ("review triage:
+// reviewModelDeepEnvVarName configures §26.3's ("review triage:
 // deterministic light/deep routing", §26.3) own deep-path model override,
 // read from NARVI_REVIEW_MODEL_DEEP. §26.3 states "depth drives model/
 // effort ... deep = frontier tier + high effort", but this codebase has
@@ -342,7 +342,7 @@ const gitHubImageBuildTokenEnvVarName = "NARVI_GITHUB_IMAGE_BUILD_TOKEN"
 // required configuration.
 const reviewModelDeepEnvVarName = "NARVI_REVIEW_MODEL_DEEP"
 
-// gitHubReReviewLabelEnvVarName configures Step 46's ("review sessions",
+// gitHubReReviewLabelEnvVarName configures §8.2's ("review sessions",
 // §8.2) own manual re-trigger-via-label lane (internal/adapters/inbound/
 // github's new pull_request/"labeled" handling): the exact label NAME a
 // maintainer applies to a PR to manually re-trigger its review session,
@@ -357,7 +357,7 @@ const reviewModelDeepEnvVarName = "NARVI_REVIEW_MODEL_DEEP"
 // "optional: an unset/empty value defaults" precedent rather than the
 // three GitHub secrets/identity fields' own "never defaulted" one.
 //
-// Deliberately NOT reusing the `review:*` label PREFIX Step 47's own
+// Deliberately NOT reusing the `review:*` label PREFIX §8.2's own
 // verdict-posting tool will later write (`review: needs-human`, §21.2) --
 // this is a HUMAN-issued COMMAND label (§5.1's own distinction: "a human
 // applying a label ... is a legitimate, deliberate command"), never a
@@ -378,7 +378,7 @@ const gitHubReReviewLabelEnvVarName = "NARVI_GITHUB_REREVIEW_LABEL"
 const defaultGitHubReReviewLabel = "run-review"
 
 // gitHubReleaseLabelEnvVarName and gitHubReleaseBranchPatternEnvVarName
-// configure Step 50's own ("release PR review", §15.1) deterministic
+// configure §15's own ("release PR review", §15.1) deterministic
 // release-PR detection rule: "a PR is treated as a release review when
 // it matches a configurable pattern: originates from/targets a
 // release/* branch, or carries a release label." Both DELIBERATELY
@@ -498,7 +498,7 @@ const (
 // error rather than silently vanishing.
 const rwxAccessTokenEnvVarName = "NARVI_RWX_ACCESS_TOKEN"
 
-// openCodeRuntimeVersionEnvVarName is the env var Load reads for Step 26's
+// openCodeRuntimeVersionEnvVarName is the env var Load reads for §8.5's
 // ("image builds", §8.5-note/§10-P2) own RuntimeVersion fingerprint input
 // (domain/imagebuild.Fingerprint's third argument) -- the pinned OpenCode
 // version this control plane assumes every base/prebuilt sandbox image
@@ -610,7 +610,7 @@ const (
 )
 
 // anthropicAPIKeyEnvVarName and intentClassifierModelEnvVarName configure
-// Step 36's ("intent classifier", §8.3/§18) real Anthropic adapter
+// §8.3's ("intent classifier", §8.3/§18) real Anthropic adapter
 // (internal/adapters/outbound/llm), read from NARVI_ANTHROPIC_API_KEY /
 // NARVI_INTENT_CLASSIFIER_MODEL. Both required in every stage -- never
 // defaulted, matching every other secret/required-choice this file
@@ -685,7 +685,7 @@ func (e *InvalidCloudIdentityIssuerURLError) Error() string {
 // objectStoreEndpointEnvVarName, objectStorePublicEndpointEnvVarName,
 // objectStoreRegionEnvVarName, objectStoreBucketEnvVarName,
 // objectStoreAccessKeyIDEnvVarName, objectStoreSecretAccessKeyEnvVarName,
-// and objectStoreUsePathStyleEnvVarName configure Step 58's ("uploads,
+// and objectStoreUsePathStyleEnvVarName configure §8.6's ("uploads,
 // blob storage & the in-sandbox download_file tool", §28.7) object-storage
 // block: "The root storage credential exists in exactly one place:
 // platform.Config ... endpoint, region, bucket, access key/secret (or
@@ -807,7 +807,7 @@ func (e *InvalidObjectStoreMaxBytesError) Error() string {
 // sign-in defaults to role "member".
 const initialAdminEmailsEnvVarName = "NARVI_INITIAL_ADMIN_EMAILS"
 
-// epistemicCheckDefaultEnvVarName configures Step 61's ("builder
+// epistemicCheckDefaultEnvVarName configures §20's ("builder
 // epistemic pre-action check", §20.4) own platform-wide default for the
 // devil's-advocate pre-action check on build turns, read from
 // NARVI_EPISTEMIC_CHECK_DEFAULT. Optional, default false (§20.4: "Off by
@@ -857,7 +857,7 @@ const (
 	RolloutModeCohort = rollout.ModeCohort
 )
 
-// rolloutModeEnvVarName configures Step 76's ("feature-flagged cohort
+// rolloutModeEnvVarName configures §10's ("feature-flagged cohort
 // rollout of sessions, with documented rollback", §10 Phase 6, §32) own
 // master switch, read from NARVI_ROLLOUT_MODE. Optional -- unlike
 // NARVI_STAGE (required, no default: envVarName's own doc comment), an
@@ -1016,7 +1016,7 @@ type Config struct {
 	GitHubClientID     string
 	GitHubClientSecret string
 
-	// GitHubWebhookSecret and GitHubBotHandle configure Step 32's
+	// GitHubWebhookSecret and GitHubBotHandle configure §8.2's
 	// ("GitHub ingress", §8.2) webhook adapter, read from
 	// NARVI_GITHUB_WEBHOOK_SECRET / NARVI_GITHUB_BOT_HANDLE. Both required
 	// in every stage -- never defaulted. See gitHubWebhookSecretEnvVarName's
@@ -1025,7 +1025,7 @@ type Config struct {
 	GitHubWebhookSecret string
 	GitHubBotHandle     string
 
-	// GitHubReReviewLabel is Step 46's ("review sessions", §8.2) own manual
+	// GitHubReReviewLabel is §8.2's ("review sessions", §8.2) own manual
 	// re-trigger-via-label lane's configured label NAME, read from
 	// NARVI_GITHUB_REREVIEW_LABEL. Deliberately OPTIONAL, unlike
 	// GitHubWebhookSecret/GitHubBotHandle immediately above -- see
@@ -1033,7 +1033,7 @@ type Config struct {
 	// default (defaultGitHubReReviewLabel) exists here at all.
 	GitHubReReviewLabel string
 
-	// GitHubReleaseLabel/GitHubReleaseBranchPattern are Step 50's own
+	// GitHubReleaseLabel/GitHubReleaseBranchPattern are §15's own
 	// ("release PR review", §15.1) deterministic release-PR detection
 	// configuration, read from NARVI_GITHUB_RELEASE_LABEL/
 	// NARVI_GITHUB_RELEASE_BRANCH_PATTERN. Both deliberately OPTIONAL --
@@ -1042,7 +1042,7 @@ type Config struct {
 	GitHubReleaseLabel         string
 	GitHubReleaseBranchPattern string
 
-	// GitHubBotToken configures Step 35's ("outbox delivery", §5.1) own
+	// GitHubBotToken configures §5.1's ("outbox delivery", §5.1) own
 	// GitHub Notifier adapter, read from NARVI_GITHUB_BOT_TOKEN. Required
 	// in every stage -- never defaulted. See gitHubBotTokenEnvVarName's own
 	// doc comment above for why this is a distinct credential from every
@@ -1052,7 +1052,7 @@ type Config struct {
 	// githubingress.Config.BotToken). Never logged.
 	GitHubBotToken string
 
-	// GitHubImageBuildToken is Step 42's ("warm boot: refresh pump + hook
+	// GitHubImageBuildToken is §19.2's ("warm boot: refresh pump + hook
 	// policy", §19.2) own platform-level GitHub credential, read from
 	// NARVI_GITHUB_IMAGE_BUILD_TOKEN. Empty string means "not configured" --
 	// see gitHubImageBuildTokenEnvVarName's own doc comment for why this,
@@ -1100,7 +1100,7 @@ type Config struct {
 	// time instead of the enum's own "member" default.
 	InitialAdminEmails []string
 
-	// EpistemicCheckDefault is Step 61's ("builder epistemic pre-action
+	// EpistemicCheckDefault is §20's ("builder epistemic pre-action
 	// check", §20.4) own platform-wide default for the devil's-advocate
 	// pre-action check on build turns, read from
 	// NARVI_EPISTEMIC_CHECK_DEFAULT. Optional: defaults to false (§20.4:
@@ -1110,7 +1110,7 @@ type Config struct {
 	// field is consulted only when that override is unset (NULL).
 	EpistemicCheckDefault bool
 
-	// RolloutMode is Step 76's own master switch (§10 Phase 6, §32:
+	// RolloutMode is §10's own master switch (§10 Phase 6, §32:
 	// "feature-flagged cohort rollout of sessions"), read from
 	// NARVI_ROLLOUT_MODE. Optional: defaults to rollout.ModeOpen when
 	// unset (§32: "so this Step lands as a byte-for-byte no-op for every
@@ -1155,7 +1155,7 @@ type Config struct {
 	OpenCodeRuntimeVersion string
 
 	// LinearWebhookSecret, LinearOAuthClientID, and LinearOAuthClientSecret
-	// are Step 34's ("Linear ingress", §8.10) own Linear wiring, read from
+	// are §8.10's ("Linear ingress", §8.10) own Linear wiring, read from
 	// NARVI_LINEAR_WEBHOOK_SECRET / NARVI_LINEAR_CLIENT_ID /
 	// NARVI_LINEAR_CLIENT_SECRET respectively — see those env var names'
 	// own doc comments above for why each is a separate secret from its
@@ -1189,7 +1189,7 @@ type Config struct {
 	SlackDefaultRepoURL  string
 
 	// AnthropicAPIKey, IntentClassifierProvider, and IntentClassifierModel
-	// configure Step 36's ("intent classifier", §8.3/§18) real Anthropic
+	// configure §8.3's ("intent classifier", §8.3/§18) real Anthropic
 	// adapter, read from NARVI_ANTHROPIC_API_KEY /
 	// NARVI_INTENT_CLASSIFIER_PROVIDER / NARVI_INTENT_CLASSIFIER_MODEL. All
 	// three required in every stage -- never defaulted. See
@@ -1244,7 +1244,7 @@ type Config struct {
 	// rather than loudly at boot.
 	CloudIdentityIssuerURL string
 
-	// ObjectStorage is Step 58's ("uploads, blob storage & the in-sandbox
+	// ObjectStorage is §8.6's ("uploads, blob storage & the in-sandbox
 	// download_file tool", §28.7) typed, boot-validated object-storage
 	// block. Nil means the feature is OFF (the mint endpoints return a
 	// structured "uploads not configured" error and nothing else
@@ -1253,7 +1253,7 @@ type Config struct {
 	ObjectStorage *ObjectStorageConfig
 }
 
-// ObjectStorageConfig is Step 58's typed object-storage configuration
+// ObjectStorageConfig is §8.6's typed object-storage configuration
 // (§28.7) -- endpoint, region, bucket, access key/secret (or ambient IAM
 // when both are empty), an optional PublicEndpoint used to sign presigned
 // URLs instead of Endpoint, a path-style toggle for MinIO-style backends,

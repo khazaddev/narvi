@@ -209,7 +209,7 @@ WHERE scope = 'global'
 ORDER BY kind
 `
 
-// Step 73b's own ("cloud identity: sandbox-side consumption + kubeconfig
+// §27.4's own ("cloud identity: sandbox-side consumption + kubeconfig
 // injection", §27.3) sandbox-facing delivery endpoint's own single,
 // session-scoped read: EVERY candidate binding (global, plus this
 // session's own environment_id if it has one) regardless of audience --

@@ -1,7 +1,7 @@
 // Package httpapi holds the REST adapter serving the web UI and external
 // clients (§6.3): "The BFF-facing routes: sessions CRUD/create, events,
 // artifacts, secrets, environments, automations, uploads, ws-token."
-// Step 19's own plan row explicitly narrows that to exactly
+// §6.2's own plan row explicitly narrows that to exactly
 // "create/get/events/artifacts" (+ ws-token, named separately by §6.2) --
 // secrets/environments/automations/uploads are NOT this Step's job (see
 // contracts/README.md's own scope note on rest/v1/dtos.schema.json).
@@ -62,7 +62,7 @@
 //   - POST /sessions/{sessionID}/scm-credentials -- scmcredentials.go's
 //     own ScmCredentials: a sandbox-bearer-token-authenticated endpoint
 //     (mirrors wshub's own header-bearer-token handshake precedent, NOT
-//     Step 20's cookie-based auth.Middleware) that decrypts and hands
+//     §13.1's cookie-based auth.Middleware) that decrypts and hands
 //     back the session's own created_by user's GitHub OAuth access token
 //     as a git-over-https credential (§5.2). This is the control-plane
 //     side of the wire contract internal/sandboxagent/credentials.
@@ -242,7 +242,7 @@
 // bot-session entry point for a caller that isn't simultaneously holding
 // a transaction open of its own.
 //
-// # Step 39 ("identities + full RBAC", §13.3) update
+// # §13.2 ("identities + full RBAC", §13.3) update
 //
 // Every state-changing REST handler in this package now calls the real
 // internal/domain/authz.Authorize BEFORE its own effect:
@@ -282,7 +282,7 @@
 // -- distinct from, and in addition to, ActionCreateSession above already
 // refusing a viewer at session-creation time.
 //
-// # Step 39 ("identities + full RBAC", §13.2) second-half update
+// # §13.2 ("identities + full RBAC", §13.2) second-half update
 //
 // Identity auto-linking (the actual DECISION/persistence logic) and the
 // magic-link consume flow both live OUTSIDE this package -- internal/app/

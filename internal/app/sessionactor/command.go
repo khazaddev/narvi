@@ -15,7 +15,7 @@ const (
 	TimerTurnDeadline       = "turn_deadline"
 	TimerTerminalGrace      = "terminal_grace"
 
-	// TimerReviewRetriggerDebounce is Step 65's own addition ("review:
+	// TimerReviewRetriggerDebounce is §24's own addition ("review:
 	// automatic re-review on new commits", §24.2) -- the ONE named timer
 	// this whole feature is built on. Unlike the 5 timers above, this one
 	// is armed/re-armed from OUTSIDE the actor entirely: internal/

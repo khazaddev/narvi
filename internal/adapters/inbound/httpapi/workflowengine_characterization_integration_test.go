@@ -1,6 +1,6 @@
 //go:build integration
 
-// This file is Step 55's ("workflow execution engine", §25.6) own
+// This file is §25.6's ("workflow execution engine", §25.6) own
 // NON-NEGOTIABLE exit criterion: the characterization test proving the new
 // engine-mediated dispatch path (createTurnLocked, now wired through
 // internal/app/workflowengine.ResolveStepForNewTurn) produces a BYTE-FOR-

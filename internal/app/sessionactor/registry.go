@@ -45,7 +45,7 @@ type storeBundle struct {
 	identity *postgres.IdentityStore
 	artifact *postgres.ArtifactStore
 
-	// user is Step 39's ("identities + full RBAC", §13.3) own addition --
+	// user is §13.2's ("identities + full RBAC", §13.3) own addition --
 	// pushpr.go's own createPRBestEffort uses it for the viewer guard
 	// ("viewers never gain PR-reviewer attribution or git identity on
 	// session artifacts"): a defense-in-depth check of the session
@@ -76,7 +76,7 @@ type storeBundle struct {
 	contractDrift *postgres.ContractDriftStore
 
 	// outbox, slackThreadSession, githubPRSession, and linearAgentSession
-	// are Step 35's ("outbox delivery", §5.1) own additions: outbox is
+	// are §5.1's ("outbox delivery", §5.1) own additions: outbox is
 	// where pushpr.go's own completeProcessingTurn writes exactly one
 	// notification row per non-'web'-origin session's turn completion,
 	// inside that SAME transaction (§5.1: "written in the same tx as the
@@ -89,7 +89,7 @@ type storeBundle struct {
 	githubPRSession    *postgres.GitHubPRSessionStore
 	linearAgentSession *postgres.LinearAgentSessionStore
 
-	// plan is Step 37's ("plan mode, web", §8.1/§12.2 item 3) own
+	// plan is §8.1's ("plan mode, web", §8.1/§12.2 item 3) own
 	// addition: pushpr.go's own completeProcessingTurn calls
 	// recordPlanIfNeeded (planrecord.go) right after persisting a turn's
 	// terminal state, inside that SAME transaction, exactly mirroring
@@ -106,7 +106,7 @@ type storeBundle struct {
 	// system-triggered transition too.
 	auditLog *postgres.AuditLogStore
 
-	// sentinelFix/reviewFinding are Step 48's ("sentinels + suggestions",
+	// sentinelFix/reviewFinding are §8.2's ("sentinels + suggestions",
 	// §17) own additions -- pushpr.go's own createSentinelFixPRBestEffort
 	// reads sentinelFix (by this Actor's own session id, the FIX session)
 	// to learn the origin PR's own head branch/number, then writes both
@@ -114,14 +114,14 @@ type storeBundle struct {
 	sentinelFix   *postgres.SentinelFixStore
 	reviewFinding *postgres.ReviewFindingStore
 
-	// handoffSentinelRuns is Step 49's ("handoff-readiness sentinel",
+	// handoffSentinelRuns is §14.4's ("handoff-readiness sentinel",
 	// §14.4) own addition -- pushpr.go's own createPRBestEffort (via
 	// handoffsentinel.go's runHandoffSentinelBestEffort) claims a row here,
 	// in the SAME transaction as its own outbox enqueue, exactly mirroring
 	// sentinelFix's own claim-before-outbox-enqueue precedent above.
 	handoffSentinelRuns *postgres.HandoffSentinelStore
 
-	// workflow is Step 55's ("workflow execution engine", §25.6) own
+	// workflow is §25.6's ("workflow execution engine", §25.6) own
 	// addition: pushpr.go's completeProcessingTurn, timerfired.go's
 	// handleTurnDeadlineTimer, and dispatch.go's failDispatchedTurn each
 	// call internal/app/workflowengine.OnTurnCompleted with this store
@@ -130,7 +130,7 @@ type storeBundle struct {
 	// why all three call sites matter, not just the first.
 	workflow *postgres.WorkflowStore
 
-	// repoSettings is Step 57's ("RWX provider + previews", §4.1.2 point
+	// repoSettings is §4.1's ("RWX provider + previews", §4.1.2 point
 	// 1) own addition -- pushpr.go's own enqueuePreviewBestEffort (called
 	// from createPRBestEffort, the ONE enqueue point) reads it, per
 	// pushed repo, to decide whether that repo's RWX preview setting
@@ -141,7 +141,7 @@ type storeBundle struct {
 	// plain a.stores.session.Get before ever opening one.
 	repoSettings *postgres.RepoSettingsStore
 
-	// reviewVerdict is Step 65's ("review: automatic re-review on new
+	// reviewVerdict is §24's ("review: automatic re-review on new
 	// commits", §24.3) own addition -- handleReviewRetriggerDebounceTimer
 	// (reviewretrigger.go) reads GetLatest to compare this PR's own
 	// latest posted verdict head_sha against pending_retrigger_head_sha,
@@ -263,7 +263,7 @@ type Registry struct {
 	// session's own fingerprint shares that one (test-only) value.
 	openCodeRuntimeVersion string
 
-	// githubBotToken is Step 48's ("sentinels + suggestions", §17.2) own
+	// githubBotToken is §8.2's ("sentinels + suggestions", §17.2) own
 	// addition, threaded through to every Actor this Registry hydrates
 	// exactly like the fields above: pushpr.go's own
 	// createSentinelFixPRBestEffort uses this SAME static bot credential
@@ -278,11 +278,11 @@ type Registry struct {
 	// empty (tests that never exercise the sentinel-fix PR path).
 	githubBotToken string
 
-	// reviewModelDeep is Step 68's own addition (§26.3) -- see
+	// reviewModelDeep is §26.3's own addition (§26.3) -- see
 	// RegistryOptions.ReviewModelDeep's own doc comment.
 	reviewModelDeep string
 
-	// diffFetcher is Step 49's ("handoff-readiness sentinel", §14.4) own
+	// diffFetcher is §14.4's ("handoff-readiness sentinel", §14.4) own
 	// addition, threaded through to every Actor this Registry hydrates
 	// exactly like the fields above: handoffsentinel.go's own
 	// runHandoffSentinelBestEffort uses it to fetch a just-created PR's own
@@ -300,7 +300,7 @@ type Registry struct {
 	// TODO-scan of nothing, never a panic.
 	diffFetcher PRDiffFetcher
 
-	// reviewDiffFetcher is Step 65's ("review: automatic re-review on new
+	// reviewDiffFetcher is §24's ("review: automatic re-review on new
 	// commits", §24.3) own addition, threaded through to every Actor this
 	// Registry hydrates exactly like diffFetcher above -- a DIFFERENT,
 	// wider interface than PRDiffFetcher (reviewcontext.Fetcher's own
@@ -332,7 +332,7 @@ type Registry struct {
 	// still renders a (degenerate but harmless) string.
 	githubBotHandle string
 
-	// contractDriftDetected is Step 27's ("mocking + contract drift", §14.3)
+	// contractDriftDetected is §14.3's ("mocking + contract drift", §14.3)
 	// own OTel counter, constructed exactly once here (NewRegistry), then
 	// threaded through to every Actor this Registry hydrates -- mirroring
 	// how every other Actor-shared field above is threaded, and mirroring
@@ -343,7 +343,7 @@ type Registry struct {
 	// a mock-configured Environment's repo.
 	contractDriftDetected metric.Int64Counter
 
-	// opsMetrics is Step 77's ("ops: dashboards, alerts, runbooks", §5.3)
+	// opsMetrics is §5.3's ("ops: dashboards, alerts, runbooks", §5.3)
 	// own bundle of five OTel instruments (opsmetrics.go), constructed
 	// exactly once here from the SAME meter as contractDriftDetected
 	// above, then threaded through to every Actor this Registry hydrates
@@ -430,7 +430,7 @@ type Registry struct {
 // decrypts the session creator's own stored GitHub OAuth access token for
 // that same call. openCodeRuntimeVersion is §8.5's ("image builds") own
 // addition: the RuntimeVersion input to every Actor's own image-fingerprint
-// computation (dispatch.go/imageresolve.go). diffFetcher is Step 49's
+// computation (dispatch.go/imageresolve.go). diffFetcher is §14.4's
 // ("handoff-readiness sentinel", §14.4) own addition: the narrow
 // PRDiffFetcher (handoffsentinel.go) createPRBestEffort's own handoff-
 // sentinel hook uses to fetch a just-created PR's diff. All seven may be
@@ -481,7 +481,7 @@ func NewRegistry(
 		return nil, fmt.Errorf("sessionactor: construct contract_drift_detected counter: %w", err)
 	}
 
-	// Step 77 ("ops: dashboards, alerts, runbooks", §5.3): the five
+	// §5.3 ("ops: dashboards, alerts, runbooks", §5.3): the five
 	// remaining instruments §5.3's own metric list names but nothing
 	// before this Step ever registered -- see opsmetrics.go's own top
 	// comment for the full gap analysis. Built from the SAME meter as
@@ -529,7 +529,7 @@ func NewRegistry(
 // this is a trailing variadic struct rather than more required
 // positional parameters.
 type RegistryOptions struct {
-	// GitHubBotToken is Step 48's ("sentinels + suggestions", §17.2) own
+	// GitHubBotToken is §8.2's ("sentinels + suggestions", §17.2) own
 	// addition: the SAME static bot credential (platform.Config.
 	// GitHubBotToken) pushpr.go's own createSentinelFixPRBestEffort uses
 	// to open a sentinel-auto-fix child session's own fix PR. May be
@@ -541,7 +541,7 @@ type RegistryOptions struct {
 	// ReviewDiffFetcher is §24's own addition -- see Registry.
 	// reviewDiffFetcher's own doc comment.
 	ReviewDiffFetcher reviewcontext.Fetcher
-	// ReviewModelDeep is Step 68's own addition (§26.3): platform.Config.
+	// ReviewModelDeep is §26.3's own addition (§26.3): platform.Config.
 	// ReviewModelDeep, threaded through to reviewretrigger.go's own
 	// automatic re-review turn insert exactly like internal/adapters/
 	// inbound/github's own SessionCoalescer.ReviewModelDeep field. Empty
@@ -549,7 +549,7 @@ type RegistryOptions struct {
 	// ModelAndEffort's own doc comment.
 	ReviewModelDeep string
 
-	// RolloutMode is Step 76's own master switch (§10 Phase 6, §32):
+	// RolloutMode is §10's own master switch (§10 Phase 6, §32):
 	// platform.Config.RolloutMode, threaded through to dispatch.go's own
 	// refuseIfRolloutUnenrolled (beside refuseIfSubstrateUnsupported),
 	// the dispatch-time HALF of §32's "fail-closed, twice" pair. Placed
@@ -582,7 +582,7 @@ type RegistryOptions struct {
 // through at hydration time, actor.go's own field doc comment) -- so a
 // caller that needs to consult provider capabilities BEFORE a session (and
 // therefore an Actor) exists at all can do so without reaching into an
-// unexported field. Step 74's own up-front fail-closed substrate check
+// unexported field. §27.5's own up-front fail-closed substrate check
 // (httpapi.CreateSessionCore, §27.5/§27.6 "refused up-front when the
 // configured provider reports no support") is this method's one caller
 // today. May be nil (some tests construct a Registry without one, e.g.

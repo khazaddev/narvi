@@ -114,7 +114,7 @@ func NewEngine(
 // errgroup.WithContext, so one loop's own ctx.Err() return can never
 // cancel-race the others -- mirrors app/imagebuild.Builder.Run's own
 // identical two-loop fan-out, scaled to four here: §3.5's original
-// three, plus Step 52's own cron trigger pump). Each tick's own error is
+// three, plus §8.4's own cron trigger pump). Each tick's own error is
 // logged, never propagated, so one bad tick never kills the other loops.
 // The caller starts this via its own errgroup.Go exactly once per process
 // (cmd/control-plane/main.go).
@@ -175,7 +175,7 @@ func (e *Engine) runSweepPump(ctx context.Context) error {
 	}
 }
 
-// runTriggerPump is Step 52's own cron-trigger evaluation loop (§8.4) --
+// runTriggerPump is §8.4's own cron-trigger evaluation loop (§8.4) --
 // reuses AutomationEnginePumpInterval as its own TICKER cadence (the SAME
 // 60s the fan-out/reconcile pumps already tick at) rather than a dedicated
 // new interval field: a standard cron schedule's own finest resolution is

@@ -1,5 +1,5 @@
-// Package workflowengine is Step 55's own ("workflow execution engine",
-// §25.6/§25.7/§25.8) impure engine atop Step 54's dark domain model
+// Package workflowengine is §25.6's own ("workflow execution engine",
+// §25.6/§25.7/§25.8) impure engine atop §25.4's dark domain model
 // (internal/domain/workflow, internal/domain/loopguard) and schema
 // (migrations/000057_workflows.up.sql, internal/adapters/outbound/postgres.
 // WorkflowStore). This package MAY do I/O (CLAUDE.md, §11's own carve-out
@@ -41,7 +41,7 @@
 // step never reaches NextStep at all here -- its attempt lands in
 // awaiting_decision and the run stays running, exactly where §25.9's own
 // decide endpoint picks it up. As of migration
-// 000088_plan_builtin_passthrough (Step 56's own corrective follow-up,
+// 000088_plan_builtin_passthrough (§25.9's own corrective follow-up,
 // §25.8/§25.9), no BUILT-IN workflow carries hitl_after any longer -- the
 // built-in plan workflow's original 2-step, hitl_after-on-step-1 shape
 // double-parked a workflow-level HITL gate against classic plan mode's own
@@ -66,7 +66,7 @@
 // internal/domain/workflow.LaneFor's own documented fail-open discipline
 // (§25.13) one level up, at the engine's own I/O boundary.
 //
-// # What this package deliberately does NOT do (Step 56's job)
+// # What this package deliberately does NOT do (§25.9's job)
 //
 // No HITL decision endpoint, no notifier wiring, no loopguard consultation
 // (verified directly: none of the three built-in workflows ever re-fires a

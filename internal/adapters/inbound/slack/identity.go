@@ -1,4 +1,4 @@
-// This file (identity.go) implements Step 39's ("identities + full RBAC",
+// This file (identity.go) implements §13.2's ("identities + full RBAC",
 // §13.2) own auto-linking wiring for Slack ingress -- shared by both
 // handler.go (the Events API route) and interactive.go (the Interactivity
 // route), replacing this package's PREVIOUS unconditional bot-attribution

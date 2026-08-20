@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 48's ("sentinels + suggestions", §12.2 item
+// Integration tests for §8.2's ("sentinels + suggestions", §12.2 item
 // 2, §17, §22.1) own findings-upsert extension to the verdict-posting
 // tool, the rebut endpoint, the apply-suggestion endpoint, and the
 // sentinel-auto-fix trigger -- against a real Postgres instance, sharing

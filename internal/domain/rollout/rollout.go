@@ -1,4 +1,4 @@
-// Package rollout implements Step 76's own ("feature-flagged cohort
+// Package rollout implements §10's own ("feature-flagged cohort
 // rollout of sessions, with documented rollback", §10 Phase 6, §32) ONE
 // pure admission decision -- shared, byte-for-byte identically, between
 // BOTH of §32's two independent gates: the primary, session-creation-time

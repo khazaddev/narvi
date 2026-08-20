@@ -1,4 +1,4 @@
-// This file (pullrequestevent.go) implements Step 48's own ("sentinels +
+// This file (pullrequestevent.go) implements §8.2's own ("sentinels +
 // suggestions") merge-gating half (§17.4/§17.5): the new GitHub
 // `pull_request` webhook lane that reacts to the ORIGIN pull request
 // closing. §24.1 already documents (independently of this Step) that

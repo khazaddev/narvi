@@ -1,6 +1,6 @@
 //go:build integration
 
-// This file proves Step 76's own per-channel refusal contract (§10 Phase
+// This file proves §10's own per-channel refusal contract (§10 Phase
 // 6, §32) for the sentinel-autofix outbox notifier specifically: a
 // rollout refusal must map to the existing terminal-skip precedent
 // (descriptionautofix.go's own "confirmed negative -> nil, never

@@ -51,7 +51,7 @@ func IsValidLane(l Lane) bool {
 //
 //   - intent.TargetReview -> LaneReview.
 //   - intent.TargetRelease / intent.TargetFeature -> LaneReview. These
-//     two are Step 50's release-vs-feature category (§15.1, §18.6) --
+//     two are §15's release-vs-feature category (§15.1, §18.6) --
 //     per rubric.go's own doc comment, that category distinguishes "a
 //     release PR review" from "an ordinary feature/fix PR review":
 //     BOTH values describe a review-lane job, refining WHICH review

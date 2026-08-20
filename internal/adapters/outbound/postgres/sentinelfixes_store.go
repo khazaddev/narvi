@@ -161,7 +161,7 @@ func (s *SentinelFixStore) MarkAbandoned(ctx context.Context, id pgtype.UUID) (s
 }
 
 // ExistsByFixPRNumber reports whether (repoFullName, fixPRNumber) is a
-// registered sentinel-auto-fix follow-up PR -- Step 60's own §17
+// registered sentinel-auto-fix follow-up PR -- §16's own §17
 // structural exclusion (see ExistsSentinelFixByFixPRNumber's own generated
 // doc comment for why this is the correct, specific marker rather than
 // sessions.parent_session_id/spawn_depth).

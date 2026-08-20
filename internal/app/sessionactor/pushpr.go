@@ -261,7 +261,7 @@ func (a *Actor) completeProcessingTurn(ctx context.Context, tx pgx.Tx, sandboxRo
 		return nil, fmt.Errorf("sessionactor: get session: %w", err)
 	}
 
-	// Step 37 ("plan mode, web", §8.1/§12.2 item 3): a plan_mode=true turn
+	// §8.1 ("plan mode, web", §8.1/§12.2 item 3): a plan_mode=true turn
 	// that just genuinely completed records exactly one new plans row, in
 	// this SAME transaction -- see planrecord.go's own doc comment.
 	// recordPlanIfNeeded itself is a no-op (nil, nil) for every other case
@@ -296,7 +296,7 @@ func (a *Actor) completeProcessingTurn(ctx context.Context, tx pgx.Tx, sandboxRo
 		EpistemicCheckDefault: a.epistemicCheckDefault,
 	}, sessionRow, processing.ID, trig)
 
-	// Step 35 ("outbox delivery", §5.1): enqueue exactly one outbox
+	// §5.1 ("outbox delivery", §5.1): enqueue exactly one outbox
 	// notification for THIS turn's completion, in the SAME transaction as
 	// the state change above -- runs for every outcome (complete/fail/
 	// cancel alike), unlike the push/PR path below which is success-only.
@@ -598,7 +598,7 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 			a.logger.Error("sessionactor: record PR artifact failed", "repo", pushed.Name, "error", err)
 		}
 
-		// Step 57 ("RWX provider + previews", §4.1.2 point 1): best-effort,
+		// §4.1 ("RWX provider + previews", §4.1.2 point 1): best-effort,
 		// never blocks -- a repo with no (or only partially) configured RWX
 		// preview setting returns immediately with no further work (see
 		// that function's own doc comment, previewpr.go). This is the ONE
@@ -606,7 +606,7 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 		// github_preview_link), per that section's own design.
 		a.enqueuePreviewBestEffort(ctx, owner, repoName, pushed, ref)
 
-		// Step 49 ("handoff-readiness sentinel", §14.4): best-effort, never
+		// §14.4 ("handoff-readiness sentinel", §14.4): best-effort, never
 		// blocks -- an ordinary (non-scoped) session's PR returns
 		// immediately with no further work (handoffsentinel.go's own top
 		// check). See that file's own top comment for why this runs HERE
@@ -615,7 +615,7 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 	}
 }
 
-// createSentinelFixPRBestEffort implements Step 48's own ("sentinels +
+// createSentinelFixPRBestEffort implements §8.2's own ("sentinels +
 // suggestions", §17.2 amendment) fix-PR-creation path: called ONLY for a
 // session whose provenance_tag is provenance.SentinelAutoFix
 // (createPRBestEffort's own caller check, above) -- a DEDICATED path that

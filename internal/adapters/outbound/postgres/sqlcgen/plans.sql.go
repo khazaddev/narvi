@@ -93,7 +93,7 @@ const getPlan = `-- name: GetPlan :one
 SELECT id, session_id, turn_id, version, status, plan_model_id, created_at, decided_at, decided_by, slack_channel_id, slack_message_ts FROM plans WHERE id = $1
 `
 
-// Step 38 ("plan mode, cross-channel", §8.1/§13.3) additions.
+// §8.1 ("plan mode, cross-channel", §8.1/§13.3) additions.
 //
 // GetPlan backs httpapi.DecidePlanOnTx's own post-guarded-UPDATE re-fetch
 // (decideplan.go): whether THIS call's own guarded UPDATE won or lost, it
@@ -155,7 +155,7 @@ type ListAwaitingApprovalPlansRow struct {
 	SessionTitle     *string            `json:"session_title"`
 }
 
-// Step 60 ("decision inbox: read model + API", §16.1)'s own
+// §16 ("decision inbox: read model + API", §16.1)'s own
 // awaiting_approval row source: every plan still 'awaiting_approval',
 // joined with its own session for the (created_by, title) the app-layer
 // aggregator needs both to render the row and to resolve own/joined RBAC
@@ -299,7 +299,7 @@ type ListRecentlyDecidedPlansParams struct {
 	Limit     int32              `json:"limit"`
 }
 
-// Step 60 ("decision inbox: read model + API", §16.2)'s own decision-
+// §16 ("decision inbox: read model + API", §16.2)'s own decision-
 // latency metric input for the plan-approval half of that computation
 // (median time from an item ENTERING the queue -- a plan's own
 // created_at -- to its ACTION -- decided_at): every plan decided (approved

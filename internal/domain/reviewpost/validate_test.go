@@ -265,7 +265,7 @@ func TestValidateVerdictInput_DigestSummaryCheckedLastAmongExisting(t *testing.T
 }
 
 // TestValidateVerdictInput_AdequacyCheckedAfterDigestSummary proves §26.2/
-// Step 67's own new Digest.DescriptionAdequacy/AdequacyExplanation checks
+// §26.2's own new Digest.DescriptionAdequacy/AdequacyExplanation checks
 // run AFTER Digest.Summary (added at the end of the fixed order, per this
 // function's own doc comment) -- a payload with BOTH an empty
 // Digest.Summary AND a garbled Digest.DescriptionAdequacy must still

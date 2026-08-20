@@ -1,4 +1,4 @@
-// This file (reviewanalytics.go) implements Step 62's own read-only
+// This file (reviewanalytics.go) implements §21's own read-only
 // analytics surface (§21.1): GET /api/repos/{owner}/{repo}/review-analytics,
 // exposing the three rollups that section names explicitly -- timeseries,
 // top-risk-driver breakdown, and the "Review finding outcomes" KPI

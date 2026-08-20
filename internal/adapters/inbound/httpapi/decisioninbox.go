@@ -1,4 +1,4 @@
-// This file (decisioninbox.go) backs Step 60's own two REST endpoints
+// This file (decisioninbox.go) backs §16's own two REST endpoints
 // ("decision inbox: read model + API", §16): GET /api/decision-inbox (the
 // read model, ListDecisionInbox below) and POST /api/decision-inbox/merge
 // (§16.2's own Merge endpoint, MergePullRequest below) -- the ONLY

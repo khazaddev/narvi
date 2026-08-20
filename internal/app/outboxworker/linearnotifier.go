@@ -61,7 +61,7 @@ func NewLinearNotifier(client *linearapi.Client, installations *postgres.LinearI
 // in cmd/control-plane/main.go's own kind->Notifier map, so an
 // unrecognized fourth kind here is defensive, not expected.
 //
-// ports.NotificationKindLinearWorkflowDecision is Step 56's own addition
+// ports.NotificationKindLinearWorkflowDecision is §25.9's own addition
 // ("workflow HITL gate + circuit breaker", §25.9) -- its payload is a
 // plain linearapi.Payload with Success always true (internal/app/
 // workflowengine's own enqueueWorkflowNotice, notify.go), the EXACT same

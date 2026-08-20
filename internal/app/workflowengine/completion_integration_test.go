@@ -116,7 +116,7 @@ func TestOnTurnCompleted_SingleStepLane_FailTrigger_EscalatesRun(t *testing.T) {
 //
 // Exercises a CUSTOM (non-built-in) hitl_after step (seedCustomHITLAfterStep,
 // dispatch_integration_test.go), not the built-in plan workflow: migration
-// 000088_plan_builtin_passthrough (Step 56's own corrective follow-up, an
+// 000088_plan_builtin_passthrough (§25.9's own corrective follow-up, an
 // audit-found design incoherence -- see that migration's own header comment
 // and docs/TECHNICAL_PLAN.md §25.8) made the built-in plan workflow a
 // genuine single-step passthrough carrying no HITL, so classic plan mode

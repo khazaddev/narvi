@@ -254,7 +254,7 @@ func TestProviderCredentialStore_ListForResolution(t *testing.T) {
 }
 
 // TestProviderCredentialStore_ListForResolution_ExcludesNeedsRelink proves
-// Step 59's own resolution-query addition (§29.5: "the row stops being
+// §8.8's own resolution-query addition (§29.5: "the row stops being
 // served"): a user-scope oauth row marked oauth_needs_relink is excluded
 // from the candidate set entirely, even though it is otherwise a perfect
 // match for the named creator userID.

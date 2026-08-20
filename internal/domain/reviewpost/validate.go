@@ -37,7 +37,7 @@ type VerdictInput struct {
 	// and never read again.
 	Summary string
 
-	// Findings is Step 48's own additive extension (§8.2/§17/§22.1): zero
+	// Findings is §8.2's own additive extension (§8.2/§17/§22.1): zero
 	// or more per-finding typed fields, alongside the verdict's own
 	// aggregate fields above -- restdtos.PostReviewVerdictRequest.findings
 	// is OPTIONAL, so an old caller posting no findings at all (every
@@ -47,7 +47,7 @@ type VerdictInput struct {
 	// here, in reviewpost, rather than as a new review.Verdict field.
 	Findings []FindingInput
 
-	// Digest is Step 66's own additive extension (§26.1): the merge-
+	// Digest is §26.1's own additive extension (§26.1): the merge-
 	// readout's typed content -- restdtos.PostReviewVerdictRequest.digest
 	// is REQUIRED (unlike Findings above), and Digest.Summary within it is
 	// unconditionally enforced by ValidateVerdictInput below; Digest.
@@ -197,7 +197,7 @@ var (
 	ErrInvalidBlastRadiusTag    = errors.New("reviewpost: blastRadius contains an unrecognized tag")
 	ErrNegativeFilesChanged     = errors.New("reviewpost: filesChanged must not be negative")
 	ErrEmptySummary             = errors.New("reviewpost: summary must not be empty")
-	// ErrEmptyDigestSummary is Step 66's own addition (§26.1): "Digest.Summary
+	// ErrEmptyDigestSummary is §26.1's own addition (§26.1): "Digest.Summary
 	// is required on every review from Step 66 on" -- mirrors ErrEmptySummary
 	// above exactly (same empty/whitespace-only check, same "missing and
 	// garbled are the identical failure" posture), for the digest's own
@@ -219,7 +219,7 @@ var (
 	// tri-state's own required one-line explanation.
 	ErrEmptyAdequacyExplanation = errors.New("reviewpost: digest.adequacyExplanation must not be empty")
 	// ErrEmptyDigestArchDecisions/ErrEmptyDigestStackRisks/
-	// ErrEmptyDigestUnverifiedLimits are Step 68's own addition (§26.3,
+	// ErrEmptyDigestUnverifiedLimits are §26.3's own addition (§26.3,
 	// via §26.1's own forward reference: "the full digest ... becomes
 	// schema-required on the deep path once §26.3 defines it") -- the
 	// three digest fields §26.1 requested but deliberately left

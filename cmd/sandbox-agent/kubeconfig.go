@@ -1,4 +1,4 @@
-// This file (kubeconfig.go) implements Step 73b's own ("cloud identity:
+// This file (kubeconfig.go) implements §27.4's own ("cloud identity:
 // sandbox-side consumption + kubeconfig injection", §27.4) IN-SANDBOX
 // half of §27.4: rendering a kubeconfig from this session's own
 // Environment's cluster_bindings row (delivered alongside §27.3's own

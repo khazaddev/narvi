@@ -1,4 +1,4 @@
-// This file (opencodeconfig.go) implements Step 72's own ("sandbox
+// This file (opencodeconfig.go) implements §27.1's own ("sandbox
 // secrets & opencode config", §27.2) CP-side MANAGEMENT surface over
 // opencode_configs (migrations/000091_opencode_configs.up.sql):
 //
@@ -16,7 +16,7 @@
 //
 // RBAC reuses the SAME 2 already-reserved actions provider_credentials/
 // sandbox_secrets use for their own environment/global route groups
-// (§27.1's "Step 53's idioms reused throughout" extended to §27.2) --
+// (§27.1's "§25.1's idioms reused throughout" extended to §27.2) --
 // deliberately NOT a new OpenCode-config-specific action: §27.2 itself
 // describes this surface's RBAC as "global scope admin-only (the §13.3
 // row that owns integrations/global secrets); environment scope

@@ -60,7 +60,7 @@ import (
 // absence, just logged rather than turned into an HTTP response, since
 // every caller of this helper is an internal, best-effort side effect, not
 // a request awaiting a status code. This is the honest "no bot/service-
-// account fallback exists" gap named in Step 21's own brief (§8.11's
+// account fallback exists" gap named in §9.3's own brief (§8.11's
 // fallback half), not a bug to work around by inventing one -- and, as of
 // Step 26, ALSO the documented reason a session whose creator has no
 // usable GitHub token still spawns successfully on the base image, never
@@ -187,7 +187,7 @@ func CheckCreatorGuard(ctx context.Context, users *postgres.UserStore, createdBy
 	return CreatorGuardVerdict{Allowed: true}
 }
 
-// creatorMayGetPRAttribution is Step 39's own viewer guard (§13.3),
+// creatorMayGetPRAttribution is §13.2's own viewer guard (§13.3),
 // called by pushpr.go's createPRBestEffort BEFORE it ever decrypts/uses
 // createdBy's own GitHub token to open a pull request -- this is a
 // SECOND, defense-in-depth check, distinct from (and in addition to)

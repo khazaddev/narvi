@@ -10,7 +10,7 @@ package ports
 // new gen") and reports Resume: false; RWX (Step 57) is the second real
 // SandboxProvider implementation — it also reports Resume: false today,
 // pending the empirical stop→start state-preservation verification
-// §4.1.3 names as Step 57's own first exit criterion (see
+// §4.1.3 names as §4.1's own first exit criterion (see
 // internal/adapters/outbound/rwx.Provider.Capabilities' own doc comment
 // for the full reasoning) — but this Capabilities struct itself already
 // supports a future provider reporting Resume: true once that or any

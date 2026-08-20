@@ -1,6 +1,6 @@
 //go:build integration
 
-// This file proves Step 76's own dispatch-time half of the "fail-closed,
+// This file proves §10's own dispatch-time half of the "fail-closed,
 // twice" rule (§10 Phase 6, §32): tryPlanSpawn's own refuseIfRolloutUnenrolled
 // (dispatch.go) refuses to spawn a session whose own named repo is not
 // enrolled under rollout.ModeCohort -- mirrors dispatch_substrate_

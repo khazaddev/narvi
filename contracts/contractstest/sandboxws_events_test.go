@@ -484,7 +484,7 @@ func TestSandboxEventsSubTaskId(t *testing.T) {
 	})
 }
 
-// TestSandboxEventsArtifactStatus is the round-trip test for Step 58's
+// TestSandboxEventsArtifactStatus is the round-trip test for §8.6's
 // ("uploads, blob storage & the in-sandbox download_file tool", §28.6)
 // own additive schema change: the artifact event gains an OPTIONAL status
 // (absent = "ready") and a nullable failureReason. Absent (every existing

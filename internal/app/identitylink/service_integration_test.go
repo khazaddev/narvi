@@ -371,7 +371,7 @@ func TestResolve_ReusesStillLiveLinkPrompt(t *testing.T) {
 // authenticated user, links the identity, records a human-actor audit-log
 // entry, and deletes the prompt so it cannot be replayed.
 //
-// Deliberately UNCHANGED by Step 39's own security-remediation fix
+// Deliberately UNCHANGED by §13.2's own security-remediation fix
 // ("identities + full RBAC", §13.2): "the-clicker" here is simply this
 // package's own test double for "whoever is authenticated and presents
 // the nonce" -- Consume itself performs no correlation between that

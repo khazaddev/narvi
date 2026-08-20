@@ -130,7 +130,7 @@ func childSessionOptionsFrom(opts []ChildSessionOptions) ChildSessionOptions {
 // spec" example path exactly.
 const defaultContractsPath = "contracts/api"
 
-// CreateSession backs POST /api/sessions (§6.3), mounted (Step 20, "auth
+// CreateSession backs POST /api/sessions (§6.3), mounted (§13.1, "auth
 // v1") behind internal/adapters/inbound/auth.Middleware -- see doc.go's own
 // updated writeup. Decodes restdtos.CreateSessionRequest from a body
 // bounded by http.MaxBytesReader(maxRequestBodyBytes) -- an oversized body
@@ -353,7 +353,7 @@ func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *p
 			return
 		}
 
-		// Step 36 ("intent classifier", §8.3/§18): this is the ONE
+		// §8.3 ("intent classifier", §8.3/§18): this is the ONE
 		// surface that ever supplies its own decision rather than calling
 		// Classify -- a human's own explicit plan/build toggle on the web
 		// UI, known the moment the session is created (§18.4's own
@@ -580,7 +580,7 @@ func validateCreateSessionRequest(req restdtos.CreateSessionRequest) (validatedC
 	}, nil
 }
 
-// checkSubstrateCapabilitiesUpFront is Step 74's own up-front half of the
+// checkSubstrateCapabilitiesUpFront is §27.5's own up-front half of the
 // "fail-closed, twice" rule (§27.5/§27.6, brief point A) -- the clearest-
 // possible-UX refusal at session-creation time, BEFORE any Postgres
 // write, when this request's own docker/egressPolicy asks for a substrate
@@ -673,7 +673,7 @@ func checkSubstrateCapabilitiesUpFront(registry *sessionactor.Registry, req rest
 // cookie-authenticated human passes an explicitly invalid pgtype.UUID{}
 // here instead.
 //
-// auditLog is Step 39's own addition (§13.3: "written in the same
+// auditLog is §13.2's own addition (§13.3: "written in the same
 // transaction as the change"): an audit_log row is inserted on this SAME
 // tx, right after the session row itself, for EVERY caller of this
 // function -- the browser REST path (CreateSession, a real authenticated
@@ -738,7 +738,7 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 	egressPolicy := validated.egressPolicy
 	hasEgressPolicy := validated.hasEgressPolicy
 
-	// Step 76's own primary gate (§10 Phase 6, §32): checked AFTER
+	// §10's own primary gate (§10 Phase 6, §32): checked AFTER
 	// validation, BEFORE the environment/session inserts below, on this
 	// SAME tx -- see checkRolloutGate's own doc comment (rolloutgate.go)
 	// for the full "why here" reasoning, including the no-op short-circuit
@@ -844,7 +844,7 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 		Repos:         reposJSON,
 		EnvironmentID: environmentID,
 		ProvenanceTag: provenanceTag,
-		// Step 37 ("plan mode, web", §12.2 item 3): only meaningful when
+		// §8.1 ("plan mode, web", §12.2 item 3): only meaningful when
 		// req.PlanMode is true, but stored unconditionally either way --
 		// mirrors modelId's own "always stored, only meaningful in
 		// context" convention (a non-plan-mode session simply never reads
@@ -975,7 +975,7 @@ func CreateSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgr
 		return sqlcgen.Session{}, verr
 	}
 
-	// Step 74's own up-front half of the "fail-closed, twice" rule
+	// §27.5's own up-front half of the "fail-closed, twice" rule
 	// (§27.5/§27.6, brief point A): refused HERE, before any Postgres
 	// write, when this request asks for a docker/enforced-egress
 	// requirement the CONFIGURED provider does not report supporting --

@@ -1,6 +1,6 @@
 // Package identitylink is the I/O-performing orchestrator for §13.2's
 // auto-link algorithm and its magic-link counterpart -- the app-layer
-// half of Step 39's ("identities + full RBAC") own auto-linking brief,
+// half of §13.2's ("identities + full RBAC") own auto-linking brief,
 // paired with the pure decision logic in internal/domain/identitylink
 // (see that package's own doc.go for the exact domain/app split, mirroring
 // internal/domain/turn vs internal/app/sessionactor).

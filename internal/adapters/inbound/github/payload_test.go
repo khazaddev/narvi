@@ -358,7 +358,7 @@ func TestParseMention_CommenterIdentity(t *testing.T) {
 			wantCommenterLogin: "",
 		},
 		{
-			// Step 46 ("review sessions", §8.2): a label-triggered retrigger
+			// §8.2 ("review sessions", §8.2): a label-triggered retrigger
 			// has no comment/commenter at all -- CommenterID/CommenterLogin
 			// instead come from GitHub's own "sender" field (the label
 			// applier), mirroring the comment.user shape (mention.
@@ -399,7 +399,7 @@ func TestParseMention_CommenterIdentity(t *testing.T) {
 	}
 }
 
-// TestParsePullRequestLabeled is Step 46's ("review sessions", §8.2) own
+// TestParsePullRequestLabeled is §8.2's ("review sessions", §8.2) own
 // table-driven test for the manual re-trigger-via-label lane: a
 // pull_request/"labeled" event whose label.name matches this deployment's
 // own configured reReviewLabel is actionable; every other action/label

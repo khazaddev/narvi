@@ -1,6 +1,6 @@
 //go:build integration
 
-// This file covers Step 52's own ("automations: triggers & extras", §8.4)
+// This file covers §8.4's own ("automations: triggers & extras", §8.4)
 // additions to the engine Step 51 already built: the cron trigger pump
 // (triggerpump.go), sandboxSettings honored on automation sessions
 // (fanout.go's own applySandboxSettings), per-automation env vars threaded

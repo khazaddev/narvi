@@ -1,6 +1,6 @@
 //go:build integration
 
-// This file proves the Step 37/38 follow-up fix (§8.1, closing the "reply
+// This file proves the follow-up fix (§8.1, closing the "reply
 // matching no verdict keyword dispatches an ordinary build turn anyway"
 // hole found during design review): Slack's own POST /webhooks/slack
 // (Events API ingress, handler.go) now blocks a plain-text thread reply

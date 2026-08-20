@@ -1,7 +1,7 @@
-// Package sandboxsecret implements Step 72's own ("sandbox secrets &
+// Package sandboxsecret implements §27.1's own ("sandbox secrets &
 // opencode config", §27.1) pure domain vocabulary for the general
 // sandbox_secrets table (migrations/000090_sandbox_secrets.up.sql) --
-// this codebase's SECOND generic secret-storage table, after Step 53's
+// this codebase's SECOND generic secret-storage table, after §25.1's
 // provider_credentials (internal/domain/providercredential).
 //
 // # Why a second table, not a widened provider_credentials

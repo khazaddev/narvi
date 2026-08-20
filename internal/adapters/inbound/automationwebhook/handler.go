@@ -1,4 +1,4 @@
-// Package automationwebhook implements Step 52's ("automations: triggers &
+// Package automationwebhook implements §8.4's ("automations: triggers &
 // extras", §8.4) inbound webhook-facing API surface: the ONE piece of
 // item 1's own "This needs webhook-facing API surface (an inbound
 // endpoint automations can be triggered from)" requirement that cannot

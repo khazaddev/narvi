@@ -1,4 +1,4 @@
-// This file (cloudidentitytoken.go) implements Step 73a's own ("cloud
+// This file (cloudidentitytoken.go) implements §27.3's own ("cloud
 // identity: OIDC issuer, bindings, minting", §27.3) CP-side MINTING
 // endpoint for sandbox-agent: POST /sessions/{sessionID}/cloud-identity-
 // token (note: no /api prefix, exactly like scm-credentials/provider-

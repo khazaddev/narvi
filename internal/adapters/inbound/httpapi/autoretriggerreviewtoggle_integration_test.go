@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 65's own (§24.5) auto-retrigger-review REST
+// Integration tests for §24's own (§24.5) auto-retrigger-review REST
 // route (reposettings.go's own PutAutoRetriggerReviewToggle), against a
 // real Postgres instance -- sharing this package's own testRig
 // (httpapi_integration_test.go), mirroring autoapprovalsettings_

@@ -20,9 +20,9 @@ import (
 	"github.com/khazaddev/narvi/internal/app/ports"
 )
 
-// This file proves Step 27's ("mocking + contract drift", §14.3) own
+// This file proves §14.3's ("mocking + contract drift", §14.3) own
 // end-to-end wiring: dispatch.go's checkContractDrift, called from
-// handleEnsureDispatched at the same post-transact hook point as Step 26's
+// handleEnsureDispatched at the same post-transact hook point as §8.5's
 // resolveAndSetImage, against a REAL Postgres instance -- mirroring
 // imagebuild_integration_test.go's own conventions exactly (newTestPool,
 // fakeSpawnProvider, fakeSourceControl, sendEnsureDispatched, waitUntil).

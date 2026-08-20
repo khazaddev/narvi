@@ -23,7 +23,7 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// This file proves Step 37's ("plan mode, web", §8.1/§12.2 item 3) two new
+// This file proves §8.1's ("plan mode, web", §8.1/§12.2 item 3) two new
 // REST endpoints -- POST .../plans/:planId/approve and .../reject -- and
 // their shared authorization stopgap (planauthz.go's canActOnPlan).
 

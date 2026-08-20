@@ -15,7 +15,7 @@ type DigestSection string
 
 // The digest sections a maintainer can currently give feedback on. Only
 // DigestSectionArchRecap has a dedicated capture COMMAND today (§26.5's
-// own "arch recap wrong: <reason>", mirroring Step 63's "false positive:
+// own "arch recap wrong: <reason>", mirroring §22's "false positive:
 // <reason>" exactly) -- the other four are named here so the read model
 // (per-section contest/confirm counts) and ComputeDigestSectionIdentity
 // below are never hard-coded to just one section, even though v1 ships

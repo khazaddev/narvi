@@ -1,4 +1,4 @@
-// Package reviewpost implements the pure computation behind Step 47's
+// Package reviewpost implements the pure computation behind §8.2's
 // server-side verdict-posting tool (§8.2, §5.2, §21.2): given a review
 // session's own typed tool-call fields (VerdictInput), it validates them,
 // builds the authoritative internal/domain/review.Verdict (Shippable
@@ -68,7 +68,7 @@
 //     accepted, rendered, and never read again as structured data), the
 //     synced label, RerunGuidance, and (Step 66) the digest sections that
 //     now front the appendix findings/coverage/docs-drift content.
-//   - digest.go: Digest, ArchDecision -- Step 66's own merge-readout
+//   - digest.go: Digest, ArchDecision -- §26.1's own merge-readout
 //     content (§26.1): "what this PR does", architecture choices, and
 //     risks to the stack, carried on VerdictInput alongside its
 //     pre-existing fields, rendered (never re-parsed) by
@@ -76,7 +76,7 @@
 //     Digest.DescriptionAdequacy/AdequacyExplanation/ProposedBody --
 //     description-adequacy tri-state, its required explanation, and the
 //     agent's own optional PR-body rewrite proposal.
-//   - autofixbody.go: RenderAutofixBody -- Step 67's own (§26.2) graduated-
+//   - autofixbody.go: RenderAutofixBody -- §26.2's own (§26.2) graduated-
 //     remediation content: the ACTUAL new PR body text a Narvi-authored
 //     PR's description gets rewritten to (proposed body + the original
 //     preserved in a collapsed block), distinct from the read-only

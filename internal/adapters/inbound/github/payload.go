@@ -98,7 +98,7 @@ type mention struct {
 	CommenterLogin string
 
 	// IsLabelRetrigger (audit fix, §13.3 row 5) reports whether THIS event
-	// is Step 46's own manual re-trigger-via-LABEL lane
+	// is §8.2's own manual re-trigger-via-LABEL lane
 	// (parsePullRequestLabeled below) rather than an ordinary @mention
 	// comment (parseIssueComment/parsePullRequestReviewComment). coalesce.go's
 	// own REUSE branch consults this to choose the right authz gate: an
@@ -359,7 +359,7 @@ const labelRetriggerPromptText = "Manual re-review requested via the configured 
 
 // pullRequestPayload is the subset of GitHub's real "pull_request" webhook
 // payload this adapter needs (verified against GitHub's own live
-// webhook-events documentation) -- Step 46's ("review sessions", §8.2) own
+// webhook-events documentation) -- §8.2's ("review sessions", §8.2) own
 // manual re-trigger-via-label lane. GitHub fires this event type for many
 // actions (opened, closed, synchronize, labeled, ...); only "labeled" (with
 // a matching label.name) is ever actionable here -- every other action is

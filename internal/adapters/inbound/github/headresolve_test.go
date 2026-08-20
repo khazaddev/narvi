@@ -160,7 +160,7 @@ func TestResolveIssueCommentHead_NullHeadRepoKeepsBaseRepo(t *testing.T) {
 	}
 }
 
-// TestResolveIssueCommentHead_StackThreadedThrough proves Step 46's own
+// TestResolveIssueCommentHead_StackThreadedThrough proves §8.2's own
 // §17.6 amendment: a successful GetPullRequest response carrying a stack
 // object populates m.Stack -- the SAME already-made call this function's
 // own top doc comment describes, never a second one (this test's own

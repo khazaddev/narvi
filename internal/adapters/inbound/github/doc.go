@@ -129,7 +129,7 @@
 // exactly one session and N turns, dispatched one at a time by that
 // session's own actor -- exactly what "session reuse" (§8.2) means.
 //
-// # Step 46 ("review sessions", §8.2): manual re-trigger via label, and
+// # §8.2 ("review sessions", §8.2): manual re-trigger via label, and
 // inline pre-fetched diff/stack context
 //
 // §8.2 above already delivers two of §8.2's own three named

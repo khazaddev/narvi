@@ -1,7 +1,7 @@
-// This file (reviewretrigger.go) implements Step 46's ("review sessions",
+// This file (reviewretrigger.go) implements §8.2's ("review sessions",
 // §8.2) own manual re-trigger-via-BUTTON surface: POST
 // /api/sessions/:id/review/retrigger (§12.2 item 2's own "re-run action"
-// on the Code review view). This is the THIRD of Step 46's three manual
+// on the Code review view). This is the THIRD of §8.2's three manual
 // re-trigger surfaces -- see internal/adapters/inbound/github's own doc.go
 // for the other two (an @mention comment, and the new label lane) and for
 // why all three are equally legitimate, deliberate human commands (§5.1).
@@ -101,7 +101,7 @@ const manualRetriggerPromptText = "Manual re-review requested via the web review
 // this endpoint to the SAME safe, deterministic "decline while a plan is
 // awaiting approval" outcome every pre-Step-64 caller already got, with no
 // outbound LLM call spent classifying text that was never a reply to
-// begin with (the fail-safe direction Step 64's own review batch requires:
+// begin with (the fail-safe direction §23's own review batch requires:
 // "when in doubt, skip classification rather than guess").
 // reviewTriageDeps/reviewModelDeep (§26.3) mirror internal/
 // adapters/inbound/github's own identical SessionCoalescer.ReviewTriage/
@@ -332,7 +332,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		// REST policy.
 		//
 		// epistemicCheckDefault: hardcoded false, deliberately never the
-		// operator's own platform.Config.EpistemicCheckDefault -- Step 61's
+		// operator's own platform.Config.EpistemicCheckDefault -- §20's
 		// own devil's-advocate preamble (§20) is a BUILDER check ("domain/
 		// turn: builder epistemic pre-action check", the Step's own title);
 		// a review turn is never a build turn (this function creates

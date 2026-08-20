@@ -10,7 +10,7 @@
 // see that package's own doc comment) in place of this turn's real,
 // live, CURRENT-gen URL/bearer/gen.
 //
-// Step 58 ("uploads, blob storage & the in-sandbox download_file tool",
+// §8.6 ("uploads, blob storage & the in-sandbox download_file tool",
 // §28.5) extends this SAME mechanism for a second tool, never a second
 // substitution scheme: internal/domain/upload's own
 // BaseURLPlaceholder/BearerPlaceholder/GenPlaceholder (rendered into a

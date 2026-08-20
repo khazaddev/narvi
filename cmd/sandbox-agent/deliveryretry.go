@@ -63,7 +63,7 @@ func classifyDeliveryFetchError(err error) error {
 	return platform.Permanent(err)
 }
 
-// classifyMintTokenError is Step 73b's own ("cloud identity: sandbox-side
+// classifyMintTokenError is §27.4's own ("cloud identity: sandbox-side
 // consumption + kubeconfig injection", §27.3) sibling to
 // classifyDeliveryFetchError, for cloud-identity-token minting
 // (credentials.CPClient.MintCloudIdentityToken) specifically -- NOT a

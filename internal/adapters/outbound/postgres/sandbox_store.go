@@ -95,7 +95,7 @@ func (s *SandboxStore) UpdateSnapshotID(ctx context.Context, arg sqlcgen.UpdateS
 }
 
 // ListLiveProviderIDs returns the provider_id of every sandboxes row
-// currently in a LIVE status, across ALL sessions -- Step 25 ("reconciler
+// currently in a LIVE status, across ALL sessions -- §5.3 ("reconciler
 // + GC", §5.3), app/reconciler's own "expected still alive" set. Unlike
 // every other SandboxStore method (each scoped to one session_id), this is
 // the one deliberately cross-session query the reconciler needs -- see

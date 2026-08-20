@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 56's ("workflow HITL gate + circuit breaker",
+// Integration tests for §25.9's ("workflow HITL gate + circuit breaker",
 // §25.9/§25.10/§25.11) own decide endpoint -- POST /api/workflow-runs/
 // :runId/steps/:stepRunId/decide -- against a real Postgres instance,
 // mirroring planapprove_integration_test.go's own house style exactly

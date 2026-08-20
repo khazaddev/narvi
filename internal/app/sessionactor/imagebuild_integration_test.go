@@ -21,8 +21,8 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// This file proves Step 26's ("image builds", §8.5-note/§10-P2) own
-// end-to-end wiring, as rewritten by Step 41 ("warm boot: shared
+// This file proves §8.5's ("image builds", §8.5-note/§10-P2) own
+// end-to-end wiring, as rewritten by §19.1 ("warm boot: shared
 // fingerprint + spawn-path simplification", §19.1): dispatch.go/
 // imageresolve.go's resolveAndSetImage on the spawn side, and internal/
 // app/imagebuild.Builder on the background side, against a REAL Postgres
@@ -224,7 +224,7 @@ func TestResolveAndSetImage_NoCachedImage_FallsBackToBaseAndCreatesPendingRow(t 
 // 'ready' row is seeded directly here (Claim + RecordSuccess against a
 // pending row this test creates), simulating what §19.2's own
 // claim-time resolution will eventually produce for a repo-bearing
-// fingerprint for real -- Step 41's own background builder cannot produce
+// fingerprint for real -- §19.1's own background builder cannot produce
 // one for a repo-bearing row itself yet (see this file's own top comment).
 func TestResolveAndSetImage_WarmHit_UsesReadyImageZeroNetworkCalls(t *testing.T) {
 	ctx := context.Background()

@@ -191,7 +191,7 @@ type Config struct {
 	// reviewtriage.LoadConfig's own `deps.RepoSettings == nil` check).
 	ArchRecapVerdicts appreviewverdict.Deps
 
-	// Comments (Step 37/38 follow-up fix, Finding 1) posts the honest
+	// Comments (a follow-up fix, Finding 1) posts the honest
 	// planAwaitingApprovalReplyText reply (planawaitingreply.go) back to a
 	// PR thread when coalesce.go's CreateOrJoin declines to enqueue a build
 	// turn because the session's plan is currently awaiting approval. ALSO
@@ -558,7 +558,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		// classifyText parameter for the full "why".
 		mentionText := m.CommentBody
 
-		// Step 46 ("review sessions", §8.2): fold this PR's own inline
+		// §8.2 ("review sessions", §8.2): fold this PR's own inline
 		// pre-fetched diff (and, when present, its GitHub-native stack
 		// context, §17.6) into the turn's own prompt text -- BEFORE
 		// coalescer.CreateOrJoin, so this happens identically for BOTH the
@@ -833,7 +833,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 				return
 			}
 			if errors.Is(err, ErrRolloutNotEnrolled) {
-				// Step 76's own permanent-denial idiom (§10 Phase 6, §32):
+				// §10's own permanent-denial idiom (§10 Phase 6, §32):
 				// this repo is not enrolled in the cohort rollout --
 				// coalesce.go's own ErrRolloutNotEnrolled doc comment for
 				// the full "why". Mirrors ErrActorNotAuthorized's own
@@ -853,7 +853,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 				return
 			}
 			if errors.Is(err, httpapi.ErrPlanAwaitingApproval) {
-				// Step 37/38 follow-up fix (Finding 1): the session's plan
+				// a follow-up fix (Finding 1): the session's plan
 				// is currently awaiting approval, so the REUSE path's own
 				// httpapi.CreateTurnForBot call (coalesce.go) declined to
 				// enqueue an ordinary build turn -- a deterministic,
@@ -895,7 +895,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		// comment for the full "why" a shared, mutable per-(repo,PR)
 		// column was the wrong place for this fact).
 
-		// Step 50 ("release PR review", §15): only the WINNER (brand-new
+		// §15 ("release PR review", §15): only the WINNER (brand-new
 		// session) path ever triggers release detection/the manifest check
 		// -- see triggerReleaseManifestCheckBestEffort's own doc comment
 		// (releasemanifest.go) for the full "why". Runs AFTER the mention

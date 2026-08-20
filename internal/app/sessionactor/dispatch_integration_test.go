@@ -64,7 +64,7 @@ import (
 // real Builder against this SAME fake provider instance, so BuildImage
 // needs the same configurable-success/failure shape every other provider
 // method here already has.
-// Step 30's own follow-up PR ("resilience suite", §9.3 scenario #5's
+// §9.3's own follow-up PR ("resilience suite", §9.3 scenario #5's
 // plain-SPAWN race variant) extends this same fake once more with
 // createBlock: an optional, test-supplied channel that, when non-nil,
 // CreateSandbox blocks on (after recording the call) until the test
@@ -102,7 +102,7 @@ type fakeSpawnProvider struct {
 	buildCalls   []ports.ImageSpec
 	nextBuildRef ports.BuildRef
 	nextBuildErr error
-	// buildBlock is Step 42's ("warm boot: refresh pump", §19.2) own
+	// buildBlock is §19.2's ("warm boot: refresh pump", §19.2) own
 	// extension, mirroring createBlock/resumeBlock's own identical
 	// "optional, test-supplied channel BuildImage blocks on after
 	// recording the call" shape exactly -- this is what lets the new
@@ -114,7 +114,7 @@ type fakeSpawnProvider struct {
 	// them, unchanged.
 	buildBlock chan struct{}
 
-	// dockerSupported/egressPolicySupported are Step 74's own extension
+	// dockerSupported/egressPolicySupported are §27.5's own extension
 	// (§27.5/§27.6), mirroring resumeSupported's own identical
 	// per-test-configurable-Capabilities-field shape exactly: false (the
 	// SAME value Capabilities() already hardcoded before this Step, via
@@ -1608,7 +1608,7 @@ func TestHandleEnsureDispatched_HealthySpawning_WithinStuckTimeout_NoChange(t *t
 	}
 }
 
-// --- Step 23 ("resume"), §3.2/§8.7: executeResume's own decision-tree
+// --- §3.2 ("resume"), §3.2/§8.7: executeResume's own decision-tree
 // coverage, mirroring this file's own existing spawn/restore-path tests
 // exactly (same rig helpers, same fakeSpawnProvider, same
 // waitUntil/fixed-sleep conventions) for the Resume path

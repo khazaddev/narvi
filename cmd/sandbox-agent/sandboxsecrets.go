@@ -1,4 +1,4 @@
-// This file (sandboxsecrets.go) implements Step 72's own ("sandbox
+// This file (sandboxsecrets.go) implements §27.1's own ("sandbox
 // secrets & opencode config", §27.1) sandbox-agent-side FETCH +
 // INJECTION-ENV-BUILDING of general sandbox_secrets, mirroring main.go's
 // own fetchProviderCredentials/providerCredentialSpawnEnv split (Step 53)

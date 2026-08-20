@@ -68,7 +68,7 @@
 // ImageBuilds: false, and — the one flag genuinely unresolved without real
 // RWX access — Resume: false, the conservative default until stop→start
 // state preservation is verified empirically against a real account
-// (§4.1.3 names this as Step 57's own first exit criterion; see
+// (§4.1.3 names this as §4.1's own first exit criterion; see
 // Provider.Capabilities' own doc comment, provider.go, for the full
 // reasoning). TakeSnapshot/RestoreFromSnapshot/BuildImage/DeleteImage/
 // ResumeSandbox each return the permanent UNSUPPORTED_OPERATION

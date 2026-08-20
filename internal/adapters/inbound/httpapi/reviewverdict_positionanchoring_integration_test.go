@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 63's own §22.1.1 content-anchored
+// Integration tests for §22's own §22.1.1 content-anchored
 // positioning, end to end through the real POST /sessions/:id/review/
 // verdict handler (reviewverdict.go) against a real Postgres instance --
 // gated behind the "integration" build tag, sharing this package's own

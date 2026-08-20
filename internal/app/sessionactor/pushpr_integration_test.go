@@ -104,7 +104,7 @@ type fakeSourceControl struct {
 	registerStackCalls []ports.RegisterPRStackSpec
 	registerStackErr   error
 
-	// diffCalls/nextDiff/nextDiffErr are Step 49's ("handoff-readiness
+	// diffCalls/nextDiff/nextDiffErr are §14.4's ("handoff-readiness
 	// sentinel", §14.4) own extension of this same fake for
 	// GetPullRequestDiff -- this fake ALSO satisfies PRDiffFetcher
 	// (handoffsentinel.go), mirroring how the real production adapter
@@ -901,7 +901,7 @@ func TestHandleSandboxEvent_PushComplete_NoCreatedBy_SkipsHonestly(t *testing.T)
 }
 
 // TestHandleSandboxEvent_PushComplete_ViewerCreator_SkipsPRCreation proves
-// Step 39's own viewer guard (§13.3: "viewers never gain PR-reviewer
+// §13.2's own viewer guard (§13.3: "viewers never gain PR-reviewer
 // attribution or git identity on session artifacts"): a session whose
 // creator has a REAL, usable, encrypted GitHub identity/token -- otherwise
 // an identical setup to TestHandleSandboxEvent_PushComplete_CreatesPRArtifact

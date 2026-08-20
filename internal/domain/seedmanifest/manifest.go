@@ -1,5 +1,5 @@
 // Package seedmanifest is the pure, no-I/O schema and structural validator
-// for Step 75's ("config/data seeding", §10-P6, §13.4) operator-authored
+// for §10's ("config/data seeding", §10-P6, §13.4) operator-authored
 // seed file. This package never reads a file, never touches the network
 // or a database, and never calls time.Now()/crypto/rand (§11) -- it only
 // ever converts already-in-memory bytes/structs into a Manifest and
@@ -185,7 +185,7 @@ type RepoSetting struct {
 
 // RWXPreview is one repo's RWX preview integration config (repo_settings.
 // rwx_preview_* columns, §4.1.2) -- this tool's concrete answer
-// to Step 75's "integrations" checklist item. See internal/app/seed/
+// to §10's "integrations" checklist item. See internal/app/seed/
 // doc.go for why the OTHER kind of "integration" this codebase names
 // (authz.ActionManageIntegrations: Slack/Linear WORKSPACE OAuth
 // connections) is deliberately NOT seedable data at all, by any tool --

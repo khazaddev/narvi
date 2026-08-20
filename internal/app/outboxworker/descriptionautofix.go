@@ -15,7 +15,7 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// This file implements Step 67's own ("review digest: description
+// This file implements §26.2's own ("review digest: description
 // adequacy + graduated remediation", §26.2) description-autofix notifier:
 // ports.NotificationKindGitHubDescriptionAutofix's own real Deliver.
 // Lives in internal/app/outboxworker, mirroring sentinelAutoFixNotifier's

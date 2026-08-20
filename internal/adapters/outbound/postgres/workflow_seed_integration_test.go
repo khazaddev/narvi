@@ -59,7 +59,7 @@ func expectPgErrCode(t *testing.T, err error, code, constraint string) {
 
 // TestWorkflowSeed_BuiltInDefinitions proves the three system templates
 // exist exactly as §25.8 shapes them TODAY, post migration
-// 000088_plan_builtin_passthrough (Step 56's own corrective follow-up):
+// 000088_plan_builtin_passthrough (§25.9's own corrective follow-up):
 // review/request/plan are now IDENTICALLY shaped single passthrough
 // steps (ModelID nil so turns.model_id/sessions.build_model_id inherit
 // exactly as today -- §25.6's zero-config proof), no HITL, no edges.

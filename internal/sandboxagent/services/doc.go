@@ -1,4 +1,4 @@
-// Package services implements Step 14's own execution half of §14.2's
+// Package services implements §14.2's own execution half of §14.2's
 // multi-service boot manifest: given an already-parsed
 // internal/domain/servicemanifest.Manifest, spawn every declared service
 // CONCURRENTLY under the shared internal/sandboxagent/supervisor.

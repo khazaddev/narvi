@@ -1,4 +1,4 @@
-// This file (providercredentialsdelivery.go) implements Step 53's own
+// This file (providercredentialsdelivery.go) implements §25.1's own
 // ("provider credential injection", §25.1/§25.3) CP-side DELIVERY
 // endpoint for sandbox-agent: POST /sessions/{sessionID}/provider-
 // credentials (note: no /api prefix, exactly like scm-credentials/

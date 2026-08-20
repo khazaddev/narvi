@@ -19,7 +19,7 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// This file proves Step 77's ("ops: dashboards, alerts, runbooks", §5.3)
+// This file proves §5.3's ("ops: dashboards, alerts, runbooks", §5.3)
 // own five new instruments (opsmetrics.go) are genuinely emitted by their
 // real production call sites -- driving each through the real Actor entry
 // point (Send/handleEnsureDispatched, exactly like every other test in

@@ -1,6 +1,6 @@
-// Package handoff implements Step 49's own ("handoff-readiness sentinel",
+// Package handoff implements §14.4's own ("handoff-readiness sentinel",
 // §14.4/§14.5) pure decision logic: given a scoped-session PR's own
-// already-resolved contract-drift signal (reused from Step 27's
+// already-resolved contract-drift signal (reused from §14.3's
 // internal/domain/contractdrift, never re-derived here) and a scan of its
 // diff for backend-adjacent TODO/FIXME markers (this Step's own new,
 // small logic), decide whether there is anything worth telling an
@@ -37,7 +37,7 @@
 //
 //  1. Handoff findings are built via reviewpost.FindingInput/BuildFinding
 //     with SentinelKind always nil. reviewpost.SentinelKind is a closed,
-//     two-value vocabulary (coverage/docs_drift) that Step 48's own
+//     two-value vocabulary (coverage/docs_drift) that §8.2's own
 //     §17.1 "no recursion" rule uses to decide whether a posted finding
 //     is eligible to trigger the sentinel-auto-fix child-session flow
 //     (httpapi/reviewverdict.go's own hasSentinelFinding). Adding a third
@@ -57,7 +57,7 @@
 //
 //  2. The "uncontracted endpoints" signal is repo-level, not endpoint-
 //     level, despite §14.4's own text ("reports which endpoints the
-//     prototype calls that have no entry in contracts/api/*"). Step 27's
+//     prototype calls that have no entry in contracts/api/*"). §14.3's
 //     actual, already-merged contract-drift machinery
 //     (internal/domain/contractdrift) computes exactly ONE thing: whether
 //     a repo's own current (RepoSHA, ContractsFingerprint) pair has
@@ -76,7 +76,7 @@
 //     was last checked" -- see ContractDriftFinding below), never a
 //     fabricated list of specific paths nothing in this codebase actually
 //     knows. Named here as a genuine, unresolved tension between §14.4's
-//     own text and Step 27's actual scope -- not silently narrowed.
+//     own text and §14.3's actual scope -- not silently narrowed.
 //
 //  3. Severity: ContractDriftFinding is review.RiskLevelMedium (real
 //     engineering follow-up is very likely needed before this ships,

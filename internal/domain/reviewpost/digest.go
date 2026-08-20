@@ -2,7 +2,7 @@ package reviewpost
 
 import "github.com/khazaddev/narvi/internal/domain/review"
 
-// This file implements Step 66's own restructuring of the rendered verdict
+// This file implements §26.1's own restructuring of the rendered verdict
 // into a "merge readout" (§26, §26.1: "when agents author most of the code
 // under review, the merge DECISION is the bottleneck, not line-by-line
 // reading"). Digest/ArchDecision live HERE, in reviewpost -- never as new

@@ -51,7 +51,7 @@ import "testing"
 //     pinned.
 //  3. `rwx sandbox stop` then `rwx sandbox start` against the SAME
 //     identity actually preserves (or does not preserve) working-tree
-//     state — Step 57's own FIRST exit criterion (§4.1.1/§4.1.3), settled
+//     state — §4.1's own FIRST exit criterion (§4.1.1/§4.1.3), settled
 //     empirically, deciding whether Capabilities().Resume ever flips to
 //     true (see Provider.Capabilities' own doc comment).
 //  4. `rwx sandbox list --format json` actually reports org-wide truth

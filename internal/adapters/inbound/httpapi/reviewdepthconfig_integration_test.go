@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 68's own (§26.3) per-repo reviewDepth config
+// Integration tests for §26.3's own (§26.3) per-repo reviewDepth config
 // REST route (reposettings.go's own PutReviewDepthConfig), against a real
 // Postgres instance -- sharing this package's own testRig (httpapi_
 // integration_test.go), mirroring autoretriggerreviewtoggle_integration_

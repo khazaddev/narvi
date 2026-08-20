@@ -23,7 +23,7 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// This file proves Step 57's own ("RWX provider + previews", §4.1.2 point
+// This file proves §4.1's own ("RWX provider + previews", §4.1.2 point
 // 1) PR preview enqueue wiring: a real push_complete that already causes
 // createPRBestEffort to open (or recover) a PR ALSO writes a "preview"-
 // typed artifact row plus the two new outbox rows (rwx_preview_dispatch,

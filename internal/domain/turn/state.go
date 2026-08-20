@@ -129,7 +129,7 @@ func (e *IllegalTransitionError) Unwrap() error { return ErrIllegalTransition }
 // Every edge here has exactly one fixed destination (no dynamic-target
 // triggers, unlike internal/domain/sandbox's Recover/GraceExpired).
 //
-// Deliberately still true after Step 24 ("two-phase terminalization"),
+// Deliberately still true after §3.2 ("two-phase terminalization"),
 // which needed no new edge here: §3.2's own late-success reconciliation
 // ("a genuinely late execution_complete... turn marked completed") does
 // NOT require a Failed -> Completed edge, because by construction a turn

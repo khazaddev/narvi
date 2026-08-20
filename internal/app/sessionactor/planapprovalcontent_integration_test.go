@@ -15,7 +15,7 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// This file proves Step 38's ("plan mode, cross-channel", §8.1/§13.3) own
+// This file proves §8.1's ("plan mode, cross-channel", §8.1/§13.3) own
 // best-effort plan-content extraction (planapprovalcontent.go's
 // planContentText) against a REAL Postgres instance, specifically the case
 // planContentEventFetchLimit's own doc comment describes: a session that

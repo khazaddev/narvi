@@ -104,7 +104,7 @@
 // been counted -- that is the CAS's job, entirely in app/automation's own
 // impure layer, per this package's own "no I/O" boundary (§11).
 //
-// # Step 52 ("automations: triggers & extras", §8.4): what this package adds
+// # §8.4 ("automations: triggers & extras", §8.4): what this package adds
 //
 // Five new files, each a small, independent, pure addition -- none of them
 // touch the three transition tables above, since none of this Step's own

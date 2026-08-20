@@ -1,4 +1,4 @@
-// This file (uploadcore.go) holds the pieces Step 58's ("uploads, blob
+// This file (uploadcore.go) holds the pieces §8.6's ("uploads, blob
 // storage & the in-sandbox download_file tool", §28) three new
 // operations -- mint (uploadmint.go), confirm (uploadconfirm.go), and
 // content/download (uploadcontent.go) -- share across BOTH their auth

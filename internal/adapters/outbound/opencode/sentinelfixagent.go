@@ -2,7 +2,7 @@ package opencode
 
 import "encoding/json"
 
-// This file implements Step 48's own ("sentinels + suggestions", §17.2)
+// This file implements §8.2's own ("sentinels + suggestions", §17.2)
 // capability-restriction mechanism: "the child session's write/edit tool
 // capability is additionally restricted server-side to test/doc path
 // patterns at spawn time... a second, independent layer alongside §17.4's

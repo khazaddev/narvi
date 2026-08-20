@@ -1,7 +1,7 @@
-// This file (automations.go) implements Step 52's own ("automations:
+// This file (automations.go) implements §8.4's own ("automations:
 // triggers & extras", §8.4) REST CRUD surface over automations
 // (migrations/000051_automations.up.sql, extended by migrations/
-// 000055_automations_triggers_and_extras.up.sql) -- Step 51 ("automations:
+// 000055_automations_triggers_and_extras.up.sql) -- §3.5 ("automations:
 // engine") shipped the fan-out/reconcile/sweep engine ENGINE-ONLY, with no
 // HTTP surface at all (verified directly: no automations.go existed in
 // this package before this Step) -- invocationenqueue.go's own doc comment

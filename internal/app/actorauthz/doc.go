@@ -6,7 +6,7 @@
 //
 // # Why this package exists
 //
-// Step 39 ("identities + full RBAC", §13.2/§13.3) added identical
+// §13.2 ("identities + full RBAC", §13.2/§13.3) added identical
 // "resolved actor's role must still pass domain/authz.Authorize" gating to
 // both internal/adapters/inbound/slack and internal/adapters/inbound/linear
 // -- authorizeResolvedActor (the role/disabled check) and ownedOrJoined

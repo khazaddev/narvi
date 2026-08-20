@@ -154,7 +154,7 @@
 //
 // # CreateInvocation -- this Step's own minimal entry point
 //
-// Step 52 ("automations: triggers & extras", §8.4) owns WHAT causes an
+// §8.4 ("automations: triggers & extras", §8.4) owns WHAT causes an
 // invocation to be created (GitHub/Linear/webhook/cron trigger condition
 // evaluation) -- out of this Step's own scope entirely. invocationenqueue.go's
 // CreateInvocation is this Step's own minimal, durable "an invocation now

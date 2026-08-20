@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Step 61's ("domain/turn: builder epistemic
+// Integration tests for §20's ("domain/turn: builder epistemic
 // pre-action check", §20.2) own structured-signal-reporting tool
 // (epistemicoutcome.go), against a real Postgres instance -- sharing this
 // package's own testRig (httpapi_integration_test.go), mirroring

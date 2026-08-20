@@ -1,7 +1,7 @@
 //go:build integration
 
 // Integration tests proving app/sessionactor's locking/fencing/pump
-// mechanics against a REAL Postgres instance (§9.1, Step 11's own
+// mechanics against a REAL Postgres instance (§9.1, §2's own
 // verification requirement) -- gated behind the "integration" build tag,
 // matching internal/adapters/outbound/postgres/postgres_integration_test.
 // go's own conventions exactly (testcontainers Postgres, embedded

@@ -77,7 +77,7 @@ func reposFromJSON(raw []byte) ([]sessionconfig.SessionConfigReposElem, error) {
 // sandbox-agent is a separate process from the control plane and only
 // knows what it's told via NARVI_SESSION_CONFIG), DockerRequired (§27.5,
 // Step 74), and EgressPolicy (§27.6) -- Step 74 folds its own
-// two new derivations into what Step 29's own environmentPathScope
+// two new derivations into what §3.4's own environmentPathScope
 // (now this function) already fetched, rather than adding two more
 // independent queries against the SAME row inside the SAME transact.
 //
@@ -168,7 +168,7 @@ func (a *Actor) allowlistFloorHosts(ctx context.Context, repos []sessionconfig.S
 	return floor
 }
 
-// reviewCounterReviewerModel resolves Step 69's own §26.4 opposing-model-
+// reviewCounterReviewerModel resolves §26.4's own §26.4 opposing-model-
 // family override for THIS session, when one applies -- nil (no override
 // at all, sessionconfig.SessionConfig.ReviewCounterReviewerModel's own
 // documented "no override" zero value) for every session that is not a
@@ -343,7 +343,7 @@ func reviewCredentialRepoFullNames(rawRepos []byte) ([]string, error) {
 //     sessionRow.EnvironmentID), above; nil (absent from the wire document
 //     entirely, via its own omitempty) for the overwhelming common,
 //     unscoped case.
-//   - Docker/EgressPolicy: Step 74's own additions (§27.5/§27.6) -- the
+//   - Docker/EgressPolicy: §27.5's own additions (§27.5/§27.6) -- the
 //     SAME environmentSubstrate call's other two return values. Docker is
 //     env.DockerRequired verbatim (a plain bool, no further processing).
 //     EgressPolicy, when its Mode == EgressModeAllowlist, is threaded

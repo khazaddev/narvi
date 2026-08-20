@@ -29,7 +29,7 @@
 // all environment-scoping-related -- SentinelAutoFix has nothing to do
 // with path-scoping/mock-config).
 //
-// Step 49 ("handoff-readiness sentinel", §14.4) adds ScopedEnvironment
+// §14.4 ("handoff-readiness sentinel", §14.4) adds ScopedEnvironment
 // below -- the SAME "scoped_environment" value httpapi/create.go already
 // wrote under its own private name, now promoted here (create.go's own
 // constant is retired in favor of this one, never left as a second,

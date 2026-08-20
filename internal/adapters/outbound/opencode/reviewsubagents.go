@@ -6,7 +6,7 @@ import (
 	"github.com/khazaddev/narvi/internal/domain/review"
 )
 
-// This file implements Step 69's own (§26.4/§26.6, "review deep path:
+// This file implements §26.4's own (§26.4/§26.6, "review deep path:
 // adversarial counter-review + readout measurement") sub-agent
 // registration: three custom OpenCode agents -- review.ArchitectureScribeAgentName,
 // review.CounterReviewerAgentName, review.FactCheckAgentName -- the
