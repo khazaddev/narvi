@@ -3119,6 +3119,36 @@ func (j *ListSandboxSecretsResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// GET /api/sessions's own response body (§12.2 item 1's own sidebar/session-list
+// addition -- no route existed for this before now). sessions is ordered
+// most-recently-updated first (sessions.updated_at DESC), bounded by the request's
+// own limit (default/max enforced server-side, never truly unbounded) -- no cursor
+// pagination in this first cut, matching ArtifactsResponse/ListPlansResponse's own
+// identical 'expected to stay small enough, deepen later if that stops being true'
+// precedent immediately above.
+type ListSessionsResponse struct {
+	// Sessions corresponds to the JSON schema field "sessions".
+	Sessions []Session `json:"sessions" yaml:"sessions" mapstructure:"sessions"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ListSessionsResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["sessions"]; raw != nil && !ok {
+		return fmt.Errorf("field sessions in ListSessionsResponse: required")
+	}
+	type Plain ListSessionsResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ListSessionsResponse(plain)
+	return nil
+}
+
 // One member's own REST wire shape -- role + every identity currently linked to
 // them (§13.3: 'linked identity chips'). role matches the Postgres user_role enum
 // exactly. Every endpoint that returns a Member (ListMembers, UpdateMemberRole)
@@ -6130,6 +6160,8 @@ func (j *SandboxSecret) UnmarshalJSON(value []byte) error {
 // Mirrors the sessions table (migrations/000004_sessions.up.sql).
 // status/failureReason/spawnSource enums match
 // session_status/session_failure_reason/session_spawn_source exactly.
+// repos/sandboxStatus (§12.2 item 1's own GET /api/sessions list endpoint) are two
+// additions to a DTO that otherwise predates them.
 type Session struct {
 	// Archived corresponds to the JSON schema field "archived".
 	Archived bool `json:"archived" yaml:"archived" mapstructure:"archived"`
@@ -6146,6 +6178,22 @@ type Session struct {
 
 	// Id corresponds to the JSON schema field "id".
 	Id string `json:"id" yaml:"id" mapstructure:"id"`
+
+	// This session's own repo list (sessions.repos,
+	// migrations/000018_session_repos.up.sql -- "position 0 = primary; repos are
+	// always a list"), set once at session-creation time and never mutated afterward.
+	// Same shape as AutomationReposElem/CreateSessionRequest.repos' own inline item
+	// -- reused here rather than a third near-identical inline copy.
+	Repos []AutomationReposElem `json:"repos" yaml:"repos" mapstructure:"repos"`
+
+	// Matches Postgres sandbox_status exactly (migrations/000006_sandboxes.up.sql).
+	// Null when this session has no sandbox row yet (e.g. status='created', never
+	// dispatched). Populated by GET /api/sessions (list) only, sourced from a LEFT
+	// JOIN against sandboxes -- GET /api/sessions/{id} always returns null here: the
+	// single-session view derives its own live boot/ready state from its own event
+	// stream instead (§6.1's typed events already carry 'ready'/'boot_progress'
+	// verbatim), never from a second, potentially-stale read of this column.
+	SandboxStatus *SessionSandboxStatus `json:"sandboxStatus" yaml:"sandboxStatus" mapstructure:"sandboxStatus"`
 
 	// Matches Postgres session_spawn_source exactly.
 	SpawnSource SessionSpawnSource `json:"spawnSource" yaml:"spawnSource" mapstructure:"spawnSource"`
@@ -6199,6 +6247,50 @@ func (j *SessionFailureReason) UnmarshalJSON(value []byte) error {
 		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_SessionFailureReason, v.Value)
 	}
 	*j = SessionFailureReason(v)
+	return nil
+}
+
+type SessionSandboxStatus struct {
+	Value interface{}
+}
+
+// MarshalJSON implements json.Marshaler.
+func (j *SessionSandboxStatus) MarshalJSON() ([]byte, error) {
+	return json.Marshal(j.Value)
+}
+
+var enumValues_SessionSandboxStatus = []interface{}{
+	"pending",
+	"spawning",
+	"connecting",
+	"booting",
+	"ready",
+	"snapshotting",
+	"suspect",
+	"stopped",
+	"failed",
+	nil,
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *SessionSandboxStatus) UnmarshalJSON(value []byte) error {
+	var v struct {
+		Value interface{}
+	}
+	if err := json.Unmarshal(value, &v.Value); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_SessionSandboxStatus {
+		if reflect.DeepEqual(v.Value, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_SessionSandboxStatus, v.Value)
+	}
+	*j = SessionSandboxStatus(v)
 	return nil
 }
 
@@ -6295,6 +6387,12 @@ func (j *Session) UnmarshalJSON(value []byte) error {
 	}
 	if _, ok := raw["id"]; raw != nil && !ok {
 		return fmt.Errorf("field id in Session: required")
+	}
+	if _, ok := raw["repos"]; raw != nil && !ok {
+		return fmt.Errorf("field repos in Session: required")
+	}
+	if _, ok := raw["sandboxStatus"]; raw != nil && !ok {
+		return fmt.Errorf("field sandboxStatus in Session: required")
 	}
 	if _, ok := raw["spawnSource"]; raw != nil && !ok {
 		return fmt.Errorf("field spawnSource in Session: required")

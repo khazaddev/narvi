@@ -13,7 +13,7 @@ export interface RestDtos {
   [k: string]: unknown;
 }
 /**
- * Mirrors the sessions table (migrations/000004_sessions.up.sql). status/failureReason/spawnSource enums match session_status/session_failure_reason/session_spawn_source exactly.
+ * Mirrors the sessions table (migrations/000004_sessions.up.sql). status/failureReason/spawnSource enums match session_status/session_failure_reason/session_spawn_source exactly. repos/sandboxStatus (§12.2 item 1's own GET /api/sessions list endpoint) are two additions to a DTO that otherwise predates them.
  *
  * This interface was referenced by `RestDtos`'s JSON-Schema
  * via the `definition` "Session".
@@ -43,6 +43,38 @@ export interface Session {
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
+  /**
+   * This session's own repo list (sessions.repos, migrations/000018_session_repos.up.sql -- "position 0 = primary; repos are always a list"), set once at session-creation time and never mutated afterward. Same shape as AutomationReposElem/CreateSessionRequest.repos' own inline item -- reused here rather than a third near-identical inline copy.
+   */
+  repos: AutomationReposElem[];
+  /**
+   * Matches Postgres sandbox_status exactly (migrations/000006_sandboxes.up.sql). Null when this session has no sandbox row yet (e.g. status='created', never dispatched). Populated by GET /api/sessions (list) only, sourced from a LEFT JOIN against sandboxes -- GET /api/sessions/{id} always returns null here: the single-session view derives its own live boot/ready state from its own event stream instead (§6.1's typed events already carry 'ready'/'boot_progress' verbatim), never from a second, potentially-stale read of this column.
+   */
+  sandboxStatus:
+    | 'pending'
+    | 'spawning'
+    | 'connecting'
+    | 'booting'
+    | 'ready'
+    | 'snapshotting'
+    | 'suspect'
+    | 'stopped'
+    | 'failed'
+    | null;
+}
+/**
+ * Same shape as CreateSessionRequest's own inline repos item (name/url/branch) -- a REAL top-level $def here (unlike CreateSessionRequest.repos' own inline item schema, which go-jsonschema cannot be $ref'd across sibling $defs) so Automation/CreateAutomationRequest can both reference it directly.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "AutomationReposElem".
+ */
+export interface AutomationReposElem {
+  name: string;
+  url: string;
+  /**
+   * Null means create runs from the repo's default base branch.
+   */
+  branch: string | null;
 }
 /**
  * The one CreateSessionRequest shape used by every ingress surface (§10 Phase-3 milestone: 'atomic dedupe, one CreateSessionRequest').
@@ -927,20 +959,6 @@ export interface ReviewAnalyticsTagCount {
 export interface ReviewAnalyticsFindingStatusCount {
   status: 'open' | 'rebutted' | 'fix_pending' | 'fix_open' | 'fix_merged' | 'fix_applied';
   count: number;
-}
-/**
- * Same shape as CreateSessionRequest's own inline repos item (name/url/branch) -- a REAL top-level $def here (unlike CreateSessionRequest.repos' own inline item schema, which go-jsonschema cannot be $ref'd across sibling $defs) so Automation/CreateAutomationRequest can both reference it directly.
- *
- * This interface was referenced by `RestDtos`'s JSON-Schema
- * via the `definition` "AutomationReposElem".
- */
-export interface AutomationReposElem {
-  name: string;
-  url: string;
-  /**
-   * Null means create runs from the repo's default base branch.
-   */
-  branch: string | null;
 }
 /**
  * One entry of an automation's own env_vars (§8.4's own 'per-automation env vars') -- plain, non-secret configuration only (internal/domain/automation.EnvVar). See internal/domain/automation/doc.go's own writeup for why per-automation SECRETS are a deliberately different, unbuilt thing (deferred to §25.1.
@@ -1953,4 +1971,13 @@ export interface PutClusterBindingRequest {
   params?: {
     [k: string]: unknown;
   };
+}
+/**
+ * GET /api/sessions's own response body (§12.2 item 1's own sidebar/session-list addition -- no route existed for this before now). sessions is ordered most-recently-updated first (sessions.updated_at DESC), bounded by the request's own limit (default/max enforced server-side, never truly unbounded) -- no cursor pagination in this first cut, matching ArtifactsResponse/ListPlansResponse's own identical 'expected to stay small enough, deepen later if that stops being true' precedent immediately above.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ListSessionsResponse".
+ */
+export interface ListSessionsResponse {
+  sessions: Session[];
 }

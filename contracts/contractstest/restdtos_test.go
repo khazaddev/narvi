@@ -32,6 +32,13 @@ func TestSessionRoundTrip(t *testing.T) {
 			CreatedBy:     &createdBy,
 			CreatedAt:     createdAt,
 			UpdatedAt:     updatedAt,
+			Repos: []restdtos.AutomationReposElem{
+				{Name: "acme/narvi", Url: "https://example.invalid/acme/narvi.git", Branch: nil},
+			},
+			// SandboxStatus stays nil: this is what GetSession returns
+			// for every session (see Session.sandboxStatus's own schema
+			// doc comment -- only ListSessions ever populates it).
+			SandboxStatus: nil,
 		})
 	})
 
@@ -49,6 +56,8 @@ func TestSessionRoundTrip(t *testing.T) {
 			CreatedBy:     nil,
 			CreatedAt:     createdAt,
 			UpdatedAt:     updatedAt,
+			Repos:         []restdtos.AutomationReposElem{},
+			SandboxStatus: &restdtos.SessionSandboxStatus{Value: "failed"},
 		})
 	})
 }

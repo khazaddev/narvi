@@ -130,3 +130,35 @@ SELECT * FROM sessions
 WHERE status = 'failed' AND NOT archived
 ORDER BY updated_at DESC
 LIMIT $1;
+
+-- name: ListSessions :many
+-- Backs GET /api/sessions (§6.3/§12.2 item 1's own sidebar addition --
+-- no general session-list route existed before this;
+-- ListFailedSessions immediately above is a narrower, admin-only,
+-- single-status read model, not this). mine_only implements §12.2 item
+-- 1's own "'My sessions' = created or joined" definition exactly:
+-- created_by = user_id OR a participants row exists for (session, user) --
+-- false returns every unarchived session system-wide, mirroring
+-- ListFailedSessions' own "no per-user filter, gated at the httpapi layer
+-- instead" precedent, since this codebase has no per-session RBAC/
+-- visibility concept today (httpapi/doc.go's own "every route ... 401
+-- before reaching any handler, nothing narrower"). sb.status is LEFT
+-- JOINed, never INNER -- a session with no sandbox row yet (status=
+-- 'created', never dispatched, or long since torn down) reads back
+-- NULL/Invalid here, never a fabricated default state; sandboxes.
+-- UNIQUE(session_id) (migrations/000006_sandboxes.up.sql) guarantees this
+-- join can add at most one row per session, never fan it out. Most-
+-- recently-updated first, id DESC as a tiebreaker for rows sharing the
+-- same updated_at (e.g. a batch of sessions created in the same
+-- transaction), bounded by $2 -- no cursor pagination in this first cut
+-- (see ListSessionsResponse's own schema doc comment for why).
+SELECT sqlc.embed(s), sb.status AS sandbox_status FROM sessions s
+LEFT JOIN sandboxes sb ON sb.session_id = s.id
+WHERE NOT s.archived
+  AND (
+    NOT sqlc.arg('mine_only')::boolean
+    OR s.created_by = sqlc.arg('user_id')
+    OR EXISTS (SELECT 1 FROM participants p WHERE p.session_id = s.id AND p.user_id = sqlc.arg('user_id'))
+  )
+ORDER BY s.updated_at DESC, s.id DESC
+LIMIT sqlc.arg('row_limit');

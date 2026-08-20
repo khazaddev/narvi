@@ -40,3 +40,11 @@ func (s *ParticipantStore) WithTx(tx pgx.Tx) *ParticipantStore {
 func (s *ParticipantStore) Exists(ctx context.Context, sessionID, userID pgtype.UUID) (bool, error) {
 	return s.q.ParticipantExists(ctx, sqlcgen.ParticipantExistsParams{SessionID: sessionID, UserID: userID})
 }
+
+// Create inserts a participants row for (sessionID, userID) -- see
+// CreateParticipant's own generated doc comment for why this store's
+// first writer is a test for the session-list endpoint's own "joined"
+// filter, not yet any production code path.
+func (s *ParticipantStore) Create(ctx context.Context, sessionID, userID pgtype.UUID) (sqlcgen.Participant, error) {
+	return s.q.CreateParticipant(ctx, sqlcgen.CreateParticipantParams{SessionID: sessionID, UserID: userID})
+}

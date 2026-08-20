@@ -14,6 +14,11 @@
 //     restdtos.CreateSessionRequest (body capped via http.MaxBytesReader,
 //     see create.go's own doc comment), validates repos is non-empty,
 //     inserts via SessionStore.Create, responds 201 with restdtos.Session.
+//   - GET /api/sessions?filter=mine|all&limit= -- listsessions.go's
+//     ListSessions (§12.2 item 1): 200 with restdtos.ListSessionsResponse,
+//     most-recently-updated first. filter defaults to "mine" ("created or
+//     joined", SessionStore.List's own mine_only join); 400 on any other
+//     filter value.
 //   - GET /api/sessions/{sessionID} -- get.go's GetSession: 404 if not
 //     found, else 200 with restdtos.Session.
 //   - GET /api/sessions/{sessionID}/events?cursor=&limit= -- events.go's

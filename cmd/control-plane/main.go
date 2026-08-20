@@ -1273,6 +1273,11 @@ func serve() error {
 	router.Route("/api/sessions", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
 		r.Post("/", httpapi.CreateSession(pool, sessionStore, turnStore, environmentStore, auditLogStore, registry, intentClassifierSvc, cfg.EpistemicCheckDefault, cfg.RolloutMode, repoSettingsStore))
+		// GET / (list, §12.2 item 1's own sidebar addition) -- mounted
+		// alongside POST / above; chi disambiguates the two by method,
+		// and separately from GET /{sessionID} below by the literal "/"
+		// path never matching that param segment.
+		r.Get("/", httpapi.ListSessions(sessionStore))
 		r.Get("/{sessionID}", httpapi.GetSession(sessionStore))
 		r.Get("/{sessionID}/events", httpapi.ListEvents(sessionStore, eventStore))
 		r.Get("/{sessionID}/artifacts", httpapi.ListArtifacts(sessionStore, artifactStore))

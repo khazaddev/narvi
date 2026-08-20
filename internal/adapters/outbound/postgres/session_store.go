@@ -93,3 +93,12 @@ func (s *SessionStore) UpdateIntentDecisionIfNull(ctx context.Context, id pgtype
 func (s *SessionStore) ListFailed(ctx context.Context, limit int32) ([]sqlcgen.Session, error) {
 	return s.q.ListFailedSessions(ctx, limit)
 }
+
+// List returns up to limit unarchived sessions (most-recently-updated
+// first), each paired with its current sandbox status (nil when the
+// session has no sandbox row yet) -- backs GET /api/sessions (§12.2 item
+// 1). See ListSessions' own generated doc comment for the full
+// mine_only/join design.
+func (s *SessionStore) List(ctx context.Context, arg sqlcgen.ListSessionsParams) ([]sqlcgen.ListSessionsRow, error) {
+	return s.q.ListSessions(ctx, arg)
+}
