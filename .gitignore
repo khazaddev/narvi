@@ -7,3 +7,14 @@
 # ignoring source. Keep in sync with cmd/.
 /control-plane
 /sandbox-agent
+
+# Web UI build output (§12.1): `make web-build`/`vite build` writes directly
+# here -- see web/vite.config.ts's own comment for why the frontend
+# bundler's outDir points inside this Go package instead of the more
+# conventional web/dist (go:embed's directive syntax forbids a `..`
+# upward-traversal pattern, so the embed target in
+# internal/adapters/inbound/webui/assets_embed.go cannot live under web/
+# without either this, or a separate copy step this avoids entirely). Never
+# committed -- a build artifact, like /control-plane and /sandbox-agent
+# above.
+/internal/adapters/inbound/webui/dist

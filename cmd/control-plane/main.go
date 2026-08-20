@@ -35,6 +35,7 @@ import (
 	identitylinkhttp "github.com/khazaddev/narvi/internal/adapters/inbound/identitylink"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/linear"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/slack"
+	"github.com/khazaddev/narvi/internal/adapters/inbound/webui"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/wshub"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/chatgptoauth"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
@@ -665,6 +666,22 @@ func serve() error {
 	// and stacking chi's competing convention on top would give every
 	// request two different request-identity mechanisms.
 	router.Get("/health", healthHandler(pool, cfg.Timeouts))
+
+	// Web UI (§12.1: "narvi serve serves API + WS + UI on one port"):
+	// wired via chi's own r.NotFound hook (webui.Mount's own doc comment
+	// has the full "why NotFound, not a wildcard route or an outer
+	// http.Handler wrap" reasoning), which by chi's routing contract is
+	// only ever invoked once every OTHER route on this router -- present
+	// now or registered further down this function -- has already failed
+	// to match. That is why this call sits here, before any of those
+	// routes exist yet, rather than at the bottom after them: the
+	// no-shadowing guarantee does not depend on this being called last
+	// (internal/adapters/inbound/webui's own TestMount_OrderIndependent
+	// pins exactly that property). webui.DistFS is nil unless this binary
+	// was built with `-tags web_assets` (after `make web-build`) -- see
+	// that package's own doc comment for why the default build never
+	// requires its embed source directory to exist on disk at all.
+	webui.Mount(router, webui.DistFS)
 
 	// OIDC discovery + JWKS ("cloud identity: OIDC issuer,
 	// bindings, minting", §27.3): deliberately mounted PUBLICLY,
