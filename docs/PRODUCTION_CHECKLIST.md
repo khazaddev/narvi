@@ -95,24 +95,34 @@ a real inbound event from each looks like once this is wired correctly.
 
 ## 5. The alerts in `deploy/observability/alerts/*.json` are actually evaluated somewhere
 
-`internal/platform.SetupOTel` (`cmd/control-plane/main.go`) exports
-metrics and traces to **stdout only** — there is no OTLP/collector
-endpoint wired anywhere in this codebase (confirmed by reading that
-function directly; `deploy/observability/alerts/reliability.json`'s own
-schema is deliberately backend-agnostic, see `internal/ops/schema.go`'s
+`internal/platform.SetupOTel` exports metrics and traces to **stdout
+only** by default — an unset `NARVI_OTLP_ENDPOINT` is a fully supported,
+byte-identical-to-before state, not a gap (Step 108, §33). Since Step
+108, `cmd/control-plane/main.go` (never `cmd/sandbox-agent`, which cannot
+reach one even if it wanted to — see `platform.Config.OTLPEndpoint`'s own
+doc comment for why that is structural, not incidental) CAN point
+`SetupOTel` at a real OTLP/HTTP collector by setting that var, in which
+case both a `TracerProvider` and a `MeterProvider` export there instead of
+stdout. Either way, `deploy/observability/alerts/reliability.json`'s own
+schema stays deliberately backend-agnostic (`internal/ops/schema.go`'s
 `PanelType`/`Alert` doc comments, precisely because no backend is
-pinned). The seven alert rules committed to this repo are inert data —
-correctly derived (see [`docs/SLOS.md`](SLOS.md)), CI-checked against
-real metric names (`TestNoMetricDrift`), but **not wired to page anyone**
-— until an operator's own collector reads this deployment's metric
-stream and an alerting backend evaluates each rule's own `condition`.
+pinned) — the seven alert rules committed to this repo are correctly
+derived (see [`docs/SLOS.md`](SLOS.md)) and CI-checked against real
+metric names (`TestNoMetricDrift`), but **evaluating** each rule's own
+`condition` and paging someone is still the operator's own collector/
+alerting backend's job, never this codebase's (§33.5 keeps §1's refusal
+to pin a vendor).
 
-**Check.** The alerting backend this deployment actually uses lists all
-seven alert names from `deploy/observability/alerts/reliability.json`
-(`OutboxLagHigh`, `OutboxDeadLetterAny`, `OrphanReapRateHigh`,
-`BootDurationP95High`, `SpawnLatencyP95High`,
-`WatchdogFalseAlarmRateHigh`, `TurnFalseFailureAny`), each pointed at the
-correct routed on-call schedule (see [`docs/ONCALL.md`](ONCALL.md)).
+**Check.** Two things, not one: (1) `NARVI_OTLP_ENDPOINT` actually points
+this deployment's control plane at a real, reachable collector — an unset
+value here silently leaves this whole item unmet, exactly as before Step
+108, just no longer for lack of a code path; (2) the alerting backend
+that collector feeds lists all seven alert names from
+`deploy/observability/alerts/reliability.json` (`OutboxLagHigh`,
+`OutboxDeadLetterAny`, `OrphanReapRateHigh`, `BootDurationP95High`,
+`SpawnLatencyP95High`, `WatchdogFalseAlarmRateHigh`,
+`TurnFalseFailureAny`), each pointed at the correct routed on-call
+schedule (see [`docs/ONCALL.md`](ONCALL.md)).
 
 ## 6. Uploads are either fully configured or deliberately out of launch scope
 
