@@ -14,6 +14,10 @@ downstream symptom.
 
 ## Confirm — which half is slow
 
+```json narvi-metrics
+{"metrics": ["sandbox_spawn_duration_seconds", "sandbox_agent_boot_duration_seconds", "sandbox_agent_hook_rerun_duration_seconds", "sandbox_agent_git_fetch_duration_seconds", "sandbox_agent_git_checkout_duration_seconds"]}
+```
+
 Two genuinely separate phases, each with its own panel/alert, so check
 both before assuming which one regressed:
 

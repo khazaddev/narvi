@@ -29,19 +29,46 @@ where to look for which of the five things below is actually happening.
 
 ## 3. Alert (or symptom) → runbook
 
-This table is the ONE place this mapping lives —
-`docs/runbooks/README.md` carries the identical table; if you edit one,
-edit both, or better, point one at the other.
+The full alert/symptom → runbook mapping lives in exactly ONE place —
+[`docs/runbooks/README.md`](runbooks/README.md)'s own table — not
+duplicated here. An earlier version of this page hand-maintained a SECOND
+copy of that table with a comment telling an editor to keep both in sync;
+that is exactly the shape that let this page's own copy drift silently
+(a "Rotating the webhook-signing key" row pointed at the cloud-identity
+OIDC runbook below, which does not mention webhooks at all — fixed below,
+but the STRUCTURAL fix is not re-duplicating the table, it's not having a
+second copy to drift in the first place). `internal/ops`'s own
+`TestAlertRunbooksExist` now CI-enforces that every file in
+`docs/runbooks/` is linked from that one surviving table exactly once, so
+open it directly — every alert this system can raise is a row there,
+next to the runbook that backs it and, where one exists, the §9.3
+resilience scenario that reproduces it.
 
-| Alert (or symptom) | Runbook |
-|---|---|
-| `OutboxLagHigh`, `OutboxDeadLetterAny` — notifications not reaching Slack/Linear/GitHub | [outbox-delivery.md](runbooks/outbox-delivery.md) |
-| `OrphanReapRateHigh` — provider-side sandboxes being reaped unusually fast | [orphan-sandboxes.md](runbooks/orphan-sandboxes.md) |
-| `BootDurationP95High`, `SpawnLatencyP95High` — sessions slow to become usable | [slow-boot-and-spawn.md](runbooks/slow-boot-and-spawn.md) |
-| `WatchdogFalseAlarmRateHigh` — sandboxes wrongly suspected dead | [watchdog-false-alarms.md](runbooks/watchdog-false-alarms.md) |
-| `TurnFalseFailureAny` — a turn reported `Failed` that actually finished | [turn-false-failures.md](runbooks/turn-false-failures.md) |
-| A session refuses to spawn with `docker`/`egress_policy` errors | [sandbox-capability-refusals.md](runbooks/sandbox-capability-refusals.md) |
-| Rotating the webhook-signing key | [signing-key-rotation.md](runbooks/signing-key-rotation.md) |
+**The one entry in that table with no alert behind it** (nothing pages
+for it — it is a routine admin procedure, not a failure mode) is signing-
+key rotation, and it covers only ONE of the two kinds of signing key this
+system has:
+
+- **Cloud-identity OIDC signing key** (Step 73a, §27.3 — `POST
+  /api/cloud-identity/signing-keys/rotate`, a database-backed asymmetric
+  keypair with a publishable overlap window): see
+  [signing-key-rotation.md](runbooks/signing-key-rotation.md) — this is
+  what that runbook documents, and ONLY what it documents.
+- **Webhook/HMAC signing secrets** (GitHub/Slack/Linear webhook
+  signatures, plus Narvi's own internal HMAC bearer scheme —
+  `platform.Config`'s `GitHubWebhookSecret`/`SlackSigningSecret`/
+  `LinearWebhookSecret`/`HMACWebhookSecret`/`HMACSandboxSecret`/
+  `HMACBotsSecret`) — **honest negative**: there is no rotation endpoint
+  and no runbook for these. Each is boot-time config, not a database row
+  (§5.4: never live-reloadable), so "rotating" one means setting a new
+  value for the relevant `NARVI_*` environment variable in the deployment
+  platform's own config and restarting the control plane — the same
+  mechanism every other config field already uses. Do NOT follow the
+  cloud-identity OIDC procedure for this: that runbook's overlap-window
+  mechanism does not exist for these secrets at all — a single symmetric
+  value, replaced wholesale on restart, invalidates every request signed
+  under the old value the moment the restart completes. There is no
+  grace period to plan around.
 
 Each SLO in [`docs/SLOS.md`](SLOS.md) names the exact alert (and
 therefore the exact runbook) that backs it, plus the arithmetic behind

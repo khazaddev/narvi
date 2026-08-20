@@ -45,8 +45,19 @@ automated outbox dead-letter replay) is stated as a gap, not glossed over.
 
 ## Instruments these runbooks rely on
 
-Every metric name mentioned in this directory is checked against the real
-registered OTel instruments by `internal/ops`'s own CI-enforced drift test
-(`go test ./internal/ops/...`, part of `make test`) — see that package's
-own `doc.go` for why. A metric named here that the code stops emitting
-fails that build, not just this documentation.
+Every metric name inside a ```` ```json narvi-metrics ```` fenced block —
+this file's own, below, plus one inside most of the runbook files this
+directory contains — is checked against the real registered OTel
+instruments by `internal/ops`'s own CI-enforced `TestNoRunbookMetricDrift`
+(`go test ./internal/ops/...`, part of `make test`) — see
+`internal/ops/docmetrics.go`'s own top comment for why, and
+[`docs/guides/README.md`](../guides/README.md)'s own "Prose is not
+machine-verified" section for the general discipline this mirrors. A
+metric named INSIDE a fenced block that the code stops emitting fails
+that build, not just this documentation — a metric mentioned only in
+free-running prose elsewhere in this directory carries no such guarantee,
+same as any other unchecked sentence.
+
+```json narvi-metrics
+{"metrics": ["session_rollout_refused_total"]}
+```

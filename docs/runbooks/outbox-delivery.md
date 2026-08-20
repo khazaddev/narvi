@@ -14,6 +14,10 @@ correct — this is specifically an *outbound-channel* symptom.
 
 ## Confirm
 
+```json narvi-metrics
+{"metrics": ["outbox_lag_seconds", "outbox_due_backlog_count", "outbox_dead_letter_total"]}
+```
+
 - `outbox_lag_seconds` (gauge) rising and staying above its usual
   near-zero baseline. Zero only means nothing was *due and claimed* this
   tick — during a sustained outage every pending row can be mid-backoff at

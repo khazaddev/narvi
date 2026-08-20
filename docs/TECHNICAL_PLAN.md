@@ -4641,24 +4641,36 @@ exactly like its five sibling fields). No REST enrollment path is added by this 
 ### 32.7 Observability
 
 Refusals are logged (structured `Warn`/`Error`, carrying the repo, `spawn_source`, and mode) at
-every gate call site, including a transient, read-error-caused one (logged with `transient=true` on
-the `httpapi` side specifically, so an operator can tell the two apart in the SAME log line rather
-than by absence of a metric increment alone). Only a GENUINE POLICY refusal (`RolloutRefusal ==
-true` — see §32.5's own "fail-closed and terminal are different properties") is additionally
-counted by one OTel counter, `session_rollout_refused_total` (tagged by `spawn_source`), constructed
-lazily on first use the same way `cloud_identity_mint_total` is (`httpapi` has no per-process
-constructor object to anchor eager construction to) — mirroring the `outbox_dead_letter_total`
-construction pattern (`internal/app/outboxworker/builder.go`) one layer over. This counter is
-deliberately §32's own "how many repos is the cohort gate actually keeping out" signal — a
-transient database blip is an infrastructure problem, not a rollout decision, and counting it here
-would make this metric lie to an operator about how many repos are genuinely being refused by
-policy. Refusals are **never audit-logged** — this codebase's own `audit_log` table records completed
-STATE CHANGES only (`reposettings.go`'s own `logUnknownRepoRefusal` doc comment states this
-convention explicitly for the structurally identical "role check passed but the named resource
-isn't one we know" refusal), and a policy refusal is not a state change. Flipping the flag itself,
-by contrast, IS a state change: the seed tool's own `seedRepoSetting` writes a
-`seed.repo_setting_upserted` `audit_log` row for every `sessions_enabled` change, on the same
-transaction as the `repo_settings` write, exactly like every other seed-tool reconciliation.
+every gate call site, including a transient, read-error-caused one — every one of the THREE real
+enforcement points (`httpapi.checkRolloutGate` at session-creation time; `sessionactor`'s own
+`refuseIfRolloutUnenrolled` at spawn/restore/resume time and `rolloutRefusalForDispatch` at
+turn-dispatch time, §32.4) logs its own refusal line with a `transient` boolean attribute, so an
+operator can tell the two apart in the SAME log line rather than by absence of a metric increment
+alone (Phase 6 audit fix, Finding 4 — before this fix, only the `httpapi` side carried this
+attribute at all, and neither `sessionactor` gate touched the metric below in any way). Only a
+GENUINE POLICY refusal — mode is `cohort` and the named repo's own enrollment fact was actually
+read, never one a degraded `repo_settings` read forced closed (see §32.5's own "fail-closed and
+terminal are different properties") — is additionally counted by one OTel counter,
+`session_rollout_refused_total` (tagged by `spawn_source`). ALL THREE call sites register and
+increment this SAME instrument name: `httpapi` constructs it lazily on first use the same way
+`cloud_identity_mint_total` is (`httpapi` has no per-process constructor object to anchor eager
+construction to) — mirroring the `outbox_dead_letter_total` construction pattern
+(`internal/app/outboxworker/builder.go`) one layer over; `sessionactor` constructs the identical
+name as part of its own `opsMetrics` bundle (Step 77's own precedent, `opsmetrics.go`), built once
+per `Registry` and threaded to every `Actor` it hydrates. A metrics backend aggregates by
+instrument name across meters, so this is genuinely ONE counter from an operator's own point of
+view — "how many repos is the cohort gate actually keeping out", across BOTH of §32's own
+enforcement points — not two separately-named ones an operator would have to remember to sum.
+A transient database blip is an infrastructure problem, not a rollout decision, and counting it
+here would make this metric lie to an operator about how many repos are genuinely being refused by
+policy — this rule is now identical at all three call sites. Refusals are **never audit-logged** —
+this codebase's own `audit_log` table records completed STATE CHANGES only (`reposettings.go`'s own
+`logUnknownRepoRefusal` doc comment states this convention explicitly for the structurally
+identical "role check passed but the named resource isn't one we know" refusal), and a policy
+refusal is not a state change. Flipping the flag itself, by contrast, IS a state change: the seed
+tool's own `seedRepoSetting` writes a `seed.repo_setting_upserted` `audit_log` row for every
+`sessions_enabled` change, on the same transaction as the `repo_settings` write, exactly like every
+other seed-tool reconciliation.
 
 ### 32.8 Rollback: what actually happens, and what does not
 
@@ -4726,7 +4738,10 @@ refused immediately (visible as `session_rollout_refused_total{spawn_source=...}
 `@mention`/label re-trigger riding the REUSE branch onto an existing session — refused essentially
 immediately too, whether or not that session's sandbox is already live (`"sessionactor: refusing to
 spawn"` for a needed spawn/restore/resume, `"sessionactor: refusing to dispatch turn"` for a
-dispatch to an already-`Ready`/`Suspect` sandbox — §32.4's own two parts); any turn already
+dispatch to an already-`Ready`/`Suspect` sandbox — §32.4's own two parts — each ALSO incrementing
+`session_rollout_refused_total{spawn_source=...}`, the SAME instrument, since Finding 4 of the
+Phase 6 audit closed the gap where these two dispatch-time refusals never touched the metric at
+all); any turn already
 `Processing` at rollback time continues until it completes or `TurnDeadline` fires; idle sandboxes
 for that repo's sessions stop on the ordinary `ActorIdleTTL`; anything left over is reclaimed by
 the next reconciler orphan-GC sweep. There is no faster path for an already-`Processing` turn than
@@ -4746,10 +4761,17 @@ longer is expected ONLY for a turn that was already `Processing` at rollback tim
 sign the rollback failed. See §32.8.
 
 **Distinguishing a policy refusal from a database blip during an incident**: if refusals stop
-appearing, or a channel behaves as though a still-enrolled repo were refused, check whether the log
-line carries `transient=true` (`httpapi`) or reads `"...rollout re-check: resolve admission decision
-failed..."` (`sessionactor`) rather than an ordinary `"...refused, repo not enrolled"` /
-`"...refusing to spawn/dispatch..."` line, and whether `session_rollout_refused_total` actually
-incremented — it does NOT for a transient read failure (§32.7). A transient failure refuses that
-ONE attempt but is retried by the channel's own ordinary retry path (§32.5) once Postgres recovers;
-it is not evidence the rollback itself is broken, and does not need a rollback re-applied.
+appearing, or a channel behaves as though a still-enrolled repo were refused, check whether the
+SAME refusal log line every one of the three enforcement points already emits — `"...refused, repo
+not enrolled"` (`httpapi`), `"...refusing to spawn..."`, `"...refusing to dispatch turn..."` (both
+`sessionactor`) — carries `transient=true` (Phase 6 audit fix, Finding 4: all three now carry this
+attribute uniformly; before this fix only the `httpapi` line did, and `sessionactor`'s own read-error
+case had no distinguishing signal on the refusal line at all), and whether
+`session_rollout_refused_total` actually incremented — it does NOT for a transient read failure, at
+any of the three call sites (§32.7). A `sessionactor`-side read error specifically ALSO logs its own
+lower-level `"...rollout re-check: read repo_settings failed; failing closed..."` `Warn` line, one
+level below the refusal line above, from `rolloutDecisionForSession` itself — useful for confirming
+WHICH repo_settings read failed and why, but the `transient` attribute on the refusal line is the
+one signal to check first. A transient failure refuses that ONE attempt but is retried by the
+channel's own ordinary retry path (§32.5) once Postgres recovers; it is not evidence the rollback
+itself is broken, and does not need a rollback re-applied.

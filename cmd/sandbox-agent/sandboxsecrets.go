@@ -42,10 +42,23 @@
 // from the injection-target side.
 //
 // Every name in a resolved map was ALREADY validated at CRUD write time
-// (internal/domain/sandboxsecret.ValidateName, enforced server-side) --
-// this file trusts that and performs no re-validation before building the
-// spawn env; re-validating a value CP itself already accepted would just
-// be a second, redundant copy of the same rule with its own drift risk.
+// (internal/domain/sandboxsecret.ValidateName, enforced server-side by
+// internal/adapters/inbound/httpapi/sandboxsecrets.go) -- but
+// fetchSandboxSecrets (below) does NOT simply trust that and skip ahead:
+// it re-runs the SAME ValidateName against every DELIVERED name, a second
+// time, at the point of injection, dropping (never failing the boot on)
+// any name that no longer passes. This defense-in-depth re-validation was
+// added during Step 72's own review round specifically because the write
+// path and the injection path can drift apart -- a control plane rolled
+// back to a build predating a later reservation, or a row written by some
+// other path entirely, would otherwise still inject a name the CURRENT
+// binary's own ValidateName would refuse. Step 73b later widened
+// ValidateName itself with cloudidentity.ReservedEnvVarNames/
+// clusterbinding.ReservedEnvVarNames (internal/domain/sandboxsecret/
+// name.go) -- this file's re-validation call picks up that widened rule
+// automatically, with no edit of its own required. See
+// fetchSandboxSecrets' own "Defense in depth" comment, below, for the
+// full reasoning.
 //
 // # Bounded retry (§27.1, adversarial-review MEDIUM fix)
 //

@@ -36,8 +36,14 @@ Two SEPARATE, independent checks, run at two different times (§27.5's own
 
 ## No metric exists yet
 
+```json narvi-metrics
+{"metrics": ["session_rollout_refused_total"]}
+```
+
 Unlike `session_rollout_refused_total` (the rollout gate's own counter,
-§32), neither refusal path above increments an OTel instrument today —
+§32, named above so the comparison itself stays checked against a real
+instrument), neither refusal path above increments an OTel instrument
+today —
 this is a genuine, currently-unbuilt gap, named honestly rather than
 invented for this Step: IMPLEMENTATION_PLAN.md row 77 names four specific
 dashboard subjects (false failures, outbox lag, orphans, boot p95) plus
