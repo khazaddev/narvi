@@ -73,7 +73,7 @@ func (TimerFired) isCommand() {}
 //     already validated, which may be stale by the time this particular
 //     message is actually processed).
 //   - MessageID is the wire message's own top-level "messageId" field --
-//     every one of the 19 sandbox-ws event types requires one
+//     every one of the 20 sandbox-ws event types requires one
 //     (contracts/sandbox-ws/v1/events.schema.json) -- carried through so
 //     appendRawEvent (actor.go) can dedupe a resend of an already-
 //     persisted event by upsert-on-(session_id, messageId) rather than

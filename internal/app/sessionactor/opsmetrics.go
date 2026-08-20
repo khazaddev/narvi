@@ -129,10 +129,15 @@ type opsMetrics struct {
 	// boot_timing sandbox-ws event (recordBootTiming, boottiming.go) --
 	// see that file's own top comment for the full "ship the fact, record
 	// centrally" reasoning (§33.3). Same instrument names and same
-	// hand-tuned bucket slices as the deleted sandbox-side histograms
-	// (internal/ops's own TestNoMetricDrift is the CI guard that would
-	// catch a rename or a bucket-shape change here going unnoticed against
-	// deploy/observability/{dashboards,alerts}).
+	// hand-tuned bucket slices as the deleted sandbox-side histograms.
+	// Two DIFFERENT guards, because one check does not cover both: a
+	// RENAME is caught by internal/ops's TestNoMetricDrift, which compares
+	// these names against deploy/observability/{dashboards,alerts}; a
+	// BUCKET-SHAPE change is not, since that check reads only the
+	// registration call's name argument and has no notion of boundaries.
+	// The slices are pinned by opsmetrics_buckets_test.go instead -- the
+	// replacement for the bucket-shape test that was deleted along with
+	// the sandbox-side files.
 	bootDuration        metric.Float64Histogram
 	hookRerunDuration   metric.Float64Histogram
 	gitFetchDuration    metric.Float64Histogram
