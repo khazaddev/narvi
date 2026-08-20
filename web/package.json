@@ -1,0 +1,33 @@
+{
+  "name": "@narvi/web",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Narvi's web UI (§12.1): Vite + React + TanStack Query/Router SPA, embedded into the control-plane binary via go:embed and served on the same port as the REST/WS API. No SSR, no BFF.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "generate-routes": "tsr generate",
+    "typecheck": "npm run generate-routes && tsc -b",
+    "lint": "oxlint",
+    "check-dto-types": "node scripts/check-no-dto-redeclaration.mjs",
+    "build": "npm run generate-routes && tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.101.4",
+    "@tanstack/react-router": "^1.170.31",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@tanstack/router-cli": "^1.167.32",
+    "@tanstack/router-plugin": "^1.168.34",
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.4",
+    "oxlint": "^1.75.0",
+    "typescript": "7.0.2",
+    "vite": "^8.2.0"
+  }
+}
