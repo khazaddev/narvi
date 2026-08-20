@@ -18,6 +18,7 @@ package sessionactor
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -369,5 +370,250 @@ func TestDispatch_OpenMode_SpawnsRegardlessOfEnrollment(t *testing.T) {
 
 	if got := provider.callCount(); got != 1 {
 		t.Errorf("provider.callCount() = %d, want 1 -- open mode must spawn regardless of enrollment", got)
+	}
+}
+
+// The four tests below are the Phase 6 audit's own fix for Finding 4:
+// before this fix, session_rollout_refused_total was incremented ONLY by
+// httpapi.checkRolloutGate -- refuseIfRolloutUnenrolled and
+// rolloutRefusalForDispatch (both above) refused just as really, but
+// never touched the metric at all. Each calls its own gate method
+// DIRECTLY (this test file is package sessionactor, not sessionactor_test,
+// exactly like every other test in this file) rather than driving the
+// full Send/EnsureDispatched pipeline -- these are about the metric
+// side-effect specifically, not dispatch sequencing already covered
+// above.
+//
+// Mutation anchor (verified by hand as part of this fix, reverted
+// byte-identical): removing the `a.recordRolloutRefusal(...)` call from
+// either refuseIfRolloutUnenrolled or rolloutRefusalForDispatch
+// (dispatch.go) makes the corresponding "_RecordsRolloutRefusedTotal"
+// test below fail (the counter no longer moves); inverting either
+// function's own `if !transient` guard makes the corresponding
+// "_DoesNotRecord...OnTransient..." test below fail instead (the counter
+// now moves when it must not).
+
+// TestRefuseIfRolloutUnenrolled_RecordsRolloutRefusedTotal_OnGenuineRefusal
+// proves the spawn/restore/resume-time gate (tryPlanSpawn's own
+// refuseIfRolloutUnenrolled) increments session_rollout_refused_total,
+// tagged spawn_source, for a genuine "repo not enrolled" fact -- no
+// repo_settings row at all, exactly TestDispatch_RefusesUnenrolledRepoUnderCohortMode's
+// own fixture, called directly instead of driven through EnsureDispatched.
+func TestRefuseIfRolloutUnenrolled_RecordsRolloutRefusedTotal_OnGenuineRefusal(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	repoURL := "https://github.com/acme/" + t.Name() + ".git"
+	sessionID := createTestSessionWithRepos(ctx, t, pool, pgtype.UUID{}, "widgets", repoURL, "")
+
+	sessionStore := narvipg.NewSessionStore(pool)
+	sessionRow, err := sessionStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+
+	r := newDispatchTestRegistryWithRolloutMode(t, ctx, pool, nil, rollout.ModeCohort)
+	t.Cleanup(func() { _ = r.Shutdown() })
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	before := readCounterSumByAttr(ctx, t, otelReader, "session_rollout_refused_total", "spawn_source", string(sessionRow.SpawnSource))
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("pool.Begin: %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+
+	if err := a.refuseIfRolloutUnenrolled(ctx, tx, sessionRow); err == nil {
+		t.Fatal("refuseIfRolloutUnenrolled: got nil error, want a refusal -- this repo has no repo_settings row at all")
+	}
+
+	after := readCounterSumByAttr(ctx, t, otelReader, "session_rollout_refused_total", "spawn_source", string(sessionRow.SpawnSource))
+	if after <= before {
+		t.Errorf("session_rollout_refused_total{spawn_source=%s} = %d, want > %d -- a genuine spawn-time policy refusal must record it", sessionRow.SpawnSource, after, before)
+	}
+}
+
+// TestRefuseIfRolloutUnenrolled_DoesNotRecordRolloutRefusedTotal_OnTransientReadError
+// mirrors httpapi's own TestCreateSessionOnTx_RolloutGate_CohortMode_ReadErrorFailsClosedButNotAsPolicy
+// (rolloutgate_integration_test.go) fault-injection idiom exactly: an
+// already-rolled-back tx standing in for a genuine repo_settings read
+// failure (RepoSettingsStore.WithTx(tx).Get is the first thing to fail).
+// The gate must still refuse (fail-closed), but must NOT count it as a
+// policy refusal -- the exact "fail-closed and terminal are different
+// properties" rule §32.5/§32.7 states, now applied identically on the
+// dispatch side.
+func TestRefuseIfRolloutUnenrolled_DoesNotRecordRolloutRefusedTotal_OnTransientReadError(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	repoURL := "https://github.com/acme/" + t.Name() + ".git"
+	sessionID := createTestSessionWithRepos(ctx, t, pool, pgtype.UUID{}, "widgets", repoURL, "")
+
+	sessionStore := narvipg.NewSessionStore(pool)
+	sessionRow, err := sessionStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+
+	r := newDispatchTestRegistryWithRolloutMode(t, ctx, pool, nil, rollout.ModeCohort)
+	t.Cleanup(func() { _ = r.Shutdown() })
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	before := readCounterSumByAttr(ctx, t, otelReader, "session_rollout_refused_total", "spawn_source", string(sessionRow.SpawnSource))
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("pool.Begin: %v", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatalf("rollback tx (fault injection setup): %v", err)
+	}
+	// tx is now closed -- refuseIfRolloutUnenrolled's own
+	// repoSettings.WithTx(tx).Get call is the first thing to fail.
+
+	if err := a.refuseIfRolloutUnenrolled(ctx, tx, sessionRow); err == nil {
+		t.Fatal("refuseIfRolloutUnenrolled: got nil error, want a refusal -- a genuine read failure must still fail CLOSED")
+	}
+
+	after := readCounterSumByAttr(ctx, t, otelReader, "session_rollout_refused_total", "spawn_source", string(sessionRow.SpawnSource))
+	if after != before {
+		t.Errorf("session_rollout_refused_total{spawn_source=%s} = %d, want unchanged %d -- a transient repo_settings read failure is NOT a demonstrated policy decision and must never count here", sessionRow.SpawnSource, after, before)
+	}
+}
+
+// TestRolloutRefusalForDispatch_RecordsRolloutRefusedTotal_OnGenuineRefusal
+// is the turn-dispatch-time gate's own equivalent of the spawn-time test
+// above -- an existing, already-Ready sandbox (the REUSE-branch shape
+// TestDispatch_DeEnrolledRepo_ExistingReadySandbox_ReusedTurnRefusedAndTerminalizes
+// exercises end to end). Unlike refuseIfRolloutUnenrolled (which logs AND
+// records the metric itself), rolloutRefusalForDispatch only RETURNS the
+// refusal/transient facts -- executeDispatch (its one caller) is what
+// actually logs and calls recordRolloutRefusal, exactly mirroring this
+// package's own pre-existing "gate returns, caller acts" shape for this
+// function specifically (its own doc comment). This test therefore calls
+// a.executeDispatch directly, with a real dispatchPlan, rather than
+// rolloutRefusalForDispatch in isolation -- the metric side-effect lives
+// one level up from that pure gate function.
+func TestRolloutRefusalForDispatch_RecordsRolloutRefusedTotal_OnGenuineRefusal(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	repoFullName := "acme/" + t.Name()
+	repoURL := "https://github.com/" + repoFullName + ".git"
+	sessionID := createTestSessionWithRepos(ctx, t, pool, pgtype.UUID{}, "widgets", repoURL, "")
+
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
+	if _, err := repoSettings.UpsertSessionsEnabled(ctx, repoFullName, false); err != nil {
+		t.Fatalf("seed de-enrollment: %v", err)
+	}
+
+	sessionStore := narvipg.NewSessionStore(pool)
+	sessionRow, err := sessionStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+
+	// executeDispatch's own doc comment: "The turn is already committed
+	// Processing by the time this runs" -- createProcessingTurn (not
+	// createPendingTurn) mirrors that real precondition directly, so
+	// failDispatchedTurn's own "turn no longer processing; ignoring"
+	// defensive guard does not no-op this test's assertion below.
+	turnStore := narvipg.NewTurnStore(pool)
+	created := createProcessingTurn(ctx, t, turnStore, sessionID)
+
+	r := newDispatchTestRegistryWithRolloutMode(t, ctx, pool, nil, rollout.ModeCohort)
+	t.Cleanup(func() { _ = r.Shutdown() })
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	// Sanity-check the pure gate function's own return values first --
+	// the SAME facts executeDispatch below is about to act on.
+	repo, refused, transient := a.rolloutRefusalForDispatch(ctx, sessionRow)
+	if !refused {
+		t.Fatal("rolloutRefusalForDispatch: refused = false, want true -- this repo is explicitly de-enrolled")
+	}
+	if transient {
+		t.Error("rolloutRefusalForDispatch: transient = true, want false -- this is a genuine, demonstrated policy fact, not a read error")
+	}
+	if repo != repoFullName {
+		t.Errorf("rolloutRefusalForDispatch: repo = %q, want %q", repo, repoFullName)
+	}
+
+	before := readCounterSumByAttr(ctx, t, otelReader, "session_rollout_refused_total", "spawn_source", string(sessionRow.SpawnSource))
+
+	if err := a.executeDispatch(ctx, &dispatchPlan{turnID: created.ID, payload: json.RawMessage(`{}`), sessionRow: sessionRow}); err != nil {
+		t.Fatalf("executeDispatch: %v", err)
+	}
+
+	after := readCounterSumByAttr(ctx, t, otelReader, "session_rollout_refused_total", "spawn_source", string(sessionRow.SpawnSource))
+	if after <= before {
+		t.Errorf("session_rollout_refused_total{spawn_source=%s} = %d, want > %d -- a genuine dispatch-time policy refusal must record it", sessionRow.SpawnSource, after, before)
+	}
+
+	gotTurn, err := turnStore.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get turn: %v", err)
+	}
+	if gotTurn.Status != sqlcgen.TurnStatusFailed {
+		t.Errorf("turn status = %s, want %s -- executeDispatch's own refusal must still fail the turn forward, exactly as before this fix", gotTurn.Status, sqlcgen.TurnStatusFailed)
+	}
+}
+
+// TestRolloutRefusalForDispatch_DoesNotRecordRolloutRefusedTotal_OnTransientReadError
+// forces rolloutDecisionForSession's own repoSettings.Get call to fail
+// with a genuine, non-ErrNoRows error by passing an already-canceled
+// context -- pgx surfaces a canceled/timed-out query the SAME way a real
+// Postgres outage would (the exact equivalence
+// TestCreateSessionOnTx_RolloutGate_CohortMode_ReadErrorFailsClosedButNotAsPolicy's
+// own doc comment states for its own already-rolled-back-tx idiom).
+// rolloutRefusalForDispatch itself has no tx parameter to inject the
+// SAME way (it deliberately runs outside any transaction, see its own doc
+// comment) -- a canceled context is this function's own equivalent fault.
+func TestRolloutRefusalForDispatch_DoesNotRecordRolloutRefusedTotal_OnTransientReadError(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	repoFullName := "acme/" + t.Name()
+	repoURL := "https://github.com/" + repoFullName + ".git"
+	sessionID := createTestSessionWithRepos(ctx, t, pool, pgtype.UUID{}, "widgets", repoURL, "")
+
+	sessionStore := narvipg.NewSessionStore(pool)
+	sessionRow, err := sessionStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+
+	r := newDispatchTestRegistryWithRolloutMode(t, ctx, pool, nil, rollout.ModeCohort)
+	t.Cleanup(func() { _ = r.Shutdown() })
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	before := readCounterSumByAttr(ctx, t, otelReader, "session_rollout_refused_total", "spawn_source", string(sessionRow.SpawnSource))
+
+	canceledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+
+	repo, refused, transient := a.rolloutRefusalForDispatch(canceledCtx, sessionRow)
+	if !refused {
+		t.Fatal("rolloutRefusalForDispatch: refused = false, want true -- a genuine read failure must still fail CLOSED")
+	}
+	if !transient {
+		t.Errorf("rolloutRefusalForDispatch: transient = false, want true -- repo %q was forced not-enrolled by a canceled-context read failure, not a demonstrated policy fact", repo)
+	}
+
+	after := readCounterSumByAttr(ctx, t, otelReader, "session_rollout_refused_total", "spawn_source", string(sessionRow.SpawnSource))
+	if after != before {
+		t.Errorf("session_rollout_refused_total{spawn_source=%s} = %d, want unchanged %d -- a transient repo_settings read failure is NOT a demonstrated policy decision and must never count here", sessionRow.SpawnSource, after, before)
 	}
 }

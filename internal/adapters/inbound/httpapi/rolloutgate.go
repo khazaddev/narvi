@@ -57,7 +57,17 @@ var sessionRolloutRefusedTotalCounter = sync.OnceValue(newSessionRolloutRefusedT
 func newSessionRolloutRefusedTotalCounter() metric.Int64Counter {
 	c, err := otel.Meter(rolloutGateMeterName).Int64Counter(
 		"session_rollout_refused_total",
-		metric.WithDescription("Count of every session-creation attempt refused by Step 76's cohort-rollout gate (§32) because a named repo was not enrolled (repo_settings.sessions_enabled). Tagged by the \"spawn_source\" attribute -- see checkRolloutGate's own doc comment."),
+		// Phase 6 audit fix (Finding 4): this description used to claim
+		// the scope was session-CREATION refusals only -- true of THIS
+		// package's own checkRolloutGate call site, but not of the metric
+		// as a whole: internal/app/sessionactor's own dispatch-time gates
+		// (refuseIfRolloutUnenrolled/rolloutRefusalForDispatch,
+		// dispatch.go) register and increment the SAME instrument name
+		// under their own meter (a metrics backend aggregates by
+		// instrument name across meters, so this is genuinely the same
+		// counter from an operator's own point of view) -- see
+		// opsmetrics.go's own rolloutRefused doc comment there for why.
+		metric.WithDescription("Count of every session-creation attempt, spawn/restore/resume attempt, or turn dispatch refused by Step 76's cohort-rollout gate (§32) because a named repo was not enrolled (repo_settings.sessions_enabled) -- httpapi.checkRolloutGate's own session-creation-time refusals here, PLUS internal/app/sessionactor's own dispatch-time re-check refusals (registered under the SAME name there). Tagged by the \"spawn_source\" attribute -- see checkRolloutGate's own doc comment."),
 		metric.WithUnit("{refusal}"),
 	)
 	if err != nil {

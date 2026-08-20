@@ -904,15 +904,33 @@ func (a *Actor) refuseIfSubstrateUnsupported(ctx context.Context, tx pgx.Tx, ses
 // passes the actor's own pool-backed a.stores.repoSettings instead,
 // mirroring resolveAndSetImage's own identical no-tx store-read shape
 // (imageresolve.go).
-func (a *Actor) rolloutDecisionForSession(ctx context.Context, repoSettings *postgres.RepoSettingsStore, sessionRow sqlcgen.Session) (rollout.Decision, error) {
+//
+// transient (Phase 6 audit fix, Finding 4) mirrors
+// httpapi.checkRolloutGate's own readErrored-tracking precedent
+// (rolloutgate.go): true only when decision.RepoFullName -- the SPECIFIC
+// repo rollout.Decide's own "first not-enrolled repo" rule stopped at --
+// was forced to Enrolled == false by a genuine repo_settings READ error,
+// never by a demonstrated policy fact (an absent row, an explicit
+// sessions_enabled=false row, or a URL that could never resolve at all --
+// none of which can ever produce a different answer on retry, mirroring
+// checkRolloutGate's own identical reasoning). Meaningless when
+// decision.Admitted is true; both callers below only consult it after
+// confirming a refusal. Failing closed and marking a refusal as a
+// permanent policy decision are two different properties -- see
+// §32.5's own "Fail-closed and terminal are different properties" -- and
+// before this fix, this function's dispatch-side callers conflated them
+// exactly the way checkRolloutGate itself used to before its own
+// adversarial-review fix (rolloutgate.go's own top comment).
+func (a *Actor) rolloutDecisionForSession(ctx context.Context, repoSettings *postgres.RepoSettingsStore, sessionRow sqlcgen.Session) (decision rollout.Decision, transient bool, err error) {
 	var repos []struct {
 		URL string `json:"url"`
 	}
 	if err := json.Unmarshal(sessionRow.Repos, &repos); err != nil {
-		return rollout.Decision{}, fmt.Errorf("sessionactor: rollout re-check: unmarshal session repos: %w", err)
+		return rollout.Decision{}, false, fmt.Errorf("sessionactor: rollout re-check: unmarshal session repos: %w", err)
 	}
 
 	admissions := make([]rollout.RepoAdmission, 0, len(repos))
+	readErrored := make([]bool, 0, len(repos))
 	for _, repo := range repos {
 		// Audit-hardening precedent (imageresolve.go's own
 		// repoAccessAllowedForSpawn, pushpr.go, contractdrift.go):
@@ -925,6 +943,7 @@ func (a *Actor) rolloutDecisionForSession(ctx context.Context, repoSettings *pos
 			a.logger.Warn("sessionactor: rollout re-check: repo url does not name a supported source-control host; treating as not enrolled",
 				"session_id", a.sessionID.String(), "url", repo.URL, "error", err)
 			admissions = append(admissions, rollout.RepoAdmission{FullName: repo.URL, Enrolled: false})
+			readErrored = append(readErrored, false)
 			continue
 		}
 
@@ -933,6 +952,7 @@ func (a *Actor) rolloutDecisionForSession(ctx context.Context, repoSettings *pos
 			a.logger.Warn("sessionactor: rollout re-check: parse owner/repo from clone url failed; treating as not enrolled",
 				"session_id", a.sessionID.String(), "error", err)
 			admissions = append(admissions, rollout.RepoAdmission{FullName: repo.URL, Enrolled: false})
+			readErrored = append(readErrored, false)
 			continue
 		}
 		fullName := owner + "/" + name
@@ -941,19 +961,42 @@ func (a *Actor) rolloutDecisionForSession(ctx context.Context, repoSettings *pos
 		switch {
 		case err == nil:
 			admissions = append(admissions, rollout.RepoAdmission{FullName: fullName, Enrolled: row.SessionsEnabled})
+			readErrored = append(readErrored, false)
 		case errors.Is(err, pgx.ErrNoRows):
 			admissions = append(admissions, rollout.RepoAdmission{FullName: fullName, Enrolled: false})
+			readErrored = append(readErrored, false)
 		default:
 			// A genuine read error -- fail-closed (§32, mirroring
 			// checkRolloutGate's own identical C3 precedent), never
 			// treated as "no row, so unenrolled" without comment.
+			// readErrored records this SPECIFICALLY so the transient
+			// return value below can tell a degraded read apart from a
+			// demonstrated policy fact -- mirrors checkRolloutGate's own
+			// identical readErrored tracking (rolloutgate.go).
 			a.logger.Warn("sessionactor: rollout re-check: read repo_settings failed; failing closed (treating as not enrolled)",
 				"session_id", a.sessionID.String(), "repo", fullName, "error", err)
 			admissions = append(admissions, rollout.RepoAdmission{FullName: fullName, Enrolled: false})
+			readErrored = append(readErrored, true)
 		}
 	}
 
-	return rollout.Decide(a.rolloutMode, admissions), nil
+	decision = rollout.Decide(a.rolloutMode, admissions)
+	if !decision.Admitted {
+		// rollout.Decide's own doc comment: "refuses on the FIRST [repo]
+		// that is not [enrolled]" -- mirrored here, over the SAME
+		// admissions slice in the SAME order, so transient always
+		// describes exactly the repo Decide's own decision.RepoFullName
+		// names, never a different one a later, unrelated read error
+		// happened to touch (mirrors checkRolloutGate's own identical
+		// refusalIsTransient derivation, rolloutgate.go).
+		for i, adm := range admissions {
+			if !adm.Enrolled {
+				transient = readErrored[i]
+				break
+			}
+		}
+	}
+	return decision, transient, nil
 }
 
 // refuseIfRolloutUnenrolled implements Step 76's own dispatch-time half
@@ -994,12 +1037,24 @@ func (a *Actor) rolloutDecisionForSession(ctx context.Context, repoSettings *pos
 // "command handling failed" logger) until re-enrolled, never a silent,
 // indefinitely-retried no-op that looks identical to the sandbox merely
 // waiting its turn.
+//
+// Phase 6 audit fix (Finding 4): this refusal now ALSO increments
+// session_rollout_refused_total (recordRolloutRefusal, opsmetrics.go) --
+// the SAME instrument httpapi.checkRolloutGate already increments for
+// its own session-creation-time refusals, previously never touched by
+// this, the dispatch-time half of the identical mechanism. The log line
+// grows a "transient" attribute, and the counter increments ONLY when
+// transient is false -- a refusal rolloutDecisionForSession's own
+// readErrored tracking attributes to a genuine repo_settings read error,
+// not a demonstrated "not enrolled" fact, must never count here, for the
+// exact reason checkRolloutGate's own doc comment gives for its
+// identical rule (§32.5/§32.7).
 func (a *Actor) refuseIfRolloutUnenrolled(ctx context.Context, tx pgx.Tx, sessionRow sqlcgen.Session) error {
 	if a.rolloutMode != rollout.ModeCohort {
 		return nil
 	}
 
-	decision, err := a.rolloutDecisionForSession(ctx, a.stores.repoSettings.WithTx(tx), sessionRow)
+	decision, transient, err := a.rolloutDecisionForSession(ctx, a.stores.repoSettings.WithTx(tx), sessionRow)
 	if err != nil {
 		return fmt.Errorf("sessionactor: dispatch-time rollout re-check: %w", err)
 	}
@@ -1008,7 +1063,10 @@ func (a *Actor) refuseIfRolloutUnenrolled(ctx context.Context, tx pgx.Tx, sessio
 	}
 
 	a.logger.Error("sessionactor: refusing to spawn: configured repo is not enrolled in the cohort rollout (§10 Phase 6, §32 dispatch-time fail-closed re-check)",
-		"session_id", a.sessionID.String(), "repo", decision.RepoFullName)
+		"session_id", a.sessionID.String(), "repo", decision.RepoFullName, "transient", transient)
+	if !transient {
+		a.recordRolloutRefusal(ctx, string(sessionRow.SpawnSource))
+	}
 	return fmt.Errorf("sessionactor: dispatch-time rollout re-check failed: repo %q not enrolled in cohort rollout", decision.RepoFullName)
 }
 
@@ -1744,9 +1802,12 @@ func (a *Actor) tryPlanDispatch(
 // WHATEVER reason (a transport failure or a policy refusal), reaches the
 // SAME terminal state the SAME way, with only the reason text differing.
 func (a *Actor) executeDispatch(ctx context.Context, plan *dispatchPlan) error {
-	if repo, refused := a.rolloutRefusalForDispatch(ctx, plan.sessionRow); refused {
+	if repo, refused, transient := a.rolloutRefusalForDispatch(ctx, plan.sessionRow); refused {
 		a.logger.Error("sessionactor: refusing to dispatch turn: configured repo is not enrolled in the cohort rollout (§10 Phase 6, §32 turn-dispatch-time fail-closed re-check)",
-			"session_id", a.sessionID.String(), "turn_id", plan.turnID.String(), "repo", repo)
+			"session_id", a.sessionID.String(), "turn_id", plan.turnID.String(), "repo", repo, "transient", transient)
+		if !transient {
+			a.recordRolloutRefusal(ctx, string(plan.sessionRow.SpawnSource))
+		}
 		return a.failDispatchedTurn(ctx, plan.turnID, fmt.Sprintf("repo %q not enrolled in cohort rollout", repo))
 	}
 
@@ -1773,15 +1834,23 @@ func (a *Actor) executeDispatch(ctx context.Context, plan *dispatchPlan) error {
 // since this runs OUTSIDE any transaction (plan's own transact has
 // already committed and returned by the time executeDispatch calls this).
 //
-// Returns ("", false) whenever dispatch is admitted (every non-cohort
-// rollout mode, or cohort mode with every one of sessionRow's own named
-// repos enrolled); (repoFullName, true) on a genuine policy refusal.
-func (a *Actor) rolloutRefusalForDispatch(ctx context.Context, sessionRow sqlcgen.Session) (string, bool) {
+// Returns ("", false, false) whenever dispatch is admitted (every
+// non-cohort rollout mode, or cohort mode with every one of sessionRow's
+// own named repos enrolled); (repoFullName/"<unresolvable repos>", true,
+// transient) on a refusal -- transient is true ONLY for a genuine
+// repo_settings read error (rolloutDecisionForSession's own readErrored
+// tracking), never for the "sessionRow.Repos itself is malformed" branch
+// below: a structurally malformed row can never produce a different
+// answer on retry, exactly like an unresolvable URL, so it is a
+// demonstrated (non-transient) refusal for recordRolloutRefusal's own
+// purposes (Phase 6 audit fix, Finding 4) even though it is not itself a
+// rollout.Decision.
+func (a *Actor) rolloutRefusalForDispatch(ctx context.Context, sessionRow sqlcgen.Session) (repo string, refused bool, transient bool) {
 	if a.rolloutMode != rollout.ModeCohort {
-		return "", false
+		return "", false, false
 	}
 
-	decision, err := a.rolloutDecisionForSession(ctx, a.stores.repoSettings, sessionRow)
+	decision, transientDecision, err := a.rolloutDecisionForSession(ctx, a.stores.repoSettings, sessionRow)
 	if err != nil {
 		// sessionRow.Repos failing to unmarshal here can only mean a
 		// structurally malformed row -- validateCreateSessionRequest
@@ -1792,12 +1861,12 @@ func (a *Actor) rolloutRefusalForDispatch(ctx context.Context, sessionRow sqlcge
 		// checks.
 		a.logger.Error("sessionactor: turn-dispatch rollout re-check: resolve admission decision failed; failing closed (refusing dispatch)",
 			"session_id", a.sessionID.String(), "error", err)
-		return "<unresolvable repos>", true
+		return "<unresolvable repos>", true, false
 	}
 	if decision.Admitted {
-		return "", false
+		return "", false, false
 	}
-	return decision.RepoFullName, true
+	return decision.RepoFullName, true, transientDecision
 }
 
 // failDispatchedTurn transitions turnID -- already committed Processing by

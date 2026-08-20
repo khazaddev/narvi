@@ -119,6 +119,25 @@ type opsMetrics struct {
 	// failure_reason value (timeout), so a label here would be constant,
 	// not informative.
 	falseFailure metric.Int64Counter
+
+	// rolloutRefused is the Phase 6 audit's own fix for Finding 4:
+	// session_rollout_refused_total (Step 76, §32) was, before this fix,
+	// incremented ONLY by httpapi.checkRolloutGate -- the session-creation-
+	// time half of §32's own "fail-closed, twice" pair. The dispatch-time
+	// half (this package's own refuseIfRolloutUnenrolled/
+	// rolloutRefusalForDispatch, dispatch.go) refused spawns/restores/
+	// resumes and turn dispatches identically, but never touched the
+	// metric at all -- leaving one of the mechanism's two real enforcement
+	// points invisible to the exact instrument §32.7/§32.9 point an
+	// operator at. Registered under the SAME string name httpapi already
+	// uses (rolloutgate.go) -- a metrics backend aggregates by instrument
+	// name across meters, so this is genuinely the SAME counter from an
+	// operator's own point of view, not a second, differently-named one --
+	// tagged by the identical spawn_source attribute, and incremented
+	// under the identical "genuine policy fact only, never a transient
+	// read error" discipline checkRolloutGate already established (see
+	// recordRolloutRefusal's own doc comment, below).
+	rolloutRefused metric.Int64Counter
 }
 
 // newOpsMetrics constructs all five instruments against meter -- the SAME
@@ -177,12 +196,22 @@ func newOpsMetrics(meter metric.Meter) (opsMetrics, error) {
 		return opsMetrics{}, fmt.Errorf("sessionactor: construct turn_false_failure_total counter: %w", err)
 	}
 
+	rolloutRefused, err := meter.Int64Counter(
+		"session_rollout_refused_total",
+		metric.WithDescription("Count of every session-creation attempt, spawn/restore/resume attempt, or turn dispatch refused by Step 76's cohort-rollout gate (§32) because a named repo was not enrolled (repo_settings.sessions_enabled) -- the SAME instrument httpapi.checkRolloutGate registers (internal/adapters/inbound/httpapi/rolloutgate.go), incremented here too for this package's own two dispatch-time re-checks (refuseIfRolloutUnenrolled, rolloutRefusalForDispatch). Tagged by spawn_source. Only a genuine, DEMONSTRATED policy refusal increments this -- a refusal caused by a transient repo_settings read error never does, mirroring checkRolloutGate's own identical fail-closed-vs-terminal discipline (§32.5)."),
+		metric.WithUnit("{refusal}"),
+	)
+	if err != nil {
+		return opsMetrics{}, fmt.Errorf("sessionactor: construct session_rollout_refused_total counter: %w", err)
+	}
+
 	return opsMetrics{
 		spawnDuration:      spawnDuration,
 		livenessGap:        livenessGap,
 		watchdogActivation: watchdogActivation,
 		watchdogFalseAlarm: watchdogFalseAlarm,
 		falseFailure:       falseFailure,
+		rolloutRefused:     rolloutRefused,
 	}, nil
 }
 
@@ -264,4 +293,24 @@ func (a *Actor) recordFalseFailure(ctx context.Context) {
 		return
 	}
 	a.opsMetrics.falseFailure.Add(ctx, 1)
+}
+
+// recordRolloutRefusal increments session_rollout_refused_total, tagged
+// by spawnSource -- refuseIfRolloutUnenrolled's and
+// rolloutRefusalForDispatch's own two call sites (dispatch.go), the
+// dispatch-time half of §32's "fail-closed, twice" pair (Finding 4, Phase
+// 6 audit). Callers must gate this on a GENUINE policy refusal
+// themselves -- mirroring httpapi.recordRolloutRefusal's own identical
+// contract (rolloutgate.go) exactly, never called at all for a refusal a
+// transient repo_settings read error caused, since counting that here
+// would make this metric lie to an operator about how many repos are
+// actually being kept out by the cohort gate, the SAME reasoning
+// checkRolloutGate's own doc comment already states in full.
+func (a *Actor) recordRolloutRefusal(ctx context.Context, spawnSource string) {
+	if a.opsMetrics.rolloutRefused == nil {
+		return
+	}
+	a.opsMetrics.rolloutRefused.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("spawn_source", spawnSource),
+	))
 }
