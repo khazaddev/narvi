@@ -1,6 +1,7 @@
 .PHONY: build vet fmt tidy lint test test-integration \
 	test-integration-group-1 test-integration-group-2 test-integration-group-3 test-integration-group-4 \
-	contracts-generate contracts-check dev
+	contracts-generate contracts-check dev \
+	web-typecheck web-lint web-check-dto-types web-build web-check
 
 build:
 	go build ./...
@@ -230,3 +231,48 @@ contracts-check:
 	fi; \
 	rm -rf "$$tmp"
 	cd contracts && npm run typecheck
+
+# web-* targets (§12.1, "ui bootstrap"): the frontend's own equivalent of
+# vet/lint/test/build above, over web/ (Vite + React + TanStack Query/
+# Router) instead of the Go module. Each assumes `cd web && npm ci` has
+# already been run -- mirrors contracts-generate/contracts-check's own
+# identical assumption about contracts/node_modules (see that target's own
+# comment) rather than auto-installing on every invocation.
+#
+# web-typecheck and web-build both regenerate src/routeTree.gen.ts first
+# (web/package.json's own "generate-routes" script, via @tanstack/
+# router-cli) -- that file is gitignored and normally produced by Vite's
+# own dev/build lifecycle, but tsc needs it to already exist before either
+# of THESE targets' own tsc pass runs, on a checkout where `vite dev`/
+# `vite build` has never run yet.
+web-typecheck:
+	cd web && npm run typecheck
+
+web-lint:
+	cd web && npm run lint
+
+# web-check-dto-types (§12.1: "no hand-written response types anywhere")
+# enforces that no .ts/.tsx file under web/src redeclares a type/interface
+# name contracts/gen/ts/*.ts already generates -- see
+# web/scripts/check-no-dto-redeclaration.mjs's own top comment for why this
+# specific, name-collision shape was chosen over a field-shape comparison.
+web-check-dto-types:
+	cd web && npm run check-dto-types
+
+# web-build produces the web UI's static bundle, written DIRECTLY into
+# internal/adapters/inbound/webui/dist/ (web/vite.config.ts's own outDir --
+# see that file's own comment for why go:embed's own directive syntax rules
+# out the more conventional web/dist here). Required before
+# `go build -tags web_assets ./cmd/control-plane` can compile at all (see
+# internal/adapters/inbound/webui's own doc comment) -- the single-binary
+# `make dist` recipe that wires the two together end to end is a later
+# Step's own scope, not built here.
+web-build:
+	cd web && npm run build
+
+# web-check is a LOCAL convenience only (typecheck + lint + the DTO-name
+# guard + build, in the order most likely to fail fast) -- CI
+# (.github/workflows/ci.yml's own `web` job) runs the same four npm scripts
+# as separate steps instead, for per-concern failure attribution in the
+# Actions UI rather than one opaque `make` invocation.
+web-check: web-typecheck web-lint web-check-dto-types web-build
