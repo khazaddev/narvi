@@ -17,6 +17,19 @@ const (
 	ActionViewSessions Action = "view_sessions"
 	// ActionViewAnalytics is read access to analytics/reporting views.
 	ActionViewAnalytics Action = "view_analytics"
+	// ActionViewOwnProfile is read access to the AUTHENTICATED caller's
+	// OWN identity/role/linked-identity graph (§12.2 item 7's "identity
+	// auto-link status panel"; GET /api/me) -- the SAME row as
+	// ActionViewSessions/ActionViewAnalytics, not a stretch reuse of
+	// either: viewing your own account is, if anything, a MORE basic
+	// capability than reading session/analytics data, so excluding
+	// viewer here (the way ActionLinkChatGPTAccount's own row does) would
+	// be wrong -- there is no "own/joined" carve-out to speak of either,
+	// since a "/me" endpoint is by construction always the caller's own
+	// resource (mirrors ActionLinkChatGPTAccount's own doc comment on
+	// that point), so this has no Resource.OwnedOrJoined dependency at
+	// all, unlike that action.
+	ActionViewOwnProfile Action = "view_own_profile"
 
 	// -- Row 2: "Create sessions, prompt, approve plans on own/joined
 	// sessions" — admin, maintainer, member (never viewer). Prompting and
@@ -443,6 +456,7 @@ const (
 var AllActions = []Action{
 	ActionViewSessions,
 	ActionViewAnalytics,
+	ActionViewOwnProfile,
 	ActionCreateSession,
 	ActionPromptSession,
 	ActionApprovePlan,
