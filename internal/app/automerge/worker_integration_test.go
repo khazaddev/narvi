@@ -384,7 +384,7 @@ func TestPumpOnce_CandidateNoLongerOpen_NeverErrors(t *testing.T) {
 }
 
 // TestPumpOnce_Armed_GetOpenPRErrors_NeverMergesNeverPanics is the T2
-// regression test (Step 62 review, fixed) for fakeAutoMergeSourceControl.
+// regression test for fakeAutoMergeSourceControl.
 // getErr: before this fix, that field was wired into the fake but set by
 // NO test in this file, leaving RevalidateForAutoMerge's own genuine-
 // error branch (mergeCandidate's `if err != nil { logger.Error(...);

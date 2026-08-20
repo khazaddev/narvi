@@ -314,8 +314,7 @@ func pullRequestLabeledBody(repoFullName, cloneRepoName, cloneURL string, prNumb
 // fakeReviewContextFetcher is a test-only diffFetcher (the union
 // interface backing Config.DiffFetcher, handler.go) -- no real HTTP round
 // trip, satisfying GetPullRequest (also PullRequestResolver,
-// headresolve.go), GetCompareDiff (reviewcontext.Fetcher, Step 62 review
-// finding C2), and GetPullRequestDiff (prDiffFetcher,
+// headresolve.go), GetCompareDiff (reviewcontext.Fetcher), and GetPullRequestDiff (prDiffFetcher,
 // pullrequestevent.go's sentinel-fix merge-gate -- unused by this file's
 // own tests today, stubbed only to satisfy the union interface) so one
 // fake can back cfg.PullRequests AND cfg.DiffFetcher identically in a

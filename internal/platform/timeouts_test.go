@@ -96,7 +96,7 @@ func TestValidate_CatchesEachBrokenLink(t *testing.T) {
 			wantChain: "OutboxClaimDuration > OutboxDeliveryTimeout",
 		},
 		{
-			// Step 52 review fix ("cron trigger pump has no catch-up for
+			// §8.4 fix ("cron trigger pump has no catch-up for
 			// missed evaluations") adds an 8th, independent link:
 			// "AutomationCronCatchUpWindow > AutomationEnginePumpInterval",
 			// needed for the catch-up window to reliably span at least one

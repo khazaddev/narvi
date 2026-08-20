@@ -29,8 +29,7 @@ func cleanVerdict() review.Verdict {
 	}
 }
 
-// cleanInput's ChangedFileCount/TouchedBlastRadius are the Step 62 review
-// finding C1 fix's own two SERVER-DERIVED fields -- deliberately set to
+// cleanInput's ChangedFileCount/TouchedBlastRadius are the two SERVER-DERIVED fields -- deliberately set to
 // the SAME small/non-sensitive shape cleanVerdict's own (now-inert)
 // FilesChanged/BlastRadius already modeled, so this baseline's own
 // "eligible" outcome means the same thing it always did, just gated on
@@ -277,7 +276,7 @@ func TestComputeEligible(t *testing.T) {
 }
 
 // TestComputeEligible_IgnoresModelSelfReportedFilesChangedAndBlastRadius is
-// the C1 regression test (Step 62 review, CRITICAL, fixed) at the pure-function
+// the C1 regression test at the pure-function
 // level: this is the exact attack the reviewers verified reproducible --
 // a reviewing agent posts a verdict with a tiny self-reported FilesChanged
 // and an empty self-reported BlastRadius (so Shippable legitimately

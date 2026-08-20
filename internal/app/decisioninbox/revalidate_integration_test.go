@@ -269,7 +269,7 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 	// Paired with review:low-risk deliberately -- an otherwise-fully-
 	// eligible risk label -- so needs-human is provably the ONE thing
 	// keeping this refused, not a coincidental "no/unrecognized risk
-	// label" refusal (Step 60 review TEST BATCH: this subtest and what used
+	// label" refusal: this subtest and what used
 	// to be a separate "NeedsHumanWithLowRisk_Refused" subtest were
 	// byte-identical, both pairing needs-human with low-risk -- the
 	// latter was deleted as pure duplication, adding zero coverage
@@ -343,7 +343,7 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 		if ok {
 			t.Fatal("RevalidateForMerge() ok = true, want false (this PR is a draft)")
 		}
-		// Step 60 review TEST BATCH: this subtest is DOUBLE-GATED by
+		// This subtest is DOUBLE-GATED by
 		// ComputeAutoApprovalEligible's own IsDraft input, so deleting
 		// RevalidateForMerge's explicit `if target.Draft` early return
 		// still passes an `ok`-only/reason-non-empty assertion -- the PR
@@ -479,7 +479,7 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 		}
 	})
 
-	// Step 60 review TEST BATCH (second round): RevalidateForMerge's own
+	// RevalidateForMerge's own
 	// truncated->500 branch was never executed by any existing test --
 	// when the target PR is not found in a TRUNCATED (partial/degraded)
 	// read, this must return a genuine ERROR (the httpapi handler maps
@@ -509,7 +509,7 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 }
 
 // TestRevalidateForMerge_EligibilityConfigStoreError_FailsClosed is the C3
-// regression test (Step 62 review, BLOCKER, fixed): a GENUINE repo_settings
+// regression test: a GENUINE repo_settings
 // read error (never pgx.ErrNoRows) resolving this repo's own §21.2
 // eligibility config must refuse the merge outright (a propagated error,
 // mirroring this function's own existing §17 sentinel-fix-exclusion/
@@ -560,7 +560,7 @@ func TestRevalidateForMerge_EligibilityConfigStoreError_FailsClosed(t *testing.T
 }
 
 // TestRevalidateForMerge_LyingVerdictAgainstReal300FileSensitivePR is the
-// C1 regression test (Step 62 review, CRITICAL, fixed) at the FULL
+// C1 regression test at the FULL
 // system level -- the exact attack the reviewers verified reproducible
 // end to end: a review agent (whose own input includes the untrusted PR
 // diff, §5.2) posts riskLevel=low/premise=ok/testsCoverage=adequate (so

@@ -2594,7 +2594,7 @@ func DefaultTimeouts() Timeouts {
 		AutomationRunStartingOrphanThreshold: 5 * time.Minute,  // §3.5, explicit ("orphaned starting runs >5 min")
 		AutomationRunRunningOrphanThreshold:  90 * time.Minute, // §3.5, explicit ("running >90 min")
 		AutomationCronGranularity:            1 * time.Minute,  // §8.4; structural, not tunable -- see field doc comment
-		AutomationCronCatchUpWindow:          10 * time.Minute, // Step 52 review fix (missed cron evaluations); not specified, chosen -- see field doc comment
+		AutomationCronCatchUpWindow:          10 * time.Minute, // §8.4 fix (missed cron evaluations); not specified, chosen -- see field doc comment
 
 		RWXCLIExecTimeout:           2 * time.Minute,  // §4.1.1; not specified (RWX publishes no p99), chosen generously -- see field doc comment
 		RWXSandboxInactivityTimeout: 45 * time.Minute, // §4.1.1; not specified, chosen with margin above ActorIdleTTL (30min) -- see field doc comment
@@ -2765,7 +2765,7 @@ func (t Timeouts) Validate() error {
 	check("AutomationRunRunningOrphanThreshold > AutomationSweepInterval",
 		"AutomationRunRunningOrphanThreshold", t.AutomationRunRunningOrphanThreshold, "AutomationSweepInterval", t.AutomationSweepInterval)
 
-	// Step 52 review fix ("cron trigger pump has no catch-up for missed
+	// §8.4 fix ("cron trigger pump has no catch-up for missed
 	// evaluations"): AutomationCronCatchUpWindow must stay at least
 	// MinTimeoutMargin above AutomationEnginePumpInterval (the trigger
 	// pump's own tick cadence), or the catch-up window could be too

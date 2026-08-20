@@ -433,8 +433,7 @@ func TestMergePullRequest_NotPlatformAuthored(t *testing.T) {
 }
 
 // TestMergePullRequest_Viewer_Returns403 proves authz.Authorize
-// (ActionMergePR) actually gates this endpoint end to end (Step 60 review
-// finding T2, CRITICAL/security) -- every OTHER merge test in this file
+// (ActionMergePR) actually gates this endpoint end to end -- every OTHER merge test in this file
 // authenticates as Member, so a deleted/bypassed RBAC gate would pass the
 // whole suite; §16.2's own "Viewer role sees the queue read-only" would
 // have no executable guard at all. Mirrors this repo's own established
@@ -483,8 +482,7 @@ func TestMergePullRequest_Viewer_Returns403(t *testing.T) {
 }
 
 // TestMergePullRequest_MergePRErrorStatusMapping covers the merge
-// handler's own ports.MergePRError status mapping end to end (Step 60 review
-// finding T5): 405 (not currently mergeable) and 409 (the PR changed
+// handler's own ports.MergePRError status mapping end to end: 405 (not currently mergeable) and 409 (the PR changed
 // since it was last checked -- GitHub's own optimistic-concurrency
 // signal, exactly the HeadSHA-moved race this endpoint's own re-
 // validation exists to catch) both map to 409; any OTHER GitHub status
@@ -569,7 +567,7 @@ func TestMergePullRequest_MergePRErrorStatusMapping(t *testing.T) {
 // on Kind, which nulled exactly these fields for exactly this row.
 //
 // HasApprovingReview/HasChangesRequested are deliberately set to TRUE in
-// the fixture below (Step 60 review TEST BATCH: "HasApprovingReview is
+// the fixture below ("HasApprovingReview is
 // asserted non-nil only, never for its value" -- a fixture that leaves
 // both at their bool zero-value cannot tell "populated with the real
 // value" apart from "always renders false regardless of input"). Both

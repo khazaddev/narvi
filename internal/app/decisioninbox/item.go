@@ -81,8 +81,7 @@ type Item struct {
 	// above, this DOES gate an action -- RevalidateForMerge treats a true
 	// value as a hard merge block -- so
 	// buildPROpenItem also consults it when classifying Kind (a PR with
-	// changes requested never classifies ready_to_merge, Step 60 review
-	// finding P1-4, second round: before this fix such a PR sat in the
+	// changes requested never classifies ready_to_merge: before this fix such a PR sat in the
 	// TOP ready_to_merge section with a Merge button that would
 	// unconditionally 409). Populated unconditionally, mirroring
 	// HasApprovingReview.

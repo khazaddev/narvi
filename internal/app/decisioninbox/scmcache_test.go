@@ -236,8 +236,7 @@ func TestSCMCache_ListOpenPRsForUser_CacheHitReturnsOriginalFetchInstant(t *test
 
 // TestSCMCache_ListOpenPRsForUser_SlowFetchDoesNotBornExpire proves a
 // cache entry's own expiresAt is anchored on fetch COMPLETION, never the
-// PRE-fetch `now` the caller supplied (Step 60 review "Also do" batch,
-// "born-expired entries"): expiresAt used to be computed from the
+// PRE-fetch `now` the caller supplied: expiresAt used to be computed from the
 // pre-fetch `now` while the fetch itself could take up to
 // GitHubListOpenPRsForUserTimeout (3 minutes, production) against a much
 // shorter DecisionInboxSCMCacheTTL (2 minutes, production) -- a slow
@@ -349,7 +348,7 @@ func TestSCMCache_ListOpenPRsForUser_PropagatesUnderlyingError(t *testing.T) {
 }
 
 // TestSCMCache_ResolveCodeOwners_SlowFetchDoesNotBornExpire is the P2-2
-// regression test (Step 60 review, second round): the "born-expired entries"
+// regression test: the "born-expired entries"
 // fix (anchoring expiresAt/asOf on fetch COMPLETION, not the caller's
 // pre-fetch `now`) was previously applied ONLY to the openPRs cache --
 // ResolveCodeOwners still anchored both on the pre-fetch `now`, stale by

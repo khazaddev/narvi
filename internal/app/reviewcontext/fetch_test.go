@@ -89,7 +89,7 @@ func assertDiffArgs(t *testing.T, f *fakeFetcher, wantOwner, wantRepo, wantBase,
 }
 
 // TestFetch_Success_DiffPinnedToExactlyWhatGetPullRequestReported is the
-// C2 regression test (Step 62 review, CRITICAL, fixed) at the unit level: the
+// C2 regression test at the unit level: the
 // core atomicity property this whole fix exists to provide -- the diff
 // fetch (GetCompareDiff) is parametrized by EXACTLY pr.BaseRef/pr.HeadSHA,
 // the SAME values this call returns as HeadSHA, never a second,

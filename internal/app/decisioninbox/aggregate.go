@@ -346,8 +346,7 @@ func buildPRItems(ctx context.Context, deps Deps, actorGitHubID, token string, n
 
 		excluded, existsErr := deps.SentinelFixes.ExistsByFixPRNumber(ctx, repoFullName, int32(pr.Number))
 		if existsErr != nil {
-			// §17's structural exclusion must fail CLOSED (Step 60 review
-			// finding A3): a store error means "cannot prove this is NOT
+			// §17's structural exclusion must fail CLOSED: a store error means "cannot prove this is NOT
 			// a sentinel-auto-fix follow-up", treated identically to a
 			// CONFIRMED one below -- excluded outright, never best-effort
 			// passed through as if the check had simply found nothing.
@@ -402,8 +401,7 @@ func buildPROpenItem(ctx context.Context, deps Deps, pr ports.OpenPR, repoFullNa
 	openFindings, findingsErr := countOpenFindings(ctx, deps, repoFullName, pr.Number)
 	findingsUnknown := false
 	if findingsErr != nil {
-		// Fail CLOSED for the ELIGIBILITY computation below (Step 60 review
-		// finding A1) -- see countOpenFindings' own doc comment for why a
+		// Fail CLOSED for the ELIGIBILITY computation below -- see countOpenFindings' own doc comment for why a
 		// degraded zero there would be actively dangerous, not merely
 		// imprecise. openFindings keeps the synthetic sentinel value for
 		// THAT purpose only; findingsUnknown (
@@ -638,8 +636,7 @@ func resolvePRProvenance(ctx context.Context, deps Deps, pr ports.OpenPR, repoFu
 	// DISCOVERED (searchOpenPRs' own doc comment), so skipping it can
 	// never hide a row or grant unintended access.
 	//
-	// Ref is pr.BaseRef, deliberately never pr.HeadSHA (Step 60 review
-	// finding B3's own related hardening): the PR's HEAD is attacker-
+	// Ref is pr.BaseRef, deliberately never pr.HeadSHA (related hardening): the PR's HEAD is attacker-
 	// chosen (whoever opened/pushed the PR controls it), so resolving
 	// CODEOWNERS there would let a PR's own author dictate which
 	// CODEOWNERS file this call reads for classifying THEIR OWN PR --

@@ -8,7 +8,7 @@ import (
 )
 
 // This file (blastradius.go) is the path→tag classifier §21.2's own
-// sensitive-path criterion needs (C1, Step 62 review, CRITICAL, fixed): "no
+// sensitive-path criterion needs (C1): "no
 // sensitive path touched -- a configurable-per-repo list", checked against
 // the PR's own SERVER-FETCHED changed-file paths (ports.OpenPR.
 // ChangedFiles), never the reviewing model's own self-reported

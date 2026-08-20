@@ -341,8 +341,7 @@ func (a *Adapter) buildOpenPRFromDetail(ctx context.Context, owner, repo string,
 
 	ci := ports.CIConclusionUnknown
 	if detail.Head.SHA != "" {
-		// fetchCIConclusionLive, deliberately NOT fetchCIConclusion (Step 60
-		// review finding A2) -- see that function's own doc comment for
+		// fetchCIConclusionLive, deliberately NOT fetchCIConclusion -- see that function's own doc comment for
 		// why a LIVE, pre-merge gate needs a STRICT conclusion, distinct
 		// from mergedbetween.go's retrospective-audit-only lenient one.
 		ci = a.fetchCIConclusionLive(ctx, owner, repo, detail.Head.SHA, token)
@@ -466,8 +465,7 @@ func (a *Adapter) buildOpenPRFromDetail(ctx context.Context, owner, repo string,
 // trusted as authority"). See mergedbetween.go's fetchCIConclusion for the
 // RETROSPECTIVE §15.2 audit sibling this function is deliberately NOT --
 // that function's own doc comment now cross-references this one; the two
-// must never be merged back into one, and never share a caller (Step 60
-// review finding A2).
+// must never be merged back into one, and never share a caller.
 //
 // STRICT, unlike fetchCIConclusion's lenient "any confirmed success, no
 // confirmed failure" rule: an incomplete check run (Conclusion == nil,
@@ -487,8 +485,7 @@ func (a *Adapter) buildOpenPRFromDetail(ctx context.Context, owner, repo string,
 // specific, more useful fact to report when both are true at once).
 //
 // The combined-status "pending" branch below additionally requires
-// TotalCount > 0 before treating it as an incomplete signal (Step 60 review
-// finding P0, second round) -- see combinedStatusResponse's own doc
+// TotalCount > 0 before treating it as an incomplete signal -- see combinedStatusResponse's own doc
 // comment (mergedbetween.go) and the inline comment at that branch for
 // the full "why": GitHub reports state=="pending" both for a genuinely
 // in-flight legacy status AND for a repo with no legacy statuses at all,

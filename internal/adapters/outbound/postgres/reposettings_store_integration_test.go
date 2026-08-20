@@ -83,7 +83,7 @@ func TestRepoSettingsStore_Upsert_CreateThenUpdate(t *testing.T) {
 }
 
 // TestRepoSettingsStore_ColumnScopedUpserts_NeverClobberEachOther is the
-// C5 regression test (Step 62 review, MEDIUM but a privilege boundary,
+// C5 regression test (a privilege boundary,
 // fixed): UpsertAutoMergeToggle and UpsertAutoApprovalEligibility are
 // column-scoped -- a write through EITHER must never overwrite whatever
 // the OTHER already set, no matter which one runs last. BEFORE this fix,

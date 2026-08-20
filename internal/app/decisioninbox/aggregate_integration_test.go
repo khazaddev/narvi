@@ -1010,7 +1010,7 @@ func TestBuild_ChangedFilesListDegraded_NeverReadyToMerge(t *testing.T) {
 }
 
 // TestBuild_CodeOwnersResolvedAgainstBaseRefNeverHead is the B3 regression
-// test named explicitly in the Step 60 review's TEST BATCH: "reverting Ref:
+// test named explicitly to close a real gap: "reverting Ref:
 // pr.BaseRef -> pr.HeadSHA... passes everything" because no test captured
 // the actual ResolveCodeOwnersSpec resolvePRProvenance builds. HeadSHA is
 // deliberately a completely different, attacker-shaped string from
@@ -1033,8 +1033,7 @@ func TestBuild_CodeOwnersResolvedAgainstBaseRefNeverHead(t *testing.T) {
 					HTMLURL: "https://github.com/acme/widgets/pull/30",
 					// HeadSHA is deliberately attacker-shaped and distinct
 					// from BaseRef -- if resolvePRProvenance ever regresses
-					// to resolving CODEOWNERS at the PR's own head (Step 60
-					// review finding B3), the assertion below catches it
+					// to resolving CODEOWNERS at the PR's own head, the assertion below catches it
 					// immediately.
 					HeadSHA:      "attacker-controlled-head-sha",
 					BaseRef:      wantBaseRef,
@@ -1149,7 +1148,7 @@ func TestBuild_SCMFetchFailedSignal(t *testing.T) {
 }
 
 // TestBuild_SentinelFixStoreErrorDegradesTheReadButNeverPanics is the
-// P1-3 regression test (Step 60 review, second round): a genuine SentinelFixes
+// P1-3 regression test: a genuine SentinelFixes
 // store error inside buildPRItems' per-PR loop must both (1) exclude ONLY
 // that one PR row (fail closed, exactly as before this fix) and (2) mark
 // the overall read degraded via Result.SCMFetchFailed, rather than
@@ -1218,7 +1217,7 @@ func TestBuild_SentinelFixStoreErrorDegradesTheReadButNeverPanics(t *testing.T) 
 }
 
 // TestBuild_CredentialResolutionErrorDegradesRatherThanRenderingNoGitHub
-// is the P2-1 regression test (Step 60 review, second round): a genuine
+// is the P2-1 regression test: a genuine
 // identity-store error resolving the actor's OWN GitHub credential must
 // route into the SAME degraded signal as P1-2/P1-3, never collapse into
 // the identical, indistinguishable ok=false empty state "no GitHub linked
@@ -1330,7 +1329,7 @@ func itoaTest(n int) string {
 }
 
 // TestBuild_EligibilityConfigStoreError_DemotesFromReadyToMerge is the C3
-// regression test (Step 62 review, BLOCKER, fixed) at the READ-MODEL level: an
+// regression test at the READ-MODEL level: an
 // otherwise-fully-eligible PR must be demoted to needs_review, never
 // rendered ready_to_merge, when this repo's own §21.2 eligibility config
 // cannot be read (a genuine, non-ErrNoRows repo_settings error) --
@@ -1386,7 +1385,7 @@ func TestBuild_EligibilityConfigStoreError_DemotesFromReadyToMerge(t *testing.T)
 }
 
 // TestBuild_ReviewDecisionDegraded_DemotesFromReadyToMerge is the C4
-// regression test (Step 62 review, HIGH, fixed) at the READ-MODEL level: a
+// regression test at the READ-MODEL level: a
 // degraded review-decision read (ports.OpenPR.ReviewDecisionDegraded)
 // must demote an otherwise-fully-eligible PR out of ready_to_merge, and
 // must mark the overall read SCMFetchFailed -- "we could not tell" must
@@ -1450,7 +1449,7 @@ func countAutoApprovalOutcomes(ctx context.Context, t *testing.T, pool *pgxpool.
 }
 
 // TestBuild_Contested_HasChangesRequestedHalf_RecordsOverridden is the T1
-// regression test (Step 62 review, BLOCKER, fixed) for the HALF of the
+// regression test for the HALF of the
 // contested guard that was PROVABLY BROKEN before this fix:
 // computeRealEligibility's own OLD code computed `eligible` gating on
 // HasNeedsHumanLabel (a real ComputeEligible input), then only entered
