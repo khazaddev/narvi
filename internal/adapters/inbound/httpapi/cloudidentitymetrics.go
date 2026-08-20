@@ -20,25 +20,27 @@ import (
 
 // cloudIdentityMeterName is this package's own OTel meter name for the
 // cloud-identity minting metric, mirroring internal/app/imagebuild's
-// "narvi/imagebuild" and internal/sandboxagent/boot's
-// "narvi/sandboxagent-boot" precedent exactly (§5.3: one named meter per
-// major subsystem).
+// "narvi/imagebuild" precedent exactly (§5.3: one named meter per major
+// subsystem).
 const cloudIdentityMeterName = "narvi/httpapi-cloudidentity"
 
 // cloudIdentityMintTotalCounter is resolved LAZILY, on first use
-// (sync.OnceValue), mirroring internal/sandboxagent/boot's
-// hookRerunDurationHistogram/internal/sandboxagent/gitclone's
-// gitFetchDurationHistogram precedent exactly: httpapi has no
-// per-process constructor object to anchor eager construction to the way
-// internal/app/imagebuild's NewBuilder does (MintCloudIdentityToken is a
-// free function, called once at boot by cmd/control-plane/main.go, but
-// resolving otel.Meter at package-init time would permanently bind this
-// instrument to whatever MeterProvider happens to be globally registered
-// at THAT moment -- which main.go's own real OTel SDK setup, or a test's
-// own TestMain, may not have installed yet). Lazy, first-use resolution
-// instead reads otel.Meter(cloudIdentityMeterName) against whatever
-// MeterProvider is globally registered at the moment the FIRST mint
-// actually happens.
+// (sync.OnceValue): httpapi has no per-process constructor object to
+// anchor eager construction to the way internal/app/imagebuild's
+// NewBuilder does (MintCloudIdentityToken is a free function, called once
+// at boot by cmd/control-plane/main.go, but resolving otel.Meter at
+// package-init time would permanently bind this instrument to whatever
+// MeterProvider happens to be globally registered at THAT moment -- which
+// main.go's own real OTel SDK setup, or a test's own TestMain, may not
+// have installed yet). Lazy, first-use resolution instead reads
+// otel.Meter(cloudIdentityMeterName) against whatever MeterProvider is
+// globally registered at the moment the FIRST mint actually happens.
+// (internal/sandboxagent/boot and internal/sandboxagent/gitclone used to
+// share this exact sync.OnceValue shape for their own hookRerunDuration/
+// gitFetchDuration histograms -- both deleted by §33.3, which moved that
+// recording control-plane-side; this counter and rolloutgate.go's own
+// sessionRolloutRefusedTotalCounter (rolloutgate.go, this same package)
+// are this codebase's current examples of the pattern.)
 var cloudIdentityMintTotalCounter = sync.OnceValue(newCloudIdentityMintTotalCounter)
 
 func newCloudIdentityMintTotalCounter() metric.Int64Counter {

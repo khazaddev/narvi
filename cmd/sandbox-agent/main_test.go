@@ -2,10 +2,18 @@
 // setupSandboxAgentOTel's own real-provider wiring directly, in-process --
 // run() itself is not unit-testable in isolation (it blocks on OS signals /
 // a live WS bridge / a real opencode spawn), but this seam alone is exactly
-// the piece the audit finding this Step fixes is about: "cmd/sandbox-agent
-// never calls platform.SetupOTel", so sandbox_agent_hook_rerun_duration_seconds
-// (internal/sandboxagent/boot, §19.5(b)) recorded against the no-op global
-// MeterProvider every process starts with by default.
+// the piece §5.3's original audit finding was about: "cmd/sandbox-agent
+// never calls platform.SetupOTel", so this binary ran its entire life
+// against the no-op global MeterProvider/TracerProvider every process
+// starts with by default. Two properties matter here and are tested
+// separately: a REAL provider ends up installed globally
+// (TestSetupSandboxAgentOTel_InstallsRealMeterProvider), and the endpoint
+// that provider is built against is always the empty string
+// (TestSetupSandboxAgentOTel_PassesEmptyEndpoint) -- §33.4's own
+// "sandbox-agent must never carry a pathway to an operator's collector"
+// requirement, pinned so a future edit threading config into that call
+// site fails a test rather than silently compiling and passing everything
+// else.
 package main
 
 import (
@@ -29,9 +37,14 @@ import (
 // (explicitly reset here, not just assumed from process start, so this test
 // is correct regardless of what any other test in this binary might have
 // left registered); AFTER it, otel.GetMeterProvider() is no longer that same
-// no-op value -- i.e. a real SDK MeterProvider is now installed globally,
-// exactly what boot's own hookRerunDurationHistogram (sync.OnceValue,
-// telemetry.go) needs to observe the first time a hook actually runs.
+// no-op value -- i.e. a real SDK MeterProvider is now installed globally.
+// No instrument sandbox-agent itself owns records through it today (§33.3
+// deleted the last one, internal/sandboxagent/boot/telemetry.go's own
+// hookRerunDurationHistogram) -- what this test actually pins is that a
+// future sandbox-side instrument would find a working provider already
+// installed rather than silently landing on the no-op default, which is
+// setupSandboxAgentOTel's own real, current justification for existing at
+// all (see that function's own doc comment).
 //
 // Not t.Parallel(): this test mutates the process-wide global OTel
 // MeterProvider/TracerProvider, which no other test in this package touches
@@ -59,7 +72,7 @@ func TestSetupSandboxAgentOTel_InstallsRealMeterProvider(t *testing.T) {
 
 	got := otel.GetMeterProvider()
 	if got == knownNoop {
-		t.Fatal("otel.GetMeterProvider() is still the known no-op provider after setupSandboxAgentOTel() -- sandbox-agent's own hook-rerun-duration histogram would still record into the void")
+		t.Fatal("otel.GetMeterProvider() is still the known no-op provider after setupSandboxAgentOTel() -- any future sandbox-side instrument would silently record into the void")
 	}
 
 	// A real, non-no-op meter must actually be usable -- proves this isn't
@@ -69,6 +82,59 @@ func TestSetupSandboxAgentOTel_InstallsRealMeterProvider(t *testing.T) {
 		t.Fatalf("Int64Counter() error = %v, want nil", err)
 	}
 	counter.Add(context.Background(), 1)
+}
+
+// TestSetupSandboxAgentOTel_PassesEmptyEndpoint pins §33.4's own load-
+// bearing claim that setupSandboxAgentOTel's call site can never acquire a
+// real OTLP collector endpoint: it intercepts the exact otlpEndpoint value
+// setupSandboxAgentOTel passes through to platform.SetupOTel (via the
+// setupOTelFn indirection in main.go) and fails if it is ever anything
+// other than "". setupSandboxAgentOTel's own doc comment explains why this
+// specific property, not merely "a MeterProvider gets installed"
+// (TestSetupSandboxAgentOTel_InstallsRealMeterProvider, above), is the
+// actual guarantee sandbox-agent's own placement INSIDE the sandbox
+// depends on -- an ingestion credential threaded into that call (e.g. a
+// future edit passing cfg.OTLPEndpoint instead of "") would compile and
+// would pass every other test in this file unchanged; only this one is
+// built to catch it.
+//
+// Mutation check (run by hand, not by `go test`): temporarily change
+// setupSandboxAgentOTel's own `return setupOTelFn(ctx, "narvi-sandbox-agent", "")`
+// to pass a non-empty literal instead, and this test must fail -- see the
+// PR description for the actual run of that check.
+func TestSetupSandboxAgentOTel_PassesEmptyEndpoint(t *testing.T) {
+	original := setupOTelFn
+	defer func() { setupOTelFn = original }()
+
+	var (
+		called          bool
+		gotServiceName  string
+		gotOTLPEndpoint string
+	)
+	setupOTelFn = func(_ context.Context, serviceName, otlpEndpoint string) (func(context.Context) error, error) {
+		called = true
+		gotServiceName = serviceName
+		gotOTLPEndpoint = otlpEndpoint
+		return func(context.Context) error { return nil }, nil
+	}
+
+	shutdown, err := setupSandboxAgentOTel(context.Background())
+	if err != nil {
+		t.Fatalf("setupSandboxAgentOTel() error = %v, want nil", err)
+	}
+	if shutdown == nil {
+		t.Fatal("setupSandboxAgentOTel() shutdown = nil, want non-nil")
+	}
+
+	if !called {
+		t.Fatal("setupSandboxAgentOTel() never called setupOTelFn -- this test's interception is broken, not proving anything")
+	}
+	if gotOTLPEndpoint != "" {
+		t.Errorf("setupSandboxAgentOTel() passed otlpEndpoint = %q to platform.SetupOTel, want \"\" -- §33.4: sandbox-agent runs inside the sandbox and must never carry a pathway to an operator's real OTLP collector", gotOTLPEndpoint)
+	}
+	if gotServiceName != "narvi-sandbox-agent" {
+		t.Errorf("setupSandboxAgentOTel() passed serviceName = %q, want %q", gotServiceName, "narvi-sandbox-agent")
+	}
 }
 
 // TestShutdownSandboxAgentOTel_BoundsAHungShutdown proves the fix for
