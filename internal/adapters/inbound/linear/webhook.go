@@ -616,7 +616,7 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 // different channel won first -- outcome.Won/outcome.FinalStatus report
 // the truth). On NO match (including when there is no awaiting_approval
 // plan at all), this falls through to the ordinary create-turn path -- this
-// IS "request changes" (Step 37 already established that reusing ordinary
+// IS "request changes" (§8.1 already established that reusing ordinary
 // turn-creation for feedback is correct). Audit-fix batch update: that
 // create-turn path is no longer this function's own direct, unlocked
 // deps.Turns.Create call (the L2 finding: a genuine check-then-act race) --
@@ -654,7 +654,7 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 	}
 
 	if payload.AgentActivity.Signal != nil && *payload.AgentActivity.Signal == stopSignal {
-		// Scope decision (Step 34, narrowed further by the L7 audit fix
+		// Scope decision (§8.10, narrowed further by the L7 audit fix
 		// below): no session/turn STOP mechanism exists in
 		// internal/app/sessionactor yet (confirmed during this Step's
 		// investigation -- no Stop command type). Wiring a real stop
@@ -896,7 +896,7 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 	// createdTurn.PlanMode (not the local planMode variable computed above
 	// the CreateTurnCore call) -- F2 audit fix: planMode is captured BEFORE
 	// CreateTurnCore/createTurnLocked ever runs, so it never reflects
-	// createTurnLocked's own Step 64 promotion of planMode=true when the
+	// createTurnLocked's own §23 promotion of planMode=true when the
 	// plan_followup classifier returns a confident "amend" (see that
 	// function's own doc comment, turn.go). Logging the stale local
 	// variable here would silently misreport a promoted turn as
@@ -1107,7 +1107,7 @@ func (deps Deps) postThoughtNotice(ctx context.Context, organizationID, agentSes
 // never fail the webhook response itself, since the Narvi session this
 // event backs has already been created successfully by this point.
 //
-// Known limitation (Step 34, explicitly scoped out): this does not
+// Known limitation (§8.10, explicitly scoped out): this does not
 // refresh an expired access token before use. Linear's own OAuth access
 // tokens are short-lived (confirmed during this Step's investigation:
 // "valid for 24 hours"); linear_installations.refresh_token_encrypted is

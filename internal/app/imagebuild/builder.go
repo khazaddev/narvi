@@ -89,7 +89,7 @@ type Builder struct {
 	sourceControl         ports.SourceControl
 	gitHubImageBuildToken string
 
-	// cacheVersionStore backs Step 43(c)'s own build-time dependency cache
+	// cacheVersionStore backs the build-time dependency cache
 	// (§19.1's closing paragraph), third iteration: immutable versioned
 	// cache snapshots. Mints a fresh PublishVersion and resolves the most
 	// recent CONFIRMED MountVersion for a given cache key (cacheMount,
@@ -140,7 +140,7 @@ type Builder struct {
 	// turn mirrors).
 	refreshClaimReclaimed metric.Int64Counter
 
-	// buildTelemetry bundles Step 43(c)'s own build-duration/failure-rate
+	// buildTelemetry bundles the build-duration/failure-rate
 	// instrumentation (§19.9's closing paragraph; telemetry.go) -- recorded
 	// around every real BuildImage call in both attempt and attemptRefresh.
 	buildTelemetry buildTelemetry
@@ -156,7 +156,7 @@ type Builder struct {
 // (§19.2's own claim-time/freshness-pump SHA resolution, §19.2 -- may be
 // nil), gitHubImageBuildToken (the new platform-level credential,
 // platform.Config.GitHubImageBuildToken -- may be empty), and
-// cacheVersionStore (Step 43(c)'s own immutable-cache-version bookkeeping,
+// cacheVersionStore (immutable-cache-version bookkeeping,
 // third iteration -- may be nil; see the Builder field's own doc comment).
 //
 // The image_build_failure_streak OTel counter is constructed exactly once,
@@ -476,7 +476,7 @@ func (b *Builder) claimBatch(ctx context.Context) ([]sqlcgen.ImageBuild, error) 
 // default-branch tip SHA "at claim time" -- this is that resolution,
 // landing here per §19.9's own §19.1/§19.2 boundary note: it needs a
 // platform-level GitHub credential no session/creator context can supply
-// (a shared image has no creator), which Step 42 is the one that adds
+// (a shared image has no creator) -- §19.2 is what adds it
 // (platform.Config.GitHubImageBuildToken, threaded through NewBuilder).
 //
 // A row naming at least one repo resolves EVERY named repo's current

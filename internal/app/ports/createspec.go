@@ -104,8 +104,7 @@ func (e *DockerMismatchError) Error() string {
 
 // EgressPolicyMismatchError is returned by CreateSpec.Validate when
 // EgressPolicy and SessionConfig.EgressPolicy disagree — the identical
-// safety net for CreateSpec's third deliberate-duplicate field (§27.6,
-// Step 74).
+// safety net for CreateSpec's third deliberate-duplicate field (§27.6).
 type EgressPolicyMismatchError struct {
 	EgressPolicy              *sessionconfig.SessionConfigEgressPolicy
 	SessionConfigEgressPolicy *sessionconfig.SessionConfigEgressPolicy
@@ -142,13 +141,13 @@ func (s CreateSpec) Validate() error {
 // interface"). §10 Phase 2 gave the original fingerprinting policy
 // ("fingerprint = repo SHAs + runtime version; always fall back to base
 // image on any miss — never block a session"); §19.1 ("warm boot: shared
-// fingerprint", Step 41) redefines the KEY (domain/imagebuild.Fingerprint
+// fingerprint") redefines the KEY (domain/imagebuild.Fingerprint
 // now hashes each repo's normalized clone URL, not a resolved SHA — one
 // shared image per repo set) while keeping BuildImage itself pinned to
 // concrete SHAs: Repos below carries BOTH the URL (what the build service
 // clones) and the concrete SHA it clones at (what makes the build
 // reproducible) per repo — the fingerprint/cache KEY and the ACTUAL build
-// inputs are deliberately different shapes now, where before Step 41 they
+// inputs are deliberately different shapes now, where previously they
 // were the same map.
 type ImageSpec struct {
 	// Base is the base image reference to build from (a registry
@@ -175,7 +174,7 @@ type ImageSpec struct {
 	// CacheMount, when non-nil, asks BuildImage to accelerate the build by
 	// mounting a persistent, provider-backed cache volume into the build
 	// sandbox at CacheMount.Paths (§19.1's own "build-time dependency
-	// cache" — Step 43(c)). See CacheMount's own doc comment for the full
+	// cache"). See CacheMount's own doc comment for the full
 	// contract; nil means "no cache requested" (every ImageSpec literal
 	// that predates this field, and every test fixture that never sets
 	// it, keeps behaving exactly as before this field existed).

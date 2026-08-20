@@ -13,10 +13,10 @@
 // learn what follows a finished step. No I/O, no time.Now(), no
 // randomness (CLAUDE.md, §11) -- this package is data plus decision
 // functions, nothing more; the impure engine
-// (internal/app/workflowengine, Step 55) and the HITL gate (
+// (internal/app/workflowengine, §25.6) and the HITL gate (
 // §25.9) import it, never the reverse.
 //
-// Everything in this package is DARK as of Step 54: no dispatch wiring,
+// Everything in this package is DARK: no dispatch wiring,
 // no behavior change, nothing consumes these types at runtime yet (the
 // Step's own row: "Dark -- no dispatch wiring yet, no behavior change").
 //
@@ -26,7 +26,7 @@
 // workflow_lane Postgres enum exactly. LaneFor maps the classifier's own
 // existing vocabulary (internal/domain/intent/rubric.go) onto it -- "not
 // a new vocabulary invented alongside it" (§25.4) -- including the
-// release-vs-feature category Step 50 added, and §25.13's fail-open
+// release-vs-feature category §15 added, and §25.13's fail-open
 // requirement for anything unrecognized. See LaneFor's own doc comment
 // for the full mapping and the documented judgment calls.
 //
@@ -75,14 +75,14 @@
 // header for why a DB-level trigger was considered and deliberately NOT
 // added.
 //
-// # What Steps 55-56 consume (context only -- none of it lives here)
+// # What §25.6/§25.9 consume (context only -- none of it lives here)
 //
-// Step 55 (engine, §25.6-§25.8): resolves the (lane, repo) binding, loads
+// §25.6-§25.8 (engine): resolves the (lane, repo) binding, loads
 // the bound definition, dispatches each step as an ordinary turn on the
 // same session (child_session only for real isolation; fresh continuity
 // is a new OpenCode conversation on the SAME session, never a child
-// session), and calls NextStep on every posted step outcome. Step 56
-// (HITL + breaker, §25.9): the approve/reject/revise verdicts on
+// session), and calls NextStep on every posted step outcome. §25.9
+// (HITL + breaker): the approve/reject/revise verdicts on
 // HITLBefore/HITLAfter gates, the decide endpoint, and loopguard
 // consultation on re-firing needs_fix edges.
 package workflow

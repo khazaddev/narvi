@@ -11,7 +11,7 @@
 // # §19.1 ("warm boot: shared fingerprint + spawn-path simplification",
 // §19.1) rewrite -- what changed and why
 //
-// Before Step 41, computing a fingerprint here required a per-repo
+// Previously, computing a fingerprint here required a per-repo
 // `ResolveBranchSHA` GitHub API call (up to
 // len(repos)*platform.Timeouts.RepoSHAResolutionTimeout of sequential
 // network latency per spawn), which in turn required a usable creator
@@ -45,8 +45,8 @@
 // creates a best-effort, URL-only pending row (repo_urls, no
 // built_repo_shas yet) and does NOTHING further -- this spawn-path call
 // site never resolves a per-repo SHA, on this spawn or any other; this
-// spawn still uses the base image regardless, exactly as before. Step 42
-// has since shipped: app/imagebuild.Builder.attempt is what actually
+// spawn still uses the base image regardless, exactly as before.
+// app/imagebuild.Builder.attempt is what actually
 // performs that claim-time SHA resolution now (using
 // platform.Config.GitHubImageBuildToken, §19.2), turning a brand-new
 // pending row into a buildable one asynchronously, off this spawn's own
@@ -91,7 +91,7 @@
 // §19.1's own rewrite above (deliberately) dropped every creator/token
 // dependency this function used to have -- which also, as an unintended
 // side effect, dropped the ONLY thing that had ever gated which repos a
-// given user's sandbox could contain: before Step 41, a warm hit required
+// given user's sandbox could contain: previously, a warm hit required
 // resolving each repo's SHA under the CREATOR's own GitHub token, which
 // implicitly 404/403'd for a repo that creator could not read. Once the
 // fingerprint became URL-only and the background builder (§19.2) started
@@ -267,10 +267,10 @@ func (a *Actor) resolveAndSetImage(ctx context.Context, plan *spawnPlan) {
 		// No row yet for this fingerprint: best-effort create a pending
 		// tracking row carrying the URL-keyed fingerprint inputs, so
 		// internal/app/imagebuild's own background loop has a record of
-		// this repo set (see this file's own top comment for the Step
-		// 41/42 boundary this best-effort row sits on: no SHA resolution
+		// this repo set (see this file's own top comment for the §19.1/§19.2
+		// boundary this best-effort row sits on: no SHA resolution
 		// ever happens on this spawn path -- app/imagebuild.Builder's
-		// claim-time resolution, Step 42, is what later resolves and
+		// claim-time resolution, §19.2, is what later resolves and
 		// builds this row asynchronously). This spawn still uses the base
 		// image regardless of whether the upsert itself succeeds.
 		a.upsertPendingImageBuildBestEffort(ctx, fingerprint, repoURLs)

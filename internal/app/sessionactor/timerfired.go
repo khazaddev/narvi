@@ -31,7 +31,7 @@
 //     deliberate, documented simplification: ConnectedClientCount is
 //     always 0. The client WS hub itself now exists and does track
 //     connected participants (internal/adapters/inbound/wshub's *Hub,
-//     Step 19), but this package has no port through which to ask it for
+//     §6.2), but this package has no port through which to ask it for
 //     a live count -- see handleInactivityTimer. This does not stop the
 //     timer from being fully wired; it just means the "clients connected
 //     -> extend + warn" branch stays unreachable until that wiring lands.
@@ -143,7 +143,7 @@ func (a *Actor) handleInactivityTimer(ctx context.Context) error {
 			// ConnectedClientCount is always 0 for now: the client WS
 			// hub itself now exists and does track connected
 			// participants (internal/adapters/inbound/wshub's *Hub,
-			// Step 19), but this actor has no field/port through which
+			// §6.2), but this actor has no field/port through which
 			// to query it for a live count. Until that wiring lands,
 			// EvaluateInactivityTimeout can never take its "clients
 			// still connected -> extend + warn" branch -- every genuine
@@ -349,7 +349,7 @@ func (a *Actor) handleTerminalGraceTimer(ctx context.Context) error {
 		// handler yet -- Stopped needs an HTTP stop endpoint (a later
 		// Step) to have recorded that a stop was explicitly requested.
 		// Stale remains genuinely unreachable too, but NOT for lack of a
-		// reconciler any more: internal/app/reconciler (Step 25,
+		// reconciler any more: internal/app/reconciler (§5.3,
 		// "reconciler + GC") exists now, but is deliberately PURE
 		// cloud-side orphan reaping -- it calls ports.SandboxProvider.
 		// StopSandbox on a provider ref with no live Postgres owner, and
@@ -472,7 +472,7 @@ func (a *Actor) handleTurnDeadlineTimer(ctx context.Context) error {
 
 		// §3.3: "Stop/failure paths emit a synthetic execution_complete
 		// event so clients always see one terminal event per turn" --
-		// exactly the machinery Step 08 built for this caller (see
+		// exactly the machinery §3.1 built for this caller (see
 		// domain/turn's own doc.go). RequiresSyntheticExecutionComplete
 		// and DeriveFailureReason are used exactly as built, not
 		// reimplemented.

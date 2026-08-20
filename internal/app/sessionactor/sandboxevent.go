@@ -10,7 +10,7 @@
 // always bumps liveness (last_seen_at = max of all signals), and fires
 // the state transitions this Step's plan row (and §3.2's, "snapshots &
 // restore") scope: "ready"/Connecting, "heartbeat"-nil-phase/Booting
-// (both Step 18), "snapshot_ready"/Snapshotting (Step 22, design decision
+// (both §3.2), "snapshot_ready"/Snapshotting (§3.2, design decision
 // 3 -- see handleSnapshotReadyEvent below), and now Suspect-recovery
 // (§3.2, "two-phase terminalization" -- see the section right below).
 //
@@ -418,7 +418,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 		// §3.3: "reported on every heartbeat" -- a heartbeat is a
 		// sandbox-level liveness signal, not a turn-scoped one (it carries
 		// no turn id), so this is a session-level write, independent of
-		// whatever transition (if any) target computed above (Step 21,
+		// whatever transition (if any) target computed above (§9.3,
 		// "e2e happy path", design decision 6).
 		if cmd.Type == "heartbeat" && cmd.ConversationID != nil {
 			if _, err := a.stores.session.WithTx(tx).UpdateConversationID(ctx, sqlcgen.UpdateSessionConversationIDParams{
@@ -453,7 +453,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 			}
 			pushAfterCommit = sig
 		case "snapshot_ready":
-			// Step 22, design decision 3: a real snapshot_ready event
+			// §3.2, design decision 3: a real snapshot_ready event
 			// finalizes the Snapshotting->Ready transition
 			// triggerSnapshotBestEffort (below) started, and persists the
 			// sandbox's own confirmed snapshotId. Runs INSIDE this SAME
@@ -906,7 +906,7 @@ func (a *Actor) triggerSnapshotBestEffort(ctx context.Context) {
 			return fmt.Errorf("sessionactor: get session for snapshot eligibility: %w", err)
 		}
 
-		// §27.8's own genuinely-unresolved point, resolved here (Step 74
+		// §27.8's own genuinely-unresolved point, resolved here (§27.5
 		// brief, point D): "Capabilities() is a flat, provider-level
 		// report; a provider whose snapshot support differs by runtime
 		// (Modal gVisor vs VM runtime) cannot express that today." There

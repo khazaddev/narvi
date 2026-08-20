@@ -373,10 +373,10 @@ type CreateTurnOptions struct {
 	ReviewDepth         *string
 	ReviewDepthDecision []byte
 
-	// ClassifyText (Step 64 follow-up fix, review Finding 1) is the raw,
+	// ClassifyText (a follow-up fix, review Finding 1) is the raw,
 	// unprefixed human reply text the plan_followup block below (just
 	// before tx.Begin) should classify -- mirrors github/coalesce.go's own
-	// pre-existing classifyText parameter for the Step 36 classifier
+	// pre-existing classifyText parameter for the §8.3 classifier
 	// (that function's own doc comment: "Audit fix: this used to be
 	// *req.Prompt directly, which ... already had ... the entire PR diff
 	// ... appended -- feeding the classifier's LLM call the entire PR
@@ -387,8 +387,7 @@ type CreateTurnOptions struct {
 	// `prompt` value ALREADY folded with review.RenderTurnPrompt's own
 	// full diff/stack/verdict-tool-instructions text -- inflating the
 	// classifier's own LLM call cost/latency by orders of magnitude and
-	// risking exceeding the model's context window, exactly like the
-	// Step 36 finding.
+	// risking exceeding the model's context window, exactly like before.
 	//
 	// nil (every caller other than github/coalesce.go's REUSE-path
 	// CreateTurnForBot call) means "no raw text was captured separately
@@ -617,7 +616,7 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	// lock), which is strictly worse than occasionally paying for a call
 	// whose result goes unused.
 	//
-	// classifyText (F1, Step 64 follow-up fix, review Finding 1) is used
+	// classifyText (F1, a follow-up fix, review Finding 1) is used
 	// here INSTEAD OF prompt when non-nil -- see CreateTurnOptions.
 	// ClassifyText's own doc comment for the full "why": prompt itself may
 	// already carry review.RenderTurnPrompt's own diff/stack/verdict-tool

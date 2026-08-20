@@ -198,7 +198,7 @@ var (
 	ErrNegativeFilesChanged     = errors.New("reviewpost: filesChanged must not be negative")
 	ErrEmptySummary             = errors.New("reviewpost: summary must not be empty")
 	// ErrEmptyDigestSummary is §26.1's own addition (§26.1): "Digest.Summary
-	// is required on every review from Step 66 on" -- mirrors ErrEmptySummary
+	// is required on every review from day one" -- mirrors ErrEmptySummary
 	// above exactly (same empty/whitespace-only check, same "missing and
 	// garbled are the identical failure" posture), for the digest's own
 	// "what this PR does" field rather than the verdict's overall narrative.
@@ -381,7 +381,7 @@ func ValidateVerdictInput(in VerdictInput) error {
 	}
 
 	// Digest.Summary (§26.1): "required on every review from
-	// Step 66 on" -- the ONE digest field required on EVERY review,
+	// day one" -- the ONE digest field required on EVERY review,
 	// light and deep alike. ArchDecisions/StackRisks/UnverifiedLimits are
 	// NOT checked here -- they are requested via the prompt (review/
 	// context.go) on every review, and validation-enforced separately,
@@ -487,7 +487,7 @@ func ValidateVerdictInput(in VerdictInput) error {
 		}
 	}
 
-	// Findings (Step 48, additive): each one validated by
+	// Findings (§8.2, additive): each one validated by
 	// ValidateFindingInput, in order -- first bad finding wins, mirroring
 	// this function's own fixed-order, first-error-wins discipline above.
 	// nil/empty Findings is not iterated at all, so an old caller posting
@@ -715,7 +715,7 @@ func BuildVerdict(in VerdictInput) review.Verdict {
 	}
 }
 
-// BuildFindings is BuildVerdict's own per-finding sibling (Step 48,
+// BuildFindings is BuildVerdict's own per-finding sibling (§8.2,
 // additive): turns an ALREADY-VALIDATED VerdictInput.Findings (every
 // element already passed ValidateFindingInput, via ValidateVerdictInput's
 // own loop above) into the []Finding a caller upserts into review_findings

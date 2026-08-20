@@ -6,7 +6,7 @@
 // (ClassifyPlanFollowup, gated on an awaiting-approval plan), never the
 // diff/stack/verdict-tool-instructions-enriched text review.RenderTurnPrompt
 // folds into the turn's own dispatched prompt -- exactly the bug class
-// this repo already fixed once for the OTHER (Step 36, review-vs-request/
+// this repo already fixed once for the OTHER (§8.3, review-vs-request/
 // plan-vs-build) classifier category (coalesce.go's own classifyText
 // parameter doc comment: "Audit fix: this used to be *req.Prompt
 // directly ... inflating cost/latency by orders of magnitude and risking
@@ -40,9 +40,9 @@ import (
 
 // capturingIntentLLM is a ports.LLM fake that records every Complete
 // call's own single user-message content, IN ORDER -- this file's own
-// regression coverage needs to distinguish the WINNER path's Step 36
+// regression coverage needs to distinguish the WINNER path's §8.3
 // ClassifyAndRecord call (review-vs-request/plan-vs-build, fires first,
-// on session creation) from the REUSE path's Step 64 ClassifyPlanFollowup
+// on session creation) from the REUSE path's §23 ClassifyPlanFollowup
 // call (amend-vs-answer, fires second, once an awaiting-approval plan
 // exists) by call order, since both categories share this SAME
 // *intentclassifier.Service/ports.LLM instance in real production wiring
@@ -162,7 +162,7 @@ func TestCoalesce_ReusePathClassifiesRawMentionText_NeverTheEnrichedPrompt(t *te
 	createLinkedGitHubUser(ctx, t, rig.users, rig.identities, commenterID, sqlcgen.UserRoleMaintainer)
 
 	// First mention: WINNER path, creates the review session. Triggers the
-	// Step 36 ClassifyAndRecord call -- capturingLLM.messages[0].
+	// §8.3 ClassifyAndRecord call -- capturingLLM.messages[0].
 	first := postWebhook(t, rig, issueCommentBodyWithCommenter(repoFullName, "planfollowup-classify-repo", cloneURL, prNumber, "first-mention", commenterID, "planfollowup-user"), "delivery-planfollowup-classify-1")
 	if first != http.StatusOK {
 		t.Fatalf("first delivery status = %d, want %d", first, http.StatusOK)
@@ -228,7 +228,7 @@ func TestCoalesce_ReusePathClassifiesRawMentionText_NeverTheEnrichedPrompt(t *te
 	capturingLLM.mu.Unlock()
 
 	if len(messages) != 2 {
-		t.Fatalf("capturingLLM.messages = %d entries, want exactly 2 (WINNER's Step 36 call + REUSE's Step 64 plan_followup call); messages = %q", len(messages), messages)
+		t.Fatalf("capturingLLM.messages = %d entries, want exactly 2 (WINNER's §8.3 call + REUSE's §23 plan_followup call); messages = %q", len(messages), messages)
 	}
 
 	planFollowupClassifyText := messages[1]

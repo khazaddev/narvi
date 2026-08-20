@@ -90,7 +90,7 @@ type PRRef struct {
 	URL    string
 }
 
-// ResolveBranchSHASpec is what SourceControl.ResolveBranchSHA (Step 26,
+// ResolveBranchSHASpec is what SourceControl.ResolveBranchSHA (§8.5,
 // "image builds") needs to resolve a repo's current commit SHA for
 // fingerprinting (§10 Phase 2: "fingerprint = repo SHAs + runtime
 // version"). Owner/Repo are the same generic source-control concepts
@@ -255,8 +255,7 @@ type RegisterPRStackSpec struct {
 	Token     string
 }
 
-// CreateBranchSpec is what SourceControl.CreateBranch (Step 48 confirmed-
-// finding fix, §17.2) needs to create a brand-new branch ref pointing at
+// CreateBranchSpec is what SourceControl.CreateBranch (§17.2) needs to create a brand-new branch ref pointing at
 // an already-known commit SHA -- the sentinel-auto-fix flow's own fix for
 // giving a fix child session an upstream branch DISTINCT from the origin
 // PR's own head branch to check out and push to (see
@@ -415,7 +414,7 @@ type MergedPR struct {
 }
 
 // PRPerson identifies one source-control account attached to a pull
-// request in some role (assignee, requested reviewer, author) -- Step 60,
+// request in some role (assignee, requested reviewer, author) -- §16,
 // "decision inbox: read model + API", §16.2. ExternalID is the account's
 // STABLE, provider-native identifier (GitHub: the numeric account id, as
 // a decimal string) -- deliberately NOT Login: this codebase's own
@@ -654,8 +653,8 @@ type ListOpenPRsForUserSpec struct {
 // §16.2) needs: Owner/Repo/Token are the same generic source-control
 // concepts every other spec in this file already uses. Ref is the commit
 // SHA (or branch) the CODEOWNERS file itself is read at -- callers MUST
-// pass the repo's own BASE ref/branch here, never the PR's head (Step 60
-// review finding P2-3, second round, correcting this doc comment, which
+// pass the repo's own BASE ref/branch here, never the PR's head (correcting
+// this doc comment, which
 // previously said the opposite -- "the PR's own current head branch/SHA"
 // -- the exact attacker-controlled value finding B3, first round, moved
 // callers away from): a PR's head is chosen by whoever opened/pushed the
