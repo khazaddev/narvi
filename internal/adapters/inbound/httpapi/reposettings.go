@@ -657,8 +657,8 @@ func PutAutoRetriggerReviewToggle(repoSettings *postgres.RepoSettingsStore, prSe
 //
 // COLUMN-SCOPED write, via postgres.RepoSettingsStore.
 // UpsertDescriptionAutofixToggle -- touches ONLY
-// description_autofix_enabled, never any other repo_settings column (Step 62
-// review finding C5's own column-scoped-write discipline, applied here
+// description_autofix_enabled, never any other repo_settings column (the same
+// column-scoped-write discipline, applied here
 // from the start). This store method returns the FULL, just-written
 // repo_settings row, so no follow-up Get call is needed to render every
 // OTHER field on the response, exactly like PutAutoRetriggerReviewToggle
@@ -782,8 +782,8 @@ func reviewDepthModeString(mode restdtos.UpdateReviewDepthConfigRequestMode) (*s
 //
 // COLUMN-SCOPED write, via postgres.RepoSettingsStore.
 // UpsertReviewDepthConfig -- touches ONLY review_depth_mode/
-// review_depth_deep_paths, never any other repo_settings column (Step 62
-// review finding C5's own column-scoped-write discipline, applied here
+// review_depth_deep_paths, never any other repo_settings column (the same
+// column-scoped-write discipline, applied here
 // from the start). This store method already returns the FULL,
 // just-written repo_settings row, so no follow-up Get call is needed to
 // render every OTHER field on the response, exactly like
@@ -867,8 +867,8 @@ func PutReviewDepthConfig(repoSettings *postgres.RepoSettingsStore, prSessions *
 //
 // COLUMN-SCOPED write, via postgres.RepoSettingsStore.
 // UpsertReviewCostBudget -- touches ONLY review_cost_budget_light_usd/
-// review_cost_budget_deep_usd, never any other repo_settings column (Step 62
-// review finding C5's own column-scoped-write discipline, applied here
+// review_cost_budget_deep_usd, never any other repo_settings column (the same
+// column-scoped-write discipline, applied here
 // from the start, exactly like PutReviewDepthConfig above). This store
 // method already returns the FULL, just-written repo_settings row, so no
 // follow-up Get call is needed to render every OTHER field on the

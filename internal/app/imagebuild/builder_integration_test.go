@@ -462,14 +462,14 @@ func sumImageBuildDurationCount(ctx context.Context, t *testing.T, reader *sdkme
 // seedPendingImageBuild inserts a fresh 'pending' image_builds row directly
 // (bypassing app/sessionactor entirely -- this package's own tests exercise
 // Builder in isolation, matching its own doc.go's scope). repo_urls is
-// seeded EMPTY (a base+runtime-only fingerprint) deliberately: Step 41
-// ("warm boot: shared fingerprint", §19.1) has no claim-time SHA
+// seeded EMPTY (a base+runtime-only fingerprint) deliberately: §19.1's
+// own "warm boot: shared fingerprint" mechanism has no claim-time SHA
 // resolution mechanism yet (that's §19.2/§19.9 -- see attempt's
 // own doc comment), so a row naming any repo can never actually reach a
 // real BuildImage call in this package's own tests -- only a repo-less row
 // can, which is exactly what these backoff/streak tests need to exercise
 // (they're testing the retry/streak MECHANISM, orthogonal to which
-// fingerprints Step 41 can build). See
+// fingerprints §19.1 can build). See
 // TestPumpOnce_RepoBearingRow_NoSHAResolutionYet_SkipsBuildImageCleanly
 // below for the repo-bearing case's own dedicated coverage.
 func seedPendingImageBuild(ctx context.Context, t *testing.T, store *narvipg.ImageBuildStore, fingerprint string) {
@@ -2530,7 +2530,7 @@ func TestBuilderRun_RefreshPumpGoroutineStarts(t *testing.T) {
 	}
 }
 
-// --- Step 43(c): build-time dependency cache (§19.1's closing paragraph) ---
+// --- Build-time dependency cache (§19.1's closing paragraph) ---
 
 // TestPumpOnce_Success_RequestsCacheMountKeyedOnBaseAndRuntimeVersion proves
 // attempt (PumpOnce's own per-row body) now populates ImageSpec.CacheMount

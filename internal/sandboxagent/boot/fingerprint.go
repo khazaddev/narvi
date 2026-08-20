@@ -19,7 +19,7 @@ import (
 // (never a literal -- this package must not import time.Duration unit
 // literals per §5.4/§11, enforced by tools/lint/narvichecks/notimeliteral).
 //
-// openCodeVersion is a plain, ALREADY-DISCOVERED value (Step 17: §7 "Pin
+// openCodeVersion is a plain, ALREADY-DISCOVERED value (§7: "Pin
 // the OpenCode version in the image; record it in the boot fingerprint")
 // -- unlike RepoSHAs, discovering it is not this function's own job: it
 // requires the OpenCode server to already be running
@@ -29,7 +29,7 @@ import (
 // RepoSHAs' own empty-map-before-cloning shape) and call CollectFingerprint
 // a SECOND time with the real value once OpenCode has been spawned --
 // exactly the same "log first with what's known, then a supplementary log
-// line once more is known" pattern Step 15 already established for
+// line once more is known" pattern §6.4 already established for
 // repo_shas (see cmd/sandbox-agent/main.go's runBootSequence).
 func CollectFingerprint(cfg Config, repoSHATimeout time.Duration, openCodeVersion string) sandboxboot.BootFingerprint {
 	return sandboxboot.BootFingerprint{

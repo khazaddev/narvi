@@ -309,7 +309,7 @@ const gitHubBotTokenEnvVarName = "NARVI_GITHUB_BOT_TOKEN"
 // whichever the deploying operator provisions) -- never logged anywhere.
 const gitHubImageBuildTokenEnvVarName = "NARVI_GITHUB_IMAGE_BUILD_TOKEN"
 
-// NARVI_CACHE_VOLUME_EPOCH (Step 43(c)'s attempt-2 rotation escape hatch)
+// NARVI_CACHE_VOLUME_EPOCH (§19.1's attempt-2 rotation escape hatch)
 // is GONE, deliberately, not merely unread: domain/imagebuild.
 // CacheVolumeKey (this Step's third iteration -- immutable versioned
 // cache snapshots) no longer takes an epoch argument at all. See that
@@ -347,7 +347,7 @@ const reviewModelDeepEnvVarName = "NARVI_REVIEW_MODEL_DEEP"
 // github's new pull_request/"labeled" handling): the exact label NAME a
 // maintainer applies to a PR to manually re-trigger its review session,
 // reusing the SAME atomic per-PR claim/coalescing (github_pr_sessions,
-// Step 32) an @mention already goes through -- never a NEW mechanism.
+// §8.2) an @mention already goes through -- never a NEW mechanism.
 // DELIBERATELY OPTIONAL, unlike gitHubBotHandleEnvVarName/
 // gitHubWebhookSecretEnvVarName above: this is a product/UX naming choice
 // with a genuinely safe out-of-the-box default (defaultGitHubReReviewLabel

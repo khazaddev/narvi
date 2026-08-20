@@ -12,7 +12,7 @@
 // Deliberately mounted OUTSIDE auth.Middleware (§13.1's cookie-based,
 // browser-user auth): this is a SANDBOX-bearer-token-authenticated
 // endpoint, matching internal/adapters/inbound/wshub/sandbox.go's own
-// header-bearer-token handshake precedent from Step 18 exactly, not a
+// header-bearer-token handshake precedent from §3.2 exactly, not a
 // browser-facing route at all -- see cmd/control-plane/main.go's own
 // mounting (outside the /api prefix, alongside the sandbox/client WS
 // route, not inside the /api/sessions auth-gated group).
@@ -90,8 +90,8 @@
 // reviewverdict.go's own identical reverse-lookup precedent) never pushes
 // or opens a PR -- it only clones a PR's head branch read-only, for inline
 // code-review context (§8.2), and its own output reaches GitHub
-// exclusively through the verdict-posting tool (reviewverdict.go, Step
-// 47), which authenticates with cfg.GitHubBotToken, never a per-commenter
+// exclusively through the verdict-posting tool (reviewverdict.go,
+// §8.2), which authenticates with cfg.GitHubBotToken, never a per-commenter
 // OAuth token. Handing such a session's SANDBOX the session CREATOR's own
 // broadly `repo`-scoped personal GitHub OAuth token (steps 7-9 below) for
 // this exact purpose was itself a confirmed credential-exposure gap: an
@@ -193,7 +193,7 @@ func verifySandboxBearerToken(presented string, storedHash *string) bool {
 // handshake places its equivalent checks -- see that file's own doc
 // comment steps 7/8; step 9 below is the M8 audit finding's own addition,
 // calling internal/app/sessionactor's own CheckCreatorGuard; step 7 below
-// is the Step 47 audit remediation's own addition):
+// is this audit remediation's own addition):
 //
 //  1. sessionID does not parse as a UUID, or no sandbox row exists for it
 //     -> 404 (mirrors wshub/sandbox.go's own "malformed and nonexistent
@@ -233,8 +233,8 @@ func verifySandboxBearerToken(presented string, storedHash *string) bool {
 //     credential-helper protocol).
 //  7. This session has a github_pr_sessions row (prSessions.
 //     GetBySessionID succeeds) -> 200 with botToken, never the creator's
-//     own identity -- see this file's own top comment ("Audit remediation
-//     (Step 47...)") for the full rationale. Steps 8-10 below (the
+//     own identity -- see this file's own top comment ("Audit remediation")
+//     for the full rationale. Steps 8-10 below (the
 //     creator-guard/identity/decrypt path) are skipped entirely for a
 //     review session: they exist to find and gate a PER-USER OAuth
 //     credential, which a review session has no legitimate use for at
