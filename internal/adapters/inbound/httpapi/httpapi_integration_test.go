@@ -2102,7 +2102,11 @@ func TestListArtifacts_HappyPath(t *testing.T) {
 // 404ing download link. Seeds a genuinely 'failed' upload via the REAL
 // production path (CreateUpload + MarkUploadFailedIfPending), never a
 // hand-written INSERT, and asserts both fields land correctly on the REST
-// list response.
+// list response. Extended here (the rail's own artifacts panel, §12.2 item
+// 1, is the first real consumer of this endpoint) to also assert filename/
+// sizeBytes/contentType land -- artifactWireMap dropped all three before
+// this Step, even though sqlcgen.Artifact has carried them since migration
+// 000060 and CreateUpload above already populates them on every row.
 func TestListArtifacts_FailedUploadStatusAndFailureReason(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
@@ -2146,6 +2150,18 @@ func TestListArtifacts_FailedUploadStatusAndFailureReason(t *testing.T) {
 	}
 	if elem["failureReason"] != "verification_failed" {
 		t.Errorf(`Artifacts[0]["failureReason"] = %v, want "verification_failed"`, elem["failureReason"])
+	}
+	if elem["filename"] != filename {
+		t.Errorf(`Artifacts[0]["filename"] = %v, want %q`, elem["filename"], filename)
+	}
+	if elem["contentType"] != contentType {
+		t.Errorf(`Artifacts[0]["contentType"] = %v, want %q`, elem["contentType"], contentType)
+	}
+	// JSON numbers decode as float64 through the generated
+	// additionalProperties:true map -- compared against size (int64) via
+	// an explicit conversion rather than expecting Go's == to coerce it.
+	if elem["sizeBytes"] != float64(size) {
+		t.Errorf(`Artifacts[0]["sizeBytes"] = %v, want %v`, elem["sizeBytes"], size)
 	}
 }
 

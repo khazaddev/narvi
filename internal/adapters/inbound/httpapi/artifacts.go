@@ -71,6 +71,28 @@ func artifactWireMap(a sqlcgen.Artifact) map[string]interface{} {
 	if a.FailureReason != nil {
 		failureReason = *a.FailureReason
 	}
+	// filename/sizeBytes/contentType (§12.2 item 1's own rail/composer
+	// consumer, §28): sqlcgen.Artifact has carried these three columns since
+	// migration 000060 (uploadmint.go's own CreateUpload call already
+	// populates them on every upload row), but this wire map never
+	// surfaced them -- a gap invisible until now because nothing
+	// client-side ever read GET .../artifacts before this Step. All three
+	// are nil for a pr/preview row (only an upload row ever sets them),
+	// so each maps to a null property here, exactly like FailureReason
+	// immediately above -- never an empty string standing in for
+	// "unknown", which a filename-display caller could mistake for a
+	// real (if empty) filename.
+	var filename, contentType interface{}
+	if a.Filename != nil {
+		filename = *a.Filename
+	}
+	if a.ContentType != nil {
+		contentType = *a.ContentType
+	}
+	var sizeBytes interface{}
+	if a.SizeBytes != nil {
+		sizeBytes = *a.SizeBytes
+	}
 	return map[string]interface{}{
 		"id":            a.ID,
 		"type":          a.Type,
@@ -79,5 +101,8 @@ func artifactWireMap(a sqlcgen.Artifact) map[string]interface{} {
 		"createdAt":     a.CreatedAt,
 		"status":        a.Status,
 		"failureReason": failureReason,
+		"filename":      filename,
+		"sizeBytes":     sizeBytes,
+		"contentType":   contentType,
 	}
 }

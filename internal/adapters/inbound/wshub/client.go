@@ -549,6 +549,22 @@ func artifactWireMap(a sqlcgen.Artifact) map[string]interface{} {
 	if a.FailureReason != nil {
 		failureReason = *a.FailureReason
 	}
+	// filename/sizeBytes/contentType (§12.2 item 1's own rail): the SAME
+	// addition as this function's own REST twin (httpapi/artifacts.go's artifactWireMap) --
+	// see that function's own doc comment for the full "why now" reasoning.
+	// Nil (-> JSON null) for a pr/preview row; only an upload row ever
+	// sets these three columns.
+	var filename, contentType interface{}
+	if a.Filename != nil {
+		filename = *a.Filename
+	}
+	if a.ContentType != nil {
+		contentType = *a.ContentType
+	}
+	var sizeBytes interface{}
+	if a.SizeBytes != nil {
+		sizeBytes = *a.SizeBytes
+	}
 	return map[string]interface{}{
 		"id":            a.ID,
 		"type":          a.Type,
@@ -557,6 +573,9 @@ func artifactWireMap(a sqlcgen.Artifact) map[string]interface{} {
 		"createdAt":     a.CreatedAt,
 		"status":        a.Status,
 		"failureReason": failureReason,
+		"filename":      filename,
+		"sizeBytes":     sizeBytes,
+		"contentType":   contentType,
 	}
 }
 
