@@ -352,7 +352,7 @@ func TestDefaultTimeouts_Step21StandaloneFields(t *testing.T) {
 	}
 
 	if err := to.Validate(); err != nil {
-		t.Fatalf("Validate() = %v, want nil (Step 21 fields must not disturb either invariant chain)", err)
+		t.Fatalf("Validate() = %v, want nil (§9.3 fields must not disturb either invariant chain)", err)
 	}
 }
 
@@ -548,7 +548,7 @@ func TestDefaultTimeouts_Step26StandaloneFields(t *testing.T) {
 	}
 
 	if err := to.Validate(); err != nil {
-		t.Fatalf("Validate() = %v, want nil (Step 26 fields must not disturb either invariant chain)", err)
+		t.Fatalf("Validate() = %v, want nil (§8.5 fields must not disturb either invariant chain)", err)
 	}
 }
 
@@ -1018,7 +1018,7 @@ func TestDefaultTimeouts_WarmBootAccessGateStandaloneFields(t *testing.T) {
 // -- ships with a sane, non-zero default matching its own documented value
 // (§19.2's own explicit "propose 10 min"), and that adding it did not
 // disturb either pre-existing invariant chain. This field shipped with the
-// original Step 42 diff but -- unlike GitFetchStepTimeout/
+// original diff but -- unlike GitFetchStepTimeout/
 // OpenCodeSummarizeTimeout above -- had no standalone-field test of its own
 // (an audit finding this batch closes): a NewBuilder/runRefreshPump caller
 // constructing a partial Timeouts (several tests already do) would panic

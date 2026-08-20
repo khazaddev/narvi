@@ -216,7 +216,7 @@ type Timeouts struct {
 	InactivityMinCheckInterval time.Duration
 
 	// --- §2 standalone additions: no ordering relationship with
-	// either invariant chain above (or with the PR-06/Step 07 additions),
+	// either invariant chain above (or with the PR-06/§1 additions),
 	// so — per those additions' own precedent — plain fields with
 	// sensible defaults, not wired into a fake invariant link.
 
@@ -673,7 +673,7 @@ type Timeouts struct {
 	// row 25 gives this explicitly: "60s loop against the provider API".
 	ReconcilerInterval time.Duration
 
-	// --- Step 25 fix (reconciler orphan-GC debounce): a real,
+	// --- §5.3 fix (reconciler orphan-GC debounce): a real,
 	// empirically-reproduced race, not covered by either invariant chain
 	// above -- but DOES need its own pairwise check against
 	// ReconcilerInterval (see Validate() below) for the guarantee it
@@ -788,7 +788,7 @@ type Timeouts struct {
 	// identical reasoning and value exactly (this codebase's own
 	// convention is one named timeout per distinct network-call type, even
 	// when two types happen to share the same chosen value -- see
-	// RepoSHAResolutionTimeout's own addition in Step 26 for the precedent
+	// RepoSHAResolutionTimeout's own addition in §8.5 for the precedent
 	// this repeats rather than reuses). Not specified in the plan; chosen
 	// as 10s, matching RepoSHAResolutionTimeout/CredentialFetchTimeout's
 	// own "lightweight call, not a large data transfer" reasoning.
@@ -865,7 +865,7 @@ type Timeouts struct {
 	// webhook handler itself (posting an initial acknowledgment Agent
 	// Activity -- see internal/adapters/outbound/linearapi's own doc
 	// comment for why this is a minimal direct call, not the general
-	// Notifier/outbox abstraction Step 35 owns). Linear's own real docs
+	// Notifier/outbox abstraction §5.1 owns). Linear's own real docs
 	// require a webhook receiver to "return a response ... within 5
 	// seconds" -- this must clear that budget with real margin, so a slow
 	// or hanging Linear API call never itself causes Linear to consider
@@ -1502,7 +1502,7 @@ type Timeouts struct {
 	// RepoAccessCacheTTL is how long a CheckRepoAccess verdict (positive OR
 	// negative) is trusted before this gate re-checks it live, keyed per
 	// (session creator, repo) -- required to keep this new gate off the
-	// steady-state hot path Step 41/42 (§19.1/§19.2) deliberately built:
+	// steady-state hot path (§19.1/§19.2) deliberately built:
 	// unlike RepoSHAResolutionTimeout's own SHA resolution (drift-
 	// sensitive, never cacheable -- §19.2's whole rationale for removing
 	// it from the spawn path), repo ACCESS changes rarely, so it is safe
@@ -1531,7 +1531,7 @@ type Timeouts struct {
 	// with repos, pay the full per-repo RepoAccessCheckTimeout again and
 	// again for as long as the incident lasts -- reintroducing exactly the
 	// "up to len(repos) * timeout of sequential GitHub latency per spawn"
-	// cost class Step 41/42's own commit message states was removed. This
+	// cost class a prior fix's own commit message states was removed. This
 	// breaker does not change the deny outcome (still fail-closed, exactly
 	// like an uncached indeterminate failure already was) -- it only stops
 	// paying for the network round trip once failures are clearly
@@ -2125,7 +2125,7 @@ type Timeouts struct {
 	// expected meaning of "daily digest".
 	DigestContentWindow time.Duration
 
-	// -- Step 63 fix ("review: learned false-positive patterns" /
+	// -- §22 fix ("review: learned false-positive patterns" /
 	// content-anchored finding positioning, §22.1.1) -- no ordering
 	// relationship with either invariant chain above (or with any prior
 	// Step's standalone additions), so -- per those additions' own
@@ -2582,15 +2582,15 @@ func DefaultTimeouts() Timeouts {
 
 		GitHubActorNoticeTTL: 24 * time.Hour, // batch fix/deny-unlinked-github-actors; not specified, chosen -- see field doc comment for why this is a DISTINCT constant from IdentityLinkPromptTTL despite sharing its value
 
-		GitHubPRDiffTimeout: 20 * time.Second, // not specified (Step 46 postdates the plan); chosen, double GitHubGetPRTimeout's own 10s -- generous for a real, possibly-large diff transfer
+		GitHubPRDiffTimeout: 20 * time.Second, // not specified (this value postdates the plan); chosen, double GitHubGetPRTimeout's own 10s -- generous for a real, possibly-large diff transfer
 
-		GitHubListMergedBetweenTimeout: 2 * time.Minute, // not specified (Step 50 postdates the plan); chosen, generous for the whole bounded call sequence a real release cut makes -- see field doc comment
+		GitHubListMergedBetweenTimeout: 2 * time.Minute, // not specified (this value postdates the plan); chosen, generous for the whole bounded call sequence a real release cut makes -- see field doc comment
 
 		ReleaseManifestCheckPumpInterval: 10 * time.Second, // blocking-finding fix #1; not specified, chosen -- see field doc comment
 		ReleaseManifestCheckTimeout:      3 * time.Minute,  // blocking-finding fix #1; not specified, chosen -- GitHubListMergedBetweenTimeout (2min) plus a full extra minute of margin, see field doc comment
 
-		AutomationEnginePumpInterval:         60 * time.Second, // Step 51; not specified, chosen, matches ReconcilerInterval's own cadence
-		AutomationSweepInterval:              60 * time.Second, // Step 51; not specified, chosen, matches AutomationEnginePumpInterval's own cadence
+		AutomationEnginePumpInterval:         60 * time.Second, // §3.5; not specified, chosen, matches ReconcilerInterval's own cadence
+		AutomationSweepInterval:              60 * time.Second, // §3.5; not specified, chosen, matches AutomationEnginePumpInterval's own cadence
 		AutomationRunStartingOrphanThreshold: 5 * time.Minute,  // §3.5, explicit ("orphaned starting runs >5 min")
 		AutomationRunRunningOrphanThreshold:  90 * time.Minute, // §3.5, explicit ("running >90 min")
 		AutomationCronGranularity:            1 * time.Minute,  // §8.4; structural, not tunable -- see field doc comment
@@ -2603,16 +2603,16 @@ func DefaultTimeouts() Timeouts {
 		UploadPresignGetTTL:            5 * time.Minute,  // §28.5, explicit ("propose 5 min")
 		UploadPendingSweepAfter:        24 * time.Hour,   // §28.4, explicit ("propose 24 h")
 		UploadAbandonmentSweepInterval: 15 * time.Minute, // §28.4, explicit ("propose 15 min")
-		ObjectStoreHTTPClientTimeout:   10 * time.Second, // Step 58; not specified, chosen, matches RepoSHAResolutionTimeout's own "lightweight call" reasoning
+		ObjectStoreHTTPClientTimeout:   10 * time.Second, // §8.6; not specified, chosen, matches RepoSHAResolutionTimeout's own "lightweight call" reasoning
 
 		ChatGPTOAuthRefreshMargin:       72 * time.Hour,   // §29.5, explicit ("propose 72h")
 		ChatGPTOAuthRefreshPumpInterval: 6 * time.Hour,    // §29.5, explicit ("propose 6h")
-		ChatGPTLinkAttemptTTL:           15 * time.Minute, // Step 59; not specified, chosen generously (human device-switch time)
-		ChatGPTOAuthHTTPClientTimeout:   15 * time.Second, // Step 59; not specified, chosen generously (a real third-party OAuth endpoint over the public internet)
+		ChatGPTLinkAttemptTTL:           15 * time.Minute, // §8.8; not specified, chosen generously (human device-switch time)
+		ChatGPTOAuthHTTPClientTimeout:   15 * time.Second, // §8.8; not specified, chosen generously (a real third-party OAuth endpoint over the public internet)
 
-		GitHubListOpenPRsForUserTimeout: 3 * time.Minute,     // Step 60; not specified, matches ReleaseManifestCheckTimeout's own figure for a comparable bounded-but-many-call operation
-		GitHubResolveCodeOwnersTimeout:  30 * time.Second,    // Step 60; not specified, chosen generously (a handful of file/user/team fetches)
-		GitHubMergePRTimeout:            15 * time.Second,    // Step 60; not specified, half again GitHubGetPRTimeout's baseline (interactive, human-facing write)
+		GitHubListOpenPRsForUserTimeout: 3 * time.Minute,     // §16; not specified, matches ReleaseManifestCheckTimeout's own figure for a comparable bounded-but-many-call operation
+		GitHubResolveCodeOwnersTimeout:  30 * time.Second,    // §16; not specified, chosen generously (a handful of file/user/team fetches)
+		GitHubMergePRTimeout:            15 * time.Second,    // §16; not specified, half again GitHubGetPRTimeout's baseline (interactive, human-facing write)
 		DecisionInboxSCMCacheTTL:        2 * time.Minute,     // §16.2's own worked example ("as of 2 min ago")
 		DecisionInboxStaleAfter:         48 * time.Hour,      // §16.1, explicit ("stale items (>48h, configurable)")
 		DecisionInboxLatencyWindow:      30 * 24 * time.Hour, // §16.2; not specified, chosen as a month of decision history -- long enough for a stable median, bounded per §21.1
@@ -2624,7 +2624,7 @@ func DefaultTimeouts() Timeouts {
 		DigestChannelDiscoveryLookback: 30 * 24 * time.Hour, // §21.3; not specified, mirrors ReviewVerdictAnalyticsWindow's own identical "a month, bounded" reasoning
 		DigestContentWindow:            24 * time.Hour,      // §21.3, explicit ("a daily digest") -- one calendar day of rollup content, distinct from the channel-discovery lookback above
 
-		FindingPositionResolveAllTimeout: 45 * time.Second, // Step 63 fix; not specified, chosen -- generous for several per-finding relocation calls (10s each) while bounding the worst case on a synchronous verdict-POST handler path
+		FindingPositionResolveAllTimeout: 45 * time.Second, // §22 fix; not specified, chosen -- generous for several per-finding relocation calls (10s each) while bounding the worst case on a synchronous verdict-POST handler path
 
 		ReviewRetriggerDebounce: 2 * time.Minute, // §24.2; not specified, chosen -- long enough to collapse a short burst of fixup-commit pushes into one quiet window, short enough that a single push still reviews promptly
 
@@ -2722,7 +2722,7 @@ func (t Timeouts) Validate() error {
 	check("FirstConnectBudget > ImagePullBootP99",
 		"FirstConnectBudget", t.FirstConnectBudget, "ImagePullBootP99", t.ImagePullBootP99)
 
-	// Step 25 fix (reconciler orphan-GC debounce): ReconcilerOrphanConfirmationPeriod
+	// §5.3 fix (reconciler orphan-GC debounce): ReconcilerOrphanConfirmationPeriod
 	// must stay at least MinTimeoutMargin below ReconcilerInterval, or the
 	// "reaped on the SECOND consecutive tick, never the first" guarantee
 	// app/reconciler.Reconciler's own debounce promises silently degrades
