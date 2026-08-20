@@ -224,7 +224,7 @@ type ListSubTaskStartEventsForTurnParams struct {
 	DispatchedEventID int64       `json:"dispatched_event_id"`
 }
 
-// Step 71 (§26.4/§7.1's own post-hoc sub-task corroboration): the two
+// (§26.4/§7.1's own post-hoc sub-task corroboration): the two
 // queries below are this codebase's FIRST use of a payload->>'gen' JSONB
 // extraction filter -- checked against the rest of this file and every
 // other file in this directory before writing these, since there is no

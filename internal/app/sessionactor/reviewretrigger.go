@@ -222,7 +222,7 @@ func (a *Actor) handleReviewRetriggerDebounceTimer(ctx context.Context) error {
 				"repo_full_name", decision.repoFullName, "pr_number", decision.prNumber)
 			decision.action = reviewRetriggerActionFetchFailed
 		} else {
-			// Step 68 (§26.3): depth re-evaluated on the delta (this
+			// (§26.3): depth re-evaluated on the delta (this
 			// PR's own CURRENT diff, reviewCtx above), THEN floored at
 			// the PR's own previous depth ("once deep, a PR stays deep,
 			// even if the delta itself would independently route
@@ -419,7 +419,7 @@ func (a *Actor) readReviewRetriggerState(ctx context.Context) (*reviewRetriggerD
 		} else {
 			verdictHeadSHA = latest.HeadSha
 			verdictRiskLevel = latest.RiskLevel
-			// Step 68 (§26.3): review_path is nullable (a pre-Step-68
+			// (§26.3): review_path is nullable (a pre-Step-68
 			// row, or a verdict whose own turn never resolved a depth)
 			// -- degrades to "", the SAME "nothing to floor against"
 			// reading as no prior verdict at all.

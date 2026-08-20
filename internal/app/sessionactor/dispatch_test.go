@@ -89,7 +89,7 @@ func TestBuildPromptPayload(t *testing.T) {
 		if got.ScmName == "" || got.ScmEmail == "" {
 			t.Error("ScmName/ScmEmail must be non-empty")
 		}
-		// Step 59 (§29.8): turns.effort now threads through end to end,
+		// (§29.8): turns.effort now threads through end to end,
 		// mirroring model_id's own assertion immediately above -- this
 		// replaces the pre-Step-59 hardcoded-nil assertion this test used
 		// to make here.

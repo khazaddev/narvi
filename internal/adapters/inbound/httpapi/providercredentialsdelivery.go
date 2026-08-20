@@ -95,7 +95,7 @@ import (
 // this exactly, the same reconciliation scmcredentials.go's own top doc
 // comment describes for the SCM case.
 //
-// Step 59 (§29.6) evolves the per-provider VALUE from a bare plaintext
+// (§29.6) evolves the per-provider VALUE from a bare plaintext
 // string into credentialAuthValue, a discriminated union -- see that
 // type's own doc comment for the exact shape and, critically, for why it
 // has no "refresh" field at all.
@@ -253,7 +253,7 @@ func ProviderCredentialsDelivery(
 			environmentID = &id
 		}
 
-		// Step 59 (§29.4): "resolution keys on sessions.created_by" --
+		// (§29.4): "resolution keys on sessions.created_by" --
 		// nil for a bot/automation session (CreatedBy invalid, migration
 		// 000004's own comment), which simply contributes no user-scope
 		// candidate below, falling through to the static-key scopes
@@ -335,7 +335,7 @@ func ProviderCredentialsDelivery(
 				continue
 			}
 
-			// Step 59 (§29.6): split by kind -- api_key re-labels today's
+			// (§29.6): split by kind -- api_key re-labels today's
 			// plaintext-string behavior into the "api" Auth-union member;
 			// oauth parses the decrypted {access, refresh, expires_ms,
 			// account_id} blob and builds the "oauth" member WITHOUT ever

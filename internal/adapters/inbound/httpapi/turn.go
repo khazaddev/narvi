@@ -159,7 +159,7 @@ func CreateTurn(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *post
 			return
 		}
 
-		// Step 58 (§28.5): attachmentIds is parsed here, at the REST
+		// (§28.5): attachmentIds is parsed here, at the REST
 		// boundary, rather than deep inside createTurnLocked's own
 		// transaction -- a malformed uuid string is a client-input
 		// mistake the same 400 turn.go's own other decode failures
@@ -723,7 +723,7 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 		}
 		for _, s := range summaries {
 			if s.Status == sqlcgen.PlanStatusAwaitingApproval {
-				// Step 64 (§23.2/§23.3): consult the PRE-COMPUTED
+				// (§23.2/§23.3): consult the PRE-COMPUTED
 				// plan_followup classification (answerOnly, computed above,
 				// before tx.Begin) -- never re-run the classifier here,
 				// inside the transaction/row lock. answerOnly == nil
@@ -839,7 +839,7 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 		epistemicCheckSessionKnown = true
 	}
 
-	// Step 58 (§28.5): the attachment block (deterministic per-attachment
+	// (§28.5): the attachment block (deterministic per-attachment
 	// listing + download_file command) and the upload-tool note are
 	// appended to the FULLY RESOLVED prompt -- after, never before,
 	// workflowengine's own {{prompt}} template substitution above -- so
@@ -898,7 +898,7 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 		effectivePrompt += domainupload.RenderUploadToolNote(sessionID.String())
 	}
 
-	// Step 61 (§20.1/§20.3): the devil's-advocate preamble is PRECEDED --
+	// (§20.1/§20.3): the devil's-advocate preamble is PRECEDED --
 	// prepended, never appended -- onto the turn's own FULLY assembled
 	// prompt (after workflow-template resolution and the attachment/
 	// upload-tool blocks above, so it is the very first thing the agent

@@ -59,7 +59,7 @@ type decisionInboxTestRig struct {
 }
 
 // seedAutoApprovedVerdict inserts a Shippable=auto review_verdicts row at
-// headSHA -- Step 62 (§21.1/§21.2): the REAL auto-approval eligibility
+// headSHA -- (§21.1/§21.2): the REAL auto-approval eligibility
 // engine now requires one before any PR classifies ready_to_merge or
 // re-validates eligible at merge/click time, mirroring internal/app/
 // decisioninbox's own identical seedAutoApprovedVerdict helper
@@ -152,7 +152,7 @@ func (f *fakeMergeSourceControl) UpdatePRBody(context.Context, ports.UpdatePRBod
 	return errors.New("not implemented")
 }
 func (f *fakeMergeSourceControl) GetOpenPR(context.Context, string, string, int, string) (ports.OpenPR, bool, error) {
-	// Step 62, §21.2 stage 2: this fake backs the HUMAN-clicked Merge
+	// §21.2 stage 2: this fake backs the HUMAN-clicked Merge
 	// endpoint's own tests (MergePullRequest -> RevalidateForMerge),
 	// which never calls GetOpenPR at all (that is RevalidateForAutoMerge's
 	// own machine-caller primitive) -- not implemented is the correct,
@@ -185,7 +185,7 @@ func newDecisionInboxTestRig(t *testing.T, sourceControl ports.SourceControl) *d
 		SCMCache:           decisioninbox.NewSCMCache(sourceControl, platform.DefaultTimeouts()),
 		TokenEncryptionKey: decisionInboxTokenKey,
 		Timeouts:           platform.DefaultTimeouts(),
-		// Step 62 (§21.1/§21.2): the REAL auto-approval eligibility
+		// (§21.1/§21.2): the REAL auto-approval eligibility
 		// engine's own store dependencies.
 		ReviewVerdict: appreviewverdict.Deps{
 			ReviewVerdicts:       reviewVerdicts,
@@ -684,7 +684,7 @@ func TestListDecisionInbox_FindingsUnknownRendersNullNotTheFailClosedSentinel(t 
 		SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
 		TokenEncryptionKey: decisionInboxTokenKey,
 		Timeouts:           platform.DefaultTimeouts(),
-		// Step 62 (§21.1/§21.2): computeRealEligibility runs regardless of
+		// (§21.1/§21.2): computeRealEligibility runs regardless of
 		// the findings-count failure above (never short-circuited by it),
 		// so this must be a real, non-nil store too -- no verdict exists
 		// for PR #1400 either way, so GetLatest reports ok=false

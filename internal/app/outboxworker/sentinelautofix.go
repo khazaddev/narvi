@@ -313,7 +313,7 @@ func (n *sentinelAutoFixNotifier) Deliver(ctx context.Context, notification port
 		spawned, err := n.spawnClaimedChildSession(ctx, payload)
 		if err != nil {
 			if errors.Is(err, errRolloutRefused) {
-				// Step 76 (§10 Phase 6, §32): terminal-skip, mirroring
+				// (§10 Phase 6, §32): terminal-skip, mirroring
 				// descriptionautofix.go's own "confirmed negative -> nil,
 				// never retried" precedent -- see errRolloutRefused's own
 				// doc comment for the full "why this is not the ordinary
@@ -435,7 +435,7 @@ func (n *sentinelAutoFixNotifier) spawnClaimedChildSession(ctx context.Context, 
 	})
 	if cerr != nil {
 		if cerr.RolloutRefusal {
-			// Step 76 (§10 Phase 6, §32): a PERMANENT policy refusal --
+			// (§10 Phase 6, §32): a PERMANENT policy refusal --
 			// the origin PR's own repo is not enrolled -- never a
 			// transient failure. errRolloutRefused lets Deliver (this
 			// notifier's own entry point) distinguish this from every

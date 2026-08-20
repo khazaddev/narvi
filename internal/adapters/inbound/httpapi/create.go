@@ -36,7 +36,7 @@ import (
 // reason a session ever carries a provenance tag at all (a non-empty
 // pathScope).
 //
-// Step 49 (§14.4, "handoff-readiness sentinel") promotes the underlying
+// (§14.4, "handoff-readiness sentinel") promotes the underlying
 // string into internal/domain/provenance.ScopedEnvironment (that
 // package's own doc comment explains why: a fourth caller,
 // internal/app/sessionactor, needs to read this exact value and cannot
@@ -828,7 +828,7 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 		}
 	}
 
-	// Step 48 (§17.2): an explicit ChildSessionOptions.ProvenanceTag
+	// (§17.2): an explicit ChildSessionOptions.ProvenanceTag
 	// OVERRIDES whatever was just computed from pathScope/mockConfig above
 	// -- see ChildSessionOptions' own doc comment for why a
 	// sentinel-auto-fix child session is never ALSO a scoped-Environment
@@ -850,7 +850,7 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 		// context" convention (a non-plan-mode session simply never reads
 		// it back).
 		BuildModelID: (*string)(req.BuildModelId),
-		// Step 59 (§29.8): build_effort mirrors build_model_id's own
+		// (§29.8): build_effort mirrors build_model_id's own
 		// shape/storage convention exactly, one field over.
 		BuildEffort: (*string)(req.BuildEffort),
 		// ParentSessionID/SpawnDepth (§17.2, migrations/000045):

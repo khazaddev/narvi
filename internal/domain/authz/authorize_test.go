@@ -199,7 +199,7 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"maintainer manages env secrets", authz.RoleMaintainer, authz.ActionManageEnvSecrets, false, true},
 		{"member cannot manage env secrets", authz.RoleMember, authz.ActionManageEnvSecrets, false, false},
 		{"viewer cannot manage env secrets", authz.RoleViewer, authz.ActionManageEnvSecrets, false, false},
-		// Step 54 (§25.11): workflow-definition authoring sits in this
+		// (§25.11): workflow-definition authoring sits in this
 		// SAME maintainer+ row as ActionManageAutomations -- no
 		// own/joined carve-out (asserted with ownedOrJoined=true for
 		// member to prove it genuinely does not exist here).
@@ -208,7 +208,7 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"member cannot manage workflow definitions", authz.RoleMember, authz.ActionManageWorkflowDefinitions, false, false},
 		{"member cannot manage workflow definitions even if ownedOrJoined", authz.RoleMember, authz.ActionManageWorkflowDefinitions, true, false},
 		{"viewer cannot manage workflow definitions", authz.RoleViewer, authz.ActionManageWorkflowDefinitions, false, false},
-		// Step 73a (§27.3): cloud-identity binding CRUD (environment AND
+		// (§27.3): cloud-identity binding CRUD (environment AND
 		// global scope both) -- this SAME maintainer+ row, no member
 		// own/joined carve-out (asserted with ownedOrJoined=true for
 		// member to prove it genuinely does not exist here).
@@ -217,7 +217,7 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"member cannot manage cloud identity bindings", authz.RoleMember, authz.ActionManageCloudIdentityBindings, false, false},
 		{"member cannot manage cloud identity bindings even if ownedOrJoined", authz.RoleMember, authz.ActionManageCloudIdentityBindings, true, false},
 		{"viewer cannot manage cloud identity bindings", authz.RoleViewer, authz.ActionManageCloudIdentityBindings, false, false},
-		// Step 73b (§27.4): cluster-binding CRUD -- this SAME maintainer+
+		// (§27.4): cluster-binding CRUD -- this SAME maintainer+
 		// row, no member own/joined carve-out.
 		{"admin manages cluster bindings", authz.RoleAdmin, authz.ActionManageClusterBindings, false, true},
 		{"maintainer manages cluster bindings", authz.RoleMaintainer, authz.ActionManageClusterBindings, false, true},
@@ -239,14 +239,14 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"maintainer configures auto-approve", authz.RoleMaintainer, authz.ActionConfigureAutoApprove, false, true},
 		{"member cannot configure auto-approve", authz.RoleMember, authz.ActionConfigureAutoApprove, false, false},
 		{"viewer cannot configure auto-approve", authz.RoleViewer, authz.ActionConfigureAutoApprove, false, false},
-		// Step 63 (§22.2): teaching a learned false-positive pattern --
+		// (§22.2): teaching a learned false-positive pattern --
 		// same row, no member own/joined carve-out (repo-scoped, not
 		// session-scoped).
 		{"admin teaches false-positive pattern", authz.RoleAdmin, authz.ActionTeachFalsePositivePattern, false, true},
 		{"maintainer teaches false-positive pattern", authz.RoleMaintainer, authz.ActionTeachFalsePositivePattern, false, true},
 		{"member cannot teach false-positive pattern", authz.RoleMember, authz.ActionTeachFalsePositivePattern, false, false},
 		{"viewer cannot teach false-positive pattern", authz.RoleViewer, authz.ActionTeachFalsePositivePattern, false, false},
-		// Step 63 (§22.4): retiring a pattern / reading the audit view --
+		// (§22.4): retiring a pattern / reading the audit view --
 		// same row.
 		{"admin manages false-positive patterns", authz.RoleAdmin, authz.ActionManageFalsePositivePatterns, false, true},
 		{"maintainer manages false-positive patterns", authz.RoleMaintainer, authz.ActionManageFalsePositivePatterns, false, true},
@@ -263,7 +263,7 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"maintainer cannot manage global secrets", authz.RoleMaintainer, authz.ActionManageGlobalSecrets, false, false},
 		{"member cannot manage global secrets", authz.RoleMember, authz.ActionManageGlobalSecrets, false, false},
 		{"viewer cannot manage global secrets", authz.RoleViewer, authz.ActionManageGlobalSecrets, false, false},
-		// Step 73a (§27.3): admin-triggered OIDC signing-key rotation --
+		// (§27.3): admin-triggered OIDC signing-key rotation --
 		// admin ONLY, not even maintainer (see that action's own doc
 		// comment for why this sits one row below binding CRUD).
 		{"admin manages cloud identity keys", authz.RoleAdmin, authz.ActionManageCloudIdentityKeys, false, true},
@@ -289,7 +289,7 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"maintainer cannot configure block-on-high-risk", authz.RoleMaintainer, authz.ActionConfigureBlockOnHighRisk, false, false},
 		{"member cannot configure block-on-high-risk", authz.RoleMember, authz.ActionConfigureBlockOnHighRisk, false, false},
 		{"viewer cannot configure block-on-high-risk", authz.RoleViewer, authz.ActionConfigureBlockOnHighRisk, false, false},
-		// Step 62 (§21.2): arming the per-repo auto-merge toggle is admin
+		// (§21.2): arming the per-repo auto-merge toggle is admin
 		// ONLY, same row and reasoning as ActionToggleSentinelAutoFix
 		// above -- asserted with ownedOrJoined=true too, to prove the
 		// ownership escape hatch does not exist for this row at all.
@@ -298,7 +298,7 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"maintainer cannot toggle auto-merge even if ownedOrJoined", authz.RoleMaintainer, authz.ActionToggleAutoMerge, true, false},
 		{"member cannot toggle auto-merge", authz.RoleMember, authz.ActionToggleAutoMerge, false, false},
 		{"viewer cannot toggle auto-merge", authz.RoleViewer, authz.ActionToggleAutoMerge, false, false},
-		// Step 54 (§25.11): workflow-binding activation is admin ONLY,
+		// (§25.11): workflow-binding activation is admin ONLY,
 		// in this SAME row as ActionActivatePromptTemplate -- not even
 		// maintainer, and no own/joined escape hatch (asserted with
 		// ownedOrJoined=true to prove it).
@@ -308,7 +308,7 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"member cannot activate workflow binding", authz.RoleMember, authz.ActionActivateWorkflowBinding, false, false},
 		{"viewer cannot activate workflow binding", authz.RoleViewer, authz.ActionActivateWorkflowBinding, false, false},
 
-		// Step 68 (§26.3): configuring a repo's own reviewDepth mode/
+		// (§26.3): configuring a repo's own reviewDepth mode/
 		// deepPaths is admin ONLY, the SAME row as ActionToggleAutoMerge/
 		// ActionToggleAutoRetriggerReview/ActionToggleDescriptionAutofix
 		// -- adversarial-review fix D8: this action had ZERO rows in this

@@ -205,7 +205,7 @@ func TestHandlePrompt_RunsFullSubstitutionChainInOrder(t *testing.T) {
 	if n := strings.Count(got, liveBearer); n != 3 {
 		t.Errorf("captured prompt_async text contains the live bearer %d times, want 3 (one per placeholder family)\ngot: %q", n, got)
 	}
-	// Step 70 (§26.7/§26.9): the review-cost-budget URL must resolve to
+	// (§26.7/§26.9): the review-cost-budget URL must resolve to
 	// h.reviewCostBudgetURL specifically -- proving HandlePrompt threads
 	// THAT field (not cfg.SessionConfig, which this substitution does not
 	// even need) into renderReviewCostBudgetToolPromptText.

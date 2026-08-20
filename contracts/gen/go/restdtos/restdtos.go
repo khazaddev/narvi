@@ -1463,7 +1463,7 @@ type CreateSessionRequest struct {
 	// independently at dispatch time).
 	Docker bool `json:"docker,omitempty,omitzero" yaml:"docker,omitempty" mapstructure:"docker,omitempty"`
 
-	// Step 59 (§29.8). Reasoning-effort override for this session's first turn; null
+	// (§29.8). Reasoning-effort override for this session's first turn; null
 	// means use the default. Required-nullable, mirroring modelId's own convention
 	// exactly -- valid values are owned per-model by OpenCode's own catalog
 	// `variants` maps (GET /api/models, this Step's own catalog endpoint), never a
@@ -1563,7 +1563,7 @@ type CreateSessionRequestBuildEffort *string
 // resubmits it).
 type CreateSessionRequestBuildModelId *string
 
-// Step 59 (§29.8). Reasoning-effort override for this session's first turn; null
+// (§29.8). Reasoning-effort override for this session's first turn; null
 // means use the default. Required-nullable, mirroring modelId's own convention
 // exactly -- valid values are owned per-model by OpenCode's own catalog `variants`
 // maps (GET /api/models, this Step's own catalog endpoint), never a Narvi-side
@@ -1836,7 +1836,7 @@ type CreateTurnRequest struct {
 	// turn's own prompt -- a byte-for-byte no-op, not a degraded case.
 	AttachmentIds []string `json:"attachmentIds,omitempty,omitzero" yaml:"attachmentIds,omitempty" mapstructure:"attachmentIds,omitempty"`
 
-	// Step 59 (§29.8). Reasoning-effort override for this turn; null means use the
+	// (§29.8). Reasoning-effort override for this turn; null means use the
 	// default -- same convention and required-nullable shape as
 	// CreateSessionRequest.effort.
 	Effort CreateTurnRequestEffort `json:"effort" yaml:"effort" mapstructure:"effort"`
@@ -1854,7 +1854,7 @@ type CreateTurnRequest struct {
 	Prompt string `json:"prompt" yaml:"prompt" mapstructure:"prompt"`
 }
 
-// Step 59 (§29.8). Reasoning-effort override for this turn; null means use the
+// (§29.8). Reasoning-effort override for this turn; null means use the
 // default -- same convention and required-nullable shape as
 // CreateSessionRequest.effort.
 type CreateTurnRequestEffort *string
@@ -2366,7 +2366,7 @@ func (j *DecisionInboxItem) UnmarshalJSON(value []byte) error {
 // architecture choices, and risks to the stack -- that fronts the rendered
 // verdict, ahead of the pre-existing findings/coverage/docs-drift content (now
 // collapsed into an appendix, internal/domain/reviewpost.RenderVerdictComment).
-// Extended by Step 67 (§26.2, 'description adequacy + graduated remediation') with
+// Extended by (§26.2, 'description adequacy + graduated remediation') with
 // descriptionAdequacy/adequacyExplanation/proposedBody below, and by Step 68
 // (§26.3, light/deep review-depth triage) with a CONDITIONAL requirement on three
 // more fields. REQUIRED on the request as a whole (unlike findings above):
@@ -5137,14 +5137,14 @@ func (j *RebutFindingRequest) UnmarshalJSON(value []byte) error {
 // (§26.2) each added a further boolean property here, never a bespoke DTO of their
 // own -- future toggles are expected to follow the same pattern.
 type RepoSettings struct {
-	// Step 62, §21.2 stage 2: admin-only, per-repo, off by default -- once armed, an
+	// §21.2 stage 2: admin-only, per-repo, off by default -- once armed, an
 	// auto-approved PR merges unattended (internal/app/automerge.Worker) instead of
 	// surfacing in the decision inbox for a human's 1-click confirm. Gated by
 	// authz.ActionToggleAutoMerge, the SAME admin-only row as sentinelAutofixEnabled,
 	// never maintainer-level ActionConfigureAutoApprove.
 	AutoMergeEnabled bool `json:"autoMergeEnabled" yaml:"autoMergeEnabled" mapstructure:"autoMergeEnabled"`
 
-	// Step 65, §24.5: admin-only, per-repo, off by default -- once armed, a new
+	// §24.5: admin-only, per-repo, off by default -- once armed, a new
 	// commit pushed to a PR with an existing review session automatically enqueues a
 	// fresh review turn (after a trailing-edge debounce quiet period, §24.2) instead
 	// of waiting for a human's manual re-trigger. Gated by
@@ -5160,7 +5160,7 @@ type RepoSettings struct {
 	// exact effect.
 	BlockOnHighRisk bool `json:"blockOnHighRisk" yaml:"blockOnHighRisk" mapstructure:"blockOnHighRisk"`
 
-	// Step 62, §21.2 stage 2: false means no auto-approval outcome (confirmed or
+	// §21.2 stage 2: false means no auto-approval outcome (confirmed or
 	// overridden) has been recorded for this repo yet in the calibration window --
 	// distinct from a real, computed 0% rate (§21.1's own 'not yet computed' sentinel
 	// discipline, mirroring ListDecisionInboxResponse.decisionLatencyComputed's own
@@ -5176,7 +5176,7 @@ type RepoSettings struct {
 	// whenever contradictionRateComputed is false.
 	ContradictionSampleSize int `json:"contradictionSampleSize" yaml:"contradictionSampleSize" mapstructure:"contradictionSampleSize"`
 
-	// Step 67, §26.2: admin-only, per-repo, off by default -- once armed, a
+	// §26.2: admin-only, per-repo, off by default -- once armed, a
 	// Narvi-authored PR's own description-adequacy floor firing (drift/misleading)
 	// may result in this repo's own PR bodies being automatically rewritten (original
 	// preserved in a collapsed block), delivered via the outbox. The drift/misleading
@@ -5195,7 +5195,7 @@ type RepoSettings struct {
 	// write.
 	DescriptionAutofixEnabled bool `json:"descriptionAutofixEnabled" yaml:"descriptionAutofixEnabled" mapstructure:"descriptionAutofixEnabled"`
 
-	// Step 62, §21.2 stage 1: this repo's own configured diff-size eligibility
+	// §21.2 stage 1: this repo's own configured diff-size eligibility
 	// threshold. Null means 'not configured -- the auto-approval engine's own
 	// built-in default applies'
 	// (internal/domain/autoapproval.DefaultEligibilityConfig), never a magic sentinel
@@ -5206,7 +5206,7 @@ type RepoSettings struct {
 	// shape.
 	RepoFullName string `json:"repoFullName" yaml:"repoFullName" mapstructure:"repoFullName"`
 
-	// Step 69, §26.7: this repo's own deep-path per-review cost ceiling, in USD. Null
+	// §26.7: this repo's own deep-path per-review cost ceiling, in USD. Null
 	// means 'not configured -- the engine's own built-in default applies'
 	// (internal/domain/reviewtriage.DefaultCostBudget, $5.00). Gated by
 	// authz.ActionConfigureReviewCostBudget, same row as reviewCostBudgetLightUsd --
@@ -5215,7 +5215,7 @@ type RepoSettings struct {
 	// answered from a real running spend total, not a self-estimate).
 	ReviewCostBudgetDeepUsd RepoSettingsReviewCostBudgetDeepUsd `json:"reviewCostBudgetDeepUsd" yaml:"reviewCostBudgetDeepUsd" mapstructure:"reviewCostBudgetDeepUsd"`
 
-	// Step 69, §26.7: this repo's own light-path per-review cost ceiling, in USD.
+	// §26.7: this repo's own light-path per-review cost ceiling, in USD.
 	// Null means 'not configured -- the engine's own built-in default applies'
 	// (internal/domain/reviewtriage.DefaultCostBudget, $0.50), never a magic sentinel
 	// number. Gated by authz.ActionConfigureReviewCostBudget (admin only, §13.3 row
@@ -5236,14 +5236,14 @@ type RepoSettings struct {
 	// row already carries.
 	ReviewCostBudgetLightUsd RepoSettingsReviewCostBudgetLightUsd `json:"reviewCostBudgetLightUsd" yaml:"reviewCostBudgetLightUsd" mapstructure:"reviewCostBudgetLightUsd"`
 
-	// Step 68, §26.3: this repo's own additional deep-routing glob patterns, layered
+	// §26.3: this repo's own additional deep-routing glob patterns, layered
 	// on top of (never replacing) the engine's own fixed sensitive-glob set
 	// (migrations/auth/infra-as-code/CI-workflow). Null means 'no repo-specific deep
 	// paths configured'. Gated by authz.ActionConfigureReviewDepth (admin only, same
 	// row as reviewDepthMode).
 	ReviewDepthDeepPaths *RepoSettingsReviewDepthDeepPaths `json:"reviewDepthDeepPaths" yaml:"reviewDepthDeepPaths" mapstructure:"reviewDepthDeepPaths"`
 
-	// Step 68, §26.3: this repo's own reviewDepth routing mode -- one of
+	// §26.3: this repo's own reviewDepth routing mode -- one of
 	// "auto"/"always_light"/"always_deep" when set (validated application-side
 	// against internal/domain/reviewtriage.Mode's own closed vocabulary, never
 	// enforced at the schema level to avoid a nullable-enum's own awkward generated
@@ -5256,7 +5256,7 @@ type RepoSettings struct {
 	// already carries.
 	ReviewDepthMode RepoSettingsReviewDepthMode `json:"reviewDepthMode" yaml:"reviewDepthMode" mapstructure:"reviewDepthMode"`
 
-	// Step 62, §21.2 stage 1: this repo's own configured sensitive-path tag list
+	// §21.2 stage 1: this repo's own configured sensitive-path tag list
 	// (internal/domain/review.Tag's own fixed vocabulary). Null means 'not configured
 	// -- the auto-approval engine's own default list applies (migrations, auth,
 	// contracts)', never an empty-list claim that this repo deliberately has zero
@@ -5275,14 +5275,14 @@ type RepoSettings struct {
 // decide whether to arm autoMergeEnabled.
 type RepoSettingsContradictionRatePercent *float64
 
-// Step 62, §21.2 stage 1: this repo's own configured diff-size eligibility
+// §21.2 stage 1: this repo's own configured diff-size eligibility
 // threshold. Null means 'not configured -- the auto-approval engine's own built-in
 // default applies' (internal/domain/autoapproval.DefaultEligibilityConfig), never
 // a magic sentinel number. Gated by authz.ActionConfigureAutoApprove
 // (maintainer+).
 type RepoSettingsMaxAutoApproveFilesChanged *int
 
-// Step 69, §26.7: this repo's own deep-path per-review cost ceiling, in USD. Null
+// §26.7: this repo's own deep-path per-review cost ceiling, in USD. Null
 // means 'not configured -- the engine's own built-in default applies'
 // (internal/domain/reviewtriage.DefaultCostBudget, $5.00). Gated by
 // authz.ActionConfigureReviewCostBudget, same row as reviewCostBudgetLightUsd --
@@ -5291,7 +5291,7 @@ type RepoSettingsMaxAutoApproveFilesChanged *int
 // from a real running spend total, not a self-estimate).
 type RepoSettingsReviewCostBudgetDeepUsd *float64
 
-// Step 69, §26.7: this repo's own light-path per-review cost ceiling, in USD. Null
+// §26.7: this repo's own light-path per-review cost ceiling, in USD. Null
 // means 'not configured -- the engine's own built-in default applies'
 // (internal/domain/reviewtriage.DefaultCostBudget, $0.50), never a magic sentinel
 // number. Gated by authz.ActionConfigureReviewCostBudget (admin only, §13.3 row 6,
@@ -5311,14 +5311,14 @@ type RepoSettingsReviewCostBudgetDeepUsd *float64
 // TOLD, admin-gated' reasoning every sibling toggle in this row already carries.
 type RepoSettingsReviewCostBudgetLightUsd *float64
 
-// Step 68, §26.3: this repo's own additional deep-routing glob patterns, layered
+// §26.3: this repo's own additional deep-routing glob patterns, layered
 // on top of (never replacing) the engine's own fixed sensitive-glob set
 // (migrations/auth/infra-as-code/CI-workflow). Null means 'no repo-specific deep
 // paths configured'. Gated by authz.ActionConfigureReviewDepth (admin only, same
 // row as reviewDepthMode).
 type RepoSettingsReviewDepthDeepPaths []string
 
-// Step 68, §26.3: this repo's own reviewDepth routing mode -- one of
+// §26.3: this repo's own reviewDepth routing mode -- one of
 // "auto"/"always_light"/"always_deep" when set (validated application-side against
 // internal/domain/reviewtriage.Mode's own closed vocabulary, never enforced at the
 // schema level to avoid a nullable-enum's own awkward generated wrapper type).
@@ -5331,7 +5331,7 @@ type RepoSettingsReviewDepthDeepPaths []string
 // carries.
 type RepoSettingsReviewDepthMode *string
 
-// Step 62, §21.2 stage 1: this repo's own configured sensitive-path tag list
+// §21.2 stage 1: this repo's own configured sensitive-path tag list
 // (internal/domain/review.Tag's own fixed vocabulary). Null means 'not configured
 // -- the auto-approval engine's own default list applies (migrations, auth,
 // contracts)', never an empty-list claim that this repo deliberately has zero
@@ -5445,13 +5445,13 @@ func (j *RepoSettings) UnmarshalJSON(value []byte) error {
 // platform.Timeouts.ReviewVerdictAnalyticsWindow (never an unbounded scan) and
 // carrying its OWN independent 'not yet computed' sentinel: 'a repo with a real 0%
 // dismiss rate and a repo with no data yet must never render identically' (§21.1).
-// Step 69, §26.5 adds a fourth rollup, digestContestationRatePercent -- the
+// §26.5 adds a fourth rollup, digestContestationRatePercent -- the
 // 'digest precision (contestation rate)' KPI that section names, the SAME 'own
 // independent not-yet-computed sentinel' discipline as the original three. Gated
 // by the existing authz.ActionViewAnalytics (§13.3 row 1) -- every role including
 // viewer.
 type ReviewAnalytics struct {
-	// Step 69, §26.5: false means zero deep-path verdicts have been posted for this
+	// §26.5: false means zero deep-path verdicts have been posted for this
 	// repo within the window (only a deep-path review ever produces an arch recap at
 	// all, §26.4/§26.9) -- distinct from a real, computed 0% rate, the SAME 'not yet
 	// computed' sentinel discipline as RepoSettings.contradictionRateComputed
@@ -6058,7 +6058,7 @@ type SandboxSecret struct {
 	Name string `json:"name" yaml:"name" mapstructure:"name"`
 
 	// Matches Postgres sandbox_secret_scope, EXCLUDING 'automation' -- that scope is
-	// schema-only as of Step 72 (§27.1: no CRUD endpoint reaches it yet, mirroring
+	// schema-only as of (§27.1: no CRUD endpoint reaches it yet, mirroring
 	// how ProviderCredentialScope's own DTO excludes 'user', a scope managed through
 	// a completely separate flow).
 	Scope SandboxSecretScope `json:"scope" yaml:"scope" mapstructure:"scope"`
@@ -7687,7 +7687,7 @@ type WorkflowStepDefinition struct {
 	// (§25.4). At most one edge per onStatus value (workflow_edges_from_status_uniq).
 	Edges []WorkflowEdge `json:"edges" yaml:"edges" mapstructure:"edges"`
 
-	// Step 59, §29.8's 'workflow engine echo'. Null means inherit exactly what the
+	// §29.8's 'workflow engine echo'. Null means inherit exactly what the
 	// session would use today (turns.effort/sessions.build_effort).
 	Effort WorkflowStepDefinitionEffort `json:"effort" yaml:"effort" mapstructure:"effort"`
 
@@ -7786,7 +7786,7 @@ func (j *WorkflowStepDefinitionConversationContinuity) UnmarshalJSON(value []byt
 	return nil
 }
 
-// Step 59, §29.8's 'workflow engine echo'. Null means inherit exactly what the
+// §29.8's 'workflow engine echo'. Null means inherit exactly what the
 // session would use today (turns.effort/sessions.build_effort).
 type WorkflowStepDefinitionEffort *string
 

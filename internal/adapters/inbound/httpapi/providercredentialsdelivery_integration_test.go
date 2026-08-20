@@ -454,7 +454,7 @@ func encryptForTest(t *testing.T, rig testRig, plaintext string) []byte {
 	return encrypted
 }
 
-// --- Step 59 (§29.4/§29.6): user-scope oauth resolution ---
+// --- (§29.4/§29.6): user-scope oauth resolution ---
 
 // TestProviderCredentialsDelivery_UserScopeOAuth_Resolves is this Step's
 // own new-behavior test: a session's own creator has a linked ChatGPT

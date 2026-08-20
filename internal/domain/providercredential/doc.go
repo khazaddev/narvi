@@ -58,7 +58,7 @@
 // against the Step brief's own paraphrase, not a guess; see that Step's
 // own PR description for the same note.
 //
-// # Step 72 (§27.1): this package's own Scope/Resolve now serve a SECOND
+// # (§27.1): this package's own Scope/Resolve now serve a SECOND
 // table
 //
 // sandbox_secrets (migrations/000090_sandbox_secrets.up.sql) is a

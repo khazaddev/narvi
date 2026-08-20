@@ -76,7 +76,7 @@ type ArchDecision struct {
 // §26.1's own "Enforcement" section, and IMPLEMENTATION_PLAN.md's Step 66
 // row verbatim: "Summary required on every review from day one, full
 // digest schema-required on the deep path once Step 68 defines it
-// (reject-don't-repair at the posting endpoint)". Step 68 (§26.3, the
+// (reject-don't-repair at the posting endpoint)". (§26.3, the
 // light/deep triage) now exists and defines that deep path. Summary
 // (ValidateVerdictInput's own ErrEmptyDigestSummary check, validate.go)
 // and §26.2's own DescriptionAdequacy/AdequacyExplanation

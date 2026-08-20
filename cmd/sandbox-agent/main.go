@@ -183,7 +183,7 @@ func main() {
 	// configuration) -- everything else falls through to the normal boot
 	// sequence.
 	//
-	// Step 73b (§27.4) originally shipped a SECOND subcommand here,
+	// (§27.4) originally shipped a SECOND subcommand here,
 	// "kube-credential", for the AuthKindOIDC cluster rung's own exec
 	// plugin. Adversarial-review HIGH fix: that subcommand needed
 	// NARVI_SESSION_CONFIG (via boot.Load()) to mint anything, but every
@@ -355,13 +355,13 @@ func (h *commandHandler) HandlePrompt(_ context.Context, cmd sandboxws.Prompt) {
 	// this is the one place those placeholders can actually be resolved. A
 	// no-op for every non-review turn (no placeholders present).
 	cmd.Text = renderVerdictToolPromptText(cmd.Text, h.cfg.SessionConfig)
-	// Step 58 (§28.5): the SAME mechanism, extended for the
+	// (§28.5): the SAME mechanism, extended for the
 	// download_file/upload tools' own placeholders (internal/domain/
 	// upload's attachment block + upload-tool note, rendered at
 	// turn-creation time by createTurnLocked) -- a no-op for a turn with
 	// none of those placeholders present.
 	cmd.Text = renderUploadToolPromptText(cmd.Text, h.cfg.SessionConfig)
-	// Step 61 (§20.2): the SAME mechanism, extended for the devil's-
+	// (§20.2): the SAME mechanism, extended for the devil's-
 	// advocate preamble's own epistemic-outcome-reporting tool
 	// (internal/domain/turn.RenderEpistemicPreamble, rendered at
 	// turn-creation time by createTurnLocked when the check is enabled
@@ -369,7 +369,7 @@ func (h *commandHandler) HandlePrompt(_ context.Context, cmd sandboxws.Prompt) {
 	// with none of those placeholders present, i.e. the overwhelming
 	// common case while the feature stays off by default.
 	cmd.Text = renderEpistemicOutcomeToolPromptText(cmd.Text, h.cfg.SessionConfig)
-	// Step 70 (§26.7/§26.9): the SAME mechanism once more, for the
+	// (§26.7/§26.9): the SAME mechanism once more, for the
 	// review-cost-budget loopback endpoint's own URL placeholder
 	// (internal/domain/review.ReviewCostBudgetToolURLPlaceholder,
 	// subAgentOrchestrationInstructions) -- a no-op for every turn without
@@ -1074,7 +1074,7 @@ func run() error {
 			return fmt.Errorf("sandbox-agent: create workspace dir: %w", err)
 		}
 
-		// Step 73b (§27.3/§27.4): wipe cloudIdentityDir ENTIRELY before
+		// (§27.3/§27.4): wipe cloudIdentityDir ENTIRELY before
 		// this boot writes anything else there -- this Step's own gap-2
 		// resolution (a snapshot_restore boot's own filesystem can already
 		// hold stale token files/a stale kubeconfig from whatever boot
@@ -1088,7 +1088,7 @@ func run() error {
 		// kubeconfig population block (further down this same function).
 		resetCloudIdentityDir(cloudIdentityDir)
 
-		// Step 48 (§17.2): for a sentinel-auto-fix child session
+		// (§17.2): for a sentinel-auto-fix child session
 		// (SessionConfig.CapabilityRestricted), write the glob-restricted
 		// "sentinel-fix" OpenCode agent config into the workspace BEFORE
 		// spawning `opencode serve` below -- OpenCode reads its own config
@@ -1121,7 +1121,7 @@ func run() error {
 			}
 		}
 
-		// Step 69 (§26.4/§26.6): register the three review sub-agents
+		// (§26.4/§26.6): register the three review sub-agents
 		// (architecture-scribe, counter-reviewer, fact-check) into the
 		// SAME workspace opencode.json, UNCONDITIONALLY -- unlike the
 		// sentinel-fix block immediately above (gated on
@@ -1298,7 +1298,7 @@ func run() error {
 		slog.Info("sandbox-agent: boot fingerprint (post-opencode-spawn)",
 			"opencode_version", postSpawnFingerprint.OpenCodeVersion)
 
-		// Step 70 (§26.7/§26.9): start the review-cost-budget loopback
+		// (§26.7/§26.9): start the review-cost-budget loopback
 		// server NOW -- agentRuntime already exists (its own
 		// CurrentTurnSpentUSD method is this server's one data source), and
 		// this must land before ANY "prompt" command can possibly arrive
@@ -1343,7 +1343,7 @@ func run() error {
 			timeouts.SandboxWSReconnectMinBackoff, timeouts.SandboxWSReconnectMaxBackoff)
 		handler.bridge = bridge
 
-		// Step 59 (§29.6): inject every resolved oauth-kind credential
+		// (§29.6): inject every resolved oauth-kind credential
 		// into OpenCode's own auth store, ONE PUT /auth/{providerID} call
 		// per provider, sequenced strictly HERE -- after Spawn already
 		// reported healthy (agentRuntime exists) and bridge already
@@ -1477,7 +1477,7 @@ func run() error {
 		})
 	}
 
-	// Step 70 (§26.7/§26.9): budgetServer's own Accept loop runs on its OWN
+	// (§26.7/§26.9): budgetServer's own Accept loop runs on its OWN
 	// errgroup (budgetSrvGroup), deliberately NOT the "group" var above --
 	// group.Wait() (below) is this function's own convergence signal for
 	// "the bridge (or, headless, the ctx-wait stand-in) is done", reached
@@ -1609,7 +1609,7 @@ func run() error {
 	defer cancel()
 	stopErr := sup.StopAll(shutdownCtx, timeouts.ProcessStopGracePeriod)
 
-	// Step 70 (§26.7/§26.9): shut the review-cost-budget loopback server
+	// (§26.7/§26.9): shut the review-cost-budget loopback server
 	// down here, unconditionally -- this is the ONE place reached
 	// regardless of which of the three ways `runErr := group.Wait()` above
 	// converged (normal ctx cancellation, a CP-issued shutdown, or a fatal

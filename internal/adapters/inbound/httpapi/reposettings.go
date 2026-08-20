@@ -263,7 +263,7 @@ func authorizeAny(w http.ResponseWriter, r *http.Request, resource authz.Resourc
 
 // GetRepoSettings backs GET /api/repos/{owner}/{repo}/settings -- see this
 // file's own doc comment for the base blockOnHighRisk/sentinelAutofixEnabled
-// behavior, unchanged by this addition. Step 62 (§21.1/§21.2) extends the
+// behavior, unchanged by this addition. (§21.1/§21.2) extends the
 // response with the auto-approval eligibility config, the auto-merge
 // toggle, and the contradiction-rate calibration read model -- all THREE
 // additive, read-only from this endpoint's own perspective (writes are
@@ -274,13 +274,13 @@ func GetRepoSettings(repoSettings *postgres.RepoSettingsStore, reviewVerdictDeps
 		ctx := r.Context()
 		logger := platform.Logger(ctx)
 
-		// Step 62 (§21.2): a maintainer authorized ONLY for
+		// (§21.2): a maintainer authorized ONLY for
 		// ActionConfigureAutoApprove (row 5) must still be able to read
 		// this repo's own settings -- not just the admin-only row 6
 		// actions this endpoint originally gated on alone (see
-		// authorizeAny's own doc comment above). Step 65 (§24.5) adds
-		// ActionToggleAutoRetriggerReview, Step 67 (§26.2) adds
-		// ActionToggleDescriptionAutofix, and Step 69 (§26.7) adds
+		// authorizeAny's own doc comment above). (§24.5) adds
+		// ActionToggleAutoRetriggerReview, (§26.2) adds
+		// ActionToggleDescriptionAutofix, and (§26.7) adds
 		// ActionConfigureReviewCostBudget, to this SAME "any one of these
 		// suffices to read" list -- all the SAME admin-only row as
 		// ActionToggleAutoMerge, so this changes nothing about who could

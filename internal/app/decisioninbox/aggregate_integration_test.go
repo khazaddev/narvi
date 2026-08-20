@@ -307,7 +307,7 @@ func TestBuild_FullScenario(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create pr artifact: %v", err)
 	}
-	// Step 62 (§21.1/§21.2): PR #10 needs a Shippable=auto review_verdicts
+	// (§21.1/§21.2): PR #10 needs a Shippable=auto review_verdicts
 	// row, at its own exact head sha, before the REAL eligibility engine
 	// will ever classify it ready_to_merge -- see seedAutoApprovedVerdict's
 	// own doc comment.
@@ -877,7 +877,7 @@ func TestBuild_HasChangesRequestedDemotesFromReadyToMerge(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("mark PR #40 platform-authored: %v", err)
 	}
-	// Step 62 (§21.1/§21.2): PR #40 needs a Shippable=auto review_verdicts
+	// (§21.1/§21.2): PR #40 needs a Shippable=auto review_verdicts
 	// row at its own exact head sha too -- see seedAutoApprovedVerdict's
 	// own doc comment for why, WITHOUT this, HasChangesRequested would no
 	// longer be the ONLY thing this fixture demonstrates keeps a PR out

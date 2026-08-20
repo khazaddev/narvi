@@ -72,7 +72,7 @@
 //     content (§26.1): "what this PR does", architecture choices, and
 //     risks to the stack, carried on VerdictInput alongside its
 //     pre-existing fields, rendered (never re-parsed) by
-//     RenderVerdictComment above. Extended by Step 67 (§26.2) with
+//     RenderVerdictComment above. Extended by (§26.2) with
 //     Digest.DescriptionAdequacy/AdequacyExplanation/ProposedBody --
 //     description-adequacy tri-state, its required explanation, and the
 //     agent's own optional PR-body rewrite proposal.

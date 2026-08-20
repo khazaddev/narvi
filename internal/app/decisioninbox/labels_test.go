@@ -1,7 +1,7 @@
 package decisioninbox
 
 // Internal-package test (not decisioninbox_test): classifyPRLabels is
-// unexported, and Step 62 (§21.2) removed its own former OBSERVABLE
+// unexported, and (§21.2) removed its own former OBSERVABLE
 // effect on RevalidateForMerge's ok/refused outcome (risk labels no
 // longer gate merge eligibility at all -- see revalidate_integration_test.go's
 // own note at the former MostRestrictiveRiskLabelWins_Refused site). This

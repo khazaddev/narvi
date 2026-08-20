@@ -117,7 +117,7 @@ const CostBudgetSafetyMargin = 0.8
 //
 // CALLED FROM cmd/sandbox-agent/reviewcostbudgetserver.go (Step 70,
 // reviewCostBudgetServer's GET /review-cost-budget handler) -- this
-// function's own first production call site. Before Step 70, §26.7's
+// function's own first production call site. Before §26.7's
 // enforcement mechanism was ENTIRELY the reviewing agent's own
 // self-governed judgment against the dollar ceiling stated in its
 // prompt (review/context.go's own subAgentOrchestrationInstructions),

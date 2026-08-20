@@ -1688,7 +1688,7 @@ type SubTaskStart struct {
 	// SessionId corresponds to the JSON schema field "sessionId".
 	SessionId string `json:"sessionId" yaml:"sessionId" mapstructure:"sessionId"`
 
-	// Step 71 (§26.4/§7.1): the task tool's own 'subagent_type' dispatch parameter --
+	// (§26.4/§7.1): the task tool's own 'subagent_type' dispatch parameter --
 	// the literal named sub-agent (e.g. 'counter-reviewer', 'architecture-scribe',
 	// 'fact-check') the engine was actually told to invoke, VERIFIED LIVE as one of
 	// the task tool's own real input fields

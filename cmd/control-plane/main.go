@@ -1918,7 +1918,7 @@ func serve() error {
 		return nil
 	})
 
-	// Step 62 (§21.2 stage 2, "auto-merge"): started/shut down through
+	// (§21.2 stage 2, "auto-merge"): started/shut down through
 	// this SAME errgroup as every other background loop above -- no
 	// naked goroutine (§11) -- with the identical context.Canceled
 	// carve-out every other background loop already establishes for
@@ -1930,7 +1930,7 @@ func serve() error {
 		return nil
 	})
 
-	// Step 62 (§21.3, "deterministic daily digest"): started/shut down
+	// (§21.3, "deterministic daily digest"): started/shut down
 	// through this SAME errgroup as every other background loop above --
 	// no naked goroutine (§11) -- with the identical context.Canceled
 	// carve-out every other background loop already establishes for

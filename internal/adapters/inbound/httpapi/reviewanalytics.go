@@ -3,7 +3,7 @@
 // exposing the three rollups that section names explicitly -- timeseries,
 // top-risk-driver breakdown, and the "Review finding outcomes" KPI
 // (§12.2 item 6) -- over the append-only review_verdicts history plus
-// review_findings' own mutable per-finding status. Step 69, §26.5 adds a
+// review_findings' own mutable per-finding status. §26.5 adds a
 // fourth rollup, the digest contestation rate (appreviewverdict.
 // DigestContestationRate, internal/app/reviewverdict/digestcontestation.go)
 // -- the "digest precision (contestation rate)" KPI that section names,

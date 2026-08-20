@@ -375,7 +375,7 @@ const (
 // precedent) -- an agent that reports no findings at all keeps posting
 // exactly the same body it always did.
 //
-// Step 66 (§26.1) adds the "digest" object below: the merge readout's own
+// (§26.1) adds the "digest" object below: the merge readout's own
 // typed content. "digest" itself is REQUIRED (unlike "findings"), and
 // within it "summary" is the one field this Step actually validates
 // (reviewpost.ValidateVerdictInput's own ErrEmptyDigestSummary) --
@@ -395,7 +395,7 @@ const (
 // session/sandbox machinery any other turn uses, Step 46), so this
 // package fetches or injects nothing new for it either.
 //
-// Step 67 (§26.2) adds "descriptionAdequacy"/"adequacyExplanation"
+// (§26.2) adds "descriptionAdequacy"/"adequacyExplanation"
 // (REQUIRED, alongside "summary" -- the SAME hard-required treatment,
 // reviewpost.ValidateVerdictInput's own ErrInvalidDescriptionAdequacy/
 // ErrEmptyAdequacyExplanation) and "proposedBody" (REQUESTED, not
@@ -441,7 +441,7 @@ const (
 // PINNED to the exact commit this review verdict is about, never a
 // separately-timed re-fetch that could observe a PR mutated in the gap.
 //
-// # Step 68 (§26.3): deep-path digest fields become REQUIRED, not merely requested
+// # (§26.3): deep-path digest fields become REQUIRED, not merely requested
 //
 // verdictToolInstructions used to be a plain const -- the SAME text for
 // every review turn, regardless of depth. Adversarial-review finding D2:
@@ -459,7 +459,7 @@ const (
 // check to the letter. "proposedBody" and the top-level "findings" stay
 // optional on every path; nothing else about this text changes.
 //
-// # Step 69 (§26.4/§26.6/§26.7): counter-review, fact-check, and the cost
+// # (§26.4/§26.6/§26.7): counter-review, fact-check, and the cost
 // budget
 //
 // costBudgetUSD is threaded through from ctx.ReviewCostBudgetUSD

@@ -503,7 +503,7 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 		return
 	}
 
-	// Step 48 (§17.2 amendment): a sentinel-auto-fix child session has NO
+	// (§17.2 amendment): a sentinel-auto-fix child session has NO
 	// human creator to attribute a PR to (sessionRow.CreatedBy is
 	// invalid/NULL, SpawnChildSession's own doc comment) -- routing it
 	// through creatorMayGetPRAttribution below would ALWAYS reject it

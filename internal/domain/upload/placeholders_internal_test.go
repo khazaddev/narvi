@@ -35,7 +35,7 @@ func TestPlaceholderTokensMatchReviewPackage(t *testing.T) {
 		review.VerdictToolURLPlaceholder,
 		review.VerdictToolBearerPlaceholder,
 		review.VerdictToolGenPlaceholder,
-		// Step 70 (§26.7/§26.9): review's FOURTH placeholder, a single
+		// (§26.7/§26.9): review's FOURTH placeholder, a single
 		// literal with no bearer/gen counterpart (the endpoint it points at
 		// needs no authentication, reviewcostbudgetserver.go's own doc
 		// comment).

@@ -26,7 +26,7 @@ func TestCPClient_FetchProviderCredentials_RequestShape(t *testing.T) {
 		gotGen = r.Header.Get("X-Sandbox-Gen")
 
 		w.Header().Set("Content-Type", "application/json")
-		// Step 59 (§29.6): the per-provider value is now a discriminated
+		// (§29.6): the per-provider value is now a discriminated
 		// union, not a bare plaintext string.
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"credentials": map[string]any{"anthropic": map[string]string{"type": "api", "key": "sk-real-value"}},

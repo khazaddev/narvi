@@ -9,7 +9,7 @@ import (
 // TestEvaluateHook_TruthTable enumerates every row of the Step 13 truth
 // table (§6.4's hook policy applied to all 4 modes x 2 hooks x 2 primary
 // values -- 16 rows), EVERY ONE pinned with workspaceMoved: false so this
-// table alone proves the Step 42 (§19.4) amendment changed NOTHING for any
+// table alone proves the (§19.4) amendment changed NOTHING for any
 // pre-existing cell: every wantShouldRun/wantFatal value below is
 // byte-identical to what EvaluateHook returned before that amendment
 // existed. The one cell the amendment actually changes (repo_image +

@@ -110,20 +110,20 @@ var matrix = map[Action]actionRule{
 	ActionCreateSession: {allow: roles(RoleAdmin, RoleMaintainer, RoleMember)},
 	ActionPromptSession: {allow: roles(RoleAdmin, RoleMaintainer), allowIfOwned: roles(RoleMember)},
 	ActionApprovePlan:   {allow: roles(RoleAdmin, RoleMaintainer), allowIfOwned: roles(RoleMember)},
-	// Step 54 (§25.11): deciding a workflow run's HITL-gated step is
+	// (§25.11): deciding a workflow run's HITL-gated step is
 	// own/joined-aware, the SAME row as plan approval by that section's
 	// explicit instruction -- see action.go's own doc comment.
 	ActionDecideWorkflowStep: {allow: roles(RoleAdmin, RoleMaintainer), allowIfOwned: roles(RoleMember)},
-	// Step 58 (§28.5): uploading to a session is own/joined-aware, the
+	// (§28.5): uploading to a session is own/joined-aware, the
 	// SAME row as prompting by that section's own explicit instruction --
 	// see action.go's own doc comment.
 	ActionUploadToSession: {allow: roles(RoleAdmin, RoleMaintainer), allowIfOwned: roles(RoleMember)},
-	// Step 59 (§29.9): linking/unlinking the caller's OWN ChatGPT account
+	// (§29.9): linking/unlinking the caller's OWN ChatGPT account
 	// is own/joined-aware, the SAME row as plan approval by that
 	// section's explicit "own-aware like ActionApprovePlan's own row"
 	// instruction -- see action.go's own doc comment.
 	ActionLinkChatGPTAccount: {allow: roles(RoleAdmin, RoleMaintainer), allowIfOwned: roles(RoleMember)},
-	// Step 60 (§16.2): merging a decision-inbox PR is own/joined-aware,
+	// (§16.2): merging a decision-inbox PR is own/joined-aware,
 	// the SAME row shape as prompting/uploading above, by direct analogy
 	// -- see action.go's own ActionMergePR doc comment for the full
 	// reasoning (no dedicated §13.3 table row names this action
@@ -140,7 +140,7 @@ var matrix = map[Action]actionRule{
 	ActionViewShadowComparison: {allow: roles(RoleAdmin, RoleMaintainer)},
 
 	// Row 4: automations/environments/repo+env secrets -- admin/maintainer.
-	// Step 54 (§25.11) adds workflow-definition authoring (an unbound
+	// (§25.11) adds workflow-definition authoring (an unbound
 	// draft) to this SAME row, per that section's explicit "same row as
 	// ActionManageAutomations" instruction.
 	ActionManageAutomations:         {allow: roles(RoleAdmin, RoleMaintainer)},
@@ -148,17 +148,17 @@ var matrix = map[Action]actionRule{
 	ActionManageRepoSecrets:         {allow: roles(RoleAdmin, RoleMaintainer)},
 	ActionManageEnvSecrets:          {allow: roles(RoleAdmin, RoleMaintainer)},
 	ActionManageWorkflowDefinitions: {allow: roles(RoleAdmin, RoleMaintainer)},
-	// Step 73a (§27.3): cloud-identity binding CRUD (both environment and
+	// (§27.3): cloud-identity binding CRUD (both environment and
 	// global scope) -- maintainer+, this SAME row, per that action's own
 	// doc comment.
 	ActionManageCloudIdentityBindings: {allow: roles(RoleAdmin, RoleMaintainer)},
-	// Step 73b (§27.4): cluster-binding CRUD (the at-most-one,
+	// (§27.4): cluster-binding CRUD (the at-most-one,
 	// per-Environment row) -- maintainer+, this SAME row, per that
 	// action's own doc comment.
 	ActionManageClusterBindings: {allow: roles(RoleAdmin, RoleMaintainer)},
 
 	// Row 5: review verdicts/re-trigger/auto-approve config --
-	// admin/maintainer. Step 63 (§22.2/§22.4) adds the learned
+	// admin/maintainer. (§22.2/§22.4) adds the learned
 	// false-positive pattern capture/lifecycle actions to this SAME row,
 	// no member own/joined carve-out -- see action.go's own doc comment
 	// on each ("a taught pattern is repo-scoped, not session-scoped, so
@@ -168,7 +168,7 @@ var matrix = map[Action]actionRule{
 	ActionConfigureAutoApprove:        {allow: roles(RoleAdmin, RoleMaintainer)},
 	ActionTeachFalsePositivePattern:   {allow: roles(RoleAdmin, RoleMaintainer)},
 	ActionManageFalsePositivePatterns: {allow: roles(RoleAdmin, RoleMaintainer)},
-	// Step 69 (§26.5): contesting a deep-path arch-recap digest section
+	// (§26.5): contesting a deep-path arch-recap digest section
 	// via the `arch recap wrong: <reason>` PR-thread command -- same row,
 	// same reasoning as ActionTeachFalsePositivePattern immediately above
 	// (action.go's own doc comment).
@@ -182,37 +182,37 @@ var matrix = map[Action]actionRule{
 	// change, not row-4 authoring).
 	ActionManageIntegrations:  {allow: roles(RoleAdmin)},
 	ActionManageGlobalSecrets: {allow: roles(RoleAdmin)},
-	// Step 73a (§27.3): admin-triggered OIDC signing-key rotation -- this
+	// (§27.3): admin-triggered OIDC signing-key rotation -- this
 	// SAME admin-only row, per that action's own doc comment.
 	ActionManageCloudIdentityKeys:  {allow: roles(RoleAdmin)},
 	ActionActivatePromptTemplate:   {allow: roles(RoleAdmin)},
 	ActionManageMembers:            {allow: roles(RoleAdmin)},
 	ActionToggleSentinelAutoFix:    {allow: roles(RoleAdmin)},
 	ActionConfigureBlockOnHighRisk: {allow: roles(RoleAdmin)},
-	// Step 62 (§21.2): arming the per-repo auto-merge toggle -- same row,
+	// (§21.2): arming the per-repo auto-merge toggle -- same row,
 	// same reasoning as ActionToggleSentinelAutoFix immediately above
 	// (action.go's own doc comment).
 	ActionToggleAutoMerge:         {allow: roles(RoleAdmin)},
 	ActionActivateWorkflowBinding: {allow: roles(RoleAdmin)},
-	// Step 65 (§24.5): arming the per-repo automatic-re-review opt-in --
+	// (§24.5): arming the per-repo automatic-re-review opt-in --
 	// same row, same reasoning as ActionToggleSentinelAutoFix/
 	// ActionToggleAutoMerge immediately above (action.go's own doc
 	// comment).
 	ActionToggleAutoRetriggerReview: {allow: roles(RoleAdmin)},
-	// Step 67 (§26.2): arming the per-repo description-autofix opt-in --
+	// (§26.2): arming the per-repo description-autofix opt-in --
 	// same row, same reasoning as ActionToggleSentinelAutoFix/
 	// ActionToggleAutoMerge/ActionToggleAutoRetriggerReview immediately
 	// above (action.go's own doc comment: §26.2 names no tier itself,
 	// reasoned here to match every sibling unattended-write toggle).
 	ActionToggleDescriptionAutofix: {allow: roles(RoleAdmin)},
-	// Step 68 (§26.3): configuring the per-repo reviewDepth mode/
+	// (§26.3): configuring the per-repo reviewDepth mode/
 	// deepPaths -- same row, same reasoning as ActionToggleSentinelAutoFix/
 	// ActionToggleAutoMerge/ActionToggleAutoRetriggerReview/
 	// ActionToggleDescriptionAutofix immediately above (action.go's own
 	// doc comment: §26.3 names no tier itself, reasoned here to match
 	// every sibling unattended-behavior config).
 	ActionConfigureReviewDepth: {allow: roles(RoleAdmin)},
-	// Step 69 (§26.7): configuring the per-repo reviewCostBudget
+	// (§26.7): configuring the per-repo reviewCostBudget
 	// light/deep ceilings -- same row, same reasoning as
 	// ActionConfigureReviewDepth immediately above (action.go's own doc
 	// comment).

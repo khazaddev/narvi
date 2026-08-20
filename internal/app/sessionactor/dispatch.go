@@ -2020,7 +2020,7 @@ func BuildPromptPayload(sessionID string, sessionRow sqlcgen.Session, sandboxRow
 		ConversationId: sessionRow.OpencodeConversationID,
 		Text:           stringOrEmpty(target.Prompt),
 		Model:          target.ModelID,
-		// Step 59 (§29.8): turns.effort mirrors turns.model_id's own
+		// (§29.8): turns.effort mirrors turns.model_id's own
 		// dispatch-time threading exactly -- this was the ONE remaining
 		// hardcoded nil the spec's own "verified end-to-end" research
 		// named explicitly (BuildPromptPayload hardcodes Effort: nil

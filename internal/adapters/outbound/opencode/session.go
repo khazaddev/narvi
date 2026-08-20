@@ -150,7 +150,7 @@ func (a *Adapter) postPromptAsync(ctx context.Context, sessionID string, cmd san
 		agent := planAgentName
 		body.Agent = &agent
 	case a.capabilityRestricted:
-		// Step 48 (§17.2): a.capabilityRestricted is set ONCE, at
+		// (§17.2): a.capabilityRestricted is set ONCE, at
 		// construction (cmd/sandbox-agent/main.go, from SessionConfig.
 		// CapabilityRestricted -- true exactly for a sentinel-auto-fix
 		// child session) -- every BUILD-mode turn on such a session uses

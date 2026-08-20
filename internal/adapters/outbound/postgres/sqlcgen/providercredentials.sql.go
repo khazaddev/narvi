@@ -330,7 +330,7 @@ type ListProviderCredentialsForResolutionParams struct {
 // could possibly apply to one session -- the global row for each
 // provider (always included), any repo-scoped row for one of this
 // session's own repo_full_names, the environment-scoped row for this
-// session's own environment_id (if any), and -- Step 59, §29.4's own
+// session's own environment_id (if any), and -- §29.4's own
 // "resolution keys on sessions.created_by" rule -- the user-scoped row for
 // the session's own creator (if any). repo_full_names may be an empty
 // array (matches nothing, never an error); environment_id/user_id are

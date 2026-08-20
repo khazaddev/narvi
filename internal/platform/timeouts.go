@@ -2593,67 +2593,67 @@ func DefaultTimeouts() Timeouts {
 		AutomationSweepInterval:              60 * time.Second, // Step 51; not specified, chosen, matches AutomationEnginePumpInterval's own cadence
 		AutomationRunStartingOrphanThreshold: 5 * time.Minute,  // §3.5, explicit ("orphaned starting runs >5 min")
 		AutomationRunRunningOrphanThreshold:  90 * time.Minute, // §3.5, explicit ("running >90 min")
-		AutomationCronGranularity:            1 * time.Minute,  // Step 52, §8.4; structural, not tunable -- see field doc comment
+		AutomationCronGranularity:            1 * time.Minute,  // §8.4; structural, not tunable -- see field doc comment
 		AutomationCronCatchUpWindow:          10 * time.Minute, // Step 52 review fix (missed cron evaluations); not specified, chosen -- see field doc comment
 
-		RWXCLIExecTimeout:           2 * time.Minute,  // Step 57, §4.1.1; not specified (RWX publishes no p99), chosen generously -- see field doc comment
-		RWXSandboxInactivityTimeout: 45 * time.Minute, // Step 57, §4.1.1; not specified, chosen with margin above ActorIdleTTL (30min) -- see field doc comment
+		RWXCLIExecTimeout:           2 * time.Minute,  // §4.1.1; not specified (RWX publishes no p99), chosen generously -- see field doc comment
+		RWXSandboxInactivityTimeout: 45 * time.Minute, // §4.1.1; not specified, chosen with margin above ActorIdleTTL (30min) -- see field doc comment
 
-		UploadPresignPutTTL:            15 * time.Minute, // Step 58, §28.4, explicit ("propose 15 min")
-		UploadPresignGetTTL:            5 * time.Minute,  // Step 58, §28.5, explicit ("propose 5 min")
-		UploadPendingSweepAfter:        24 * time.Hour,   // Step 58, §28.4, explicit ("propose 24 h")
-		UploadAbandonmentSweepInterval: 15 * time.Minute, // Step 58, §28.4, explicit ("propose 15 min")
+		UploadPresignPutTTL:            15 * time.Minute, // §28.4, explicit ("propose 15 min")
+		UploadPresignGetTTL:            5 * time.Minute,  // §28.5, explicit ("propose 5 min")
+		UploadPendingSweepAfter:        24 * time.Hour,   // §28.4, explicit ("propose 24 h")
+		UploadAbandonmentSweepInterval: 15 * time.Minute, // §28.4, explicit ("propose 15 min")
 		ObjectStoreHTTPClientTimeout:   10 * time.Second, // Step 58; not specified, chosen, matches RepoSHAResolutionTimeout's own "lightweight call" reasoning
 
-		ChatGPTOAuthRefreshMargin:       72 * time.Hour,   // Step 59, §29.5, explicit ("propose 72h")
-		ChatGPTOAuthRefreshPumpInterval: 6 * time.Hour,    // Step 59, §29.5, explicit ("propose 6h")
+		ChatGPTOAuthRefreshMargin:       72 * time.Hour,   // §29.5, explicit ("propose 72h")
+		ChatGPTOAuthRefreshPumpInterval: 6 * time.Hour,    // §29.5, explicit ("propose 6h")
 		ChatGPTLinkAttemptTTL:           15 * time.Minute, // Step 59; not specified, chosen generously (human device-switch time)
 		ChatGPTOAuthHTTPClientTimeout:   15 * time.Second, // Step 59; not specified, chosen generously (a real third-party OAuth endpoint over the public internet)
 
 		GitHubListOpenPRsForUserTimeout: 3 * time.Minute,     // Step 60; not specified, matches ReleaseManifestCheckTimeout's own figure for a comparable bounded-but-many-call operation
 		GitHubResolveCodeOwnersTimeout:  30 * time.Second,    // Step 60; not specified, chosen generously (a handful of file/user/team fetches)
 		GitHubMergePRTimeout:            15 * time.Second,    // Step 60; not specified, half again GitHubGetPRTimeout's baseline (interactive, human-facing write)
-		DecisionInboxSCMCacheTTL:        2 * time.Minute,     // Step 60, §16.2's own worked example ("as of 2 min ago")
-		DecisionInboxStaleAfter:         48 * time.Hour,      // Step 60, §16.1, explicit ("stale items (>48h, configurable)")
-		DecisionInboxLatencyWindow:      30 * 24 * time.Hour, // Step 60, §16.2; not specified, chosen as a month of decision history -- long enough for a stable median, bounded per §21.1
+		DecisionInboxSCMCacheTTL:        2 * time.Minute,     // §16.2's own worked example ("as of 2 min ago")
+		DecisionInboxStaleAfter:         48 * time.Hour,      // §16.1, explicit ("stale items (>48h, configurable)")
+		DecisionInboxLatencyWindow:      30 * 24 * time.Hour, // §16.2; not specified, chosen as a month of decision history -- long enough for a stable median, bounded per §21.1
 
-		ReviewVerdictAnalyticsWindow:   30 * 24 * time.Hour, // Step 62, §21.1, explicit ("bounded from day one ... default 30 days, mirroring the decision inbox's own DecisionInboxLatencyWindow, §16.2 -- never DecisionInboxStaleAfter's own much narrower 48h item-staleness flag, §16.1, a different concept entirely") -- mirrors DecisionInboxLatencyWindow's own identical "a month, bounded" reasoning
-		AutoMergePumpInterval:          60 * time.Second,    // Step 62, §21.2; not specified, mirrors AutomationEnginePumpInterval's own identical periodic-background-policy-engine reasoning
-		AutoMergeCandidateLookback:     7 * 24 * time.Hour,  // Step 62, §21.2; not specified, chosen generously -- every candidate is re-confirmed live regardless
-		DigestPumpInterval:             5 * time.Minute,     // Step 62, §21.3; not specified, chosen -- a digest fires at most once per channel per day, so coarse polling is ample
-		DigestChannelDiscoveryLookback: 30 * 24 * time.Hour, // Step 62, §21.3; not specified, mirrors ReviewVerdictAnalyticsWindow's own identical "a month, bounded" reasoning
-		DigestContentWindow:            24 * time.Hour,      // Step 62, §21.3, explicit ("a daily digest") -- one calendar day of rollup content, distinct from the channel-discovery lookback above
+		ReviewVerdictAnalyticsWindow:   30 * 24 * time.Hour, // §21.1, explicit ("bounded from day one ... default 30 days, mirroring the decision inbox's own DecisionInboxLatencyWindow, §16.2 -- never DecisionInboxStaleAfter's own much narrower 48h item-staleness flag, §16.1, a different concept entirely") -- mirrors DecisionInboxLatencyWindow's own identical "a month, bounded" reasoning
+		AutoMergePumpInterval:          60 * time.Second,    // §21.2; not specified, mirrors AutomationEnginePumpInterval's own identical periodic-background-policy-engine reasoning
+		AutoMergeCandidateLookback:     7 * 24 * time.Hour,  // §21.2; not specified, chosen generously -- every candidate is re-confirmed live regardless
+		DigestPumpInterval:             5 * time.Minute,     // §21.3; not specified, chosen -- a digest fires at most once per channel per day, so coarse polling is ample
+		DigestChannelDiscoveryLookback: 30 * 24 * time.Hour, // §21.3; not specified, mirrors ReviewVerdictAnalyticsWindow's own identical "a month, bounded" reasoning
+		DigestContentWindow:            24 * time.Hour,      // §21.3, explicit ("a daily digest") -- one calendar day of rollup content, distinct from the channel-discovery lookback above
 
 		FindingPositionResolveAllTimeout: 45 * time.Second, // Step 63 fix; not specified, chosen -- generous for several per-finding relocation calls (10s each) while bounding the worst case on a synchronous verdict-POST handler path
 
-		ReviewRetriggerDebounce: 2 * time.Minute, // Step 65, §24.2; not specified, chosen -- long enough to collapse a short burst of fixup-commit pushes into one quiet window, short enough that a single push still reviews promptly
+		ReviewRetriggerDebounce: 2 * time.Minute, // §24.2; not specified, chosen -- long enough to collapse a short burst of fixup-commit pushes into one quiet window, short enough that a single push still reviews promptly
 
-		ReviewCostBudgetServerReadHeaderTimeout: 5 * time.Second, // Step 70, §26.7/§26.9; not specified, chosen -- matches RepoSHADiscoveryTimeout/CredentialFetchTimeout's own "lightweight, purely local" precedent, see field doc comment
+		ReviewCostBudgetServerReadHeaderTimeout: 5 * time.Second, // §26.7/§26.9; not specified, chosen -- matches RepoSHADiscoveryTimeout/CredentialFetchTimeout's own "lightweight, purely local" precedent, see field doc comment
 
-		SandboxSecretFetchTimeout:         10 * time.Second,       // Step 72, §27.1; not specified, chosen, matches ProviderCredentialFetchTimeout's own reasoning
+		SandboxSecretFetchTimeout:         10 * time.Second,       // §27.1; not specified, chosen, matches ProviderCredentialFetchTimeout's own reasoning
 		SandboxSecretFetchMaxAttempts:     3,                      // adversarial-review MEDIUM fix (§27.1 "with bounded retry"); see field doc comment for the worst-case-budget arithmetic
 		SandboxSecretFetchRetryBaseDelay:  500 * time.Millisecond, // adversarial-review MEDIUM fix; see field doc comment
 		SandboxSecretFetchRetryMaxDelay:   2 * time.Second,        // adversarial-review MEDIUM fix; see field doc comment
-		OpenCodeConfigFetchTimeout:        10 * time.Second,       // Step 72, §27.2; not specified, chosen, matches ProviderCredentialFetchTimeout's own reasoning
+		OpenCodeConfigFetchTimeout:        10 * time.Second,       // §27.2; not specified, chosen, matches ProviderCredentialFetchTimeout's own reasoning
 		OpenCodeConfigFetchMaxAttempts:    3,                      // adversarial-review MEDIUM fix; mirrors SandboxSecretFetchMaxAttempts
 		OpenCodeConfigFetchRetryBaseDelay: 500 * time.Millisecond, // adversarial-review MEDIUM fix; mirrors SandboxSecretFetchRetryBaseDelay
 		OpenCodeConfigFetchRetryMaxDelay:  2 * time.Second,        // adversarial-review MEDIUM fix; mirrors SandboxSecretFetchRetryMaxDelay
 
-		CloudIdentityTokenLifetime:           10 * time.Minute, // Step 73a, §27.3, explicit ("exp ≈ 10 minutes")
-		CloudIdentitySigningKeyOverlapWindow: 15 * time.Minute, // Step 73a, §27.3; not specified numerically beyond ">= max token lifetime", chosen with margin -- see field doc comment
+		CloudIdentityTokenLifetime:           10 * time.Minute, // §27.3, explicit ("exp ≈ 10 minutes")
+		CloudIdentitySigningKeyOverlapWindow: 15 * time.Minute, // §27.3; not specified numerically beyond ">= max token lifetime", chosen with margin -- see field doc comment
 
-		CloudIdentityConfigFetchTimeout:        10 * time.Second,       // Step 73b, §27.3/§27.4; not specified, chosen, matches every other boot-time delivery fetch's own reasoning
+		CloudIdentityConfigFetchTimeout:        10 * time.Second,       // §27.3/§27.4; not specified, chosen, matches every other boot-time delivery fetch's own reasoning
 		CloudIdentityConfigFetchMaxAttempts:    3,                      // mirrors SandboxSecretFetchMaxAttempts
 		CloudIdentityConfigFetchRetryBaseDelay: 500 * time.Millisecond, // mirrors SandboxSecretFetchRetryBaseDelay
 		CloudIdentityConfigFetchRetryMaxDelay:  2 * time.Second,        // mirrors SandboxSecretFetchRetryMaxDelay
-		CloudIdentityTokenMintTimeout:          10 * time.Second,       // Step 73b, §27.3; not specified, chosen -- see field doc comment
+		CloudIdentityTokenMintTimeout:          10 * time.Second,       // §27.3; not specified, chosen -- see field doc comment
 		CloudIdentityTokenMintMaxAttempts:      3,                      // mirrors CloudIdentityConfigFetchMaxAttempts
 		CloudIdentityTokenMintRetryBaseDelay:   500 * time.Millisecond, // mirrors CloudIdentityConfigFetchRetryBaseDelay
 		CloudIdentityTokenMintRetryMaxDelay:    2 * time.Second,        // mirrors CloudIdentityConfigFetchRetryMaxDelay
 
-		DockerReadinessTimeout: 60 * time.Second, // Step 74, §27.5; not specified, chosen generously -- see field doc comment
+		DockerReadinessTimeout: 60 * time.Second, // §27.5; not specified, chosen generously -- see field doc comment
 
-		SeedRunTimeout: 5 * time.Minute, // Step 75, §10-P6/§13.4; not specified, chosen generously -- see field doc comment
+		SeedRunTimeout: 5 * time.Minute, // §10-P6/§13.4; not specified, chosen generously -- see field doc comment
 	}
 }
 
@@ -2798,7 +2798,7 @@ func (t Timeouts) Validate() error {
 	check("UploadPendingSweepAfter > UploadAbandonmentSweepInterval",
 		"UploadPendingSweepAfter", t.UploadPendingSweepAfter, "UploadAbandonmentSweepInterval", t.UploadAbandonmentSweepInterval)
 
-	// Step 73a (§27.3): CloudIdentitySigningKeyOverlapWindow must stay at
+	// (§27.3): CloudIdentitySigningKeyOverlapWindow must stay at
 	// least MinTimeoutMargin above CloudIdentityTokenLifetime, or a token
 	// minted right before rotation could outlive the grace window its own
 	// signing key is still published for -- see

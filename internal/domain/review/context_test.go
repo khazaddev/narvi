@@ -389,7 +389,7 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 		`"findings"`, `"sentinelKind"`, `"filePath"`, `"line"`, `"description"`, `"suggestedFix"`,
 		`"severity"`,
 		string(restdtos.PostedFindingSeverityLow), string(restdtos.PostedFindingSeverityMedium), string(restdtos.PostedFindingSeverityHigh),
-		// Step 66 (§26.1): "digest" (and its own per-field object) was
+		// (§26.1): "digest" (and its own per-field object) was
 		// completely absent from this template before this Step -- an agent
 		// following only the pre-Step-66 template could never emit a
 		// digest at all, and PostReviewVerdictRequest.digest is now
@@ -398,7 +398,7 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 		// ErrEmptyDigestSummary.
 		`"digest"`, `"archDecisions"`, `"decision"`, `"rejectedAlternative"`, `"conventionConformance"`,
 		`"stackRisks"`, `"unverifiedLimits"`,
-		// Step 67 (§26.2): "descriptionAdequacy"/"adequacyExplanation"
+		// (§26.2): "descriptionAdequacy"/"adequacyExplanation"
 		// (REQUIRED)/"proposedBody" (REQUESTED) were completely absent from
 		// this template before this Step -- an agent following only the
 		// pre-Step-67 template could never emit them, and
@@ -408,7 +408,7 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 		// ErrInvalidDescriptionAdequacy/ErrEmptyAdequacyExplanation.
 		`"descriptionAdequacy"`, string(restdtos.DigestDescriptionAdequacyOk), string(restdtos.DigestDescriptionAdequacyDrift), string(restdtos.DigestDescriptionAdequacyMisleading),
 		`"adequacyExplanation"`, `"proposedBody"`,
-		// Step 69 (§26.4/§26.6): "factCheck"/"factCheckKilled" (REQUIRED,
+		// (§26.4/§26.6): "factCheck"/"factCheckKilled" (REQUIRED,
 		// both paths) and "counterReview" (deep-path only) were completely
 		// absent from this template before this Step -- an agent following
 		// only the pre-Step-69 template could never emit them, and

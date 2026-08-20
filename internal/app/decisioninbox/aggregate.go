@@ -109,7 +109,7 @@ type Deps struct {
 	TokenEncryptionKey []byte
 	Timeouts           platform.Timeouts
 
-	// ReviewVerdict bundles the Step 62 (§21.1/§21.2) stores the REAL
+	// ReviewVerdict bundles the (§21.1/§21.2) stores the REAL
 	// auto-approval eligibility engine needs -- review_verdicts history
 	// (the latest verdict per PR), repo_settings' own auto-approval
 	// config, and the contradiction-rate outcome table. Replaces Step

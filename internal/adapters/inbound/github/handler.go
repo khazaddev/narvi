@@ -351,7 +351,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 
 		eventType := r.Header.Get("X-GitHub-Event")
 
-		// Step 48 (§17.4/§17.5): a `pull_request` event whose own action is
+		// (§17.4/§17.5): a `pull_request` event whose own action is
 		// "closed" is the merge-gating trigger -- a STRUCTURALLY DIFFERENT
 		// thing from the "labeled" manual re-trigger lane parseMention
 		// already handles for this SAME event type (payload.go's own doc
@@ -368,7 +368,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 			return
 		}
 
-		// Step 65 (§24.1): a `pull_request` event whose own action is
+		// (§24.1): a `pull_request` event whose own action is
 		// "synchronize" (GitHub's own name for "new commits landed on
 		// this PR's head") is this feature's own second, automatic
 		// re-review trigger -- a STRUCTURALLY DIFFERENT thing from the
@@ -386,7 +386,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 			return
 		}
 
-		// Step 63 (§22.2): a `false positive: <reason>` capture command is
+		// (§22.2): a `false positive: <reason>` capture command is
 		// dispatched HERE, BEFORE parseMention -- dispatch-before-router,
 		// mirroring the pull_request/"closed" merge-gating check above
 		// exactly (this file's own doc comment on that check). Checked
@@ -418,7 +418,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 			}
 		}
 
-		// Step 69 (§26.5): an `arch recap wrong: <reason>` capture command
+		// (§26.5): an `arch recap wrong: <reason>` capture command
 		// is dispatched HERE, BEFORE parseMention -- dispatch-before-
 		// router, mirroring the false-positive capture check immediately
 		// above exactly (archrecapcontest.go's own doc comment). Checked
@@ -571,7 +571,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		// or any other minimal wiring that doesn't care about this Step)
 		// simply skips the fetch entirely, leaving m.CommentBody as the
 		// turn's own prompt verbatim -- today's pre-Step-46 behavior.
-		// Step 48 (§22.1)/Step 70 (§22.1.2 retirement, this Step): prepend
+		// (§22.1)/(§22.1.2 retirement, this Step): prepend
 		// this PR's own already-answered facts BEFORE the diff/stack/
 		// tool-instructions blocks below -- prepended to, never replacing,
 		// the mention's own prose text captured as mentionText above. This
@@ -589,7 +589,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		// call later in EXECUTION order, while keeping it the LAST prepend
 		// before RenderTurnPrompt, preserves its own existing FIRST
 		// position in the text exactly.
-		// Step 63 (§22.3): prepend this repo's own currently-active
+		// (§22.3): prepend this repo's own currently-active
 		// learned false-positive patterns FIRST (broadest, repo-wide
 		// context), before the PR-specific already-answered facts below --
 		// "injected into every review pass, first pass and re-review
@@ -644,7 +644,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 			}
 		}
 
-		// Step 68 (§26.3): the depth decision, computed from prCtx above.
+		// (§26.3): the depth decision, computed from prCtx above.
 		// Adversarial-review fix D2 ("deep-path digest requirement
 		// contradicts the prompt the agent actually receives"): this MUST
 		// run, and be floored (D1, immediately below), BEFORE
@@ -705,7 +705,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		// must set it, never review itself (doc.go's own "zero external
 		// imports" convention).
 		prCtx.CostBudgetSafetyMarginPercent = int(domainreviewtriage.CostBudgetSafetyMargin * 100)
-		// Step 48 (§22.1)/Step 70 (§22.1.2 retirement): see this block's
+		// (§22.1)/(§22.1.2 retirement): see this block's
 		// own earlier comment (where it used to sit, right after the
 		// false-positive-patterns block) for why it moved here --
 		// prCtx.ChangedPaths is only known now, after the diff fetch

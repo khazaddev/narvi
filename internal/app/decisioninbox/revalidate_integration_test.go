@@ -54,7 +54,7 @@ func newRevalidateStores(pool *pgxpool.Pool) *revalidateStores {
 			SentinelFixes:  narvipg.NewSentinelFixStore(pool),
 			Artifacts:      narvipg.NewArtifactStore(pool),
 			Identities:     narvipg.NewIdentityStore(pool),
-			// Step 62 (§21.1/§21.2): the REAL auto-approval eligibility
+			// (§21.1/§21.2): the REAL auto-approval eligibility
 			// engine's own store dependencies -- revalidateCore now reads
 			// review_verdicts/repo_settings through this bundle.
 			ReviewVerdict: appreviewverdict.Deps{
@@ -100,7 +100,7 @@ func (rs *revalidateStores) eligiblePR(ctx context.Context, t *testing.T, pool *
 	if err != nil {
 		t.Fatalf("create platform session: %v", err)
 	}
-	// Step 62 (§21.1/§21.2): a matching Shippable=auto review_verdicts
+	// (§21.1/§21.2): a matching Shippable=auto review_verdicts
 	// row, at this exact head sha, is now REQUIRED before the real
 	// eligibility engine will ever say ok=true -- see
 	// seedAutoApprovedVerdict's own doc comment (aggregate_integration_test.go)
@@ -401,7 +401,7 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 		}
 	})
 
-	// Step 62 (§21.2) note: classifyPRLabels' own "most restrictive risk
+	// (§21.2) note: classifyPRLabels' own "most restrictive risk
 	// label wins" property is no longer
 	// observable through RevalidateForMerge's own ok/refused OUTCOME --
 	// the real auto-approval eligibility engine (internal/domain/
@@ -414,7 +414,7 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 	// the returned riskLabel value directly rather than through this
 	// function's now-unrelated merge-eligibility outcome.
 
-	// Step 62 (§21.2): a PR with NO review_verdicts row at all must be
+	// (§21.2): a PR with NO review_verdicts row at all must be
 	// refused -- the auto-approval engine fails CLOSED on "no verdict on
 	// record", never defaulting to eligible for lack of data.
 	t.Run("NoVerdictOnRecord_Refused", func(t *testing.T) {
@@ -455,7 +455,7 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 		}
 	})
 
-	// Step 62 (§21.2): the stale-head-SHA guard -- a verdict on record
+	// (§21.2): the stale-head-SHA guard -- a verdict on record
 	// whose own head_sha no longer matches the PR's LIVE current head
 	// must refuse, no matter how clean that verdict once looked.
 	t.Run("StaleVerdictHeadSHA_Refused", func(t *testing.T) {

@@ -1337,7 +1337,7 @@ func (a *Adapter) doPut(ctx context.Context, path, token string, reqBody []byte)
 }
 
 // doPatch performs one authenticated PATCH against a.apiBaseURL+path with
-// reqBody as the JSON request body -- the doPut-analog Step 67 (§26.2)
+// reqBody as the JSON request body -- the doPut-analog (§26.2)
 // needs, since GitHub's own "update a pull request" endpoint (the ONE
 // real caller, prbody.go's own UpdatePRBody) is specifically a PATCH,
 // never a PUT or POST. Otherwise byte-for-byte the same bounded-read/

@@ -203,7 +203,7 @@ func OnTurnCompleted(ctx context.Context, deps Deps, sessionRow sqlcgen.Session,
 		outcome = authoritative
 	}
 
-	// Step 56 (§25.9): ApplyStepOutcome (advance.go) is the SAME shared
+	// (§25.9): ApplyStepOutcome (advance.go) is the SAME shared
 	// authority the HITL decide endpoint's own approve verdict calls --
 	// consults workflow.NextStep, wires loopguard.Evaluate on a genuine
 	// needs_fix re-fire, and actually dispatches the next attempt's turn on

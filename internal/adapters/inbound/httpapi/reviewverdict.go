@@ -384,7 +384,7 @@ func PostReviewVerdict(
 			input.Findings = append(input.Findings, findingInputFromWire(f))
 		}
 
-		// Step 71 (§26.4/§7.1): post-hoc sub-task corroboration -- see
+		// (§26.4/§7.1): post-hoc sub-task corroboration -- see
 		// reviewpost.VerdictInput.CounterReviewCorroborated's own doc
 		// comment and reviewpost.BuildVerdict's own "Second substitution"
 		// doc comment for what this feeds and why. The two corroboration
@@ -609,7 +609,7 @@ func PostReviewVerdict(
 			findingIdentityHashes = append(findingIdentityHashes, f.IdentityHash)
 		}
 
-		// Step 62 (§21.1): append one review_verdicts row, in the SAME
+		// (§21.1): append one review_verdicts row, in the SAME
 		// transaction as the findings upserts/outbox write above -- pure
 		// storage of the verdict already computed above, forwarding
 		// head_sha verbatim from verdictHeadSHA (

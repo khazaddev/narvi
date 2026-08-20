@@ -1,5 +1,5 @@
 // This file (sandboxevent.go) implements handling a SandboxEvent command
-// (command.go) -- the sandbox-WS-hub half of Step 18 (§3.2 liveness, §6.1
+// (command.go) -- the sandbox-WS-hub half of (§3.2 liveness, §6.1
 // ack receipt / event persistence, §9.3 scenario #6 stale-gen rejection).
 // internal/adapters/inbound/wshub (this same Step) is the ONLY caller: its
 // read loop delivers one SandboxEvent per inbound wire frame, once that

@@ -159,7 +159,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		}
 
 		prompt := manualRetriggerPromptText
-		// Step 63 (§22.3): prepend this repo's own currently-active
+		// (§22.3): prepend this repo's own currently-active
 		// learned false-positive patterns BEFORE the already-answered
 		// facts below -- "injected into every review pass, first pass and
 		// re-review alike": a manual re-trigger is exactly a re-review
@@ -170,7 +170,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 				prompt = advisory + prompt
 			}
 		}
-		// Step 48 (§22.1)/Step 70 (§22.1.2 retirement, this Step): prepend
+		// (§22.1)/(§22.1.2 retirement, this Step): prepend
 		// this PR's own already-answered facts (open+rebutted
 		// review_findings) BEFORE calling RenderTurnPrompt -- prepended
 		// to, never replacing, the prose fallback above. This call is
@@ -229,7 +229,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 			}
 		}
 
-		// Step 68 (§26.3): the depth decision, computed from prCtx above.
+		// (§26.3): the depth decision, computed from prCtx above.
 		// Adversarial-review fix D2 ("deep-path digest requirement
 		// contradicts the prompt the agent actually receives"): this MUST
 		// run, and be floored (D1, immediately below), BEFORE
@@ -289,7 +289,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		// must set it, never review itself (doc.go's own "zero external
 		// imports" convention).
 		prCtx.CostBudgetSafetyMarginPercent = int(domainreviewtriage.CostBudgetSafetyMargin * 100)
-		// Step 48 (§22.1)/Step 70 (§22.1.2 retirement): see this
+		// (§22.1)/(§22.1.2 retirement): see this
 		// function's own earlier comment (where this block used to sit,
 		// right after the false-positive-patterns block) for why it moved
 		// here -- prCtx.ChangedPaths is only known now, after the diff

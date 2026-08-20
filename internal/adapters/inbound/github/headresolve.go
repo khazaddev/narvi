@@ -107,7 +107,7 @@ func resolveIssueCommentHead(ctx context.Context, logger *slog.Logger, resolver 
 
 	headBranch := pr.HeadRef
 	m.HeadBranch = &headBranch
-	// Step 62 (§21.1): the SAME already-in-flight GetPullRequest call
+	// (§21.1): the SAME already-in-flight GetPullRequest call
 	// also carries the PR's current head SHA -- captured here for free,
 	// mirroring m.Stack's own identical "one call already made for head-
 	// branch resolution, no second call just for this" reasoning

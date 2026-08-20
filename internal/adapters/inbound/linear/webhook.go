@@ -508,7 +508,7 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 
 	created, cerr := httpapi.CreateSessionCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Environments, deps.AuditLog, deps.Registry, req, creator, deps.EpistemicCheckDefault, deps.RolloutMode, deps.RepoSettings)
 	if cerr != nil {
-		// Step 76 (§10 Phase 6, §32): a RolloutRefusal is a PERMANENT
+		// (§10 Phase 6, §32): a RolloutRefusal is a PERMANENT
 		// policy refusal, never a transient failure -- checked
 		// structurally (CreateSessionError.RolloutRefusal), never by
 		// string-matching cerr.Message. Releasing the delivery claim

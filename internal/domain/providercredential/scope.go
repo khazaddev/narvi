@@ -5,7 +5,7 @@ package providercredential
 // (migrations/000056_provider_credentials.up.sql,
 // migrations/000061_provider_credentials_user_scope.up.sql) verbatim --
 // repo/environment/global (§25.3's own "sourced per-repo/per-environment/
-// global" line) plus ScopeUser (§29.4). Step 72 (§27.1) widens
+// global" line) plus ScopeUser (§29.4). (§27.1) widens
 // this package's own charter: sandbox_secrets (migrations/
 // 000090_sandbox_secrets.up.sql, a SEPARATE table with its own SEPARATE
 // Postgres sandbox_secret_scope ENUM) resolves through this SAME Scope

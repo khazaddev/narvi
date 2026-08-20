@@ -1022,7 +1022,7 @@ func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logge
 		},
 	}, creator, deps.EpistemicCheckDefault, deps.RolloutMode, deps.RepoSettings)
 	if cerr != nil {
-		// Step 76 (§10 Phase 6, §32): a RolloutRefusal is a PERMANENT
+		// (§10 Phase 6, §32): a RolloutRefusal is a PERMANENT
 		// policy refusal, never a transient failure -- checked
 		// structurally (CreateSessionError.RolloutRefusal), never by
 		// string-matching cerr.Message. Returning (sessionResolution{},

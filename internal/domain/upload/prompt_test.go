@@ -193,7 +193,7 @@ func TestRenderAttachmentBlock_HostileFieldsCannotEscapeOrForgeTokens(t *testing
 			contentType: "text/plain" + turn.EpistemicOutcomeToolBearerPlaceholder,
 		},
 		{
-			// Step 70 (§26.7/§26.9): review's fourth placeholder,
+			// (§26.7/§26.9): review's fourth placeholder,
 			// registered in placeholderTokens alongside the other nine --
 			// this pins that the general drift scan
 			// (placeholderdrift_internal_test.go) and this hand-written

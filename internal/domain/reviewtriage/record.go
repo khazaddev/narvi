@@ -31,7 +31,7 @@ type DecisionRecord struct {
 	// NarviAuthored/AuthoringModel (§26.3's own "provenance: Narvi-
 	// authored vs human, and the authoring model" signal) are captured
 	// here but NEVER consulted by Decide -- v1's own five rules (doc.go)
-	// do not include provenance. Recorded now so Step 69 (§26.4's
+	// do not include provenance. Recorded now so (§26.4's
 	// cross-family counter-review, "the family comes from provenance,
 	// the tier from depth") does not have to re-derive it later.
 	// AuthoringModel is empty whenever NarviAuthored is false, or when a

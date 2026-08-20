@@ -31,7 +31,7 @@ import (
 // short form of it is ever surfaced, for a different, internal audience
 // (a re-reviewing agent's own prompt, not a human reading the PR).
 //
-// # Step 66 (§26.1): restructured into a merge readout
+// # (§26.1): restructured into a merge readout
 //
 // digest (digest.go, VerdictInput.Digest, already validated -- Digest.
 // Summary non-empty, per ValidateVerdictInput) supplies the new content
@@ -79,7 +79,7 @@ import (
 //     always produced, §26.1's own words: "demoted to supporting
 //     evidence", never restructured or dropped.
 //
-// # Step 69 (§26.4): "Contested points"
+// # (§26.4): "Contested points"
 //
 // digest.ContestedPoints (digest.go, the deep path's own inter-agent
 // disagreement narrative -- populated by counter-review synthesis, empty
@@ -160,7 +160,7 @@ func RenderVerdictComment(v review.Verdict, findings []Finding, digest Digest, s
 	}
 	b.WriteString("\n")
 
-	// --- Step 69 (§26.4): "Contested points" -- rendered only when the
+	// --- (§26.4): "Contested points" -- rendered only when the
 	// deep path's counter-review synthesis actually produced one; see
 	// renderContestedPoints' own doc comment for why an empty value
 	// renders no section at all.
