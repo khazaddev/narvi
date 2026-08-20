@@ -26,6 +26,25 @@ export default defineConfig({
     tanstackRouter({ target: 'react', autoCodeSplitting: true }),
     react(),
   ],
+  resolve: {
+    alias: {
+      // §12.1's data layer ("no hand-written response types anywhere"):
+      // every generated file under contracts/gen/ts/ is exposed to web/src
+      // under this one stable specifier rather than a relative path whose
+      // "../" count depends on how deep the importing file happens to
+      // live (and breaks silently -- wrong file, not a compile error -- if
+      // that file ever moves). contracts/ is its own separate npm project
+      // (@narvi/contracts, contracts/package.json's own description: "does
+      // not make the repo root an npm project; phase 6 brings its own
+      // frontend package"), not an npm workspace dependency of web/, so
+      // this alias, mirrored in tsconfig.app.json's own "paths" (for
+      // tsc -b) and vitest.config.ts (for tests), is what actually wires
+      // the two projects together. See web/README.md's own "Generated
+      // contracts" section for the full "why an alias, not a relative
+      // path or a workspace dependency" writeup.
+      '@narvi/contracts': path.resolve(here, '../contracts/gen/ts'),
+    },
+  },
   build: {
     // Points DIRECTLY at internal/adapters/inbound/webui/dist -- the exact
     // directory that package's own `//go:embed all:dist` directive (see
