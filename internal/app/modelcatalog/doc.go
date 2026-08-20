@@ -6,7 +6,7 @@
 // # Structural decision (named here, since §29 leaves it open)
 //
 // snapshot.json is a control-plane-embedded SNAPSHOT of OpenCode's own
-// live GET /provider catalog for the 3 providers Step 53 already wires
+// live GET /provider catalog for the 3 providers §25.1 already wires
 // credential injection for (google/anthropic/openai) -- live-verified
 // against the pinned OpenCode 1.17.15 binary during this Step's own
 // implementation research (a clean-config instance; the same discipline

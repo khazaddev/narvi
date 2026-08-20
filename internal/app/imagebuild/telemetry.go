@@ -8,7 +8,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
-// This file is Step 43(c)'s own build-duration/failure-rate instrumentation
+// This file is the build-duration/failure-rate instrumentation
 // (§19.9's closing paragraph): "Build-duration and failure-rate
 // instrumentation is still worth having -- to size the win and catch a
 // regression afterwards, the same role §19.5's telemetry now plays for
@@ -72,7 +72,7 @@ type buildTelemetry struct {
 func newBuildTelemetry(meter metric.Meter) (buildTelemetry, error) {
 	duration, err := meter.Float64Histogram(
 		"image_build_duration_seconds",
-		metric.WithDescription("Wall-clock duration of one real ports.SandboxProvider.BuildImage call, tagged by phase (claim/refresh) and outcome (success/failure) -- the build-duration half of §19.9's own closing-paragraph instrumentation for Step 43(c)'s build-time dependency cache: sizes the win and catches a regression, never a shipping gate."),
+		metric.WithDescription("Wall-clock duration of one real ports.SandboxProvider.BuildImage call, tagged by phase (claim/refresh) and outcome (success/failure) -- the build-duration half of §19.9's own closing-paragraph instrumentation for the build-time dependency cache: sizes the win and catches a regression, never a shipping gate."),
 		metric.WithUnit("s"),
 		metric.WithExplicitBucketBoundaries(buildDurationBuckets...),
 	)

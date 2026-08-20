@@ -151,7 +151,7 @@ type storeBundle struct {
 	// already reuses -- never a second, independently-derived reduction.
 	reviewVerdict *postgres.ReviewVerdictStore
 
-	// falsePositivePattern is a rereview fix (Step 65 finding 1) own
+	// falsePositivePattern is a rereview fix (finding 1) own
 	// addition: handleReviewRetriggerDebounceTimer's own phase 2
 	// (composeAutoRetriggerPrompt, reviewretrigger.go) calls
 	// reviewcontext.FetchFalsePositivePatterns with this store, exactly
@@ -449,7 +449,7 @@ type Registry struct {
 //
 // opts is a trailing variadic of RegistryOptions (§8.2's own
 // githubBotToken started this "one small options struct, not more
-// positional parameters" pattern as a bare `...string`; Step 65 widens it
+// positional parameters" pattern as a bare `...string`; §24 widens it
 // into a real struct since it needs to add two further optional fields
 // of DIFFERENT types) -- every real caller passes at most one; only the
 // first is read. This means adding a new optional field here NEVER

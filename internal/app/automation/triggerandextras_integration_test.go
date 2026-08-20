@@ -1,7 +1,7 @@
 //go:build integration
 
-// This file covers §8.4's own ("automations: triggers & extras", §8.4)
-// additions to the engine Step 51 already built: the cron trigger pump
+// This file covers §8.4's own ("automations: triggers & extras")
+// additions to the engine §3.5 already built: the cron trigger pump
 // (triggerpump.go), sandboxSettings honored on automation sessions
 // (fanout.go's own applySandboxSettings), per-automation env vars threaded
 // into the dispatched prompt (fanout.go's own buildRunPrompt), and
@@ -434,8 +434,8 @@ func TestCloseout_RecordsLastRunAndArtifactSummaryOnFailure(t *testing.T) {
 
 // TestCreateInvocation_StillWorksUnchangedForATriggerAgnosticCaller is a
 // small regression guard: invocationenqueue.go's own CreateInvocation
-// signature/behavior must stay exactly what it was in Step 51 -- Step
-// 52's trigger evaluators (the cron pump, the webhook handler) call it
+// signature/behavior must stay exactly what it was -- §8.4's
+// trigger evaluators (the cron pump, the webhook handler) call it
 // completely unchanged, per its own doc comment's own explicit promise.
 func TestCreateInvocation_StillWorksUnchangedForATriggerAgnosticCaller(t *testing.T) {
 	f := newFixture(t)

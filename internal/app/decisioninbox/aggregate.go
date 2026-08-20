@@ -11,7 +11,7 @@
 //     (directly, as requested reviewer, or via CODEOWNERS), authored by a
 //     platform session (an artifacts row of type 'pr' exists for this
 //     PR's own URL -- internal/app/sessionactor/pushpr.go's own
-//     recordPRArtifact, Step 21), CI green at head, and passing this
+//     recordPRArtifact, §9.3), CI green at head, and passing this
 //     Step's own INTERIM auto-approval-eligibility stand-in (internal/
 //     domain/decisioninbox.ComputeAutoApprovalEligible -- see that
 //     function's own doc comment for the full justification: §21's real
@@ -383,8 +383,8 @@ func buildPRItems(ctx context.Context, deps Deps, actorGitHubID, token string, n
 }
 
 // openFindingsUnknownFailClosed is the OpenBlockingFindings value
-// buildPROpenItem substitutes when countOpenFindings itself errors (Step 60
-// review finding A1) -- any positive value fails ComputeAutoApprovalEligible
+// buildPROpenItem substitutes when countOpenFindings itself errors --
+// any positive value fails ComputeAutoApprovalEligible
 // closed (its own check is a bare "> 0"), so the exact magnitude carries
 // no further meaning beyond that; 1 is chosen purely so a human reading a
 // rendered row sees a small, plausible-looking finding count rather than

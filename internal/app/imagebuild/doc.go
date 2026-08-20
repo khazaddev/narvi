@@ -131,7 +131,7 @@
 // RecordImageRefreshSuccess/RecordImageRefreshFailure's own generated doc
 // comments and attemptRefresh's own top doc comment for the full mechanism.
 //
-// # Step 42 addition: the freshness pump (§19.2)
+// # §19.2's own addition: the freshness pump
 //
 // Builder.Run now fans out a SECOND, independent ticker loop
 // (runRefreshPump, on platform.Timeouts.ImageRefreshCheckInterval)
@@ -161,7 +161,7 @@
 // persistently-SHA-resolution-failing row can no longer permanently
 // occupy the front of the queue).
 //
-// # Step 43(c) addition: build-time dependency cache (§19.1's closing
+// # Build-time dependency cache (§19.1's closing
 // # paragraph), third iteration: immutable versioned cache snapshots
 //
 // Every real BuildImage call this package makes -- both attempt's own

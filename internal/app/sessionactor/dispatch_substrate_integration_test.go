@@ -58,7 +58,7 @@ func createTestEnvironmentWithEgressAllowlist(ctx context.Context, t *testing.T,
 }
 
 // TestDispatch_RefusesDockerRequiredSessionWhenProviderUnsupported is a
-// MUTATION-TESTABLE guard (Step 74 brief: "remove the dispatch re-check
+// MUTATION-TESTABLE guard (§27.5 brief: "remove the dispatch re-check
 // → a DIFFERENT named test must fail") and the dispatch-time half of "a
 // test that disables one and shows the other still refuses, in both
 // directions": the session's own Environment is created DIRECTLY against
@@ -184,7 +184,7 @@ func TestDispatch_RefusesEgressAllowlistSessionWhenProviderUnsupported(t *testin
 }
 
 // TestDispatch_AppendsAllowlistFloorEndToEnd proves the non-negotiable
-// allowlist floor (Step 74 brief, point B) is genuinely present on the
+// allowlist floor (§27.5 brief, point B) is genuinely present on the
 // real wire CreateSpec a spawn sends, computed from THIS session's own
 // actual repo, even though the customer's own configured allowlist named
 // only an unrelated host.

@@ -128,9 +128,9 @@ func TestSentinelAutoFixNotifier_RolloutRefusal_SkipsTerminallyNeverRetried(t *t
 	// doc comment: "OUTSIDE any transaction ... then atomically claims ...
 	// and spawns ... on ONE transaction") -- so the branch IS created even
 	// though the session spawn that would have used it is refused. This is
-	// not a Step 76 regression: identical for ANY CreateSessionOnTx
+	// not a §10 regression: identical for ANY CreateSessionOnTx
 	// failure past this point (a generic validation error would leave the
-	// same orphaned branch). What Step 76 specifically guarantees is the
+	// same orphaned branch). What §10 specifically guarantees is the
 	// ONE thing downstream of that: no false 'fix_pending' finding, no
 	// spawned session, no retry storm -- asserted above.
 	if got := sourceControl.createBranchCallCount(); got != 1 {

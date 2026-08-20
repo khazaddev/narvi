@@ -12,9 +12,9 @@ import (
 // reviewer sub-task's own opposing-model-family override (§26.4: "family
 // opposed to the PR's authoring model... via the engine's own per-sub-
 // agent model selection, using §25.1's credential injection + §8.8's
-// model catalog"). Exactly the three providers Step 53 already wires
+// model catalog"). Exactly the three providers §25.1 already wires
 // credential injection for (internal/app/modelcatalog/doc.go: "the 3
-// providers Step 53 already wires credential injection for
+// providers §25.1 already wires credential injection for
 // (google/anthropic/openai)") -- there is no fourth provider this
 // function could ever select, by construction.
 var counterReviewerProviderPreference = []string{"anthropic", "openai", "google"}

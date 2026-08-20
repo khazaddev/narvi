@@ -260,7 +260,7 @@ func TestCompleteProcessingTurn_LinearOrigin_EnqueuesExactlyOneLinearOutboxRow(t
 // enqueues the same per-origin outbox notification the real-
 // execution_complete path (completeProcessingTurn) already did.
 //
-// The gap this locks closed: Step 35 wired enqueueOutboxNotification into
+// The gap this locks closed: §5.1 wired enqueueOutboxNotification into
 // completeProcessingTurn only. A turn that reached its terminal `failed`
 // state via turn_deadline expiring -- the SAME turn.Transition +
 // UpdateStatus + synthetic execution_complete shape, just driven by a
@@ -359,7 +359,7 @@ func TestTurnDeadlineTimeout_EnqueuesOutboxNotificationPerOrigin(t *testing.T) {
 			},
 		},
 		{
-			name:        "github origin stays silent (Step 47 raw-comment blocking)",
+			name:        "github origin stays silent (§8.2 raw-comment blocking)",
 			spawnSource: sqlcgen.SessionSpawnSourceGithub,
 			seedReverseLookup: func(ctx context.Context, t *testing.T, pool *pgxpool.Pool, sessionID pgtype.UUID) {
 				t.Helper()
