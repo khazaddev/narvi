@@ -55,6 +55,30 @@
 // site's own doc comment; §27.6's server-appended egress allowlist floor
 // admits the control-plane host plus the session's git hosts, never one,
 // and that is a property this file preserves rather than routes around).
+//
+// §33.3 then closed the OTHER half of the same story: sandbox-agent's own
+// four boot-phase-duration histograms (this comment's own PR-13/14
+// reference -- sandbox_agent_boot_duration_seconds/hook_rerun_duration_
+// seconds/git_fetch_duration_seconds/git_checkout_duration_seconds) used
+// to be recorded INSIDE the ephemeral sandbox process itself (internal/
+// sandboxagent/boot/telemetry.go, internal/sandboxagent/gitclone/
+// telemetry.go, both now deleted) -- an OTLP endpoint was never a fix for
+// those four, since a sandbox process can live only minutes and vanish
+// (SIGKILL, provider teardown) before its own periodic export interval
+// ever elapses, and widening §27.6's egress floor to admit a collector
+// host in every customer sandbox was rejected outright (§33.4: the exact
+// secret-in-customer-code-path class this codebase strips from every
+// child environment). sandbox-agent now sends one best-effort boot_timing
+// sandbox-ws event per data point instead of recording locally, over the
+// authenticated WS connection that is already open before boot begins,
+// and the control plane records all four histograms in internal/app/
+// sessionactor's own opsmetrics.go/boottiming.go -- alongside the three
+// §5.3 gap-analysis instruments the paragraph above already describes.
+// Every sandbox-agent-side instrument this platform ever registered is
+// now recorded control-plane-side; none is left inside the ephemeral
+// process. This file's own SetupOTel bootstrap is unchanged by that move
+// (traces may still come later) -- cmd/sandbox-agent still hardcodes an
+// empty otlpEndpoint at its own call site, stdout-only, exactly as before.
 
 package platform
 

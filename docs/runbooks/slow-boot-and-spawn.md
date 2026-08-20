@@ -30,14 +30,21 @@ both before assuming which one regressed:
   out by `action` first: a slow `restore` and a slow fresh `spawn` point
   at different provider-side subsystems.
 - **In-sandbox boot sequence** — `sandbox_agent_boot_duration_seconds`
-  (p95, recorded sandbox-agent-side, `internal/sandboxagent/boot/
-  telemetry.go`) — repo clone/sync through hook/service startup, AFTER
-  the sandbox has already connected. Break down further with
-  `sandbox_agent_hook_rerun_duration_seconds` (one hook's own time —
-  tagged `repo`/`hook`/`boot_mode`/`workspace_moved`),
-  `sandbox_agent_git_fetch_duration_seconds`, and
-  `sandbox_agent_git_checkout_duration_seconds` to isolate which boot
-  phase actually regressed.
+  (p95) — repo clone/sync through hook/service startup, AFTER the sandbox
+  has already connected. Still MEASURED sandbox-agent-side, on the
+  sandbox's own clock (`cmd/sandbox-agent/main.go`'s own `bootStart`
+  bracket), but RECORDED control-plane-side: a best-effort `boot_timing`
+  sandbox-ws event relays the already-measured value and
+  `internal/app/sessionactor/boottiming.go` records it (§33.3) — the
+  sandbox process is ephemeral and can vanish before an export interval
+  elapses, so recording happens where the long-lived process is. Break
+  down further with `sandbox_agent_hook_rerun_duration_seconds` (one
+  hook's own time — tagged `hook`/`boot_mode`/`workspace_moved`; NOT
+  `repo` — dropped as unbounded metric-attribute cardinality, §33.3, but
+  still visible per-session in the raw event log),
+  `sandbox_agent_git_fetch_duration_seconds` (tagged `degraded`), and
+  `sandbox_agent_git_checkout_duration_seconds` (tagged `failed`) to
+  isolate which boot phase actually regressed.
 - Log: `sandbox-agent` emits a **boot fingerprint** first on every boot
   (binary version, image digest, repo SHAs, boot mode, §5.3) — check
   whether a slow boot correlates with a specific image digest (a bad base

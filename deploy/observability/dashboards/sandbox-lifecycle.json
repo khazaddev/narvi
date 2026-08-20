@@ -14,7 +14,7 @@
     {
       "id": "boot-duration-p95",
       "title": "Sandbox boot-to-ready duration (p95)",
-      "description": "p95 of sandbox_agent_boot_duration_seconds — total wall-clock duration of one boot-to-ready sequence (repo clone/sync through RunBoot's own hook/service startup), recorded sandbox-agent-side (internal/sandboxagent/boot/telemetry.go). IMPLEMENTATION_PLAN.md row 77's own 'boot p95' subject. Tagged by boot_mode and failed.",
+      "description": "p95 of sandbox_agent_boot_duration_seconds — total wall-clock duration of one boot-to-ready sequence (repo clone/sync through RunBoot's own hook/service startup), still MEASURED sandbox-agent-side but RECORDED control-plane-side from a relayed best-effort boot_timing event (§33.3, internal/app/sessionactor/boottiming.go). IMPLEMENTATION_PLAN.md row 77's own 'boot p95' subject. Tagged by boot_mode and failed.",
       "type": "histogram_quantile",
       "metrics": ["sandbox_agent_boot_duration_seconds"],
       "quantile": 0.95,
@@ -23,7 +23,7 @@
     {
       "id": "hook-rerun-duration-p95",
       "title": "Boot hook (setup.sh/start.sh) duration (p95)",
-      "description": "p95 of sandbox_agent_hook_rerun_duration_seconds — one hook's own wall-clock duration, including a workspaceMoved-triggered non-fatal setup.sh rerun under repo_image (§19.4/§19.5). §5.3's own 'boot phase durations'. Tagged by repo/hook/failed/boot_mode/workspace_moved.",
+      "description": "p95 of sandbox_agent_hook_rerun_duration_seconds — one hook's own wall-clock duration, including a workspaceMoved-triggered non-fatal setup.sh rerun under repo_image (§19.4/§19.5). §5.3's own 'boot phase durations'. Tagged by hook/failed/boot_mode/workspace_moved -- NOT repo (§33.3: dropped as unbounded metric-attribute cardinality; still visible per-session in the raw event log).",
       "type": "histogram_quantile",
       "metrics": ["sandbox_agent_hook_rerun_duration_seconds"],
       "quantile": 0.95,
@@ -32,7 +32,7 @@
     {
       "id": "git-fetch-duration-p95",
       "title": "Boot-time git fetch duration (p95)",
-      "description": "p95 of sandbox_agent_git_fetch_duration_seconds — the §19.3 boot-time fetch step, one repo. §5.3's own 'boot phase durations'.",
+      "description": "p95 of sandbox_agent_git_fetch_duration_seconds — the §19.3 boot-time fetch step, one repo. §5.3's own 'boot phase durations'. Tagged by degraded -- NOT repo (§33.3: dropped as unbounded metric-attribute cardinality; still visible per-session in the raw event log).",
       "type": "histogram_quantile",
       "metrics": ["sandbox_agent_git_fetch_duration_seconds"],
       "quantile": 0.95,
@@ -41,7 +41,7 @@
     {
       "id": "git-checkout-duration-p95",
       "title": "Boot-time git checkout duration (p95)",
-      "description": "p95 of sandbox_agent_git_checkout_duration_seconds — SyncAll's own checkoutBranch step, one repo. §5.3's own 'boot phase durations'.",
+      "description": "p95 of sandbox_agent_git_checkout_duration_seconds — SyncAll's own checkoutBranch step, one repo. §5.3's own 'boot phase durations'. Tagged by failed -- NOT repo (§33.3: dropped as unbounded metric-attribute cardinality; still visible per-session in the raw event log).",
       "type": "histogram_quantile",
       "metrics": ["sandbox_agent_git_checkout_duration_seconds"],
       "quantile": 0.95,
