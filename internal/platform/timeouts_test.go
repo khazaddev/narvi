@@ -167,7 +167,7 @@ func TestDefaultTimeouts_StandaloneFields(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step07StandaloneFields proves the Step 07 standalone
+// TestDefaultTimeouts_Step07StandaloneFields proves the §3.2 standalone
 // additions (sandbox liveness/circuit-breaker/spawn/inactivity fields) ship
 // with the exact values §3.2 specifies (or, where §3.2 gives no figure, the
 // chosen default documented alongside the field). These fields have no
@@ -201,7 +201,7 @@ func TestDefaultTimeouts_Step07StandaloneFields(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step11StandaloneFields proves the Step 11 standalone
+// TestDefaultTimeouts_Step11StandaloneFields proves the §2 standalone
 // additions (ActorIdleTTL, TimerPumpInterval, TimerClaimDuration) ship
 // with the exact values §2 specifies (or, where §2 gives no figure, the
 // chosen default documented alongside the field). These fields have no
@@ -229,7 +229,7 @@ func TestDefaultTimeouts_Step11StandaloneFields(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step13StandaloneFields proves the Step 13 standalone
+// TestDefaultTimeouts_Step13StandaloneFields proves the §6.4 standalone
 // additions (HookTimeout, ProcessStopGracePeriod, SupervisorShutdownTimeout,
 // RepoSHADiscoveryTimeout) ship with sane, non-zero defaults. These fields
 // have no ordering relationship with either invariant chain, so this only
@@ -257,7 +257,7 @@ func TestDefaultTimeouts_Step13StandaloneFields(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step14StandaloneFields proves the Step 14 standalone
+// TestDefaultTimeouts_Step14StandaloneFields proves the §14.2 standalone
 // additions (ServiceReadinessTimeout, ServiceReadinessPollInterval) ship
 // with sane, non-zero defaults. These fields have no ordering relationship
 // with either invariant chain, so this only checks their own values -- not
@@ -283,7 +283,7 @@ func TestDefaultTimeouts_Step14StandaloneFields(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step15StandaloneFields proves the Step 15 standalone
+// TestDefaultTimeouts_Step15StandaloneFields proves the §6.4 standalone
 // additions (RepoCloneTimeout, CredentialFetchTimeout,
 // CredentialExpiryBuffer) ship with sane, non-zero defaults. These fields
 // have no ordering relationship with either invariant chain, so this only
@@ -310,7 +310,7 @@ func TestDefaultTimeouts_Step15StandaloneFields(t *testing.T) {
 	}
 }
 
-// TestDefaultTimeouts_Step18StandaloneFields proves the Step 18 standalone
+// TestDefaultTimeouts_Step18StandaloneFields proves the §3.2 standalone
 // addition (SandboxEventAckTimeout) ships with a sane, non-zero default,
 // and that adding it did not accidentally break either pre-existing
 // invariant chain (it is a standalone field, wired into neither).

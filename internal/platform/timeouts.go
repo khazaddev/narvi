@@ -160,7 +160,7 @@ type Timeouts struct {
 	// (invented).
 	HealthCheckTimeout time.Duration
 
-	// --- Step 07 standalone additions: no ordering relationship with the
+	// --- §3.2 standalone additions: no ordering relationship with the
 	// two chains above (or with the PR-06 additions), so — per that PR's
 	// own precedent — just plain fields with sensible defaults, not wired
 	// into a fake invariant link.
@@ -215,7 +215,7 @@ type Timeouts struct {
 	// alarm checks. Not given an explicit figure in the plan; chosen as 30s.
 	InactivityMinCheckInterval time.Duration
 
-	// --- Step 11 standalone additions: no ordering relationship with
+	// --- §2 standalone additions: no ordering relationship with
 	// either invariant chain above (or with the PR-06/Step 07 additions),
 	// so — per those additions' own precedent — plain fields with
 	// sensible defaults, not wired into a fake invariant link.
@@ -242,7 +242,7 @@ type Timeouts struct {
 	// reasonably quickly.
 	TimerClaimDuration time.Duration
 
-	// --- Step 13 standalone additions: no ordering relationship with
+	// --- §6.4 standalone additions: no ordering relationship with
 	// either invariant chain above (or with any prior Step's standalone
 	// additions), so — per those additions' own precedent — plain fields
 	// with sensible defaults, not wired into a fake invariant link.
@@ -277,7 +277,7 @@ type Timeouts struct {
 	// existing Timeouts field. Not specified in the plan; chosen as 5s.
 	RepoSHADiscoveryTimeout time.Duration
 
-	// --- Step 14 standalone additions: no ordering relationship with
+	// --- §14.2 standalone additions: no ordering relationship with
 	// either invariant chain above (or with any prior Step's standalone
 	// additions), so — per those additions' own precedent — plain fields
 	// with sensible defaults, not wired into a fake invariant link.
@@ -300,7 +300,7 @@ type Timeouts struct {
 	// health endpoint.
 	ServiceReadinessPollInterval time.Duration
 
-	// --- Step 15 standalone additions: no ordering relationship with
+	// --- §6.4 standalone additions: no ordering relationship with
 	// either invariant chain above (or with any prior Step's standalone
 	// additions), so — per those additions' own precedent — plain fields
 	// with sensible defaults, not wired into a fake invariant link.
@@ -342,7 +342,7 @@ type Timeouts struct {
 	// stale-cache question.
 	ProviderCredentialFetchTimeout time.Duration
 
-	// --- Step 16 standalone additions: no ordering relationship with
+	// --- §6.1 standalone additions: no ordering relationship with
 	// either invariant chain above (or with any prior Step's standalone
 	// additions), so — per those additions' own precedent — plain fields
 	// with sensible defaults, not wired into a fake invariant link.
@@ -371,7 +371,7 @@ type Timeouts struct {
 	// above is capped at. Not specified in the plan; chosen as 30s.
 	SandboxWSReconnectMaxBackoff time.Duration
 
-	// --- Step 17 standalone additions: no ordering relationship with
+	// --- §7 standalone additions: no ordering relationship with
 	// either invariant chain above (or with any prior Step's standalone
 	// additions), so — per those additions' own precedent — plain fields
 	// with sensible defaults, not wired into a fake invariant link.
@@ -393,7 +393,7 @@ type Timeouts struct {
 	// ServiceReadinessPollInterval's own precedent exactly.
 	OpenCodeReadinessPollInterval time.Duration
 
-	// --- Step 18 standalone additions: no ordering relationship with
+	// --- §3.2 standalone additions: no ordering relationship with
 	// either invariant chain above (or with any prior Step's standalone
 	// additions), so — per those additions' own precedent — a plain field
 	// with a sensible default, not wired into a fake invariant link.
@@ -410,7 +410,7 @@ type Timeouts struct {
 	// heartbeat cadence would otherwise mask it.
 	SandboxEventAckTimeout time.Duration
 
-	// --- Step 19 standalone additions: no ordering relationship with
+	// --- §6.2 standalone additions: no ordering relationship with
 	// either invariant chain above (or with any prior Step's standalone
 	// additions), so — per those additions' own precedent — plain fields
 	// with sensible defaults, not wired into a fake invariant link.
@@ -429,7 +429,7 @@ type Timeouts struct {
 	// TTL".
 	WSTokenTTL time.Duration
 
-	// --- Step 20 standalone additions: no ordering relationship with
+	// --- §13.1 standalone additions: no ordering relationship with
 	// either invariant chain above (or with any prior Step's standalone
 	// additions), so — per those additions' own precedent — plain fields
 	// with sensible defaults, not wired into a fake invariant link.
@@ -453,7 +453,7 @@ type Timeouts struct {
 	// it for.
 	UserSessionTTL time.Duration
 
-	// --- Step 21 standalone additions ("e2e happy path"): no ordering
+	// --- §9.3 standalone additions ("e2e happy path"): no ordering
 	// relationship with either invariant chain above (or with any prior
 	// Step's standalone additions), so — per those additions' own
 	// precedent — plain fields with sensible defaults, not wired into a
@@ -518,7 +518,7 @@ type Timeouts struct {
 	// able to hang forever. Not specified in the plan; chosen as 30s.
 	OpenCodeRequestTimeout time.Duration
 
-	// --- Step 44 standalone addition ("OpenCode adapter: context-overflow
+	// --- §7.2 standalone addition ("OpenCode adapter: context-overflow
 	// compaction retry", §7.2): no ordering relationship with either
 	// invariant chain above (or with any prior Step's standalone
 	// additions), so -- per those additions' own precedent -- a plain
@@ -644,7 +644,7 @@ type Timeouts struct {
 	// specified in the plan; chosen as 1h.
 	ExpiredCredentialCleanupInterval time.Duration
 
-	// --- Step 22 standalone additions ("snapshots & restore"): no
+	// --- §3.2 standalone additions ("snapshots & restore"): no
 	// ordering relationship with either invariant chain above (or with any
 	// prior Step's standalone additions), so -- per those additions' own
 	// precedent -- a plain field with a sensible default, not wired into a
@@ -660,7 +660,7 @@ type Timeouts struct {
 	// can genuinely take longer. Not specified in the plan; chosen as 60s.
 	SnapshotMintTimeout time.Duration
 
-	// --- Step 25 standalone addition ("reconciler + GC"): no ordering
+	// --- §5.3 standalone addition ("reconciler + GC"): no ordering
 	// relationship with either invariant chain above (or with any prior
 	// Step's standalone additions), so -- per those additions' own
 	// precedent -- a plain field with a sensible default, not wired into a
@@ -730,7 +730,7 @@ type Timeouts struct {
 	// it uncleaned indefinitely.
 	ReconcilerOrphanConfirmationPeriod time.Duration
 
-	// --- Step 26 standalone additions ("image builds", §8.5-note/§10-P2):
+	// --- §8.5 standalone additions ("image builds", §8.5-note/§10-P2):
 	// no ordering relationship with either invariant chain above (or with
 	// any prior Step's standalone additions), so -- per those additions'
 	// own precedent -- plain fields with sensible defaults, not wired into
@@ -773,7 +773,7 @@ type Timeouts struct {
 	// first one, so it does not contradict §3.5.
 	ImageBuildBackoffMax time.Duration
 
-	// --- Step 27 standalone addition ("mocking + contract drift", §14.3):
+	// --- §14.3 standalone addition ("mocking + contract drift", §14.3):
 	// no ordering relationship with either invariant chain above (or with
 	// any prior Step's standalone additions), so -- per those additions'
 	// own precedent -- a plain field with a sensible default, not wired
@@ -794,7 +794,7 @@ type Timeouts struct {
 	// own "lightweight call, not a large data transfer" reasoning.
 	ContractsFingerprintResolutionTimeout time.Duration
 
-	// --- Step 29 standalone addition ("gitstate in-sandbox", §3.4): no
+	// --- §3.4 standalone addition ("gitstate in-sandbox", §3.4): no
 	// ordering relationship with either invariant chain above (or with any
 	// prior Step's standalone additions), so -- per those additions' own
 	// precedent -- a plain field with a sensible default, not wired into a
@@ -814,7 +814,7 @@ type Timeouts struct {
 	// without stalling the whole boot sequence" reasoning.
 	GitSyncStepTimeout time.Duration
 
-	// --- Step 31 standalone addition ("webhook toolkit", §5.1/§5.2): no
+	// --- §5.1 standalone addition ("webhook toolkit", §5.1/§5.2): no
 	// ordering relationship with either invariant chain above (or with any
 	// prior Step's standalone additions), so -- per those additions' own
 	// precedent -- a plain field with a sensible default, not wired into a
@@ -837,7 +837,7 @@ type Timeouts struct {
 	// Slack's own commonly recommended replay window.
 	WebhookTimestampFreshnessWindow time.Duration
 
-	// --- Step 34 standalone additions ("Linear ingress", §8.10): no
+	// --- §8.10 standalone additions ("Linear ingress", §8.10): no
 	// ordering relationship with either invariant chain above (or with any
 	// prior Step's standalone additions), so -- per those additions' own
 	// precedent -- plain fields with sensible defaults, not wired into a
@@ -933,7 +933,7 @@ type Timeouts struct {
 	LinearSetSessionIDRetryBaseDelay time.Duration
 	LinearSetSessionIDRetryMaxDelay  time.Duration
 
-	// --- Step 33 standalone addition ("Slack ingress", §8.10): no
+	// --- §8.10 standalone addition ("Slack ingress", §8.10): no
 	// ordering relationship with either invariant chain above (or with
 	// any prior Step's standalone additions), so -- per those additions'
 	// own precedent -- a plain field with a sensible default, not wired
@@ -954,7 +954,7 @@ type Timeouts struct {
 	// noticeably worse.
 	SlackAckTimeout time.Duration
 
-	// --- Step 38 standalone addition ("plan mode, cross-channel", §8.1/
+	// --- §8.1 standalone addition ("plan mode, cross-channel", §8.1/
 	// §13.3): no ordering relationship with either invariant chain above (or
 	// with any prior Step's standalone additions), so -- per those
 	// additions' own precedent -- a plain field with a sensible default, not
@@ -996,7 +996,7 @@ type Timeouts struct {
 	// finishes.
 	SlackInteractivityAckTimeout time.Duration
 
-	// --- Step 35 standalone additions ("outbox delivery", §5.1): no
+	// --- §5.1 standalone additions ("outbox delivery", §5.1): no
 	// ordering relationship with either invariant chain above (or with any
 	// prior Step's standalone additions), so -- per those additions' own
 	// precedent -- plain fields with sensible defaults, not wired into a
@@ -1147,7 +1147,7 @@ type Timeouts struct {
 	// sequential processing time.
 	OutboxClaimDuration time.Duration
 
-	// --- Step 36 standalone addition ("intent classifier", §8.3/§18): no
+	// --- §8.3 standalone addition ("intent classifier", §8.3/§18): no
 	// ordering relationship with either invariant chain above (or with any
 	// prior Step's standalone additions), so -- per those additions' own
 	// precedent -- a plain field with a sensible default, not wired into a
@@ -1171,7 +1171,7 @@ type Timeouts struct {
 	// thinking enabled).
 	IntentClassifierLLMTimeout time.Duration
 
-	// --- Step 39 standalone additions ("identities + full RBAC", §13.2):
+	// --- §13.2 standalone additions ("identities + full RBAC", §13.2):
 	// no ordering relationship with either invariant chain above (or with
 	// any prior Step's standalone additions), so -- per those additions'
 	// own precedent -- plain fields with sensible defaults, not wired into
@@ -1408,7 +1408,7 @@ type Timeouts struct {
 	// webhook response prompt.
 	GitHubGetPRTimeout time.Duration
 
-	// --- Step 40 standalone addition ("warm boot: fetch-aware git sync",
+	// --- §19.3 standalone addition ("warm boot: fetch-aware git sync",
 	// §19.3): no ordering relationship with either invariant chain above
 	// (or with any prior Step's standalone additions), so -- per those
 	// additions' own precedent -- a plain field with a sensible default,
@@ -1458,7 +1458,7 @@ type Timeouts struct {
 	// does not need that same budget).
 	GitFetchStepTimeout time.Duration
 
-	// --- Step 42 standalone addition ("warm boot: refresh pump + hook
+	// --- §19.2 standalone addition ("warm boot: refresh pump + hook
 	// policy", §19.2): no ordering relationship with either invariant chain
 	// above (or with any prior Step's standalone additions), so -- per
 	// those additions' own precedent -- a plain field with a sensible
@@ -1634,7 +1634,7 @@ type Timeouts struct {
 	// their next active day rather than only once, ever.
 	GitHubActorNoticeTTL time.Duration
 
-	// --- Step 46 standalone addition ("review sessions", §8.2): no
+	// --- §8.2 standalone addition ("review sessions", §8.2): no
 	// ordering relationship with either invariant chain above (or with any
 	// prior standalone addition), so -- per those additions' own precedent
 	// -- a plain field with a sensible default, not wired into a fake
@@ -1663,7 +1663,7 @@ type Timeouts struct {
 	// reason to fail the review session's own turn creation.
 	GitHubPRDiffTimeout time.Duration
 
-	// --- Step 50 standalone addition ("release PR review", §15.2): no
+	// --- §15 standalone addition ("release PR review", §15.2): no
 	// ordering relationship with either invariant chain above (or with any
 	// prior standalone addition), so -- per those additions' own precedent
 	// -- a plain field with a sensible default, not wired into a fake
@@ -1729,7 +1729,7 @@ type Timeouts struct {
 	// after ListMergedBetween itself returns.
 	ReleaseManifestCheckTimeout time.Duration
 
-	// --- Step 51 standalone addition ("automations: engine", §3.5): the
+	// --- §3.5 standalone addition ("automations: engine", §3.5): the
 	// two sweep thresholds are explicit in the plan ("orphaned starting
 	// runs >5 min, running >90 min"); the two poll intervals are not, and
 	// -- per every prior pump-interval addition's own precedent
@@ -1837,7 +1837,7 @@ type Timeouts struct {
 	// (ProviderHTTPClientTimeout, OutboxClaimDuration, etc.).
 	AutomationCronCatchUpWindow time.Duration
 
-	// --- Step 57 standalone additions ("RWX provider + previews", §4.1.1):
+	// --- §4.1 standalone additions ("RWX provider + previews", §4.1.1):
 	// RWXCLIExecTimeout has no ordering relationship with either invariant
 	// chain above (or with any prior standalone addition), so — per those
 	// additions' own precedent — a plain field with a sensible default, not
@@ -1885,7 +1885,7 @@ type Timeouts struct {
 	// ProviderHardCap's 2-hour ceiling.
 	RWXSandboxInactivityTimeout time.Duration
 
-	// --- Step 58 standalone additions ("uploads, blob storage & the
+	// --- §8.6 standalone additions ("uploads, blob storage & the
 	// in-sandbox download_file tool", §28): UploadPresignPutTTL,
 	// UploadPresignGetTTL, and ObjectStoreHTTPClientTimeout have no
 	// ordering relationship with any invariant chain above (or with each
@@ -1938,7 +1938,7 @@ type Timeouts struct {
 	// is a HeadObject, Delete a DeleteObject, neither moves object bytes.
 	ObjectStoreHTTPClientTimeout time.Duration
 
-	// --- Step 59 standalone additions ("models: Codex via ChatGPT-account
+	// --- §8.8 standalone additions ("models: Codex via ChatGPT-account
 	// OAuth", §29.5/§29.9): no ordering relationship with either invariant
 	// chain above (or any prior Step's own standalone additions), so —
 	// per those additions' own precedent — plain fields with sensible
@@ -2397,7 +2397,7 @@ type Timeouts struct {
 	CloudIdentityTokenMintRetryBaseDelay time.Duration
 	CloudIdentityTokenMintRetryMaxDelay  time.Duration
 
-	// --- Step 74 standalone addition ("sandbox substrate: docker, egress
+	// --- §27.5 standalone addition ("sandbox substrate: docker, egress
 	// policy, toolchain", §27.5): no ordering relationship with either
 	// invariant chain above (or with any prior Step's standalone
 	// additions), so -- per those additions' own precedent -- a plain
@@ -2421,7 +2421,7 @@ type Timeouts struct {
 	// same "poll until ready or timeout" shape.
 	DockerReadinessTimeout time.Duration
 
-	// --- Step 75 standalone addition ("config/data seeding", §10-P6,
+	// --- §10 standalone addition ("config/data seeding", §10-P6,
 	// §13.4): no ordering relationship with either invariant chain above,
 	// so -- per every prior Step's own standalone-addition precedent -- a
 	// plain field with a sensible default, not wired into a fake
