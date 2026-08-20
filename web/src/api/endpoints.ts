@@ -14,7 +14,16 @@
 // /api/sessions (uploads, plans, review, ...) are exactly as typeable
 // through this SAME request<T> + rest-dtos.ts pattern -- Steps 81+ add
 // them as each view needs one, not speculatively here.
-import type { CreateSessionRequest, CreateTurnRequest, CreateTurnResponse, EventsResponse, Member, Session, WSTokenResponse } from '@narvi/contracts/rest-dtos'
+import type {
+  CreateSessionRequest,
+  CreateTurnRequest,
+  CreateTurnResponse,
+  EventsResponse,
+  ListSessionsResponse,
+  Member,
+  Session,
+  WSTokenResponse,
+} from '@narvi/contracts/rest-dtos'
 
 import { request } from './http'
 
@@ -24,6 +33,19 @@ export function createSession(body: CreateSessionRequest, signal?: AbortSignal):
 
 export function getSession(sessionId: string, signal?: AbortSignal): Promise<Session> {
   return request<Session>(`/api/sessions/${encodeURIComponent(sessionId)}`, { signal })
+}
+
+// -- Step 82 (§12.2 item 1): the session workspace sidebar's own list. --
+
+/**
+ * listSessions calls GET /api/sessions?filter=mine|all -- the sidebar's
+ * own data source (status chips, My sessions/All filter). filter mirrors
+ * the REST route's own two accepted values exactly (listsessions.go);
+ * this wrapper does not default it itself, so the query key a caller
+ * builds always names the actual filter in effect.
+ */
+export function listSessions(filter: 'mine' | 'all', signal?: AbortSignal): Promise<ListSessionsResponse> {
+  return request<ListSessionsResponse>(`/api/sessions?filter=${filter}`, { signal })
 }
 
 export function listSessionEvents(sessionId: string, options: { cursor?: string; limit?: number } = {}, signal?: AbortSignal): Promise<EventsResponse> {

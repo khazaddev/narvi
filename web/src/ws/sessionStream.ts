@@ -95,6 +95,22 @@ export class SessionStream {
   private readonly listeners = new Set<() => void>()
   private backfillInFlight = false
   private backfillDirty = false
+  // cachedSnapshot -- Step 82's own fix, discovered wiring this class into
+  // React's useSyncExternalStore for the first time (this file's own top
+  // comment already anticipated that exact hook shape, but getSnapshot()
+  // below used to allocate a fresh object -- and a fresh `this.log.
+  // entries()` array via .slice() -- on EVERY call. useSyncExternalStore
+  // compares successive getSnapshot() results with Object.is to decide
+  // whether a re-render is needed; a snapshot whose identity changes on
+  // every call even with NO underlying state change makes React re-render
+  // in a tight loop trying to reconcile a "torn" read, which manifests as
+  // "Maximum update depth exceeded" (confirmed live: this exact failure,
+  // in a real browser, before this fix). Invalidated (set to null) at the
+  // top of notify() below -- the ONE place every mutation in this class
+  // already funnels through before announcing a change -- so a caller
+  // between two notify() calls always gets back the SAME reference, and a
+  // caller after one gets a freshly computed one.
+  private cachedSnapshot: SessionStreamSnapshot | null = null
 
   constructor(options: SessionStreamOptions) {
     this.sessionId = options.sessionId
@@ -140,13 +156,16 @@ export class SessionStream {
   }
 
   getSnapshot(): SessionStreamSnapshot {
-    return {
-      connectionStatus: this.connectionStatus,
-      syncState: this.syncState,
-      events: this.log.entries(),
-      activity: this.activity,
-      lastError: this.lastError,
+    if (this.cachedSnapshot === null) {
+      this.cachedSnapshot = {
+        connectionStatus: this.connectionStatus,
+        syncState: this.syncState,
+        events: this.log.entries(),
+        activity: this.activity,
+        lastError: this.lastError,
+      }
     }
+    return this.cachedSnapshot
   }
 
   subscribe(listener: () => void): () => void {
@@ -157,6 +176,7 @@ export class SessionStream {
   }
 
   private notify(): void {
+    this.cachedSnapshot = null
     for (const listener of this.listeners) listener()
   }
 
