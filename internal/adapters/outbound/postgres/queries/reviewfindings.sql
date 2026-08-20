@@ -1,4 +1,4 @@
--- Queries backing ReviewFindingStore (Step 48, "sentinels + suggestions",
+-- Queries backing ReviewFindingStore ("sentinels + suggestions",
 -- §17/§22.1) -- see migrations/000046_review_findings.up.sql's own doc
 -- comment for the full table design.
 
@@ -101,7 +101,7 @@ WHERE repo_full_name = $1 AND pr_number = $2 AND identity_hash = $3
 RETURNING *;
 
 -- name: ListReviewFindingStatusesInWindow :many
--- Step 62's own "Review finding outcomes" analytics KPI (§21.1/§12.2
+-- §21's own "Review finding outcomes" analytics KPI (§21.1/§12.2
 -- item 6) -- every finding FIRST seen for repoFullName after sinceTime,
 -- bounded by limit (§21.1's own "bounded from day one" discipline). Only
 -- the status column is selected: internal/domain/reviewverdict.

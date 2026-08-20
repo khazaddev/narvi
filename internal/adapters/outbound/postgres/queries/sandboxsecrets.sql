@@ -1,4 +1,4 @@
--- Queries backing SandboxSecretStore (Step 72, "sandbox secrets &
+-- Queries backing SandboxSecretStore ("sandbox secrets &
 -- opencode config", §27.1) -- migrations/000090_sandbox_secrets.up.sql.
 -- value_encrypted is ciphertext (platform.EncryptToken output) end to end
 -- here; nothing in this file, or the Go store wrapping it, ever decrypts

@@ -1,5 +1,5 @@
 -- Queries backing ParticipantStore (migrations/000011_participants.up.sql).
--- ParticipantExists is Step 37's own first real reader of this table
+-- ParticipantExists is §8.1's own first real reader of this table
 -- (§13.3's own stopgap authorization predicate, internal/adapters/inbound/
 -- httpapi/planauthz.go's canActOnPlan) -- nothing populates participants
 -- yet (§8.11's own "distinct, not-yet-scoped concern"), so this always

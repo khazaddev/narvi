@@ -1,5 +1,5 @@
 -- Queries backing WebhookDeliveryStore (§5.1's dedupe/coalescing claim,
--- §4.3). No caller exists yet -- Steps 32/33/34 (GitHub/Slack/Linear
+-- §4.3). No caller exists yet -- §8.2/§8.10 (GitHub/Slack/Linear
 -- ingress) are the ones that actually call ClaimWebhookDelivery, once
 -- each provider's own adapter has verified its signature and parsed out
 -- its own delivery id.

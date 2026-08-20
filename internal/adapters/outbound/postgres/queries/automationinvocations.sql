@@ -1,11 +1,11 @@
--- Queries backing AutomationInvocationStore (Step 51, "automations:
+-- Queries backing AutomationInvocationStore ("automations:
 -- engine", §3.5), migrations/000052_automation_invocations.up.sql.
 
 -- name: CreateAutomationInvocation :one
 -- Fast, cheap, durable hand-off (mirrors internal/app/releasereview.
 -- Enqueue's own identical "one INSERT, the real work happens later on a
 -- background loop's own schedule" shape) -- the caller (this Step: tests
--- only; Step 52: a real trigger-condition evaluation) has already run
+-- only; §8.4: a real trigger-condition evaluation) has already run
 -- automation.ValidateTargets against targets before calling this.
 INSERT INTO automation_invocations (automation_id, targets, total_runs)
 VALUES ($1, $2, $3)
@@ -29,9 +29,9 @@ WHERE id = $1;
 -- invocation already created (e.g. moments before a THIRD consecutive
 -- failure elsewhere auto-pauses this same automation) is simply left
 -- un-fanned-out -- still visible to this same query on a LATER tick, once
--- either the automation is resumed (Step 52/76's own future surface) or
+-- either the automation is resumed (§8.4/§10's own future surface) or
 -- never, if it stays paused -- rather than dispatching real sessions for
--- an automation the engine itself just decided to stop trusting. Step 52's
+-- an automation the engine itself just decided to stop trusting. §8.4's
 -- own future trigger evaluator is expected to check this same status
 -- before ever calling CreateInvocation in the first place; this is the
 -- SECOND, independent layer, for an invocation already queued before that

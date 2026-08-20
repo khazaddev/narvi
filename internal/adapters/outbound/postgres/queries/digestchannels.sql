@@ -1,5 +1,5 @@
 -- Queries backing internal/app/digest's own channel-discovery step
--- (Step 62, §21.3) -- "per-repo/per-channel ... reusing existing
+-- (§21.3) -- "per-repo/per-channel ... reusing existing
 -- session-thread association tables, never a second, separate repo<->
 -- channel mechanism". Each query joins the SAME github_pr_sessions table
 -- (repo_full_name) already used throughout this codebase's own review

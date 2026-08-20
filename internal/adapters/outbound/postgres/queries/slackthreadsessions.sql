@@ -1,5 +1,5 @@
 -- Queries backing SlackThreadSessionStore (§8.10's thread↔session
--- mapping, Step 33 "Slack ingress"). See
+-- mapping "Slack ingress"). See
 -- migrations/000029_slack_thread_sessions.up.sql's own doc comment for
 -- the full atomic-claim design.
 
@@ -28,10 +28,10 @@ SELECT * FROM slack_thread_sessions
 WHERE channel_id = $1 AND thread_ts = $2;
 
 -- name: GetSlackThreadSessionBySessionID :one
--- The REVERSE lookup Step 35 ("outbox delivery") needs: given a
+-- The REVERSE lookup §5.1 ("outbox delivery") needs: given a
 -- session_id, which (channel_id, thread_ts) thread does it back? Backed
 -- by migrations/000029_slack_thread_sessions.up.sql's own already-existing
--- slack_thread_sessions_session_id_idx (Step 33 added this index up
+-- slack_thread_sessions_session_id_idx (added up
 -- front). A pgx.ErrNoRows result means this session was never created via
 -- a Slack thread -- the caller skips enqueuing a Slack notification
 -- entirely rather than fabricating one.

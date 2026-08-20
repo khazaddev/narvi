@@ -1,4 +1,4 @@
--- Queries backing ClusterBindingStore (Step 73b, "cloud identity:
+-- Queries backing ClusterBindingStore ("cloud identity:
 -- sandbox-side consumption + kubeconfig injection", §27.4) --
 -- migrations/000094_cluster_bindings.up.sql. params travels as opaque
 -- JSONB bytes end to end here -- identifiers, never secrets (this

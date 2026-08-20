@@ -25,7 +25,7 @@ WHERE session_id = $1
 RETURNING *;
 
 -- name: UpsertSandboxForSpawn :one
--- Step 21 ("e2e happy path"), design decision 3a: creates the sandbox row
+-- §9.3 ("e2e happy path"), design decision 3a: creates the sandbox row
 -- (gen=1) if none exists yet, or bumps gen/resets status to 'spawning'/
 -- rotates token_hash if one already does (§3.2: "every spawn/restore
 -- increments sandbox.gen" -- paraphrased above, not a verbatim quote).
@@ -101,7 +101,7 @@ WHERE session_id = $1
 RETURNING *;
 
 -- name: UpdateSandboxSnapshotID :one
--- Step 22 ("snapshots & restore"), design decision 3: records a real,
+-- §3.2 ("snapshots & restore"), design decision 3: records a real,
 -- sandbox-confirmed snapshot id once a "snapshot_ready" wire event
 -- arrives -- read back as SpawnState.SnapshotImageID (internal/domain/
 -- sandbox.EvaluateSpawnDecision's own restore-eligibility input) on a
@@ -123,7 +123,7 @@ WHERE session_id = $1
 RETURNING *;
 
 -- name: UpdateSandboxStatusToSuspect :one
--- Step 24 ("two-phase terminalization"): the single write
+-- §3.2 ("two-phase terminalization"): the single write
 -- transitionSandboxToSuspect (internal/app/sessionactor/timerfired.go)
 -- performs when a watchdog moves a sandbox into Suspect. Sets status =
 -- 'suspect' as a hardcoded literal -- mirroring UpsertSandboxForSpawn's
@@ -144,7 +144,7 @@ WHERE session_id = $1
 RETURNING *;
 
 -- name: RecoverSandboxFromSuspect :one
--- Step 24 ("two-phase terminalization"): the single write
+-- §3.2 ("two-phase terminalization"): the single write
 -- handleSandboxEvent's own recovery branch (sandboxevent.go) performs
 -- when ANY recognized inbound sandbox event arrives for a Suspect sandbox
 -- that still carries a pre_suspect_status -- i.e. "any liveness signal
@@ -171,7 +171,7 @@ WHERE session_id = $1
 RETURNING *;
 
 -- name: ListLiveSandboxProviderIDs :many
--- Step 25 ("reconciler + GC", §5.3): the reconciler's own "expected still
+-- §5.3 ("reconciler + GC", §5.3): the reconciler's own "expected still
 -- alive" set -- the provider_id of every sandbox row currently in a LIVE
 -- status, across ALL sessions. Unlike every OTHER query in this file
 -- (each scoped to one session_id via WHERE session_id = $1), this one
@@ -195,7 +195,7 @@ WHERE status IN ('spawning', 'connecting', 'booting', 'ready', 'snapshotting', '
   AND provider_id IS NOT NULL;
 
 -- name: UpdateSandboxPendingSnapshotMessageID :one
--- Step 22 fix (message-id correlation): sets or clears (pass NULL)
+-- §3.2 fix (message-id correlation): sets or clears (pass NULL)
 -- pending_snapshot_message_id -- the MessageId of whichever Snapshot
 -- command this sandbox is currently waiting on a snapshot_ready for.
 -- triggerSnapshotBestEffort sets it, in the SAME transact that commits

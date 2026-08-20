@@ -1,5 +1,5 @@
--- Queries backing WorkflowStore (Step 55, "workflow execution engine",
--- §25.6/§25.7/§25.8), the first real reader/writer of Step 54's own dark
+-- Queries backing WorkflowStore ("workflow execution engine",
+-- §25.6/§25.7/§25.8), the first real reader/writer of §25.4's own dark
 -- schema (migrations/000057_workflows.up.sql). internal/app/workflowengine
 -- is this file's only caller: it resolves which (lane, repo) binding and
 -- WorkflowDefinition govern a session's current turn, tracks the run/
@@ -120,7 +120,7 @@ RETURNING *;
 UPDATE workflow_runs SET status = 'completed', finished_at = now(), updated_at = now() WHERE id = $1 RETURNING *;
 
 -- name: FailWorkflowRun :one
--- Step 56's own addition (§25.9): a winning HITL reject verdict ends the
+-- §25.9's own addition (§25.9): a winning HITL reject verdict ends the
 -- run -- mirrors CompleteWorkflowRun's own shape exactly, landing on
 -- 'failed' instead of 'completed' (WorkflowStepDecideResponse.runStatus's
 -- own documented "'failed' after a winning reject ends the run" example).
@@ -137,7 +137,7 @@ UPDATE workflow_step_runs
 SET outcome_status = $2, outcome_summary = $3, outcome_payload = $4, updated_at = now()
 WHERE id = $1 AND status = 'running';
 
--- Step 56 ("workflow HITL gate + circuit breaker", §25.9) own additions
+-- §25.9 ("workflow HITL gate + circuit breaker", §25.9) own additions
 -- below: the decide endpoint's lookup/guarded-decision queries, the
 -- circuit breaker's own COUNT(*) attempt read (§25.5), and the escalation
 -- notice's one-time claim (migrations/000058_workflow_hitl.up.sql).
