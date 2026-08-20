@@ -39,7 +39,26 @@ import (
 // directions of this boundary: a real plan-style citation added to a
 // source comment must fail this check, and a narrative "// Step 1:" line
 // must not.
-var stepRefPattern = regexp.MustCompile(`Step\s+\d+`)
+//
+// # Three citation shapes, one pattern
+//
+// A full-text audit of this repo found real citations in three shapes:
+// the plain "Step 21", the plural "Steps 32-34"/"Steps 32/33/34" (several
+// ingress Steps cited together), and the parenthesis form "Step (17)"/
+// "Steps (47, 58)". stepRefPattern below matches all three at once. The
+// ONE known false-positive risk this widening accepts: a local, in-file
+// numbered list that happens to use capitalized "Steps N" for its own
+// items (e.g. "Steps 8-10 below" meaning list items 8 through 10, not
+// plan Steps) would also match -- found exactly once in this repo
+// (scmcredentials.go, fixed by lowercasing to "steps 8-10", which this
+// pattern's case sensitivity already treats as ordinary English). That is
+// judged rare and cheap enough to fix on sight that it does not clear the
+// "fights its users" bar the singular narrative-colon case would have.
+//
+// The whitespace after "Step(s)" is REQUIRED (\s+, not \s*): an identifier
+// like builtInPlanStep1ID has no space between "Step" and the digit, and
+// must never be mistaken for a citation.
+var stepRefPattern = regexp.MustCompile(`Steps?\s+\(?\d+`)
 
 // narrativeStepLine matches a numbered step at the start of a comment line
 // that immediately introduces a local action with a colon -- see this

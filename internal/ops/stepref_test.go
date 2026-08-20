@@ -46,9 +46,14 @@ func TestCheckStepRefs_MutationBoundary(t *testing.T) {
 		{"possessive plan citation", `// Step 48's own capability restriction applies here.`, true},
 		{"parenthetical plan citation", `// see the resolution table (Step 59, §29.5) for details.`, true},
 		{"bare plan citation mid-sentence", `// refused because Step 76's cohort-rollout gate said no.`, true},
+		{"plural plan citation", `// shared across Steps 32/33/34's own GitHub/Slack/Linear ingress.`, true},
+		{"plural plan citation, range", `// design (schema/domain/contracts/RBAC only), and Steps 55-56 own it.`, true},
+		{"parenthesis-form plan citation", `// AgentRuntime is the SECOND port, added this Step (17), against opencode.`, true},
+		{"plural parenthesis-form plan citation", `// extending it is expected as later Steps (47, 58) find real gaps.`, true},
 		{"narrative step, plain", `	// Step 1: the timer fires first, exactly like production does.`, false},
 		{"narrative step, dashed", `	// --- Step 3: kill pod A. Deliberately NOT a graceful stop.`, false},
 		{"narrative step, sub-lettered", `	// Step 2a: the sandbox reconnects before the deadline.`, false},
+		{"identifier, not a citation", `	builtInPlanStep1ID = "00000000-0000-4000-8000-000000000031"`, false},
 	}
 
 	dir := t.TempDir()
