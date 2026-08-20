@@ -1,9 +1,9 @@
 // Command sandbox-agent is the static binary shipped into sandbox images
-// (§1). Step 13 gave it its first real behavior: boot-mode/hook-policy
+// (§1). Its boot dispatch makes boot-mode/hook-policy
 // decisions (internal/domain/sandboxboot) plus native process supervision
 // (internal/sandboxagent/supervisor) -- process groups, killpg-style
-// signaling, reaping, and bounded graceful-then-forceful shutdown. Step 14
-// extends its boot dispatch to also supervise a per-repo .narvi/
+// signaling, reaping, and bounded graceful-then-forceful shutdown -- and
+// supervises a per-repo .narvi/
 // services.yml multi-service manifest (internal/sandboxagent/services,
 // §14.2) when one is present, falling back to the original setup.sh/
 // start.sh hook contract otherwise -- both orchestrated by
@@ -16,7 +16,7 @@
 // (internal/sandboxagent/gitclone.CloneAll) and writes the generated
 // AGENTS.md manifest BEFORE handing the successfully-cloned subset to
 // boot.RunBoot as its []boot.RepoInfo -- when SessionConfig is nil (the
-// common dev/test case), repos stays nil exactly as before this Step; (2)
+// common dev/test case), repos stays nil; (2)
 // a SEPARATE "credential-helper" subcommand (main's own dispatch, mirroring
 // cmd/control-plane/main.go's own subcommand pattern) that implements
 // git's credential-helper protocol end to end (internal/sandboxagent/
@@ -24,9 +24,9 @@
 // `git clone` to invoke via `-c credential.helper=!'<this binary>'
 // credential-helper` (§5.2).
 //
-// Step 16 wires the real sandbox WS bridge (internal/sandboxagent/wsbridge)
-// in place of the slog-only boot_progress reporter Step 14 left as an
-// explicit placeholder: when Config.SessionConfig is present, run() builds
+// The real sandbox WS bridge (internal/sandboxagent/wsbridge) replaces the
+// slog-only boot_progress reporter's earlier placeholder role:
+// when Config.SessionConfig is present, run() builds
 // a *wsbridge.Bridge and drives it via bridge.Run(ctx) alongside the
 // existing OS-signal-driven shutdown -- whichever finishes first (an OS
 // signal cancels ctx, or the control plane sends a "shutdown" command, or
@@ -36,9 +36,9 @@
 // prompt/stop/push/snapshot/git_sync_complete were all wired to a log-only
 // stub handler.
 //
-// Step 17 lands the real OpenCode adapter (internal/adapters/outbound/
+// The real OpenCode adapter (internal/adapters/outbound/
 // opencode) and its process-spawning sibling
-// (internal/sandboxagent/opencodeproc): when Config.SessionConfig is
+// (internal/sandboxagent/opencodeproc) round this out: when Config.SessionConfig is
 // present, run() spawns `opencode serve` (via opencodeproc.Spawn, which
 // itself reuses the SAME Supervisor already tracking every other
 // supervised process -- StopAll's own existing graceful shutdown reaps it
@@ -64,8 +64,8 @@
 // WS reconnect must not be aborted just because the connection blipped
 // (the wsbridge ack protocol already handles redelivering the turn's own
 // events across a reconnect independently of whether the turn itself is
-// still running). git_sync_complete remains the EXACT log-only stub Step
-// 16 shipped -- Step 29 (gitstate in-sandbox) is that command's own job,
+// still running). git_sync_complete remains the EXACT log-only stub
+// originally shipped -- §3.4 (gitstate in-sandbox) is that command's own job,
 // per docs/IMPLEMENTATION_PLAN.md's own Phase 2 row assignment; leave it
 // exactly as it is.
 //
@@ -300,7 +300,7 @@ type commandHandler struct {
 	// runCtx is run()'s own long-lived, OS-signal-driven context --
 	// deliberately NOT the shorter-lived, per-WS-connection ctx wsbridge's
 	// own dispatch hands to HandlePrompt/HandleStop (see the package doc
-	// comment's own Step 17 paragraph for why: a turn must survive a mere
+	// comment's own §7 paragraph for why: a turn must survive a mere
 	// WS reconnect, not be aborted by one).
 	runCtx context.Context
 
@@ -653,7 +653,7 @@ func (h *commandHandler) sendPushError(cmd sandboxws.Push, pushErr error) {
 	}
 }
 
-// HandleSnapshot implements the real `snapshot` command (Step 22,
+// HandleSnapshot implements the real `snapshot` command (§3.2,
 // "snapshots & restore", design decision 4): calls the control plane's own
 // new snapshot-mint endpoint (internal/sandboxagent/snapshotclient,
 // design decision 2 -- the real TakeSnapshot network call can only be
@@ -803,7 +803,7 @@ func shutdownSandboxAgentOTel(shutdown func(context.Context) error, timeout time
 // injection", §25.1/§25.3) fetches this session's own resolved provider
 // credentials from CP ONCE (POST /sessions/{id}/provider-credentials) --
 // callers split the result by kind: providerCredentialSpawnEnv (api-kind,
-// unchanged since Step 53) and providerCredentialOAuthSets (oauth-kind,
+// unchanged) and providerCredentialOAuthSets (oauth-kind,
 // §29.6) below. A single fetch, not two, so both env injection
 // and the post-spawn PUT /auth/{providerID} call see the EXACT SAME
 // resolved snapshot -- two independent fetches could race and observe
@@ -1210,7 +1210,7 @@ func run() error {
 			}
 		}
 
-		// Step 73b ("cloud identity: sandbox-side consumption + kubeconfig
+		// ("cloud identity: sandbox-side consumption + kubeconfig
 		// injection", §27.3/§27.4): resolve this session's own cloud-
 		// identity bindings + cluster binding, mint one token per binding
 		// (plus, for an AuthKindOIDC cluster binding, its own token --
@@ -1291,7 +1291,7 @@ func run() error {
 		// necessarily reported this as empty; now that OpenCode has
 		// actually been spawned, log a SECOND, supplementary line -- the
 		// SAME "log first with what's known, then a supplementary line
-		// once more is known" pattern Step 15 already established for
+		// once more is known" pattern §6.4 already established for
 		// repo_shas (see runBootSequence's own post-clone fingerprint
 		// log).
 		postSpawnFingerprint := boot.CollectFingerprint(cfg, timeouts.RepoSHADiscoveryTimeout, result.Version)
@@ -1429,7 +1429,7 @@ func run() error {
 	// so both cases converge identically below.
 	var group errgroup.Group
 	// budgetSrvGroup is §26.5's own SEPARATE errgroup for
-	// budgetServer.Serve() -- see the "Step 70" comment below (right where
+	// budgetServer.Serve() -- see the comment below (right where
 	// budgetSrvGroup.Go is actually called) for why this must NOT be the
 	// SAME group as the one immediately above.
 	var budgetSrvGroup errgroup.Group
@@ -1568,7 +1568,7 @@ func run() error {
 
 	runErr := group.Wait()
 
-	// Step 73b: unconditionally cancel the refresh loop's own derived
+	// §27.4: unconditionally cancel the refresh loop's own derived
 	// context THE MOMENT group.Wait() has converged (whichever of the
 	// three ways it did) -- see this loop's own group construction, above,
 	// for the full "why a separate context, why explicit cancellation
@@ -1754,7 +1754,7 @@ func logRepoMissingFromManifest(manifest boot.ImageManifest, currentSHAs map[str
 // against the successfully-prepared subset. repos/preparation is skipped
 // entirely when cfg.SessionConfig is nil (the common dev/test case) --
 // boot.RunBoot's own documented, correct no-op on an empty repo list
-// handles that unchanged from Step 14.
+// handles that.
 //
 // §3.4 ("gitstate in-sandbox", §3.4) splits "prepare every repo" on
 // cfg.BootMode, the exact, principled dispatch point internal/domain/

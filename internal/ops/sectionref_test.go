@@ -14,7 +14,9 @@ import (
 // section sigil where "Step N" was meant, across 60 files. Every referent was
 // correct; only the sigil was wrong, and that was harmless purely because
 // TECHNICAL_PLAN has no section numbered 46, 60 or 62 yet -- see sectionref.go
-// for why that is a countdown rather than a stable state.
+// for why that is a countdown rather than a stable state. Under this repo's
+// convention, code cites only the durable §N.M, never the Step number that
+// happened to introduce it -- so the fix is the section, not "Step N".
 //
 // Mutation-tested as part of this change's own verification: adding a citation
 // of a nonexistent section number to a real source comment makes this fail, and
@@ -37,9 +39,12 @@ func TestNoSectionRefDrift(t *testing.T) {
 	}
 	for _, ref := range unresolved {
 		t.Errorf("%s cites §%s (%d time(s)), which docs/TECHNICAL_PLAN.md does not define. "+
-			"If you meant the implementation Step of that number, write \"Step %s\" — §N and Step N are "+
-			"different namespaces that overlap numerically (see internal/ops/sectionref.go).",
-			ref.File, ref.Section, ref.Count, ref.Section)
+			"§N and Step N are different namespaces that overlap numerically (see "+
+			"internal/ops/sectionref.go) — if you meant an implementation Step, that is a "+
+			"scheduling artifact and does not belong in code at all: cite the technical-plan "+
+			"section that actually governs the behavior instead, or describe the behavior "+
+			"directly with no citation if no section does.",
+			ref.File, ref.Section, ref.Count)
 	}
 }
 

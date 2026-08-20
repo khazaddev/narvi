@@ -14,9 +14,9 @@
 // package) is the top-level per-repo dispatcher that decides whether to
 // call this package's Run or fall back to the existing hook logic.
 //
-// HONEST GAP (documented the same way Step 13 documented
+// HONEST GAP (documented the same way §6.4 documented
 // NARVI_IMAGE_DIGEST's own gap): ProgressReporter is a plain in-process
-// callback, not a real transport. Step 16 (control-plane WS bridge) is
+// callback, not a real transport. §6.1 (control-plane WS bridge) is
 // expected to supply a reporter that forwards boot_progress events over
 // the real WS connection once that bridge exists; until then, main.go
 // wires a slog-only reporter that just logs each event.
@@ -40,6 +40,6 @@
 // package gives up on a secondary service after a timeout), a service is
 // tracked by the shared Supervisor like any other supervised process, and
 // torn down only by the existing StopAll-based shutdown path
-// (cmd/sandbox-agent/main.go, already wired in Step 13) -- this package
+// (cmd/sandbox-agent/main.go, already wired in §6.4) -- this package
 // never calls Stop/StopAll itself.
 package services

@@ -22,14 +22,27 @@ import (
 //
 // "§N" and "Step N" are DIFFERENT namespaces that overlap numerically: §21 is
 // a real technical-plan section AND Step 21 is a real implementation Step, and
-// they are unrelated. A Phase 6 audit of every reference found 239 comment
-// citations using the section sigil where Steps 46, 60 and 62 were meant --
-// harmless only because TECHNICAL_PLAN.md has no section numbered 46, 60 or 62
-// yet. It has 33 top-level sections and gained four in a single working
-// session. The moment it reaches section 46, every one of those citations
-// silently starts resolving to a real but WRONG section, and no tool would
-// flag it, because by then the reference is valid. Those 239 were rewritten to "Step N"; this
-// check is what stops the class from coming back.
+// they are unrelated -- worse, per this repo's own convention (docs/
+// IMPLEMENTATION_PLAN.md's cross-cutting conventions), code comments cite only
+// the durable §N; a Step number is a scheduling artifact of the plan's own row
+// order, says WHEN something was built rather than WHAT it must do, and does
+// not belong in source at all. A Phase 6 audit of every reference found 239
+// comment citations using the section sigil where Steps 46, 60 and 62 were
+// meant -- harmless only because TECHNICAL_PLAN.md has no section numbered 46,
+// 60 or 62 yet. It has 33 top-level sections and gained four in a single
+// working session. The moment it reaches section 46, every one of those
+// citations silently starts resolving to a real but WRONG section, and no
+// tool would flag it, because by then the reference is valid.
+//
+// Those 239 were first mechanically rewritten to "Step N", which fixed the
+// immediate ambiguity but got the underlying convention backwards -- a Step
+// number is exactly the renumberable reference this repo's own history (the
+// plan has been renumbered before) argues against. They were corrected a
+// second time: each cites whichever §N.M actually governs the behavior in
+// question, or is rephrased to describe that behavior directly with no
+// citation at all when no section does. This check is what stops either
+// class of error -- the wrong sigil, or a citation of a section that later
+// stops existing -- from coming back undetected.
 //
 // It cannot catch a citation that resolves to the wrong-but-existing section
 // (that is semantics, the boundary docs/guides/README.md draws for the sibling

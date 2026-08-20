@@ -861,7 +861,7 @@ type ClusterBinding struct {
 
 	// Auth-kind-specific identifiers, never secrets -- authKind='cloud': {cloud:
 	// "aws"|"gcp"|"azure"[, region]}; authKind='oidc': {clientId}; authKind='static':
-	// {secretName} (the Step 72 sandbox_secrets NAME whose value is the complete
+	// {secretName} (the §27.1 sandbox_secrets NAME whose value is the complete
 	// kubeconfig file content). Modeled as an opaque raw-JSON passthrough, the SAME
 	// precision-preserving convention CloudIdentityBinding.params already establishes
 	// in this schema.
@@ -2367,7 +2367,7 @@ func (j *DecisionInboxItem) UnmarshalJSON(value []byte) error {
 // verdict, ahead of the pre-existing findings/coverage/docs-drift content (now
 // collapsed into an appendix, internal/domain/reviewpost.RenderVerdictComment).
 // Extended by (§26.2, 'description adequacy + graduated remediation') with
-// descriptionAdequacy/adequacyExplanation/proposedBody below, and by Step 68
+// descriptionAdequacy/adequacyExplanation/proposedBody below, and
 // (§26.3, light/deep review-depth triage) with a CONDITIONAL requirement on three
 // more fields. REQUIRED on the request as a whole (unlike findings above):
 // summary/descriptionAdequacy/adequacyExplanation within it are ALWAYS
@@ -2911,8 +2911,7 @@ type ListDecisionInboxResponse struct {
 	// When the PR-derived rows (ready_to_merge/needs_review) were actually fetched
 	// from GitHub (§16.2: 'the response carries its as-of timestamp... never
 	// presented as live truth') -- null iff the caller has no linked GitHub identity,
-	// so no SCM read was attempted AT ALL. Distinct from scmFetchFailed below (Step 60
-	// review finding C1): scmAsOf==null alone used to be the ONLY signal here, which
+	// so no SCM read was attempted AT ALL. Distinct from scmFetchFailed below: scmAsOf==null alone used to be the ONLY signal here, which
 	// meant a GitHub outage or a revoked token (a read that WAS attempted and failed)
 	// was indistinguishable from never having linked GitHub in the first place -- a
 	// contract-abiding client would render 'no GitHub linked' for what was actually a
@@ -2923,8 +2922,7 @@ type ListDecisionInboxResponse struct {
 
 	// True iff the caller's PR-derived rows (ready_to_merge/needs_review) are a
 	// known-incomplete or degraded picture -- ONE channel fed by several independent
-	// producers (extending Step 60
-	// review finding C1, first round): the live PR fetch failing outright (a revoked
+	// producers: the live PR fetch failing outright (a revoked
 	// token, a GitHub incident, a timeout, or a linked-identity lookup/decrypt
 	// failure -- scmAsOf stays null in these cases, no fetch was attempted or it
 	// never returned); one of GitHub's own underlying discovery queries failing while
@@ -3406,7 +3404,7 @@ func (j *MintUploadResponse) UnmarshalJSON(value []byte) error {
 // opencode adapter's own resolveProviderModel/fallbackModel), applied here as the
 // control plane's ONLY source rather than a fallback of last resort -- refreshed
 // by hand whenever the pinned OpenCode version bumps, exactly like that fallback
-// constant already is. Scope: the 3 providers Step 53 already wires credential
+// constant already is. Scope: the 3 providers §25.1 already wires credential
 // injection for (google/anthropic/openai) -- every model id is the exact catalog
 // id OpenCode itself recognizes, usable verbatim as the '<providerId>/<modelId>'
 // string modelId/buildModelId/effort/buildEffort already accept end to end today
@@ -4108,7 +4106,7 @@ type PostReviewVerdictRequest struct {
 	// ErrInvalidCounterReview), which this JSON Schema cannot express (review-depth
 	// lives on the turn, not on this payload -- mirrors
 	// digest.archDecisions/stackRisks/unverifiedLimits' own identical
-	// conditional-requirement shape, Step 68). 'skipped' raises the server-computed
+	// conditional-requirement shape, §26.3). 'skipped' raises the server-computed
 	// Shippable floor to needs_human (review.CounterReviewFloor) -- the deliberate,
 	// load-bearing difference from factCheck above, which never raises anything.
 	CounterReview PostReviewVerdictRequestCounterReview `json:"counterReview,omitempty,omitzero" yaml:"counterReview,omitempty" mapstructure:"counterReview,omitempty"`
@@ -4229,7 +4227,7 @@ func (j *PostReviewVerdictRequestBlastRadiusElem) UnmarshalJSON(value []byte) er
 // (internal/domain/reviewpost.ValidateVerdictInput's own ErrInvalidCounterReview),
 // which this JSON Schema cannot express (review-depth lives on the turn, not on
 // this payload -- mirrors digest.archDecisions/stackRisks/unverifiedLimits' own
-// identical conditional-requirement shape, Step 68). 'skipped' raises the
+// identical conditional-requirement shape, §26.3). 'skipped' raises the
 // server-computed Shippable floor to needs_human (review.CounterReviewFloor) --
 // the deliberate, load-bearing difference from factCheck above, which never raises
 // anything.
@@ -5221,7 +5219,7 @@ type RepoSettings struct {
 	// number. Gated by authz.ActionConfigureReviewCostBudget (admin only, §13.3 row
 	// 6, same row as reviewDepthMode) -- arming a non-default ceiling changes the
 	// dollar figure a review turn's own prompt renders as a query parameter on its
-	// GET to this sandbox's own loopback review-cost-budget endpoint (Step 70;
+	// GET to this sandbox's own loopback review-cost-budget endpoint (§26.5;
 	// internal/domain/review's own subAgentOrchestrationInstructions renders 'GET
 	// {{REVIEW_COST_BUDGET_TOOL_URL}}?ceilingUsd=<this value>'; cmd/sandbox-agent's
 	// reviewcostbudgetserver.go answers with a real
@@ -5297,7 +5295,7 @@ type RepoSettingsReviewCostBudgetDeepUsd *float64
 // number. Gated by authz.ActionConfigureReviewCostBudget (admin only, §13.3 row 6,
 // same row as reviewDepthMode) -- arming a non-default ceiling changes the dollar
 // figure a review turn's own prompt renders as a query parameter on its GET to
-// this sandbox's own loopback review-cost-budget endpoint (Step 70;
+// this sandbox's own loopback review-cost-budget endpoint (§26.5;
 // internal/domain/review's own subAgentOrchestrationInstructions renders 'GET
 // {{REVIEW_COST_BUDGET_TOOL_URL}}?ceilingUsd=<this value>'; cmd/sandbox-agent's
 // reviewcostbudgetserver.go answers with a real
@@ -7106,7 +7104,7 @@ func (j *WorkflowBinding) UnmarshalJSON(value []byte) error {
 // internal/domain/workflow.Definition). Doubles as the eventual editing surface's
 // PUT body -- always the full, current desired state (steps and edges included),
 // never a partial patch, matching UpdateRepoSettingsRequest's own convention --
-// but NO handler consumes it yet (Step 54 is dark). isBuiltIn marks one of the
+// but NO handler consumes it yet (§25.4 is dark). isBuiltIn marks one of the
 // three seeded system templates; a PUT/DELETE against an isBuiltIn=true definition
 // is refused unconditionally, even for an admin -- a structural invariant (§25.4),
 // not an RBAC row, enforced by the store/handler layer Steps 55-56 add. version is
@@ -7454,8 +7452,8 @@ func (j *WorkflowRun) UnmarshalJSON(value []byte) error {
 
 // Request body for POST /api/workflow-runs/:runId/steps/:stepRunId/decide
 // (§25.9/§25.10) -- the same shape discipline as decideplan.go's approve/reject.
-// NO handler is registered for this route yet: Step 54 ships the contract only
-// (dark); Step 56 mounts the endpoint, gated by authz.ActionDecideWorkflowStep
+// NO handler is registered for this route yet: §25.4 ships the contract only
+// (dark); §25.9 mounts the endpoint, gated by authz.ActionDecideWorkflowStep
 // (own/joined-aware, same row as plan approval, §25.11). verdict is a schema-level
 // enum (matching Postgres workflow_step_decision exactly) because the vocabulary
 // is a closed domain enum, the same modeling choice as
@@ -7705,8 +7703,8 @@ type WorkflowStepDefinition struct {
 	// Id corresponds to the JSON schema field "id".
 	Id string `json:"id" yaml:"id" mapstructure:"id"`
 
-	// Matches Postgres workflow_step_kind exactly -- a single-value closed enum as of
-	// Step 54 (every §25.8 shape is an ordinary agent turn); modeled as an enum, not
+	// Matches Postgres workflow_step_kind exactly -- a single-value closed enum
+	// (every §25.8 shape is an ordinary agent turn); modeled as an enum, not
 	// a literal, so a later phase can add a kind without a shape change.
 	Kind WorkflowStepDefinitionKind `json:"kind" yaml:"kind" mapstructure:"kind"`
 
