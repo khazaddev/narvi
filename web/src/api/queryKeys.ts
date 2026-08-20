@@ -18,6 +18,14 @@ export const sessionQueryKeys = {
   artifacts: (sessionId: string) => ['session', sessionId, 'artifacts'] as const,
 }
 
+// sessionListQueryKeys (Step 82, §12.2 item 1) -- the sidebar's own list
+// query, namespaced separately from sessionQueryKeys above (which is
+// always parameterized per single session id): the list is parameterized
+// per FILTER instead ("mine"/"all"), a completely different axis.
+export const sessionListQueryKeys = {
+  list: (filter: 'mine' | 'all') => ['sessions', 'list', filter] as const,
+}
+
 // authQueryKeys (Step 81, §13.1) -- the sign-in view's own "am I signed
 // in, and as whom" query (GET /api/me). One key, no params: there is only
 // ever one meaningful "current caller" per browser session, unlike

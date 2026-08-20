@@ -1,0 +1,213 @@
+// Timeline.tsx -- decision 4 ("A timeline of typed events") + decision 3
+// ("Every failure is actionable"): renders a TimelineModel
+// (timelineModel.ts) as the mockup's own turn/step card sequence,
+// including §7.1's sub-task lane nesting and the failure card + Resume.
+//
+// # This Step's own defining risk, concretely, in this file
+//
+// Every string rendered below that originates from an event payload --
+// toolName, a tool's freeform input/output, an execution_complete's own
+// reason, a warning/error message -- is rendered as plain React text
+// content (JSX text/attribute interpolation, which escapes by
+// construction) or through safeJsonPreview (textSafety.ts, which caps
+// length before the DOM ever sees it). Nothing in this file ever calls
+// dangerouslySetInnerHTML, and no event-sourced string is ever built into
+// a URL (artifact links live in the rail, Step 83 -- this file renders no
+// href from event content at all).
+import { useState } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+
+import { createTurn } from '../api/endpoints'
+import { sessionListQueryKeys, sessionQueryKeys } from '../api/queryKeys'
+import { safeJsonPreview } from './textSafety'
+import type { StepNode, SubTaskNode, ToolCallNode, TurnNode } from './timelineModel'
+
+// The composer (Step 83) is what lets a person type their own follow-up;
+// this Step's own "one-click Resume" (decision 3) has no text box to draw
+// a prompt from, so it sends this fixed, honestly-generic continuation
+// instead -- CreateTurnRequest.prompt is required/non-null (unlike
+// CreateSessionRequest.prompt), and the OpenCode conversation itself is
+// what actually carries context forward (sessions.opencode_conversation_id,
+// threaded automatically server-side, CreateTurnRequest's own doc
+// comment) -- this string only needs to nudge the model to continue, not
+// restate anything.
+const RESUME_PROMPT = 'Resume — continue exactly where the previous turn left off.'
+
+// MAX_RENDERED_TURNS -- the "very long timeline must stay readable and
+// must not hang the tab" requirement: rather than rendering every turn a
+// long-lived session ever ran, only the most recent MAX_RENDERED_TURNS
+// are mounted, with an honest count of what's hidden above them. A full
+// virtualized scroller is a reasonable future enhancement; this fixed cap
+// is the simplest thing that keeps a pathologically long history from
+// ever reaching the DOM at all.
+const MAX_RENDERED_TURNS = 30
+
+function formatDuration(startIso: string, endIso: string): string {
+  const ms = new Date(endIso).getTime() - new Date(startIso).getTime()
+  if (!Number.isFinite(ms) || ms < 0) return ''
+  if (ms < 1000) return `${ms}ms`
+  return `${(ms / 1000).toFixed(1)}s`
+}
+
+function ToolCallRow({ tc, live }: { tc: ToolCallNode; live: boolean }) {
+  const [open, setOpen] = useState(false)
+  const isLive = live && tc.result === null
+  const isError = tc.result?.isError === true
+  return (
+    <div className="tool-block">
+      <button type="button" className="tool tool-toggle" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        <span className={`st ${isLive ? 'live' : isError ? 'err' : 'done'}`}>{isLive ? '●' : isError ? '✕' : '✓'}</span>
+        {tc.toolName}
+        <span className="dur">{isLive ? 'running…' : tc.result ? formatDuration(tc.startedAt, tc.result.finishedAt) : ''}</span>
+      </button>
+      {open && (
+        <pre className="evt-json">
+          {safeJsonPreview(tc.input)}
+          {tc.result ? `\n\n→ ${safeJsonPreview(tc.result.output)}` : ''}
+        </pre>
+      )}
+      {tc.subTasks.length > 0 && <SubTaskLanes subTasks={tc.subTasks} />}
+    </div>
+  )
+}
+
+function SubTaskLanes({ subTasks }: { subTasks: SubTaskNode[] }) {
+  const running = subTasks.filter((s) => s.status === 'running').length
+  return (
+    <div className="sublanes">
+      {subTasks.length > 1 && (
+        <div className="sublane-summary">
+          {running > 0 ? `${running} running` : `${subTasks.length} sub-tasks`}
+        </div>
+      )}
+      {subTasks.map((s) => (
+        <div key={s.subTaskId} className={`sublane sublane-${s.status}`}>
+          <span className="st">{s.status === 'running' ? '●' : s.status === 'completed' ? '✓' : s.status === 'failed' ? '✕' : '⦸'}</span>
+          {s.label}
+          {s.subAgentType ? <span className="sublane-agent"> · {s.subAgentType}</span> : null}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ToolCallList({ toolCalls, live }: { toolCalls: ToolCallNode[]; live: boolean }) {
+  const [expanded, setExpanded] = useState(false)
+  const HEAD = 2
+  const TAIL = 1
+  if (toolCalls.length <= HEAD + TAIL || expanded) {
+    return (
+      <>
+        {toolCalls.map((tc, i) => (
+          <ToolCallRow key={tc.callId || tc.messageId} tc={tc} live={live && i === toolCalls.length - 1} />
+        ))}
+      </>
+    )
+  }
+  const head = toolCalls.slice(0, HEAD)
+  const tail = toolCalls.slice(toolCalls.length - TAIL)
+  const hidden = toolCalls.length - HEAD - TAIL
+  return (
+    <>
+      {head.map((tc) => (
+        <ToolCallRow key={tc.callId || tc.messageId} tc={tc} live={false} />
+      ))}
+      <button type="button" className="fold" onClick={() => setExpanded(true)}>
+        ▸ {hidden} more tool call{hidden === 1 ? '' : 's'}
+      </button>
+      {tail.map((tc, i) => (
+        <ToolCallRow key={tc.callId || tc.messageId} tc={tc} live={live && i === tail.length - 1} />
+      ))}
+    </>
+  )
+}
+
+function StepCard({ step, live }: { step: StepNode; live: boolean }) {
+  const tokenText = step.tokens.map((t) => t.text).join('\n\n')
+  return (
+    <div className={`card${live ? ' stream' : ''}`}>
+      <div className="who">
+        <span className="avatar b">A</span>
+        <b>Agent</b>
+        {step.startedAt && <time>{new Date(step.startedAt).toLocaleTimeString()}</time>}
+      </div>
+      <div className="steps">
+        <ToolCallList toolCalls={step.toolCalls} live={live} />
+        {step.cost && (
+          <div className="step-sum">
+            {step.toolCalls.length} call{step.toolCalls.length === 1 ? '' : 's'} · {step.cost.inputTokens + step.cost.outputTokens} tokens
+            {step.cost.usd !== null ? ` · $${step.cost.usd.toFixed(2)}` : ''}
+          </div>
+        )}
+      </div>
+      {tokenText && (
+        <p>
+          {tokenText}
+          {live && <span className="caret" aria-hidden="true" />}
+        </p>
+      )}
+    </div>
+  )
+}
+
+const OUTCOME_HEADLINE: Record<string, string> = {
+  heartbeat_silence: 'Sandbox lost mid-turn',
+  timeout: 'This turn ran out of time',
+  never_started: 'This turn never started',
+}
+
+function FailureCard({ sessionId, turn }: { sessionId: string; turn: TurnNode }) {
+  const queryClient = useQueryClient()
+  const mutation = useMutation({
+    mutationFn: () => createTurn(sessionId, { prompt: RESUME_PROMPT, modelId: null, effort: null, planMode: false }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: sessionQueryKeys.detail(sessionId) })
+      void queryClient.invalidateQueries({ queryKey: sessionListQueryKeys.list('mine') })
+      void queryClient.invalidateQueries({ queryKey: sessionListQueryKeys.list('all') })
+    },
+  })
+  const outcome = turn.outcome
+  if (!outcome || outcome.outcome === 'completed') return null
+  const headline = (outcome.reason && OUTCOME_HEADLINE[outcome.reason]) || 'This turn did not complete'
+  return (
+    <div className="card failcard">
+      <div className="fh">
+        <span className="chip crit">
+          <span className="dot" />
+          turn {outcome.outcome}
+        </span>
+        <b>{headline}</b>
+      </div>
+      <p>Your conversation and branch are intact -- resuming replays the same conversation on a fresh sandbox.</p>
+      <div className="btnrow">
+        <button type="button" className="btn primary" disabled={mutation.isPending} onClick={() => mutation.mutate()}>
+          {mutation.isPending ? 'Resuming…' : 'Resume turn'}
+        </button>
+        <span className="reason">reason: {outcome.reason ?? 'not provided'}</span>
+      </div>
+      {mutation.isError && (
+        <p className="sidebar-notice" role="alert">
+          Resume failed. Try again.
+        </p>
+      )}
+    </div>
+  )
+}
+
+export function Timeline({ sessionId, turns }: { sessionId: string; turns: TurnNode[] }) {
+  const shown = turns.slice(-MAX_RENDERED_TURNS)
+  const hiddenCount = turns.length - shown.length
+  return (
+    <div className="timeline">
+      {hiddenCount > 0 && <div className="resumed-note">{hiddenCount} earlier turns not shown in this view</div>}
+      {shown.map((turn) => (
+        <div key={turn.firstEventId} className="turn-block">
+          {turn.steps.map((step, i) => (
+            <StepCard key={step.stepId} step={step} live={turn.live && i === turn.steps.length - 1} />
+          ))}
+          <FailureCard sessionId={sessionId} turn={turn} />
+        </div>
+      ))}
+    </div>
+  )
+}

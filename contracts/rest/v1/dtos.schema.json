@@ -7,7 +7,7 @@
     "Session": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Mirrors the sessions table (migrations/000004_sessions.up.sql). status/failureReason/spawnSource enums match session_status/session_failure_reason/session_spawn_source exactly.",
+      "description": "Mirrors the sessions table (migrations/000004_sessions.up.sql). status/failureReason/spawnSource enums match session_status/session_failure_reason/session_spawn_source exactly. repos/sandboxStatus (\u00a712.2 item 1's own GET /api/sessions list endpoint) are two additions to a DTO that otherwise predates them.",
       "required": [
         "id",
         "title",
@@ -17,7 +17,9 @@
         "spawnSource",
         "createdBy",
         "createdAt",
-        "updatedAt"
+        "updatedAt",
+        "repos",
+        "sandboxStatus"
       ],
       "properties": {
         "id": {
@@ -84,6 +86,32 @@
         "updatedAt": {
           "type": "string",
           "format": "date-time"
+        },
+        "repos": {
+          "type": "array",
+          "description": "This session's own repo list (sessions.repos, migrations/000018_session_repos.up.sql -- \"position 0 = primary; repos are always a list\"), set once at session-creation time and never mutated afterward. Same shape as AutomationReposElem/CreateSessionRequest.repos' own inline item -- reused here rather than a third near-identical inline copy.",
+          "items": {
+            "$ref": "#/$defs/AutomationReposElem"
+          }
+        },
+        "sandboxStatus": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "pending",
+            "spawning",
+            "connecting",
+            "booting",
+            "ready",
+            "snapshotting",
+            "suspect",
+            "stopped",
+            "failed",
+            null
+          ],
+          "description": "Matches Postgres sandbox_status exactly (migrations/000006_sandboxes.up.sql). Null when this session has no sandbox row yet (e.g. status='created', never dispatched). Populated by GET /api/sessions (list) only, sourced from a LEFT JOIN against sandboxes -- GET /api/sessions/{id} always returns null here: the single-session view derives its own live boot/ready state from its own event stream instead (\u00a76.1's typed events already carry 'ready'/'boot_progress' verbatim), never from a second, potentially-stale read of this column."
         }
       }
     },
@@ -3876,6 +3904,22 @@
             "imports": [
               "encoding/json"
             ]
+          }
+        }
+      }
+    },
+    "ListSessionsResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "GET /api/sessions's own response body (\u00a712.2 item 1's own sidebar/session-list addition -- no route existed for this before now). sessions is ordered most-recently-updated first (sessions.updated_at DESC), bounded by the request's own limit (default/max enforced server-side, never truly unbounded) -- no cursor pagination in this first cut, matching ArtifactsResponse/ListPlansResponse's own identical 'expected to stay small enough, deepen later if that stops being true' precedent immediately above.",
+      "required": [
+        "sessions"
+      ],
+      "properties": {
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Session"
           }
         }
       }

@@ -52,6 +52,44 @@ function newStream(sessionId: string, queryClient: QueryClient): SessionStream {
 }
 
 describe('SessionStream', () => {
+  // Step 82's own regression test: getSnapshot() must return the SAME
+  // object reference across repeated calls between two real state changes
+  // -- React's useSyncExternalStore (web/src/session/useSessionStream.ts)
+  // compares successive snapshots with Object.is, and a snapshot whose
+  // identity changes on every call even with nothing new to show causes
+  // an infinite render loop (confirmed live, in a real browser, before
+  // this test/fix existed: "Maximum update depth exceeded"). Removing
+  // SessionStream's own cachedSnapshot memoization (this file's own top
+  // comment on getSnapshot/notify) makes this test fail.
+  it('getSnapshot() returns a referentially stable snapshot until the next real state change', async () => {
+    server = await FakeClientWsServer.start()
+    const queryClient = new QueryClient()
+    stream = newStream('sess-stable', queryClient)
+
+    const connPromise = server.waitForConnection()
+    stream.start()
+    const conn = await connPromise
+    await conn.nextMessage()
+    conn.send(subscribedPayload('sess-stable', [fakeEvent(1)]))
+    await drainOneBackfillRound(conn, [], null)
+    await waitFor(() => stream!.getSnapshot().syncState === 'complete')
+
+    const first = stream.getSnapshot()
+    const second = stream.getSnapshot()
+    expect(second).toBe(first) // same reference -- no new state in between
+
+    // A real state change (a live broadcast triggers a backfill pass,
+    // sessionStream.ts's own top comment) invalidates the cache; the next
+    // snapshot must be a NEW object, and stay stable again afterward.
+    const backfillPromise = drainOneBackfillRound(conn, [fakeEvent(2)], null)
+    conn.send({ type: 'artifact', extra: 'broadcast' })
+    await backfillPromise
+    await waitFor(() => stream!.getSnapshot().events.length === 2)
+    const third = stream.getSnapshot()
+    expect(third).not.toBe(first)
+    expect(stream.getSnapshot()).toBe(third)
+  })
+
   it('a redelivered replay (every fresh subscribe re-sends the same events, reconnect included) is applied exactly once -- removing EventLog\'s dedup guard makes this test fail', async () => {
     server = await FakeClientWsServer.start()
     const queryClient = new QueryClient()

@@ -249,6 +249,92 @@ func (q *Queries) ListFailedSessions(ctx context.Context, limit int32) ([]Sessio
 	return items, nil
 }
 
+const listSessions = `-- name: ListSessions :many
+SELECT s.id, s.title, s.status, s.failure_reason, s.archived, s.spawn_source, s.created_by, s.created_at, s.updated_at, s.actor_epoch, s.repos, s.opencode_conversation_id, s.environment_id, s.provenance_tag, s.intent_decision, s.build_model_id, s.parent_session_id, s.spawn_depth, s.build_effort, s.epistemic_check_enabled, sb.status AS sandbox_status FROM sessions s
+LEFT JOIN sandboxes sb ON sb.session_id = s.id
+WHERE NOT s.archived
+  AND (
+    NOT $1::boolean
+    OR s.created_by = $2
+    OR EXISTS (SELECT 1 FROM participants p WHERE p.session_id = s.id AND p.user_id = $2)
+  )
+ORDER BY s.updated_at DESC, s.id DESC
+LIMIT $3
+`
+
+type ListSessionsParams struct {
+	MineOnly bool        `json:"mine_only"`
+	UserID   pgtype.UUID `json:"user_id"`
+	RowLimit int32       `json:"row_limit"`
+}
+
+type ListSessionsRow struct {
+	Session       Session        `json:"session"`
+	SandboxStatus *SandboxStatus `json:"sandbox_status"`
+}
+
+// Backs GET /api/sessions (§6.3/§12.2 item 1's own sidebar addition --
+// no general session-list route existed before this;
+// ListFailedSessions immediately above is a narrower, admin-only,
+// single-status read model, not this). mine_only implements §12.2 item
+// 1's own "'My sessions' = created or joined" definition exactly:
+// created_by = user_id OR a participants row exists for (session, user) --
+// false returns every unarchived session system-wide, mirroring
+// ListFailedSessions' own "no per-user filter, gated at the httpapi layer
+// instead" precedent, since this codebase has no per-session RBAC/
+// visibility concept today (httpapi/doc.go's own "every route ... 401
+// before reaching any handler, nothing narrower"). sb.status is LEFT
+// JOINed, never INNER -- a session with no sandbox row yet (status=
+// 'created', never dispatched, or long since torn down) reads back
+// NULL/Invalid here, never a fabricated default state; sandboxes.
+// UNIQUE(session_id) (migrations/000006_sandboxes.up.sql) guarantees this
+// join can add at most one row per session, never fan it out. Most-
+// recently-updated first, id DESC as a tiebreaker for rows sharing the
+// same updated_at (e.g. a batch of sessions created in the same
+// transaction), bounded by $2 -- no cursor pagination in this first cut
+// (see ListSessionsResponse's own schema doc comment for why).
+func (q *Queries) ListSessions(ctx context.Context, arg ListSessionsParams) ([]ListSessionsRow, error) {
+	rows, err := q.db.Query(ctx, listSessions, arg.MineOnly, arg.UserID, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSessionsRow
+	for rows.Next() {
+		var i ListSessionsRow
+		if err := rows.Scan(
+			&i.Session.ID,
+			&i.Session.Title,
+			&i.Session.Status,
+			&i.Session.FailureReason,
+			&i.Session.Archived,
+			&i.Session.SpawnSource,
+			&i.Session.CreatedBy,
+			&i.Session.CreatedAt,
+			&i.Session.UpdatedAt,
+			&i.Session.ActorEpoch,
+			&i.Session.Repos,
+			&i.Session.OpencodeConversationID,
+			&i.Session.EnvironmentID,
+			&i.Session.ProvenanceTag,
+			&i.Session.IntentDecision,
+			&i.Session.BuildModelID,
+			&i.Session.ParentSessionID,
+			&i.Session.SpawnDepth,
+			&i.Session.BuildEffort,
+			&i.Session.EpistemicCheckEnabled,
+			&i.SandboxStatus,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateSessionConversationID = `-- name: UpdateSessionConversationID :one
 UPDATE sessions
 SET opencode_conversation_id = $2, updated_at = now()
