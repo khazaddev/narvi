@@ -22,16 +22,16 @@ import (
 // only five, and every one of them either VALIDATES or FORWARDS a
 // caller-supplied []review.Tag, never DERIVES one from paths). §26.3's own
 // "sensitive globs ... mapped deterministically onto the same BlastRadius
-// tags" is Step 68 -- a LATER, broader design (per-repo-configurable
-// deepPaths, feeding the light/deep review-triage fork, §21.4 phasing:
-// this Step is 62, that one is 68) this file deliberately does NOT
+// tags" is a LATER, broader design (per-repo-configurable
+// deepPaths, feeding the light/deep review-triage fork, coming after
+// this file's own gate) this file deliberately does NOT
 // attempt to build ahead of schedule. What follows is a narrower,
 // self-contained v1 sufficient for THIS Step's own gate: a FIXED, built-in
 // mapping, no per-repo configuration of the globs themselves (only WHICH
 // of the resulting tags counts as "sensitive" is per-repo-configurable,
 // via EligibilityConfig.SensitiveTags -- unchanged by this file). A
-// straightforward, additive rewrite once Step 68 actually lands, never a
-// migration this Step needs to anticipate.
+// straightforward, additive rewrite once §26.3 actually lands, never a
+// migration this file needs to anticipate.
 //
 // # Design: deliberately over-inclusive, never under-inclusive
 //

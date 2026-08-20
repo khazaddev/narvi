@@ -6,7 +6,7 @@ import (
 	"github.com/khazaddev/narvi/internal/domain/sandboxboot"
 )
 
-// TestEvaluateHook_TruthTable enumerates every row of the Step 13 truth
+// TestEvaluateHook_TruthTable enumerates every row of the truth
 // table (§6.4's hook policy applied to all 4 modes x 2 hooks x 2 primary
 // values -- 16 rows), EVERY ONE pinned with workspaceMoved: false so this
 // table alone proves the (§19.4) amendment changed NOTHING for any
@@ -72,7 +72,7 @@ func TestEvaluateHook_TruthTable(t *testing.T) {
 }
 
 // TestEvaluateHook_RepoImageSetup_WorkspaceMovedAmendment proves the ONE
-// cell §19.4's amendment actually changes (Step 42, breaking change): for
+// cell §19.4's amendment actually changes (a breaking change): for
 // BootModeRepoImage + HookSetup, workspaceMoved: true flips ShouldRun to
 // true while FatalOnFailure stays false regardless (a moved workspace
 // proves nothing about dependencies, so it can never justify failing the

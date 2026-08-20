@@ -76,10 +76,10 @@
 //     so this package's own shape never has to change out from under
 //     them: a future Step calls Authorize with the right
 //     Action constant and gets the exact matrix row §13.3 already
-//     specifies, with zero changes to this package. The three Step 54
+//     specifies, with zero changes to this package. The three §25.4
 //     workflow actions (ActionManageWorkflowDefinitions,
 //     ActionActivateWorkflowBinding, ActionDecideWorkflowStep — §25.11)
-//     follow the same reserved-name discipline deliberately: Step 54 is
-//     dark (schema/contracts/RBAC only), and Steps 55-56 mount the
+//     follow the same reserved-name discipline deliberately: §25.4 is
+//     dark (schema/contracts/RBAC only), and §25.6/§25.9 mount the
 //     first handlers that call Authorize with them.
 package authz

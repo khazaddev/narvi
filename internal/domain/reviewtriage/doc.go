@@ -32,10 +32,10 @@
 // # Do not invent a second BlastRadius vocabulary
 //
 // internal/domain/autoapproval/blastradius.go's own top doc comment
-// explicitly anticipates this Step: "§26.3's own 'sensitive globs ...
-// mapped deterministically onto the same BlastRadius tags' is Step 68 ...
-// A straightforward, additive rewrite once Step 68 actually lands, never
-// a migration this Step needs to anticipate." This package follows that
+// explicitly anticipates this: "§26.3's own 'sensitive globs ...
+// mapped deterministically onto the same BlastRadius tags' is a LATER,
+// broader design ... A straightforward, additive rewrite once §26.3
+// actually lands, never a migration this file needs to anticipate." This package follows that
 // note literally: sensitiveGlobHit (decide.go) calls
 // autoapproval.ClassifyChangedPaths directly -- the SAME eight-value
 // review.Tag vocabulary, the SAME path-classification heuristics

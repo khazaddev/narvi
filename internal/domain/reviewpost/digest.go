@@ -72,9 +72,8 @@ type ArchDecision struct {
 //
 // # Enforcement -- Summary/DescriptionAdequacy/AdequacyExplanation always required; ArchDecisions/StackRisks/UnverifiedLimits required too, but only on the deep path; ProposedBody never required
 //
-// §26.1's own "Enforcement" section, and IMPLEMENTATION_PLAN.md's Step 66
-// row verbatim: "Summary required on every review from day one, full
-// digest schema-required on the deep path once Step 68 defines it
+// §26.1's own "Enforcement" section, verbatim: "Summary required on every review from day one, full
+// digest schema-required on the deep path once that's defined
 // (reject-don't-repair at the posting endpoint)". (§26.3, the
 // light/deep triage) now exists and defines that deep path. Summary
 // (ValidateVerdictInput's own ErrEmptyDigestSummary check, validate.go)

@@ -140,7 +140,7 @@ const (
 	// ActionManageEnvSecrets covers per-environment secret management.
 	ActionManageEnvSecrets Action = "manage_env_secrets"
 	// ActionManageWorkflowDefinitions covers creating/editing/deleting a
-	// CUSTOM workflow definition — an unbound draft (§25.11 — Step 54),
+	// CUSTOM workflow definition — an unbound draft (§25.11),
 	// maintainer+ in this SAME row as ActionManageAutomations by
 	// §25.11's explicit instruction. Deliberately NOT the action that
 	// makes a definition live anywhere (that is
@@ -349,7 +349,7 @@ const (
 	// 100% of a lane's production traffic (§25.6), a system-posture
 	// change like template activation, not a per-draft authoring step
 	// like row 4's ActionManageWorkflowDefinitions. No caller exists
-	// yet (Step 54 is dark; Steps 55-56 own the first handlers).
+	// yet (§25.4 is dark; §25.6/§25.9 own the first handlers).
 	ActionActivateWorkflowBinding Action = "activate_workflow_binding"
 	// ActionToggleAutoRetriggerReview covers §24.5's own per-repo opt-in
 	// for automatic re-review on new commits (repo_settings.

@@ -33,7 +33,7 @@ type Definition struct {
 // workflow_step_kind Postgres enum exactly.
 type StepKind string
 
-// StepKindAgent -- the only StepKind as of Step 54: an ordinary agent
+// StepKindAgent -- the only StepKind today: an ordinary agent
 // turn (prompt + model), which is what EVERY step in every §25.8 shape
 // (the three built-ins and the Gemini->Opus->Sonnet->Codex override
 // example) is, and what §25.6's execution model dispatches ("every step
@@ -191,8 +191,8 @@ var (
 // is a well-formed workflow the engine's closed model can execute --
 // exactly the check §25.12 requires the canvas editor to apply at save
 // time ("rejecting an undrawable-by-the-engine graph at save time, not
-// silently accepting it"), owned here so Steps 55-56 (load-time
-// defense) and Step 88 (save-time gate) share ONE rule set, never two
+// silently accepting it"), owned here so §25.6/§25.9 (load-time
+// defense) and §25.12 (save-time gate) share ONE rule set, never two
 // drifting copies. First violation wins; nil means def is executable.
 //
 // Orders must be unique and >= 1 but NOT contiguous -- NextStep's
