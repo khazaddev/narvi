@@ -103,7 +103,7 @@ const manualRetriggerPromptText = "Manual re-review requested via the web review
 // outbound LLM call spent classifying text that was never a reply to
 // begin with (the fail-safe direction Step 64's own review batch requires:
 // "when in doubt, skip classification rather than guess").
-// reviewTriageDeps/reviewModelDeep (Step 68, §26.3) mirror internal/
+// reviewTriageDeps/reviewModelDeep (§26.3) mirror internal/
 // adapters/inbound/github's own identical SessionCoalescer.ReviewTriage/
 // ReviewModelDeep fields -- see that struct's own doc comment.
 func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, prSessions *postgres.GitHubPRSessionStore, diffFetcher reviewcontext.Fetcher, reviewFindings reviewcontext.FindingsFetcher, falsePositivePatterns reviewcontext.FalsePositivePatternsFetcher, botToken string, timeouts platform.Timeouts, reviewTriageDeps appreviewtriage.Deps, reviewModelDeep string) http.HandlerFunc {
@@ -188,7 +188,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		// call later in EXECUTION order, while keeping it the LAST
 		// prepend before RenderTurnPrompt, preserves its own existing
 		// FIRST position in the text exactly.
-		// reviewHeadSHA (Step 62 review finding C2, CRITICAL, fixed) is
+		// reviewHeadSHA is
 		// captured here and threaded into CreateTurnCore below via
 		// CreateTurnOptions.ReviewHeadSHA -- persisted onto THIS turn's
 		// own row (turns.review_head_sha, set once at creation), never
@@ -197,7 +197,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		// previous github_pr_sessions.pending_head_sha design this fix
 		// replaces -- see migrations/000072_turns_review_head_sha.up.sql's
 		// own doc comment for the full "why").
-		// prCtx (Step 68, §26.3) is hoisted to this outer scope -- the
+		// prCtx (§26.3) is hoisted to this outer scope -- the
 		// WHOLE struct is needed further down to compute this manual
 		// re-trigger's own light/deep triage decision, mirroring
 		// internal/adapters/inbound/github's own identical hoist
@@ -275,7 +275,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 			flooredDepth = domainreviewtriage.Floor(triageDecision.Depth, priorReviewDepth)
 		}
 		prCtx.DeepPath = flooredDepth == domainreviewtriage.DepthDeep
-		// ReviewCostBudgetUSD (Step 69, §26.7): the SAME triageConfig
+		// ReviewCostBudgetUSD (§26.7): the SAME triageConfig
 		// ComputeDecision already resolved, above -- no second repo_settings
 		// read. Read AFTER flooredDepth is known so a re-review that got
 		// floored deep by §24's own "once deep, stays deep" rule correctly

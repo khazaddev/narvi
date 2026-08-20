@@ -1,4 +1,4 @@
-// Package slack is the Slack Events API ingress adapter (Step 33, "Slack
+// Package slack is the Slack Events API ingress adapter ("Slack
 // ingress", §8.10 "Slack/Linear fidelity" -- the Slack half only; Step 34
 // covers Linear, in a separate package/worktree in parallel). One route,
 // wired in cmd/control-plane/main.go: POST /webhooks/slack.
@@ -44,7 +44,7 @@
 //     need to understand, rather than erroring on them).
 //  5. For a real "event_callback": WebhookDeliveryStore.Claim(ctx,
 //     "slack", envelope.EventID) BEFORE any processing (§5.1's dedupe
-//     claim, Step 31) -- envelope.EventID is Slack's own "globally unique
+//     claim) -- envelope.EventID is Slack's own "globally unique
 //     across all workspaces" event_id field (confirmed against Slack's
 //     own Events API documentation), which Slack repeats byte-for-byte on
 //     every redelivery of the SAME event (a real, common occurrence any
@@ -140,7 +140,7 @@
 // configured with a default repo yet and no session is created; a REPLY
 // on an already-mapped thread is entirely unaffected (it never needs a
 // repo). Real per-channel repo routing is left to a future Step (most
-// naturally automations, §8.4/Step 47).
+// naturally automations, §8.4).
 //
 // # In-thread acks -- scoping decision (Step 33's own row, "in-thread
 // acks")

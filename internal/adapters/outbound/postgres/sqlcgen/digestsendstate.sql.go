@@ -127,7 +127,7 @@ type SeedDigestSendStateParams struct {
 	ChannelID       string      `json:"channel_id"`
 }
 
-// Queries backing DigestSendStateStore (Step 62, §21.3) -- see
+// Queries backing DigestSendStateStore (§21.3) -- see
 // migrations/000071_digest_send_state.up.sql's own doc comment for the
 // full two-phase (seed, then claim) at-most-one-send design.
 // Phase 1 (idempotent seed): ensures a 'pending' row exists for

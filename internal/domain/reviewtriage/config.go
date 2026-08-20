@@ -40,7 +40,7 @@ type Config struct {
 	// matchDeepPath (decide.go) for the two supported pattern shapes
 	// (a bare directory/file prefix, or a single-`*`-wildcard glob).
 	DeepPaths []string
-	// CostBudget (§26.7, Step 69) is this repo's own per-path cost
+	// CostBudget (§26.7) is this repo's own per-path cost
 	// ceiling -- "reviewCostBudget: {light, deep} joins §26.3's
 	// reviewDepth config on the SAME per-repo settings row" (§26.7,
 	// verbatim). See CostBudget's own doc comment (costbudget.go) for the

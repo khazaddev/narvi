@@ -64,7 +64,7 @@ import (
 // (whether through this function, or -- as internal/app/outboxworker's
 // own sentinelAutoFixNotifier now does, since the Finding-1 audit fix --
 // through the identical CreateSessionOnTx parameter directly).
-// rolloutMode/repoSettings (Step 76, §32) mirror CreateSessionOnTx's own
+// rolloutMode/repoSettings (§32) mirror CreateSessionOnTx's own
 // identical required parameters -- see that function's own doc comment.
 // This function has no real production caller today (childsession.go's
 // own top doc comment), but stays parameter-complete/consistent

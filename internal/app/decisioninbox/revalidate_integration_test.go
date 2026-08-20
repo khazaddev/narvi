@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for RevalidateForMerge (Step 60, "decision inbox:
+// Integration tests for RevalidateForMerge ("decision inbox:
 // read model + API", §16.2's own Merge endpoint) against a REAL Postgres
 // instance -- gated behind the "integration" build tag, same package
 // (decisioninbox_test) and newTestPool/fakeDecisionInboxSourceControl
@@ -72,7 +72,7 @@ func newRevalidateStores(pool *pgxpool.Pool) *revalidateStores {
 // under actorGitHubID -- platform-authored (an artifacts row is created),
 // low-risk, CI green, no findings, no needs-human label, no changes
 // requested, not a draft/handoff/sentinel-fix. Every test below starts
-// from this exact baseline and perturbs ONE fact (Step 60 review finding T1:
+// from this exact baseline and perturbs ONE fact (
 // "the row renders ready_to_merge, then X changes -> assert the merge is
 // refused"), proving each negative check independently actually gates
 // the merge rather than merely existing in the source.
@@ -123,9 +123,9 @@ func (rs *revalidateStores) replaceTargetPR(actorGitHubID string, pr ports.OpenP
 }
 
 // TestRevalidateForMerge_NegativeCases covers every fact RevalidateForMerge
-// re-checks that used to have zero coverage (Step 60 review finding T1,
+// re-checks that used to have zero coverage (
 // CRITICAL): the CI-green re-check, the needs-human label, the §17
-// sentinel-fix exclusion, draft, handoff, and (Step 60 review finding A4,
+// sentinel-fix exclusion, draft, handoff, and (
 // folded in here since it is the SAME "the row renders ready_to_merge,
 // then a fact changes" shape) HasChangesRequested. Each subtest starts
 // from eligiblePR's own fully-eligible baseline and perturbs ONE fact.
@@ -152,7 +152,7 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 	})
 
 	t.Run("CIRed_Refused", func(t *testing.T) {
-		// Step 60 review finding A2/T1: this is the one guard that directly
+		// this is the one guard that directly
 		// exercises the merge gate's own strict CI check -- deletable
 		// before this test existed.
 		const repoFullName = "acme/revalidate-ci-red"
@@ -172,7 +172,7 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 		}
 	})
 
-	// Step 62 review finding C4 (BLOCKER, fixed): a degraded review-decision
+	// a degraded review-decision
 	// read (GitHub's own reviews endpoint failed) must refuse the merge
 	// exactly like a CONFIRMED changes-request would -- "we could not
 	// tell" must never silently satisfy this gate. This is the ONE
@@ -358,7 +358,7 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 		}
 	})
 
-	// Step 60 review finding T6: the handoff-label branch, merge-path half
+	// the handoff-label branch, merge-path half
 	// (aggregate.go's own read-path half lives in
 	// aggregate_integration_test.go's TestBuild_HandoffPR).
 	t.Run("HandoffLabel_Refused", func(t *testing.T) {
@@ -379,7 +379,7 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 		}
 	})
 
-	// Step 60 review finding A4: HasChangesRequested is a hard merge blocker
+	// HasChangesRequested is a hard merge blocker
 	// -- the one review-decision fact this endpoint's own "approval
 	// state" re-check actually gates on (never HasApprovingReview, which
 	// is display-only -- see RevalidateForMerge's own doc comment).
@@ -402,12 +402,12 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 	})
 
 	// Step 62 (§21.2) note: classifyPRLabels' own "most restrictive risk
-	// label wins" property (Step 60 review finding A6) is no longer
+	// label wins" property is no longer
 	// observable through RevalidateForMerge's own ok/refused OUTCOME --
 	// the real auto-approval eligibility engine (internal/domain/
 	// autoapproval) gates on the STORED verdict's own Shippable field,
 	// never on a PR's GitHub risk labels at all (those labels are now
-	// purely a display artifact synced FROM a past verdict, §8.2/Step 47,
+	// purely a display artifact synced FROM a past verdict, §8.2,
 	// never fed back INTO eligibility). Coverage for classifyPRLabels'
 	// own precedence rule moved to labels_test.go's own
 	// TestClassifyPRLabels_MostRestrictiveRiskLabelWins, which asserts

@@ -72,11 +72,11 @@ func reposFromJSON(raw []byte) ([]sessionconfig.SessionConfigReposElem, error) {
 
 // environmentSubstrate resolves everything assembleSessionConfig needs
 // from the session's own Environment row in exactly ONE Postgres read:
-// PathScope (§14.1, Step 29 -- §14.1's own clone-step enforcement needs
+// PathScope (§14.1 -- §14.1's own clone-step enforcement needs
 // the sandbox process to actually receive these glob patterns, since
 // sandbox-agent is a separate process from the control plane and only
 // knows what it's told via NARVI_SESSION_CONFIG), DockerRequired (§27.5,
-// Step 74), and EgressPolicy (§27.6, Step 74) -- Step 74 folds its own
+// Step 74), and EgressPolicy (§27.6) -- Step 74 folds its own
 // two new derivations into what Step 29's own environmentPathScope
 // (now this function) already fetched, rather than adding two more
 // independent queries against the SAME row inside the SAME transact.
@@ -230,7 +230,7 @@ func (a *Actor) reviewCounterReviewerModel(ctx context.Context, tx pgx.Tx, sessi
 // reviewCredentialedProviders resolves the set of counterReviewerProviderPreference
 // providers (internal/app/reviewtriage) that sessionRow's own repo(s)/
 // environment/creator actually has a usable credential for -- B2 fix
-// (adversarial review of Step 69, §26.4): "prefer no pin over guessing
+// (adversarial review of §26.4): "prefer no pin over guessing
 // when the opposing provider is not known-credentialed". Mirrors
 // httpapi.ProviderCredentialsDelivery's own resolution inputs exactly
 // (repoFullNames from sessionRow.Repos via reposource.ParseOwnerRepo,
@@ -432,7 +432,7 @@ func (a *Actor) assembleSessionConfig(
 		SandboxId:         sandboxID,
 		SandboxToken:      plaintextToken,
 		SessionId:         sessionID,
-		// CapabilityRestricted (Step 48, §17.2): true exactly for a
+		// CapabilityRestricted (§17.2): true exactly for a
 		// sentinel-auto-fix child session -- see provenance.
 		// IsSentinelAutoFix's own doc comment for the three independent
 		// things that key off this SAME provenance_tag value; this is the
@@ -440,7 +440,7 @@ func (a *Actor) assembleSessionConfig(
 		// config into the workspace before ever spawning `opencode serve`
 		// for this ONE kind of session.
 		CapabilityRestricted: provenance.IsSentinelAutoFix(sessionRow.ProvenanceTag),
-		// ReviewCounterReviewerModel (Step 69, §26.4): nil for every
+		// ReviewCounterReviewerModel (§26.4): nil for every
 		// session that either is not a GitHub PR review session at all, or
 		// is one but has no resolvable authoring-model provenance to
 		// oppose -- see reviewCounterReviewerModel's own doc comment,

@@ -2,7 +2,7 @@
 // REST capabilities Step 47's ("server-side verdict", §8.2) verdict-
 // posting tool needs beyond what this package already had (PostIssueComment,
 // adapter.go): submitting a FORMAL pull request review (the "formal-review
-// gate", §8.2/Step 47's own "submitting an actual GitHub PR review rather
+// gate", §8.2's own "submitting an actual GitHub PR review rather
 // than a comment"), and syncing the review:*-risk label vocabulary
 // (internal/domain/reviewpost's own ComputeLabelSync) onto the PR.
 //

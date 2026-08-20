@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for SandboxSecretStore (Step 72, "sandbox secrets &
+// Integration tests for SandboxSecretStore ("sandbox secrets &
 // opencode config", §27.1) against a real Postgres instance --
 // migrations/000090_sandbox_secrets.up.sql. Mirrors
 // providercredential_store_integration_test.go's own test shapes,

@@ -1,5 +1,5 @@
 // Package decisioninbox holds the decision inbox's own pure decision
-// functions (Step 60, "decision inbox: read model + API", §16) -- item
+// functions ("decision inbox: read model + API", §16) -- item
 // taxonomy classification helpers, ranking, staleness, assignment-
 // provenance rendering, and the decision-latency median. No I/O, no
 // time.Now(), no randomness (CLAUDE.md/§11): every function here is a pure

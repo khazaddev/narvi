@@ -1,5 +1,5 @@
 // This file (listopenprs.go) implements ports.SourceControl.
-// ListOpenPRsForUser (Step 60, "decision inbox: read model + API", §16.2):
+// ListOpenPRsForUser ("decision inbox: read model + API", §16.2):
 // "review state, CI at head SHA, labels, assignees/reviewers" for every
 // open PR a user is involved in.
 //
@@ -176,7 +176,7 @@ type openPRDetailResponse struct {
 // top doc comment for the full design (login resolution, candidate
 // discovery, cost).
 //
-// truncated (Step 60 review finding C1) is true iff at least one of the two
+// truncated is true iff at least one of the two
 // discovery queries below itself failed -- a genuine coverage gap, since
 // the SURVIVING query's own results are still returned (never blanked
 // out, this function's own established best-effort-per-query discipline,
@@ -431,7 +431,7 @@ func (a *Adapter) buildOpenPRFromDetail(ctx context.Context, owner, repo string,
 
 		HasApprovingReview:  hasApproving,
 		HasChangesRequested: hasChangesRequested,
-		// Step 62 review finding C4: fetchReviewDecision's own third return --
+		// fetchReviewDecision's own third return --
 		// see that field's own doc comment (ports.OpenPR) for the full
 		// "why" and which callers must fail closed on it.
 		ReviewDecisionDegraded: reviewDecisionDegraded,
@@ -508,8 +508,7 @@ func (a *Adapter) fetchCIConclusionLive(ctx context.Context, owner, repo, headSH
 			case "success":
 				sawSuccess = true
 			case "pending":
-				// Step 60 review finding P0 (BLOCKER, second round). The
-				// comment previously here claimed "pending" was "the
+				// The comment previously here claimed "pending" was "the
 				// combined-status surface's exact analogue of the Checks
 				// API's Conclusion == nil below" -- factually wrong:
 				// Conclusion == nil only ever exists once a check run
@@ -561,7 +560,7 @@ func (a *Adapter) fetchCIConclusionLive(ctx context.Context, owner, repo, headSH
 					// Also never green for a live gate, unlike
 					// fetchCIConclusion's own lenient rule, which leaves a
 					// cancelled run contributing to neither sawFailure nor
-					// sawSuccess at all (Step 60 review finding A2's own
+					// sawSuccess at all (matching that rule's own
 					// "cancelled is likewise ignored" text).
 					sawIncomplete = true
 				case "success", "neutral":
@@ -604,9 +603,8 @@ func (a *Adapter) fetchOpenPRDetail(ctx context.Context, owner, repo string, num
 // page, per_page=100, mirroring fetchHasApprovingReview's own identical
 // bound) and reduces it to each REVIEWER's own LATEST decision before
 // reporting whether at least one carries state APPROVED and whether at
-// least one carries state CHANGES_REQUESTED (Step 62 review finding C4's own
-// third return, degraded, added below; Step 60 review finding P1-1,
-// second round -- replacing this function's own previous "any
+// least one carries state CHANGES_REQUESTED (a third return, degraded,
+// added below -- replacing this function's own previous "any
 // CHANGES_REQUESTED review exists, ever" rule). GitHub's own review list
 // is APPEND-ONLY: a reviewer who requested changes and later re-reviewed
 // and approved leaves the OLD CHANGES_REQUESTED row in place forever,
@@ -634,7 +632,7 @@ func (a *Adapter) fetchOpenPRDetail(ctx context.Context, owner, repo string, num
 // commented has not thereby withdrawn that decision; only a LATER
 // APPROVED or CHANGES_REQUESTED review from that SAME reviewer does.
 //
-// degraded (Step 62 review finding C4, BLOCKER, fixed) is true iff this fetch
+// degraded is true iff this fetch
 // itself failed (transient HTTP error OR a response that did not decode) --
 // BEFORE this fix, either failure silently returned (false, false),
 // indistinguishable from a genuine, confirmed "nobody has requested

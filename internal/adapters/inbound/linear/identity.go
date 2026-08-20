@@ -169,7 +169,7 @@ func (deps Deps) postIdentityNotice(ctx context.Context, organizationID, agentSe
 // (identitylink.Resolution.NotificationText) rather than sending a
 // second, separate activity.
 //
-// Residual risk (Step 39, "identities + full RBAC", §13.2 -- documented,
+// Residual risk ("identities + full RBAC", §13.2 -- documented,
 // deliberate, Linear-specific): unlike Slack (ack.go's own postEphemeral),
 // this text -- including a still-sensitive magic-link URL -- is posted as
 // an ordinary Agent Activity, visible to whoever can see this Linear
@@ -208,7 +208,7 @@ func appendNotice(base, notice string) string {
 	return base + "\n\n" + notice
 }
 
-// authorizeResolvedActor/ownedOrJoined used to live here (Step 39,
+// authorizeResolvedActor/ownedOrJoined used to live here (
 // "identities + full RBAC", §13.2/§13.3) but moved verbatim into
 // internal/app/actorauthz (batch fix/audit-github-actor-rbac), confirmed
 // identical to Slack's own copy -- see that package's own doc.go for the

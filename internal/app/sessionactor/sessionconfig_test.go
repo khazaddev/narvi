@@ -256,7 +256,7 @@ func TestAssembleSessionConfig_CapabilityRestricted(t *testing.T) {
 }
 
 // TestAssembleSessionConfig_ReviewCounterReviewerModel_NilWithoutPRSessionStore
-// pins §26.4/Step 69's own fail-safe degradation: an Actor with no
+// pins §26.4's own fail-safe degradation: an Actor with no
 // githubPRSession store wired at all (the zero-value *Actor this file's
 // own TestAssembleSessionConfig/TestAssembleSessionConfig_CapabilityRestricted
 // already construct, and every non-review-session production Actor in

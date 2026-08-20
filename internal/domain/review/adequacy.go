@@ -1,7 +1,7 @@
 package review
 
 // DescriptionAdequacy is the reviewer's own tri-state assessment (§26.2,
-// Step 67, "review digest: description adequacy + graduated remediation")
+// "review digest: description adequacy + graduated remediation")
 // of whether a PR's title+body honestly represent what its diff actually
 // does -- the reviewing agent's own comparison of its diff-derived
 // Digest.Summary (internal/domain/reviewpost, Step 66's own §26.1

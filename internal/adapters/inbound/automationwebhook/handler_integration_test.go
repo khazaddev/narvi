@@ -1,7 +1,7 @@
 //go:build integration
 
 // Full HTTP-level integration tests for POST /webhooks/automations/
-// {automationID} (Step 52, "automations: triggers & extras", §8.4) --
+// {automationID} ("automations: triggers & extras", §8.4) --
 // mirrors internal/adapters/inbound/identitylink's own single-file,
 // per-test testcontainers-Postgres convention exactly (this package's own
 // integration suite is small enough that a shared, cross-test container --

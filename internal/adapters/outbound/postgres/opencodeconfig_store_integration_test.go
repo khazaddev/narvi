@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for OpenCodeConfigStore (Step 72, "sandbox secrets &
+// Integration tests for OpenCodeConfigStore ("sandbox secrets &
 // opencode config", §27.2) against a real Postgres instance --
 // migrations/000091_opencode_configs.up.sql.
 package postgres_test

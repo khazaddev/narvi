@@ -25,7 +25,7 @@ type CreateProviderCredentialParams struct {
 	ScopeTargetID  *string                    `json:"scope_target_id"`
 }
 
-// Queries backing ProviderCredentialStore (Step 53, "provider credential
+// Queries backing ProviderCredentialStore ("provider credential
 // injection", §25.1/§25.3) -- migrations/000056_provider_credentials.up.sql.
 // value_encrypted is ciphertext (platform.EncryptToken output) end to
 // end here; nothing in this file, or the Go store wrapping it, ever

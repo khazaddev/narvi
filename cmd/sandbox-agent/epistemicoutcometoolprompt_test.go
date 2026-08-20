@@ -39,7 +39,7 @@ import (
 )
 
 // TestRenderEpistemicOutcomeToolPromptText mirrors
-// TestRenderVerdictToolPromptText's own table shape exactly (Step 61,
+// TestRenderVerdictToolPromptText's own table shape exactly (
 // §20.2): the SAME mechanism, a third placeholder set, resolved against
 // the SAME controlPlaneHTTPBase derivation reviewVerdictToolURL/
 // epistemicOutcomeToolURL both share.

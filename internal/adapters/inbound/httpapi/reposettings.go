@@ -363,7 +363,7 @@ func autoApprovalTagsFromJSON(raw []byte) restdtos.RepoSettingsSensitiveBlastRad
 }
 
 // reviewDepthFieldsFromRow renders settings' own review_depth_mode/
-// review_depth_deep_paths columns (Step 68, §26.3) into RepoSettings'
+// review_depth_deep_paths columns (§26.3) into RepoSettings'
 // own two wire fields -- shared by every restdtos.RepoSettings
 // construction site in this file so none of them independently drifts
 // from GetRepoSettings' own field-by-field rendering, mirroring
@@ -476,7 +476,7 @@ func PutRepoSettings(repoSettings *postgres.RepoSettingsStore, prSessions *postg
 }
 
 // PutAutoApprovalSettings backs PUT /api/repos/{owner}/{repo}/auto-approval-settings
-// (Step 62, §21.2 stage 1) -- the auto-approval eligibility engine's own
+// (§21.2 stage 1) -- the auto-approval eligibility engine's own
 // two per-repo-tunable criteria. Gated SOLELY by authz.ActionConfigureAutoApprove
 // (maintainer+, §13.3 row 5) -- a SEPARATE endpoint from PutRepoSettings
 // above specifically so a maintainer authorized for this row never needs
@@ -485,8 +485,7 @@ func PutRepoSettings(repoSettings *postgres.RepoSettingsStore, prSessions *postg
 // UpdateAutoApprovalSettingsRequest's own doc comment, contracts/rest/v1/
 // dtos.schema.json).
 //
-// Step 62 review finding C5 (MEDIUM but a privilege boundary, fixed):
-// COLUMN-SCOPED write, via appreviewverdict.UpsertAutoApprovalEligibility
+// A COLUMN-SCOPED write, via appreviewverdict.UpsertAutoApprovalEligibility
 // -- touches ONLY max_auto_approve_files_changed/sensitive_blast_radius_tags
 // at the SQL level, never repo_settings.auto_merge_enabled (PutAutoMergeToggle
 // below owns that column, under its own admin-only gate). Replaces the
@@ -544,8 +543,8 @@ func PutAutoApprovalSettings(repoSettings *postgres.RepoSettingsStore, reviewVer
 // row 6) -- see UpdateAutoMergeToggleRequest's own doc comment for why
 // this is a separate endpoint from PutAutoApprovalSettings above.
 //
-// Step 62 review finding C5's own fix, mirrored in the other direction:
-// COLUMN-SCOPED write, via appreviewverdict.UpsertAutoMergeToggle --
+// Mirrored in the other direction: a COLUMN-SCOPED write, via
+// appreviewverdict.UpsertAutoMergeToggle --
 // touches ONLY auto_merge_enabled, never the eligibility-config columns
 // PutAutoApprovalSettings above owns. See that handler's own doc comment
 // for the full "why" this replaces the previous read-modify-write.
@@ -582,7 +581,7 @@ func PutAutoMergeToggle(repoSettings *postgres.RepoSettingsStore, reviewVerdictD
 }
 
 // PutAutoRetriggerReviewToggle backs PUT
-// /api/repos/{owner}/{repo}/auto-retrigger-review (Step 65, §24.5) --
+// /api/repos/{owner}/{repo}/auto-retrigger-review (§24.5) --
 // arms/disarms the per-repo automatic-re-review-on-new-commits opt-in.
 // Gated SOLELY by authz.ActionToggleAutoRetriggerReview (admin only,
 // §13.3 row 6) -- see UpdateAutoRetriggerReviewToggleRequest's own doc
@@ -592,8 +591,8 @@ func PutAutoMergeToggle(repoSettings *postgres.RepoSettingsStore, reviewVerdictD
 // COLUMN-SCOPED write, via postgres.RepoSettingsStore.
 // UpsertAutoRetriggerReviewToggle -- touches ONLY
 // auto_retrigger_review_enabled, never any other repo_settings column
-// (Step 62 review finding C5's own column-scoped-write discipline, applied
-// here from the start rather than as a later fix). Unlike
+// (the same column-scoped-write discipline as above, applied here from
+// the start rather than as a later fix). Unlike
 // PutAutoMergeToggle, this store method already returns the FULL,
 // just-written repo_settings row, so no follow-up Get call is needed to
 // render every OTHER field on the response.
@@ -648,7 +647,7 @@ func PutAutoRetriggerReviewToggle(repoSettings *postgres.RepoSettingsStore, prSe
 }
 
 // PutDescriptionAutofixToggle backs PUT
-// /api/repos/{owner}/{repo}/description-autofix (Step 67, §26.2) --
+// /api/repos/{owner}/{repo}/description-autofix (§26.2) --
 // arms/disarms the per-repo Narvi-authored-PR description-autofix
 // toggle. Gated SOLELY by authz.ActionToggleDescriptionAutofix (admin
 // only, §13.3 row 6) -- see UpdateDescriptionAutofixToggleRequest's own
@@ -773,7 +772,7 @@ func reviewDepthModeString(mode restdtos.UpdateReviewDepthConfigRequestMode) (*s
 }
 
 // PutReviewDepthConfig backs PUT /api/repos/{owner}/{repo}/review-depth
-// (Step 68, §26.3) -- (re)configures this repo's own reviewDepth mode/
+// (§26.3) -- (re)configures this repo's own reviewDepth mode/
 // deepPaths. Gated SOLELY by authz.ActionConfigureReviewDepth (admin
 // only, §13.3 row 6) -- see UpdateReviewDepthConfigRequest's own doc
 // comment (contracts/rest/v1/dtos.schema.json) for why this is a
@@ -859,7 +858,7 @@ func PutReviewDepthConfig(repoSettings *postgres.RepoSettingsStore, prSessions *
 }
 
 // PutReviewCostBudget backs PUT /api/repos/{owner}/{repo}/review-cost-budget
-// (Step 69, §26.7) -- (re)configures this repo's own per-path cost
+// (§26.7) -- (re)configures this repo's own per-path cost
 // ceilings. Gated SOLELY by authz.ActionConfigureReviewCostBudget (admin
 // only, §13.3 row 6) -- see UpdateReviewCostBudgetRequest's own doc
 // comment (contracts/rest/v1/dtos.schema.json) for why this is a separate

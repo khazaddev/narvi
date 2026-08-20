@@ -1,5 +1,5 @@
 // Package automation holds the automation → invocation → run(s) domain
-// model (Step 51, "automations: engine", §3.5): "automation → invocation →
+// model ("automations: engine", §3.5): "automation → invocation →
 // run(s) (one run per target, fan-out ≤10). At-most-one failure strike per
 // invocation via CAS (UPDATE ... WHERE failure_counted_at IS NULL).
 // Auto-pause after 3 consecutive failed invocations. Recovery sweeps:

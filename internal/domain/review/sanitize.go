@@ -12,7 +12,7 @@ package review
 // and epistemicOutcomeToolGenPlaceholderLiteral are byte-for-byte copies of
 // internal/domain/turn's own EpistemicOutcomeToolURLPlaceholder/
 // EpistemicOutcomeToolBearerPlaceholder/EpistemicOutcomeToolGenPlaceholder
-// (turn/epistemicpreamble.go, Step 61/§20.2) -- duplicated as raw string
+// (turn/epistemicpreamble.go, §20.2) -- duplicated as raw string
 // literals here, rather than imported, because this package's own doc
 // comment (doc.go) fixes it at "zero external imports": internal/domain/turn
 // is not this package, and reaching sideways into a sibling domain

@@ -115,7 +115,7 @@ type testRig struct {
 	auditLog *narvipg.AuditLogStore
 
 	// linkPrompts backs the members API's own GET /api/members (below) --
-	// ListMembers's own "pending-link state" half (Step 39, §13.2).
+	// ListMembers's own "pending-link state" half (§13.2).
 	linkPrompts *narvipg.IdentityLinkPromptStore
 
 	// promptTemplates backs POST /api/intent-templates(/preview) below
@@ -155,7 +155,7 @@ type testRig struct {
 	diffFetcher reviewcontext.Fetcher
 	botToken    string
 
-	// positionResolver (Step 63, §22.1.1) is review/verdict's own
+	// positionResolver (§22.1.1) is review/verdict's own
 	// relocation-fallback dependency -- nil by default (this rig's own
 	// pre-Step-63 tests never care about it, and a nil resolver is a
 	// fully nil-safe, legitimate value: findingposition.ResolveAll's own
@@ -165,7 +165,7 @@ type testRig struct {
 	// immediately above.
 	positionResolver *findingposition.Resolver
 
-	// repoSettings/botHandle (Step 47, "server-side verdict", §8.2/§21.2)
+	// repoSettings/botHandle ("server-side verdict", §8.2/§21.2)
 	// back this rig's own verdict-posting-tool route (review/verdict,
 	// reviewverdict_integration_test.go) and the admin repo-settings routes
 	// (reposettings_integration_test.go). botHandle defaults to a fixed,
@@ -176,7 +176,7 @@ type testRig struct {
 	repoSettings *narvipg.RepoSettingsStore
 	botHandle    string
 
-	// rolloutMode (Step 76, §10 Phase 6, §32) backs this rig's own
+	// rolloutMode (§10 Phase 6, §32) backs this rig's own
 	// CreateSession route below -- defaults to platform.RolloutModeOpen
 	// (today's existing, unchanged behavior for every test in this file
 	// that doesn't care about cohort rollout), overridable via
@@ -184,7 +184,7 @@ type testRig struct {
 	// with a meaningful non-zero default.
 	rolloutMode platform.RolloutMode
 
-	// reviewFindings/sentinelFixes (Step 48, "sentinels + suggestions",
+	// reviewFindings/sentinelFixes ("sentinels + suggestions",
 	// §17/§22.1) back this rig's own findings-upsert/rebut/apply-
 	// suggestion routes (reviewfindings_integration_test.go) and the
 	// verdict-posting route's own extended findings/sentinel-auto-fix
@@ -192,13 +192,13 @@ type testRig struct {
 	reviewFindings *narvipg.ReviewFindingStore
 	sentinelFixes  *narvipg.SentinelFixStore
 
-	// falsePositivePatterns (Step 63, "review: learned false-positive
+	// falsePositivePatterns ("review: learned false-positive
 	// patterns", §22.2/§22.3/§22.4) backs this rig's own advisory-
 	// injection/lifecycle behavior on the retrigger and verdict-posting
 	// routes.
 	falsePositivePatterns *narvipg.FalsePositivePatternStore
 
-	// reviewVerdicts (Step 62, §21.1) backs the verdict-posting route's
+	// reviewVerdicts (§21.1) backs the verdict-posting route's
 	// own review_verdicts insert (reviewverdict.go).
 	reviewVerdicts *narvipg.ReviewVerdictStore
 
@@ -210,7 +210,7 @@ type testRig struct {
 	// mutate func with a fake implementing ports.SourceControl.
 	sourceControl ports.SourceControl
 
-	// automations (Step 52, "automations: triggers & extras", §8.4) backs
+	// automations ("automations: triggers & extras", §8.4) backs
 	// this rig's own /api/automations routes (automations_integration_
 	// test.go).
 	automations *narvipg.AutomationStore
@@ -223,14 +223,14 @@ type testRig struct {
 	// assert against AutomationStore.GetByWebhookTokenHash directly.
 	automationInvocations *narvipg.AutomationInvocationStore
 
-	// providerCredentials (Step 53, "provider credential injection",
+	// providerCredentials ("provider credential injection",
 	// §25.1/§25.3) backs this rig's own 3 scoped provider-credentials CRUD
 	// route groups (providercredentials_integration_test.go) and the
 	// sandbox-facing delivery route (providercredentialsdelivery_
 	// integration_test.go).
 	providerCredentials *narvipg.ProviderCredentialStore
 
-	// sandboxSecrets/openCodeConfigs (Step 72, "sandbox secrets & opencode
+	// sandboxSecrets/openCodeConfigs ("sandbox secrets & opencode
 	// config", §27.1/§27.2) back this rig's own sandbox-secrets CRUD route
 	// groups + sandbox-facing delivery route
 	// (sandboxsecrets_integration_test.go/sandboxsecretsdelivery_
@@ -241,7 +241,7 @@ type testRig struct {
 	sandboxSecrets  *narvipg.SandboxSecretStore
 	openCodeConfigs *narvipg.OpenCodeConfigStore
 
-	// chatGPTLinkAttempts/chatGPTDeviceFlow (Step 59, "models: Codex via
+	// chatGPTLinkAttempts/chatGPTDeviceFlow ("models: Codex via
 	// ChatGPT-account OAuth", §29.3) back this rig's own /api/me/
 	// chatgpt-link route group (chatgptlink_integration_test.go).
 	// chatGPTDeviceFlow defaults to a client pointed at an unreachable
@@ -253,7 +253,7 @@ type testRig struct {
 	chatGPTLinkAttempts *narvipg.ChatGPTLinkAttemptStore
 	chatGPTDeviceFlow   *chatgptoauth.Client
 
-	// workflows (Step 55, "workflow execution engine", §25.6) backs this
+	// workflows ("workflow execution engine", §25.6) backs this
 	// rig's own generic step-outcome-posting-tool route
 	// (workflowstepoutcome_integration_test.go) -- the SAME store instance
 	// createTurnLocked's own tests (turncore_integration_test.go,
@@ -263,7 +263,7 @@ type testRig struct {
 	// too, see turn.go's own doc comment for why).
 	workflows *narvipg.WorkflowStore
 
-	// slackThreadSession (Step 56, "workflow HITL gate + circuit breaker",
+	// slackThreadSession ("workflow HITL gate + circuit breaker",
 	// §25.9) backs this rig's own decide-endpoint route
 	// (decideworkflowstep_integration_test.go) -- notification-destination
 	// resolution for a Slack-origin session, the SAME store
@@ -272,7 +272,7 @@ type testRig struct {
 	// Step (only sessionactor did), so it is new to this rig.
 	slackThreadSession *narvipg.SlackThreadSessionStore
 
-	// blobStore/objCfg (Step 58, "uploads, blob storage & the in-sandbox
+	// blobStore/objCfg ("uploads, blob storage & the in-sandbox
 	// download_file tool", §28) back this rig's own mint/confirm/content
 	// routes, both auth variants (upload_integration_test.go). blobStore
 	// defaults to a fresh *fakeBlobStore per rig (upload_integration_test.go's
@@ -293,7 +293,7 @@ type testRig struct {
 	// own identical "nil by default, override via mutate" precedent above.
 	broadcaster ports.EventBroadcaster
 
-	// cloudIdentityBindings/oidcSigningKeys (Step 73a, "cloud identity:
+	// cloudIdentityBindings/oidcSigningKeys ("cloud identity:
 	// OIDC issuer, bindings, minting", §27.3) back this rig's own 2
 	// scoped cloud-identity-bindings CRUD route groups
 	// (cloudidentitybindings_integration_test.go), the signing-key
@@ -312,7 +312,7 @@ type testRig struct {
 	oidcSigningKeys        *narvipg.OIDCSigningKeyStore
 	cloudIdentityIssuerURL string
 
-	// clusterBindings (Step 73b, "cloud identity: sandbox-side consumption
+	// clusterBindings ("cloud identity: sandbox-side consumption
 	// + kubeconfig injection", §27.4) backs this rig's own cluster-binding
 	// management route group (clusterbindings_integration_test.go) and the
 	// sandbox-facing cloud-identity-config delivery route
@@ -404,7 +404,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	}
 
 	router := chi.NewRouter()
-	// OIDC discovery + JWKS (Step 73a, §27.3) -- mounted PUBLICLY,
+	// OIDC discovery + JWKS (§27.3) -- mounted PUBLICLY,
 	// UNAUTHENTICATED, exactly like cmd/control-plane/main.go's own real
 	// wiring (see httpapi/oidcdiscovery.go's own doc comment for the
 	// full "why" and cloudidentitydiscovery_integration_test.go's own
@@ -419,7 +419,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Get("/{sessionID}", httpapi.GetSession(rig.sessions))
 		r.Get("/{sessionID}/events", httpapi.ListEvents(rig.sessions, rig.events))
 		r.Get("/{sessionID}/artifacts", httpapi.ListArtifacts(rig.sessions, rig.artifacts))
-		// uploads (Step 58, "uploads, blob storage & the in-sandbox
+		// uploads ("uploads, blob storage & the in-sandbox
 		// download_file tool", §28.4/§28.5) -- mounted exactly like
 		// cmd/control-plane/main.go's own wiring (see uploadmint.go/
 		// uploadconfirm.go/uploadcontent.go's own doc comments).
@@ -433,12 +433,12 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		// Audit-fix batch (completeness/discoverability, M3) -- see
 		// httpapi/plans.go's own doc comment.
 		r.Get("/{sessionID}/plans", httpapi.ListPlans(rig.sessions, rig.plans))
-		// review/retrigger (Step 46, "review sessions", §8.2's own manual
+		// review/retrigger ("review sessions", §8.2's own manual
 		// re-trigger-via-BUTTON surface) -- see reviewretrigger.go's own doc
 		// comment. rig.diffFetcher/rig.botToken default nil/"" -- see this
 		// rig's own diffFetcher field doc comment for why, and for how a
 		// test overrides them.
-		// reviewTriageDeps (Step 68, §26.3; wired to REAL stores as of D6's
+		// reviewTriageDeps (§26.3; wired to REAL stores as of D6's
 		// own adversarial-review fix -- this used to pass the bare zero
 		// value appreviewtriage.Deps{}, which meant NO test anywhere in
 		// this package's own integration suite could exercise
@@ -458,7 +458,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Post("/{sessionID}/review/findings/{identityHash}/rebut", httpapi.RebutReviewFinding(rig.sessions, rig.prSessions, rig.reviewFindings, rig.auditLog))
 		r.Post("/{sessionID}/review/findings/{identityHash}/apply-suggestion", httpapi.ApplySuggestion(rig.sessions, rig.prSessions, rig.reviewFindings, rig.identities, rig.sourceControl, rig.tokenEncryptionKey, platform.DefaultTimeouts()))
 	})
-	// /api/members, /api/audit-log (Step 39, "identities + full RBAC",
+	// /api/members, /api/audit-log ("identities + full RBAC",
 	// §13.2/§13.3) -- mounted exactly like cmd/control-plane/main.go's own
 	// wiring (this file's own doc comment on that file's own precedent):
 	// gated behind auth.Middleware only, with each handler rendering its
@@ -474,7 +474,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
 		r.Get("/", httpapi.ListAuditLog(rig.auditLog))
 	})
-	// /api/me/chatgpt-link (Step 59, "models: Codex via ChatGPT-account
+	// /api/me/chatgpt-link ("models: Codex via ChatGPT-account
 	// OAuth", §29.3/§29.9) -- mounted exactly like cmd/control-plane/
 	// main.go's own wiring.
 	router.Route("/api/me/chatgpt-link", func(r chi.Router) {
@@ -492,13 +492,13 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Get("/", httpapi.GetChatGPTLinkStatus(chatGPTLinkDeps))
 		r.Delete("/", httpapi.DeleteChatGPTLink(chatGPTLinkDeps))
 	})
-	// /api/models (Step 59, "models: Catalog", §8 item 8/§29/§25.2) --
+	// /api/models ("models: Catalog", §8 item 8/§29/§25.2) --
 	// mounted exactly like cmd/control-plane/main.go's own wiring.
 	router.Route("/api/models", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
 		r.Get("/", httpapi.GetModelCatalog())
 	})
-	// /api/admin/shadow-compare (Step 59, "shadow-comparison tooling for
+	// /api/admin/shadow-compare ("shadow-comparison tooling for
 	// review", §9.4/§18.5) -- mounted exactly like cmd/control-plane/
 	// main.go's own wiring.
 	router.Route("/api/admin/shadow-compare", func(r chi.Router) {
@@ -522,21 +522,21 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// way -- see snapshotmint.go's own doc comment.
 	router.Post("/sessions/{sessionID}/snapshot",
 		httpapi.SnapshotMint(rig.sandboxes, rig.provider))
-	// review/verdict (Step 47, "server-side verdict", §8.2/§5.2) is mounted
+	// review/verdict ("server-side verdict", §8.2/§5.2) is mounted
 	// the SAME way -- see reviewverdict.go's own doc comment.
 	router.Post("/sessions/{sessionID}/review/verdict",
 		httpapi.PostReviewVerdict(rig.pool, rig.sandboxes, rig.sessions, rig.prSessions, rig.repoSettings, rig.reviewFindings, rig.sentinelFixes, rig.outbox, rig.reviewVerdicts, rig.turns, rig.events, rig.botHandle, rig.botToken, rig.diffFetcher, rig.positionResolver, platform.DefaultTimeouts()))
-	// workflow/step-outcome (Step 55, "workflow execution engine", §25.6)
+	// workflow/step-outcome ("workflow execution engine", §25.6)
 	// is mounted the SAME way -- see workflowstepoutcome.go's own doc
 	// comment.
 	router.Post("/sessions/{sessionID}/workflow/step-outcome",
 		httpapi.PostWorkflowStepOutcome(rig.sandboxes, rig.workflows))
-	// turn/epistemic-outcome (Step 61, "builder epistemic pre-action
+	// turn/epistemic-outcome ("builder epistemic pre-action
 	// check", §20.2) is mounted the SAME way -- see epistemicoutcome.go's
 	// own doc comment.
 	router.Post("/sessions/{sessionID}/turn/epistemic-outcome",
 		httpapi.PostEpistemicOutcome(rig.sandboxes, rig.turns))
-	// uploads mint/confirm/content (Step 58, §28.4/§28.5) sandbox-bearer
+	// uploads mint/confirm/content (§28.4/§28.5) sandbox-bearer
 	// variants are mounted the SAME way -- see uploadmint.go/
 	// uploadconfirm.go/uploadcontent.go's own doc comments.
 	router.Post("/sessions/{sessionID}/uploads",
@@ -545,7 +545,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		httpapi.ConfirmUpload(rig.sandboxes, rig.pool, rig.artifacts, rig.events, rig.outbox, rig.broadcaster, rig.blobStore, rig.objCfg))
 	router.Get("/sessions/{sessionID}/uploads/{uploadID}/content",
 		httpapi.UploadContent(rig.sandboxes, rig.artifacts, rig.blobStore, rig.objCfg, platform.DefaultTimeouts()))
-	// /api/workflow-runs/{runId}/steps/{stepRunId}/decide (Step 56, "workflow
+	// /api/workflow-runs/{runId}/steps/{stepRunId}/decide ("workflow
 	// HITL gate + circuit breaker", §25.9/§25.10/§25.11) -- mounted behind
 	// auth.Middleware exactly like cmd/control-plane/main.go's own real
 	// wiring (see decideworkflowstep.go's own doc comment).
@@ -557,7 +557,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// auth.Middleware, exactly like cmd/control-plane/main.go's own wiring
 	// (see reposettings.go's own doc comment).
 	//
-	// reviewVerdictDeps (Step 62, §21.1/§21.2) is built fresh here, from
+	// reviewVerdictDeps (§21.1/§21.2) is built fresh here, from
 	// stores this rig already constructs elsewhere (rig.reviewVerdicts/
 	// rig.reviewFindings) plus two one-off stores no other route in this
 	// rig needs -- mirrors cmd/control-plane/main.go's own identical
@@ -567,7 +567,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		RepoSettings:         rig.repoSettings,
 		ReviewFindings:       rig.reviewFindings,
 		AutoApprovalOutcomes: narvipg.NewAutoApprovalOutcomeStore(rig.pool),
-		// DigestSectionFeedback (Step 69, §26.5) backs
+		// DigestSectionFeedback (§26.5) backs
 		// appreviewverdict.DigestContestationRate -- the SAME one-off
 		// "constructed inline, no dedicated rig field" treatment
 		// AutoApprovalOutcomes immediately above already gets.
@@ -579,7 +579,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Get("/", httpapi.GetRepoSettings(rig.repoSettings, reviewVerdictDeps, rig.prSessions))
 		r.Put("/", httpapi.PutRepoSettings(rig.repoSettings, rig.prSessions))
 	})
-	// /api/repos/{owner}/{repo}/false-positive-patterns (Step 63, §22.4) --
+	// /api/repos/{owner}/{repo}/false-positive-patterns (§22.4) --
 	// mounted behind auth.Middleware, exactly like cmd/control-plane/
 	// main.go's own wiring (see falsepositivepatterns.go's own doc
 	// comment).
@@ -596,7 +596,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
 		r.Put("/", httpapi.PutAutoMergeToggle(rig.repoSettings, reviewVerdictDeps, rig.prSessions))
 	})
-	// /api/repos/{owner}/{repo}/auto-retrigger-review (Step 65, §24.5) --
+	// /api/repos/{owner}/{repo}/auto-retrigger-review (§24.5) --
 	// mounted behind auth.Middleware, exactly like cmd/control-plane/
 	// main.go's own wiring (see reposettings.go's own
 	// PutAutoRetriggerReviewToggle doc comment).
@@ -604,7 +604,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
 		r.Put("/", httpapi.PutAutoRetriggerReviewToggle(rig.repoSettings, rig.prSessions))
 	})
-	// /api/repos/{owner}/{repo}/description-autofix (Step 67, §26.2) --
+	// /api/repos/{owner}/{repo}/description-autofix (§26.2) --
 	// mounted behind auth.Middleware, exactly like cmd/control-plane/
 	// main.go's own wiring (see reposettings.go's own
 	// PutDescriptionAutofixToggle doc comment).
@@ -612,7 +612,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
 		r.Put("/", httpapi.PutDescriptionAutofixToggle(rig.repoSettings, rig.prSessions))
 	})
-	// /api/repos/{owner}/{repo}/review-depth (Step 68, §26.3) -- mounted
+	// /api/repos/{owner}/{repo}/review-depth (§26.3) -- mounted
 	// behind auth.Middleware, exactly like cmd/control-plane/main.go's own
 	// wiring (see reposettings.go's own PutReviewDepthConfig doc comment).
 	// Adversarial-review fix, D8: this route was NOT mounted in this test
@@ -625,7 +625,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
 		r.Put("/", httpapi.PutReviewDepthConfig(rig.repoSettings, rig.prSessions))
 	})
-	// /api/repos/{owner}/{repo}/review-cost-budget (Step 69, §26.7) --
+	// /api/repos/{owner}/{repo}/review-cost-budget (§26.7) --
 	// mounted behind auth.Middleware, exactly like cmd/control-plane/
 	// main.go's own wiring (see reposettings.go's own PutReviewCostBudget
 	// doc comment). B9 fix: this route was NOT mounted in this test rig at
@@ -637,7 +637,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
 		r.Put("/", httpapi.PutReviewCostBudget(rig.repoSettings, rig.prSessions))
 	})
-	// /api/repos/{owner}/{repo}/review-analytics (Step 62, §21.1) --
+	// /api/repos/{owner}/{repo}/review-analytics (§21.1) --
 	// mounted behind auth.Middleware exactly like cmd/control-plane/
 	// main.go's own wiring (see reviewanalytics.go's own doc comment).
 	router.Route("/api/repos/{owner}/{repo}/review-analytics", func(r chi.Router) {
@@ -646,7 +646,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	})
 	// /api/repos/{owner}/{repo}/provider-credentials,
 	// /api/environments/{environmentID}/provider-credentials,
-	// /api/provider-credentials (Step 53, "provider credential injection",
+	// /api/provider-credentials ("provider credential injection",
 	// §25.1/§25.3) -- mounted exactly like cmd/control-plane/main.go's own
 	// wiring (see providercredentials.go's own doc comment).
 	router.Route("/api/repos/{owner}/{repo}/provider-credentials", func(r chi.Router) {
@@ -705,7 +705,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		httpapi.SandboxSecretsDelivery(rig.sessions, rig.sandboxes, rig.sandboxSecrets, rig.tokenEncryptionKey))
 	// /api/environments/{environmentID}/cloud-identity-bindings,
 	// /api/cloud-identity-bindings, /api/cloud-identity/signing-keys/rotate,
-	// and the sandbox-facing minting route (Step 73a, "cloud identity:
+	// and the sandbox-facing minting route ("cloud identity:
 	// OIDC issuer, bindings, minting", §27.3) -- mounted exactly like
 	// cmd/control-plane/main.go's own wiring (see httpapi/
 	// cloudidentitybindings.go/cloudidentitykeys.go/cloudidentitytoken.go's
@@ -734,7 +734,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	router.Post("/sessions/{sessionID}/cloud-identity-token",
 		httpapi.MintCloudIdentityToken(rig.sessions, rig.sandboxes, rig.cloudIdentityBindings, rig.oidcSigningKeys, rig.tokenEncryptionKey, rig.cloudIdentityIssuerURL, platform.DefaultTimeouts()))
 	// /api/environments/{environmentID}/cluster-binding and its
-	// sandbox-facing cloud-identity-config delivery route (Step 73b,
+	// sandbox-facing cloud-identity-config delivery route (
 	// §27.3/§27.4) -- mounted exactly like cmd/control-plane/main.go's own
 	// wiring (see httpapi/clusterbindings.go/cloudidentityconfigdelivery.go's
 	// own doc comments).
@@ -747,7 +747,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	router.Post("/sessions/{sessionID}/cloud-identity-config",
 		httpapi.CloudIdentityConfigDelivery(rig.sessions, rig.sandboxes, rig.cloudIdentityBindings, rig.clusterBindings))
 	// /api/environments/{environmentID}/opencode-config, /api/opencode-config,
-	// and their sandbox-facing delivery route (Step 72, §27.2) -- mounted
+	// and their sandbox-facing delivery route (§27.2) -- mounted
 	// exactly like cmd/control-plane/main.go's own wiring (see
 	// opencodeconfig.go's own doc comment).
 	router.Route("/api/environments/{environmentID}/opencode-config", func(r chi.Router) {
@@ -764,7 +764,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	})
 	router.Post("/sessions/{sessionID}/opencode-config",
 		httpapi.OpenCodeConfigDelivery(rig.sessions, rig.sandboxes, rig.openCodeConfigs))
-	// /api/automations (Step 52, "automations: triggers & extras", §8.4) --
+	// /api/automations ("automations: triggers & extras", §8.4) --
 	// mounted exactly like cmd/control-plane/main.go's own wiring (see
 	// automations.go's own doc comment).
 	router.Route("/api/automations", func(r chi.Router) {
@@ -943,7 +943,7 @@ func TestRoutes_RequireAuth(t *testing.T) {
 		{name: "ListPlans", method: http.MethodGet, path: "/api/sessions/" + session.ID.String() + "/plans"},
 		{name: "MintWSToken", method: http.MethodPost, path: "/api/sessions/" + session.ID.String() + "/ws-token"},
 		{name: "CreateTurn", method: http.MethodPost, path: "/api/sessions/" + session.ID.String() + "/turns"},
-		// uploads (Step 58, §28.4/§28.5) -- the three /api-mounted browser
+		// uploads (§28.4/§28.5) -- the three /api-mounted browser
 		// twins, review-fix coverage addition (FIX F): the sandbox-bearer
 		// variants of these same three routes are deliberately mounted
 		// OUTSIDE auth.Middleware entirely (their own bearer+gen handshake
@@ -1342,7 +1342,7 @@ func TestCreateSession_WebSpawnSource_PersistsAsWeb(t *testing.T) {
 
 // TestCreateSession_EpistemicCheckEnabled_PersistsToPostgres is the
 // test-wiring bundle's own addition (adversarial review): proves the REST
-// epistemicCheckEnabled field (§20.4, Step 61) actually reaches
+// epistemicCheckEnabled field (§20.4) actually reaches
 // sessions.epistemic_check_enabled -- before this test existed, mutating
 // CreateSessionOnTx's own EpistemicCheckEnabled: (*bool)(req.
 // EpistemicCheckEnabled) to nil (create.go's own CreateSessionParams

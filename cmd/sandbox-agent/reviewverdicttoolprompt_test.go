@@ -262,7 +262,7 @@ func TestIsLoopbackHost(t *testing.T) {
 }
 
 // TestRenderUploadToolPromptText mirrors TestRenderVerdictToolPromptText's
-// own table shape exactly (Step 58, §28.5): the SAME mechanism, a
+// own table shape exactly (§28.5): the SAME mechanism, a
 // different placeholder set, resolved against the SAME
 // controlPlaneHTTPBase derivation reviewVerdictToolURL itself now shares.
 func TestRenderUploadToolPromptText(t *testing.T) {

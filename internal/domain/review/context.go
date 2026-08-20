@@ -2,7 +2,7 @@ package review
 
 // StackContext is the GitHub-native-stack information a review session's
 // pre-fetched context carries WHEN the PR under review happens to belong to
-// a GitHub stack (§17.6's amendment to Step 46, §21.1's own stacked-PR
+// a GitHub stack (§17.6's amendment to §21.1's own stacked-PR
 // review-scope decision) -- today, in practice, only ever the origin+
 // sentinel-fix pair §17 registers, since nothing else in this plan produces
 // a chain of more than two dependent pull requests (§17.6: "the one pair,
@@ -38,7 +38,7 @@ type StackContext struct {
 }
 
 // PreFetchedContext is a review turn's own inline pre-fetched context
-// (§8.2/Step 46: "inline diff pre-fetched into context (agent must not need
+// (§8.2: "inline diff pre-fetched into context (agent must not need
 // to run `gh pr diff` repeatedly)") -- built once, outside any domain
 // package (a real outbound GitHub API call, §11: no I/O in /internal/domain),
 // by whichever ingress/retrigger path is creating or reusing a review
@@ -65,7 +65,7 @@ type PreFetchedContext struct {
 	// itself failed/degraded, indistinguishable to this struct by design:
 	// either way there is nothing stack-shaped to add to the context).
 	Stack *StackContext
-	// HeadSHA (§21.1, Step 62) is the commit this context's own Diff was
+	// HeadSHA (§21.1) is the commit this context's own Diff was
 	// fetched against -- server-side bookkeeping ONLY, never rendered
 	// into the prompt text by RenderTurnPrompt below (an agent has no
 	// legitimate use for this value, and §21.2's stale-verdict guard
@@ -80,7 +80,7 @@ type PreFetchedContext struct {
 	// could not determine a head SHA (a degraded, best-effort outcome,
 	// exactly like Diff itself being empty on a failed fetch).
 	HeadSHA string
-	// Title/Body (adversarial-review fix, §26.2/Step 67's own follow-up)
+	// Title/Body (adversarial-review fix, §26.2's own follow-up)
 	// are the PR's own CURRENT title/body, fetched server-side by the SAME
 	// GetPullRequest call this struct's one real producer
 	// (internal/app/reviewcontext.Fetch) already makes unconditionally,
@@ -114,7 +114,7 @@ type PreFetchedContext struct {
 	Title string
 	Body  string
 
-	// Additions/Deletions/ChangedFilesCount (§26.3, Step 68) are this
+	// Additions/Deletions/ChangedFilesCount (§26.3) are this
 	// PR's own server-reported diff-size facts -- GitHub's "Get a pull
 	// request" response (the SAME GetPullRequest call this struct's one
 	// producer, internal/app/reviewcontext.Fetch, already makes to
@@ -133,7 +133,7 @@ type PreFetchedContext struct {
 	Additions         int
 	Deletions         int
 	ChangedFilesCount int
-	// ChangedPaths (§26.3, Step 68) is Diff's own changed-file-path
+	// ChangedPaths (§26.3) is Diff's own changed-file-path
 	// listing, parsed deterministically by reviewtriage.
 	// ExtractChangedPaths -- never rendered into the prompt (mirrors
 	// HeadSHA), computed once by this struct's one producer so every
@@ -141,7 +141,7 @@ type PreFetchedContext struct {
 	// re-parsing Diff at its own call site. nil when Diff itself is
 	// empty (a failed or never-attempted fetch).
 	ChangedPaths []string
-	// Labels (§26.3, Step 68) is this PR's own current GitHub label set
+	// Labels (§26.3) is this PR's own current GitHub label set
 	// -- bookkeeping only, mirrors HeadSHA -- sourced from the SAME
 	// GetPullRequest call (githubapi.PullRequest.Labels, already
 	// resolved for Step 50's release detection) rather than a new fetch.
@@ -181,7 +181,7 @@ type PreFetchedContext struct {
 	// never two independently-computed values that could disagree.
 	DeepPath bool
 
-	// ReviewCostBudgetUSD (§26.7, Step 69) is this review's own per-path
+	// ReviewCostBudgetUSD (§26.7) is this review's own per-path
 	// cost ceiling (repo_settings.review_cost_budget_light_usd/
 	// review_cost_budget_deep_usd -- internal/domain/reviewtriage.
 	// Config.CostBudget, resolved server-side alongside ctx.DeepPath
@@ -239,7 +239,7 @@ const defaultCostBudgetSafetyMarginPercent = 80
 // choose its own delimiter, which is exactly the class of injection
 // ("close my own block early, then inject a fake instruction outside it")
 // a caller-controlled delimiter would open. descriptionContentDelimiter
-// (adversarial-review fix, §26.2/Step 67's own follow-up) wraps the PR's
+// (adversarial-review fix, §26.2's own follow-up) wraps the PR's
 // own title+body -- model-authored-or-human-authored, either way untrusted
 // -- exactly like diffContentDelimiter already wraps the PR's own diff.
 const (
@@ -287,7 +287,7 @@ const (
 	VerdictToolGenPlaceholder    = "{{REVIEW_VERDICT_TOOL_GEN}}"
 )
 
-// ReviewCostBudgetToolURLPlaceholder (§26.7/§26.9, Step 70) is the fixed
+// ReviewCostBudgetToolURLPlaceholder (§26.7/§26.9) is the fixed
 // token subAgentOrchestrationInstructions (below) carries in place of this
 // turn's real, live GET review-cost-budget URL -- mirrors
 // VerdictToolURLPlaceholder's own doc comment exactly, for the identical
@@ -316,7 +316,7 @@ const (
 const ReviewCostBudgetToolURLPlaceholder = "{{REVIEW_COST_BUDGET_TOOL_URL}}"
 
 // ArchitectureScribeAgentName, CounterReviewerAgentName, and
-// FactCheckAgentName (§26.4/§26.6, Step 69) are the literal OpenCode
+// FactCheckAgentName (§26.4/§26.6) are the literal OpenCode
 // custom-agent names (opencode.json's own "agent" object, mirroring Step
 // 48's "sentinel-fix" custom agent, internal/adapters/outbound/opencode/
 // sentinelfixagent.go) the primary reviewer's own orchestration is
@@ -380,7 +380,7 @@ const (
 // within it "summary" is the one field this Step actually validates
 // (reviewpost.ValidateVerdictInput's own ErrEmptyDigestSummary) --
 // "archDecisions"/"stackRisks"/"unverifiedLimits" are REQUESTED, and
-// (Step 68, §26.3, below) become REQUIRED instead whenever this turn was
+// (§26.3, below) become REQUIRED instead whenever this turn was
 // routed to the deep path (ctx.DeepPath true -- see verdictToolInstructions'
 // own doc comment for the full "why" and PreFetchedContext.DeepPath's own
 // doc comment for where that fact comes from). digest.summary is
@@ -422,7 +422,7 @@ const (
 //
 // The fix: internal/app/reviewcontext.Fetch already calls GetPullRequest
 // with the bot's own credential on EVERY review turn (to resolve
-// HeadSHA/BaseRef/Stack, Step 62/§17.6) -- the exact endpoint that already
+// HeadSHA/BaseRef/Stack, §17.6) -- the exact endpoint that already
 // returns "title"/"body" too (githubapi.PullRequest.Title/Body). Fetch
 // carries those onto PreFetchedContext.Title/Body (this file, above), and
 // RenderTurnPrompt below renders them into their own delimited,
@@ -589,7 +589,7 @@ func verdictToolInstructions(deep bool, costBudgetUSD float64, costBudgetSafetyM
 // findings list this funnel prunes) -- dispatched whenever convenient,
 // before/after/interleaved with the funnel above.
 //
-// # The cost budget (§26.7, Step 70): a real, checkable fact, not
+// # The cost budget (§26.7): a real, checkable fact, not
 // self-estimation -- but still not a server-ENFORCED gate
 //
 // §26.7 specifies a look-ahead check performed by "the primary reviewer's
@@ -724,7 +724,7 @@ func twoDigits(n int) string {
 // RenderTurnPrompt assembles a review turn's final prompt text from
 // basePrompt (the human-authored or deterministically-synthesized command
 // text that triggered this turn -- a mention comment's own body, or a fixed
-// string for a label/button-triggered manual retrigger, §8.2/Step 46) plus
+// string for a label/button-triggered manual retrigger, §8.2) plus
 // ctx's own pre-fetched diff/stack context, in that order: the human's own
 // words come first, the fetched context follows, clearly delimited and
 // labeled as data.
@@ -776,7 +776,7 @@ func twoDigits(n int) string {
 // placeholder tokens (VerdictToolURLPlaceholder et al.), never live
 // secrets -- see their own doc comment for why this package cannot fill
 // them in itself, and where they actually get resolved. This fifth piece
-// is now (Step 68, §26.3, extended by Step 69, §26.4/§26.6/§26.7) the ONE
+// is now (§26.3, extended by §26.4/§26.6/§26.7) the ONE
 // piece that is not textually identical across every call --
 // verdictToolInstructions(ctx.DeepPath, ctx.ReviewCostBudgetUSD, ctx.CostBudgetSafetyMarginPercent) renders
 // the deep-path digest fields as REQUIRED rather than merely requested,

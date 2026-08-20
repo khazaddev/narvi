@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// This file implements §26.2/Step 67's own "graduated remediation"
+// This file implements §26.2's own "graduated remediation"
 // content: the ACTUAL new PR body text a Narvi-authored PR's description
 // gets rewritten to, when the per-repo descriptionAutofix flag is on
 // (internal/app/outboxworker's own description-autofix notifier is the

@@ -154,7 +154,7 @@ type SessionCoalescer struct {
 	// entirely rather than left unread; cmd/control-plane/main.go no
 	// longer sets it either.
 
-	// ReviewTriage (Step 68, §26.3) bundles the two stores internal/app/
+	// ReviewTriage (§26.3) bundles the two stores internal/app/
 	// reviewtriage.ComputeDecision needs (repo_settings, for the
 	// per-repo reviewDepth config; review_verdicts, for the "prior high
 	// verdict" signal) -- constructed once at wiring time (cmd/control-
@@ -164,13 +164,13 @@ type SessionCoalescer struct {
 	// review turn gets its own fresh depth decision, not just a
 	// session's first one.
 	ReviewTriage appreviewtriage.Deps
-	// ReviewModelDeep (Step 68, §26.3) is platform.Config.ReviewModelDeep,
+	// ReviewModelDeep (§26.3) is platform.Config.ReviewModelDeep,
 	// threaded through for domainreviewtriage.ModelAndEffort -- empty
 	// means "not configured", see that function's own doc comment
 	// (internal/domain/reviewtriage/modeleffort.go).
 	ReviewModelDeep string
 
-	// RolloutMode/RepoSettings (Step 76, §10 Phase 6, §32) are threaded
+	// RolloutMode/RepoSettings (§10 Phase 6, §32) are threaded
 	// through to the WINNER path's own httpapi.CreateSessionOnTx call
 	// below, exactly like AuditLog/Environments already are -- both are
 	// REQUIRED parameters of that function (its own doc comment), so a
@@ -328,7 +328,7 @@ type SessionCoalescer struct {
 // avoid. Reused verbatim, never recaptured: both categories classify the
 // EXACT same raw mention text.
 //
-// reviewHeadSHA (Step 62 review finding C2, CRITICAL, fixed) is the commit
+// reviewHeadSHA is the commit
 // SHA handler.go's own reviewcontext.Fetch call just anchored req.Prompt's
 // own pre-fetched diff to (empty when that fetch failed/never ran) --
 // threaded through to whichever of the two branches below actually
@@ -338,7 +338,7 @@ type SessionCoalescer struct {
 // (turns.review_head_sha) at creation time -- see that column's own
 // migration doc comment for the full "why".
 //
-// reviewDepth/triageModelID/triageEffort/triageRecordJSON (Step 68,
+// reviewDepth/triageModelID/triageEffort/triageRecordJSON (
 // §26.3) are the ALREADY-RESOLVED light/deep routing outcome -- computed
 // by THIS function's own caller, handler.go, via appreviewtriage.
 // ComputeDecision (plus domainreviewtriage.Floor/ModelAndEffort/
@@ -509,7 +509,7 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 		// must never be `prompt` (which, unlike here, already carries
 		// review.RenderTurnPrompt's own folded-in diff/stack/verdict-tool
 		// text once cfg.DiffFetcher is wired).
-		// triageModelID/triageEffort (Step 68, §26.3): a GitHub-sourced
+		// triageModelID/triageEffort (§26.3): a GitHub-sourced
 		// req never sets ModelId itself (this package's own request-
 		// building code, handler.go, never populates it), so the
 		// triage-computed override is the only model/effort signal this
@@ -570,7 +570,7 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 	// intentdomain.TargetReview below confirms it deterministically), so
 	// this is never a build turn either, for the identical reason the
 	// REUSE branch's own CreateTurnForBot call (below) hardcodes false.
-	// triageModelID/triageEffort (Step 68, §26.3): a GitHub-sourced req
+	// triageModelID/triageEffort (§26.3): a GitHub-sourced req
 	// never sets ModelId/Effort itself (this package's own request-
 	// building code, handler.go, never populates either) -- overwriting
 	// them here, on this function's own local copy of req, is therefore

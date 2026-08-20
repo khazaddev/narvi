@@ -11,7 +11,7 @@ import (
 // eventTypeIssueComment and eventTypePullRequestReviewComment are the two
 // "X-GitHub-Event" values that can carry a PR @mention (doc.go's own
 // writeup) -- GitHub's real event names, verbatim. eventTypePullRequest
-// (Step 46, "review sessions", §8.2) is a THIRD, unrelated trigger: not a
+// ("review sessions", §8.2) is a THIRD, unrelated trigger: not a
 // mention at all, but GitHub's own "labeled" action on a pull request,
 // detecting a maintainer's deliberate manual re-trigger command (§5.1: "a
 // human applying a label ... is a legitimate, deliberate command").
@@ -59,7 +59,7 @@ type mention struct {
 	// falls back to today's pre-fix behavior), never "issue_comment can't
 	// carry this".
 	HeadBranch *string
-	// HeadSHA (Step 62, §21.1) is the PR's head commit SHA AT THE MOMENT
+	// HeadSHA (§21.1) is the PR's head commit SHA AT THE MOMENT
 	// this mention's own event carried/resolved it -- nil exactly when
 	// HeadBranch is still nil-and-unresolved (issue_comment, before
 	// resolveIssueCommentHead runs), set together with HeadBranch by
@@ -78,7 +78,7 @@ type mention struct {
 	// "comment.user.login" (GitHub's own real webhook shape, IDENTICAL
 	// field names/shape across both event types; verified against GitHub's
 	// own live webhook-events documentation during this batch's own design
-	// phase); for a label retrigger (pull_request/"labeled", Step 46,
+	// phase); for a label retrigger (pull_request/"labeled",
 	// "review sessions", §8.2), "sender.id"/"sender.login" -- the actor who
 	// APPLIED the label, GitHub's own analogous field for an event with no
 	// comment/commenter at all. Both shapes are handled identically by
@@ -112,7 +112,7 @@ type mention struct {
 	// genuine label re-trigger.
 	IsLabelRetrigger bool
 
-	// Stack (Step 46, "review sessions", §17.6's amendment) is non-nil
+	// Stack ("review sessions", §17.6's amendment) is non-nil
 	// exactly when this event's own webhook payload directly embeds
 	// GitHub's own stack object -- today, only ever true for
 	// parsePullRequestLabeled below (a native "pull_request" event, the
@@ -144,7 +144,7 @@ func nonEmptyStringPtr(s string) *string {
 
 // genuine, actionable review-session trigger: a comment mentioning
 // reReviewLabel's own configured bot handle (mentionRE), or a
-// pull_request/"labeled" event naming reReviewLabel (Step 46, "review
+// pull_request/"labeled" event naming reReviewLabel ("review
 // sessions", §8.2's own manual re-trigger-via-label lane). ok=false (nil
 // error) means "ignore this delivery" -- an unrecognized event type, a
 // non-"created" comment action, a plain-issue (not PR) comment, a comment
@@ -195,7 +195,7 @@ type issueCommentPayload struct {
 		} `json:"pull_request"`
 	} `json:"issue"`
 	Comment struct {
-		// ID (Step 63, §22.2) is this comment's own globally-unique
+		// ID (§22.2) is this comment's own globally-unique
 		// GitHub id -- "the triggering comment id" a false-positive-
 		// pattern capture command is keyed on (falsepositivecapture.go),
 		// never used by ordinary mention detection/parseIssueComment
@@ -257,7 +257,7 @@ func parseIssueComment(body []byte, mentionRE *regexp.Regexp) (mention, bool, er
 type pullRequestReviewCommentPayload struct {
 	Action  string `json:"action"`
 	Comment struct {
-		// ID (Step 63, §22.2) mirrors issueCommentPayload.Comment.ID's own
+		// ID (§22.2) mirrors issueCommentPayload.Comment.ID's own
 		// identical doc comment -- see that field's own comment.
 		ID   int64  `json:"id"`
 		Body string `json:"body"`
@@ -274,7 +274,7 @@ type pullRequestReviewCommentPayload struct {
 		Number int32 `json:"number"`
 		Head   struct {
 			Ref string `json:"ref"`
-			// SHA (Step 62, §21.1) is this PR's own current head commit
+			// SHA (§21.1) is this PR's own current head commit
 			// -- carried inline on this SAME payload, exactly like Ref,
 			// so no further API call is needed to learn it either.
 			SHA string `json:"sha"`
@@ -391,7 +391,7 @@ type pullRequestPayload struct {
 		Number int32 `json:"number"`
 		Head   struct {
 			Ref string `json:"ref"`
-			// SHA (Step 62, §21.1) is this PR's own current head
+			// SHA (§21.1) is this PR's own current head
 			// commit -- carried inline on this SAME payload, exactly
 			// like Ref/Stack below, so no separate GetPullRequest
 			// call is needed for it either.

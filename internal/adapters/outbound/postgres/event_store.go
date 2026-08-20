@@ -70,7 +70,7 @@ func (s *EventStore) ListRecentForSession(ctx context.Context, sessionID pgtype.
 	})
 }
 
-// ListSubTaskStartsForTurn and ListSubTaskFinishesForTurn (Step 71, §26.4/
+// ListSubTaskStartsForTurn and ListSubTaskFinishesForTurn (§26.4/
 // §7.1; renamed from ...ForGen after an adversarial review of this same PR
 // caught a real cross-turn contamination gap -- see queries/events.sql's
 // own doc comment on these two queries for the full "why") back post-hoc

@@ -213,7 +213,7 @@ func NewBuilder(store *postgres.ImageBuildStore, pool *pgxpool.Pool, provider po
 }
 
 // cacheMount resolves the ports.CacheMount a real BuildImage call requests
-// to accelerate a build (§19.1's closing paragraph, Step 43(c), third
+// to accelerate a build (§19.1's closing paragraph(c), third
 // iteration: immutable versioned cache snapshots). Key is
 // domain/imagebuild.CacheVolumeKey(base, runtimeVersion) -- deliberately
 // NOT a function of repos, so every fingerprint sharing the same

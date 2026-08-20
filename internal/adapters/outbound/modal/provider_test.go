@@ -961,7 +961,7 @@ func TestProvider_BuildImage(t *testing.T) {
 }
 
 // --- BuildImage: CacheMount wiring + pure-accelerator fallback (§19.1's
-// closing paragraph, Step 43(c)) ---
+// closing paragraph(c)) ---
 
 // TestProvider_BuildImage_CacheMount_SentOnWire proves a spec carrying
 // CacheMount produces a request whose cacheVolume field mirrors

@@ -724,7 +724,7 @@ func (h *commandHandler) HandleSnapshot(_ context.Context, cmd sandboxws.Snapsho
 }
 
 // HandleGitSyncComplete observes the control plane's own best-effort
-// acknowledgment of a git_sync event (§3.4, Step 29 "gitstate in-sandbox").
+// acknowledgment of a git_sync event (§3.4 "gitstate in-sandbox").
 // This sandbox's own git-sync reconciliation (internal/sandboxagent/
 // gitclone.SyncAll, driven from runBootSequence below) is entirely
 // sandbox-local -- git doesn't need CP permission to run stash/checkout/
@@ -799,12 +799,12 @@ func shutdownSandboxAgentOTel(shutdown func(context.Context) error, timeout time
 
 // run mirrors cmd/control-plane/main.go's serve() shape: a thin main()
 // dispatches to this testable, error-returning function.
-// fetchProviderCredentialSpawnEnv (Step 53, "provider credential
+// fetchProviderCredentialSpawnEnv ("provider credential
 // injection", §25.1/§25.3) fetches this session's own resolved provider
 // credentials from CP ONCE (POST /sessions/{id}/provider-credentials) --
 // callers split the result by kind: providerCredentialSpawnEnv (api-kind,
 // unchanged since Step 53) and providerCredentialOAuthSets (oauth-kind,
-// Step 59, §29.6) below. A single fetch, not two, so both env injection
+// §29.6) below. A single fetch, not two, so both env injection
 // and the post-spawn PUT /auth/{providerID} call see the EXACT SAME
 // resolved snapshot -- two independent fetches could race and observe
 // different results if a credential changed between them. Only ever
@@ -1024,12 +1024,12 @@ func run() error {
 	// resolvedCredentials is populated inside the SAME block below and
 	// consumed twice: providerCredentialSpawnEnv (api-kind, feeding
 	// opencodeproc.Spawn's own env) here, and providerCredentialOAuthSets
-	// (oauth-kind, Step 59 §29.6) in the SECOND cfg.SessionConfig != nil
+	// (oauth-kind §29.6) in the SECOND cfg.SessionConfig != nil
 	// block below, once bridge exists -- declared at this outer scope
 	// (mirroring agentRuntime's own identical need) so both call sites see
 	// the exact same fetched snapshot.
 	var resolvedCredentials map[string]credentials.AuthValue
-	// sandboxSecretEnv (Step 72, §27.1, adversarial-review HIGH fix) and
+	// sandboxSecretEnv (§27.1, adversarial-review HIGH fix) and
 	// bootDegradeNotes (§27.1, adversarial-review LOW fix) are populated
 	// inside the SAME block below and consumed AFTER it closes: this
 	// binary's own single opencodeproc.Spawn call sits inside this block
@@ -1041,7 +1041,7 @@ func run() error {
 	// are.
 	var sandboxSecretEnv []string
 	var bootDegradeNotes []string
-	// cloudIdentityStates/cloudIdentityMintClient (Step 73b, "cloud
+	// cloudIdentityStates/cloudIdentityMintClient ("cloud
 	// identity: sandbox-side consumption + kubeconfig injection", §27.3)
 	// are populated inside the SAME block below and consumed LATER,
 	// outside it, by the background refresh loop's own group.Go
@@ -1260,7 +1260,7 @@ func run() error {
 		// deliberately best-effort (nil on any failure, never fatal to
 		// boot) and why it is fetched exactly ONCE here for both the
 		// api-kind env-var injection below and the oauth-kind PUT
-		// /auth/{providerID} call once bridge exists (Step 59, §29.6).
+		// /auth/{providerID} call once bridge exists (§29.6).
 		resolvedCredentials = fetchProviderCredentials(ctx, cfg, timeouts.ProviderCredentialFetchTimeout)
 		providerCredentialEnv := providerCredentialSpawnEnv(resolvedCredentials)
 
@@ -1435,7 +1435,7 @@ func run() error {
 	var budgetSrvGroup errgroup.Group
 
 	// cloudIdentityRefreshCtx/cancelCloudIdentityRefresh/
-	// cloudIdentityRefreshGroup (Step 73b, "cloud identity: sandbox-side
+	// cloudIdentityRefreshGroup ("cloud identity: sandbox-side
 	// consumption + kubeconfig injection", §27.3) give the background
 	// token-refresh loop (runCloudIdentityRefreshLoop, cloudidentity.go)
 	// its OWN separate errgroup AND its OWN explicitly-canceled derived
@@ -1504,7 +1504,7 @@ func run() error {
 	}
 
 	// onGitSync translates each internal/sandboxagent/gitclone.SyncAll phase
-	// (§3.4, Step 29 "gitstate in-sandbox") into an outbound sandboxws.
+	// (§3.4 "gitstate in-sandbox") into an outbound sandboxws.
 	// GitSync event, mirroring reportBootProgress's own "forward over the
 	// bridge when one exists, always log locally too" shape immediately
 	// above. git_sync is a best-effort event with no ackId (events.
@@ -1620,8 +1620,8 @@ func run() error {
 	// near-duplicate timeout. budgetSrvGroup.Wait() afterward drains
 	// budgetServer's own Serve goroutine (Shutdown makes it return
 	// promptly) -- never left running past this function's own return, the
-	// same "no orphaned listener/goroutine" bar Step 13 already set for a
-	// different subsystem.
+	// same no-orphaned-listener bar the process supervisor already meets
+	// for a different subsystem.
 	if budgetServer != nil {
 		if err := budgetServer.Shutdown(shutdownCtx); err != nil {
 			slog.Warn("sandbox-agent: review-cost-budget server shutdown failed", "error", err)
@@ -1769,7 +1769,7 @@ func logRepoMissingFromManifest(manifest boot.ImageManifest, currentSHAs map[str
 // never called on this path at all; cloning again into a non-empty
 // directory would conflict with what is already there.
 //
-// secretEnv (Step 72, §27.1, adversarial-review HIGH fix) is run()'s own
+// secretEnv (§27.1, adversarial-review HIGH fix) is run()'s own
 // already-built sandboxSecretEnv slice -- passed straight through to
 // boot.RunBoot, which threads it on into every hook/services.yml spawn.
 // nil is a correct, safe input (every existing test call site already
@@ -1795,13 +1795,13 @@ func runBootSequence(
 	onGitSync gitclone.OnGitSync,
 ) error {
 	var repos []boot.RepoInfo
-	// workspaceMoved (§19.4, Step 42) stays nil for a nil-SessionConfig boot
+	// workspaceMoved (§19.4) stays nil for a nil-SessionConfig boot
 	// (the dev/test no-op case, exactly like repos itself) -- boot.RunBoot's
 	// own runRepoHooks call treats a nil map as "every repo defaults to
 	// workspaceMoved: true" (workspaceMovedFor's own safe default), which is
 	// moot anyway since repos is empty in that case too.
 	var workspaceMoved map[string]bool
-	// setupRerunLadder (§19.6, Step 43) stays nil for a nil-SessionConfig
+	// setupRerunLadder (§19.6) stays nil for a nil-SessionConfig
 	// boot too -- boot.RunBoot's own ladderFor call treats a nil map as
 	// "fall through to full setup.sh", the correct floor, and is moot
 	// anyway since repos itself is empty in that case (mirroring
@@ -1958,7 +1958,7 @@ func runBootSequence(
 		}
 	}
 
-	// timeouts.SetupRerunRetryBackoff (§19.6, Step 43) paces the ONE retry
+	// timeouts.SetupRerunRetryBackoff (§19.6) paces the ONE retry
 	// of a failed full setup.sh rerun -- see runSetupRerunLadder's own doc
 	// comment (hooks.go). It carries the same value as the OpenCode
 	// adapter's own transient-retry pause today and is still a separate

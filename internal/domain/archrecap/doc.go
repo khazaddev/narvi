@@ -1,9 +1,9 @@
-// Package archrecap implements §26.5/Step 69's own measurement command:
+// Package archrecap implements §26.5's own measurement command:
 // `arch recap wrong: <reason>` -- a maintainer+ contests the deep path's
 // own architecture-recap digest section (§26.1/§26.4's "Architecture
 // choices" section, informed by the architecture-scribe sub-task on the
 // deep path). Deliberately mirrors internal/domain/falsepositive's own
-// `false positive: <reason>` capture command (Step 63, §22.2) precisely
+// `false positive: <reason>` capture command (§22.2) precisely
 // -- IMPLEMENTATION_PLAN.md's own Step 69 row: "a maintainer command
 // `arch recap wrong: <reason>` that MIRRORS Step 63's `false positive:
 // <reason>` command EXACTLY" -- down to the deterministic, case-

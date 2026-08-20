@@ -49,7 +49,7 @@ const (
 	ActionDecideWorkflowStep Action = "decide_workflow_step"
 	// ActionUploadToSession is minting/confirming a file upload against an
 	// EXISTING session (POST /api/sessions/:id/uploads and its own
-	// /complete twin, Step 58, §28.5) — the SAME row shape as
+	// /complete twin, §28.5) — the SAME row shape as
 	// ActionPromptSession by that section's own explicit instruction ("a
 	// new Authorize action mapped to the same §13.3 row as prompting"):
 	// admin/maintainer on any session, member only on one they created or
@@ -61,7 +61,7 @@ const (
 	// no separate Authorize call" precedent.
 	ActionUploadToSession Action = "upload_to_session"
 	// ActionMergePR covers clicking Merge on a decision-inbox
-	// ready_to_merge row (Step 60, "decision inbox: read model + API",
+	// ready_to_merge row ("decision inbox: read model + API",
 	// §16.2/§16.1 -- "Viewer role sees the queue read-only and cannot
 	// merge"). §13.3's own table names no dedicated "merge PRs" row at
 	// all; this Action is placed in THIS row, the SAME shape as
@@ -84,7 +84,7 @@ const (
 	ActionMergePR Action = "merge_pr"
 	// ActionLinkChatGPTAccount covers self-service linking/unlinking of
 	// the caller's OWN ChatGPT account (POST/DELETE /api/me/chatgpt-link,
-	// Step 59, §29.3/§29.9 — "self-service, own-user only... one new
+	// §29.3/§29.9 — "self-service, own-user only... one new
 	// action row, own-aware like ActionApprovePlan's own row"): admin/
 	// maintainer unconditionally (though in practice every /api/me/...
 	// call is already self-scoped by the caller's own identity), member
@@ -152,7 +152,7 @@ const (
 	// handlers.
 	ActionManageWorkflowDefinitions Action = "manage_workflow_definitions"
 	// ActionManageCloudIdentityBindings covers creating/editing/deleting a
-	// cloud_identity_bindings row (Step 73a, "cloud identity: OIDC
+	// cloud_identity_bindings row ("cloud identity: OIDC
 	// issuer, bindings, minting", §27.3) -- both scope=environment AND
 	// scope=global rows share this ONE action, per §27.3's own explicit
 	// instruction ("params are... maintainer+ managed (the §13.3
@@ -168,7 +168,7 @@ const (
 	// cloudidentitybindings.go is this Action's own caller.
 	ActionManageCloudIdentityBindings Action = "manage_cloud_identity_bindings"
 	// ActionManageClusterBindings covers creating/editing/deleting the
-	// (at most one, per-Environment) cluster_bindings row (Step 73b,
+	// (at most one, per-Environment) cluster_bindings row (
 	// "cloud identity: sandbox-side consumption + kubeconfig injection",
 	// §27.4) -- this SAME row (maintainer+) as ActionManageCloudIdentityBindings
 	// immediately above, by the identical reasoning that action's own doc
@@ -246,11 +246,11 @@ const (
 	// this same row 2 shape, still two names) rather than merging into
 	// one action whose meaning would depend on which caller invoked it.
 	ActionManageFalsePositivePatterns Action = "manage_false_positive_patterns"
-	// ActionContestArchRecap covers §26.5/Step 69's own "arch recap
+	// ActionContestArchRecap covers §26.5's own "arch recap
 	// wrong: <reason>" PR-thread command -- a maintainer+ contests the
 	// deep path's own architecture-recap digest section, mirroring
 	// ActionTeachFalsePositivePattern's own capture-command shape EXACTLY
-	// (Step 63, §22.2, this SAME row): dispatched BEFORE the ordinary
+	// (§22.2, this SAME row): dispatched BEFORE the ordinary
 	// mention/session router (internal/adapters/inbound/github's own
 	// archrecapcontest.go), reusing THIS SAME §13.3 gate directly, never
 	// a parallel permission model invented for this one command. Placed
@@ -311,7 +311,7 @@ const (
 	// ActionToggleSentinelAutoFix covers §17's own sentinel auto-fix
 	// on/off toggle.
 	ActionToggleSentinelAutoFix Action = "toggle_sentinel_auto_fix"
-	// ActionConfigureBlockOnHighRisk covers §8.2/Step 47's own
+	// ActionConfigureBlockOnHighRisk covers §8.2's own
 	// blockOnHighRisk admin, per-repo, strict-boolean setting
 	// (repo_settings, migrations/000044_repo_settings.up.sql) --
 	// internal/adapters/inbound/httpapi/reposettings.go's own GET/PUT

@@ -61,7 +61,7 @@ func (j *Ack) UnmarshalJSON(value []byte) error {
 }
 
 // artifactType MUST match the Postgres artifact_type enum
-// (migrations/000012_artifacts.up.sql) exactly. status/failureReason (Step 58,
+// (migrations/000012_artifacts.up.sql) exactly. status/failureReason (
 // §28.6) are additive and OPTIONAL: absent status means "ready" (the same
 // zero-producers-today additive reasoning SnapshotReady.commandMessageId used) --
 // every pr/preview artifact event emitted before this Step, and every future one

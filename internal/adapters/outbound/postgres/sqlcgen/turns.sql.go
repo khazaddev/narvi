@@ -41,7 +41,7 @@ type CreateTurnParams struct {
 // compiling and behaving identically: the zero-value nil/nil/false it
 // already implicitly got before this Step's own columns existed.
 //
-// effort (migrations/000063_turn_session_effort.up.sql, Step 59, §29.8)
+// effort (migrations/000063_turn_session_effort.up.sql, §29.8)
 // mirrors model_id's own shape exactly, one column over -- plain
 // positional param like model_id itself (this query's own existing style
 // for a nullable column; sqlc generates a keyed struct either way, so
@@ -58,20 +58,20 @@ type CreateTurnParams struct {
 // diff was anchored to. See that migration's own doc comment for the
 // full "why".
 //
-// answer_only (migrations/000074_plan_followup.up.sql, Step 64, §23.2)
+// answer_only (migrations/000074_plan_followup.up.sql, §23.2)
 // mirrors review_head_sha's own identical shape one column further --
 // nil/absent for every existing call site (every CreateTurnParams
 // literal that predates this Step), set exactly once, at creation, by
 // createTurnLocked's own plan_followup gate (turn.go). See that
 // migration's own doc comment for the full "why NULL vs FALSE" split.
 //
-// review_depth (migrations/000080_turns_review_depth.up.sql, Step 68,
+// review_depth (migrations/000080_turns_review_depth.up.sql,
 // §26.3) mirrors review_head_sha's own identical shape one column
 // further -- nil/absent for every non-review turn, set exactly once, at
 // creation, by every review-turn-creation path.
 //
 // review_depth_decision (migrations/000083_turns_review_depth_decision.up.sql,
-// Step 68, §18.4's own precedent) is review_depth's own richer sibling --
+// §18.4's own precedent) is review_depth's own richer sibling --
 // the full internal/domain/reviewtriage.DecisionRecord, JSON-marshaled by
 // the caller (this query does no encoding of its own).
 func (q *Queries) CreateTurn(ctx context.Context, arg CreateTurnParams) (Turn, error) {

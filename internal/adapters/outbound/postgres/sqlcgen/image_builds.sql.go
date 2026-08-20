@@ -114,8 +114,8 @@ SELECT fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt
 WHERE fingerprint = $1
 `
 
-// Queries backing ImageBuildStore (Step 26, "image builds", §8.5-note/
-// §10-P2; Step 41, "warm boot: shared fingerprint", §19.1). See
+// Queries backing ImageBuildStore ("image builds", §8.5-note/
+// §10-P2; "warm boot: shared fingerprint", §19.1). See
 // migrations/000024_image_builds.up.sql and
 // migrations/000039_image_builds_shared_fingerprint.up.sql for the
 // table's own doc comments (why base/repo_urls/runtime_version are

@@ -159,7 +159,7 @@ func resolveSlackActorSingleAttempt(ctx context.Context, logger *slog.Logger, sl
 	return res.UserID, res.NotificationText()
 }
 
-// authorizeResolvedActor/ownedOrJoined used to live here (Step 39,
+// authorizeResolvedActor/ownedOrJoined used to live here (
 // "identities + full RBAC", §13.2/§13.3) but moved verbatim into
 // internal/app/actorauthz (batch fix/audit-github-actor-rbac) once GitHub
 // ingress became a third consumer of the identical logic Linear's own

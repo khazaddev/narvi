@@ -1,6 +1,6 @@
 package boot_test
 
-// Two new §9.3-class resilience scenarios (Step 42, §19.4/§19.9's own
+// Two new §9.3-class resilience scenarios (§19.4/§19.9's own
 // "stale-image boot" and "non-idempotent-setup boot" additions), exercised
 // through boot.RunBoot itself -- the same real orchestration point
 // cmd/sandbox-agent's own runBootSequence calls (hook policy +

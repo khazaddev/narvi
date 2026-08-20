@@ -98,7 +98,7 @@ ON CONFLICT (cache_key) DO UPDATE SET next_version = image_cache_version_counter
 RETURNING next_version
 `
 
-// Queries backing ImageCacheVersionStore (Step 43(c), third iteration:
+// Queries backing ImageCacheVersionStore (third iteration:
 // immutable versioned cache snapshots -- §19.1's closing paragraph). See
 // migrations/000087_image_cache_versions.up.sql for the two-table shape's
 // own full doc comment (why a reservation counter and a confirmed-history

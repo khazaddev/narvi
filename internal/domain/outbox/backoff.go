@@ -1,5 +1,5 @@
 // Package outbox holds the pure, I/O-free decision logic for the outbox
-// delivery worker (internal/app/outboxworker, Step 35 "outbox delivery",
+// delivery worker (internal/app/outboxworker "outbox delivery",
 // §5.1: "a retry worker delivers with exponential backoff + dead-letter
 // after N attempts"). No I/O, no time.Now(), no randomness (CLAUDE.md) --
 // every input this package's own EvaluateBackoff needs (attempt count,

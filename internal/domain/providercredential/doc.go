@@ -43,7 +43,7 @@
 //
 // Both independently give the SAME order, automation first (most
 // specific) down to global (least specific) -- automation was out of
-// scope for Step 53 itself (§8.4/Step 52's own "per-automation secrets"
+// scope for Step 53 itself (§8.4's own "per-automation secrets"
 // deferral was for a LATER, focused follow-up, not provider_credentials),
 // so for the 3 scopes THAT Step actually built, the real, doubly-confirmed
 // precedence was:

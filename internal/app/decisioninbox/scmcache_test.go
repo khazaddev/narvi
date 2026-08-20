@@ -33,7 +33,7 @@ type fakeSCMCacheSourceControl struct {
 	// entries" test below needs a REAL fetch duration that outlasts a
 	// (deliberately tiny, test-only) TTL to actually exercise the bug.
 	openPRsDelay time.Duration
-	// openPRsTruncated/openPRsErr (Step 60 review finding C1, TEST BATCH:
+	// openPRsTruncated/openPRsErr (
 	// this fake previously hardcoded truncated=false and never errored,
 	// so neither the truncated->never-cached path nor the plain-error
 	// path below this struct had any test coverage at all) let a test
@@ -43,7 +43,7 @@ type fakeSCMCacheSourceControl struct {
 
 	// codeOwnersDelay/codeOwnersCallCount mirror openPRsDelay/
 	// openPRsCallCount immediately above, for ResolveCodeOwners instead
-	// (Step 60 review finding P2-2, second round: the born-expired fix was
+	// (the born-expired fix was
 	// previously applied only to the openPRs cache -- ResolveCodeOwners'
 	// own identical bug had no test at all, mirroring
 	// TestSCMCache_ListOpenPRsForUser_SlowFetchDoesNotBornExpire below).
@@ -148,7 +148,7 @@ func (f *fakeSCMCacheSourceControl) UpdatePRBody(context.Context, ports.UpdatePR
 
 // TestSCMCache_ListOpenPRsForUser_IsolatesByExternalID proves the cache
 // key (spec.GitHubExternalID) is what actually isolates one user's own
-// cached PR list from another's (Step 60 review finding B1) -- SCMCache is
+// cached PR list from another's -- SCMCache is
 // constructed ONCE, process-wide, and shared across every actor's own
 // inbox load; the cache key is the ENTIRE tenant-isolation boundary. A
 // mutation replacing that key with a constant would make this test's own
@@ -199,7 +199,7 @@ func TestSCMCache_ListOpenPRsForUser_IsolatesByExternalID(t *testing.T) {
 
 // TestSCMCache_ListOpenPRsForUser_CacheHitReturnsOriginalFetchInstant
 // proves a cache HIT returns the ORIGINAL fetch's own instant, never the
-// hit's own later `now` (Step 60 review finding T3 -- §16.2's own "never
+// hit's own later `now` ( §16.2's own "never
 // presented as live truth" invariant: `return cached, now, nil` on the
 // hit path would pass every OTHER existing test, since the one prior
 // cache-hit coverage shared `now` between the miss and the hit call,
@@ -287,7 +287,7 @@ func TestSCMCache_ListOpenPRsForUser_SlowFetchDoesNotBornExpire(t *testing.T) {
 }
 
 // TestSCMCache_ListOpenPRsForUser_TruncatedResultIsNeitherHiddenNorCached
-// proves TWO facts Step 60 review finding C1 (TEST BATCH) named as previously
+// proves TWO facts that were previously
 // untested (this method's own fake used to hardcode truncated=false and
 // never error): (1) SCMCache.ListOpenPRsForUser's own truncated return
 // actually surfaces the underlying port's truncated=true (rather than
@@ -329,9 +329,9 @@ func TestSCMCache_ListOpenPRsForUser_TruncatedResultIsNeitherHiddenNorCached(t *
 	}
 }
 
-// TestSCMCache_ListOpenPRsForUser_PropagatesUnderlyingError is the second
-// half of Step 60 review finding C1's own "add a truncated knob and error
-// injection" instruction -- the fake never errored before this test.
+// TestSCMCache_ListOpenPRsForUser_PropagatesUnderlyingError adds error
+// injection alongside the truncated-result coverage above -- the fake
+// never errored before this test.
 func TestSCMCache_ListOpenPRsForUser_PropagatesUnderlyingError(t *testing.T) {
 	t.Parallel()
 

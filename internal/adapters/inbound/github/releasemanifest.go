@@ -58,7 +58,7 @@ import (
 // via ONE GetPullRequest call, rather than reusing whatever headBranch
 // this mention's own payload happened to carry: labels are never present
 // on any of this package's own parsed mention payloads today (payload.go
-// parses only what Step 46/§17.6's own already-shipped concerns needed), and
+// parses only what §17.6's own already-shipped concerns needed), and
 // a fresh call here -- paid only on the WINNER path, i.e. once per
 // brand-new review session, never once per ordinary mention -- is a
 // small, bounded cost for a session-creation-time-only signal.

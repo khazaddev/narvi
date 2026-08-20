@@ -32,7 +32,7 @@
 //  5. X-Sandbox-Gen missing/malformed/mismatched -> 403.
 //  6. The presented token fails verifySandboxBearerToken -> 401.
 //  7. Otherwise -> 200 with a provider-keyed map of credentialAuthValue
-//     (Step 59, §29.6: {"type":"api","key":"sk-..."} or {"type":"oauth",
+//     (§29.6: {"type":"api","key":"sk-..."} or {"type":"oauth",
 //     "access":...,"expires":...,"accountId":...} -- see that type's own
 //     doc comment for the full shape, and for why it structurally cannot
 //     carry a refresh token) -- resolved via internal/domain/

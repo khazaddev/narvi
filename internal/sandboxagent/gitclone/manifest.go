@@ -22,7 +22,7 @@ const agentsManifestFilename = "AGENTS.md"
 // documented its own invented Readiness.Health shape. A later Step is free
 // to change the rendering without needing to touch any wire contract.
 //
-// degradeNotes (Step 72, §27.1, adversarial-review LOW fix) is zero or
+// degradeNotes (§27.1, adversarial-review LOW fix) is zero or
 // more human-readable notes about a boot-time feature that degraded via
 // the "warn and continue" policy (§27.1's own explicit words: a fetch
 // failure is "recorded in the boot log and AGENTS.md, never a boot

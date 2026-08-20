@@ -1,8 +1,8 @@
 package review
 
-// Verdict is code review's first-class structured verdict (§8.2/Step 45)
+// Verdict is code review's first-class structured verdict (§8.2)
 // — the type a review session (a later Step) produces and the
-// server-side verdict-posting tool (§8.2/Step 47) persists, never a
+// server-side verdict-posting tool (§8.2) persists, never a
 // free-text comment re-parsed after the fact (doc.go). It carries exactly
 // the seven fields IMPLEMENTATION_PLAN.md's own Step 45 row names, plus
 // ProposedShippable (required by the server-computed-Shippable property

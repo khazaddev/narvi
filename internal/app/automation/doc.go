@@ -1,5 +1,5 @@
 // Package automation is the process-wide background automation engine
-// (Step 51, "automations: engine", §3.5) -- a sibling of app/reconciler,
+// ("automations: engine", §3.5) -- a sibling of app/reconciler,
 // app/imagebuild, and app/outboxworker, not folded into any of them
 // (TECHNICAL_PLAN.md §1's own repo-layout convention: one package per
 // major loop/subsystem under internal/app/). See internal/domain/

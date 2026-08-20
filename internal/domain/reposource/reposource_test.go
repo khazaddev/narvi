@@ -494,7 +494,7 @@ func TestParseOwnerRepo(t *testing.T) {
 }
 
 // TestSplitFullName proves SplitFullName's own simple "<owner>/<repo>"
-// split (Step 46, "review sessions", §8.2) -- moved here from what used to
+// split ("review sessions", §8.2) -- moved here from what used to
 // be internal/adapters/inbound/github/headresolve_test.go's own
 // TestSplitOwnerRepo (identical cases, carried over verbatim) when the
 // function itself moved to become this package's SplitFullName (that

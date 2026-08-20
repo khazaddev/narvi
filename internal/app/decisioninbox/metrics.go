@@ -27,7 +27,7 @@ const maxRecentlyDecidedPlans = 1000
 // already names and works around by querying per-user instead) --
 // nothing here silently mislabels that gap; ok=false with sampleSize=0
 // distinguishes "no plan decisions in the window yet" from a real
-// computed value, and a later Step (§21's own analytics work, Step 62)
+// computed value, and a later Step (§21's own analytics work)
 // is the natural place to extend this once review_verdicts gives PR-merge
 // latency a durable source too.
 func Metrics(ctx context.Context, deps Deps, now time.Time) (median time.Duration, sampleSize int, ok bool, err error) {

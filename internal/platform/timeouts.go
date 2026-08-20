@@ -323,7 +323,7 @@ type Timeouts struct {
 	// ExpiresAt is treated as already stale, never handed back as-is.
 	CredentialExpiryBuffer time.Duration
 
-	// ProviderCredentialFetchTimeout (Step 53, "provider credential
+	// ProviderCredentialFetchTimeout ("provider credential
 	// injection", §25.1/§25.3) bounds a single call to CP's
 	// /sessions/{id}/provider-credentials delivery endpoint
 	// (internal/sandboxagent/credentials.CPClient.FetchProviderCredentials),
@@ -2200,7 +2200,7 @@ type Timeouts struct {
 	// sequenced into that SAME bounded teardown window, not a separate one.
 	ReviewCostBudgetServerReadHeaderTimeout time.Duration
 
-	// SandboxSecretFetchTimeout (Step 72, "sandbox secrets & opencode
+	// SandboxSecretFetchTimeout ("sandbox secrets & opencode
 	// config", §27.1) bounds a SINGLE ATTEMPT at CP's
 	// /sessions/{id}/sandbox-secrets delivery endpoint
 	// (internal/sandboxagent/credentials.CPClient.FetchSandboxSecrets),
@@ -2269,7 +2269,7 @@ type Timeouts struct {
 	SandboxSecretFetchRetryBaseDelay time.Duration
 	SandboxSecretFetchRetryMaxDelay  time.Duration
 
-	// OpenCodeConfigFetchTimeout (Step 72, §27.2) bounds a SINGLE ATTEMPT
+	// OpenCodeConfigFetchTimeout (§27.2) bounds a SINGLE ATTEMPT
 	// at CP's /sessions/{id}/opencode-config delivery endpoint
 	// (internal/sandboxagent/credentials.CPClient.FetchOpenCodeConfig),
 	// tried up to OpenCodeConfigFetchMaxAttempts times (below) at boot,
@@ -2300,7 +2300,7 @@ type Timeouts struct {
 	OpenCodeConfigFetchRetryBaseDelay time.Duration
 	OpenCodeConfigFetchRetryMaxDelay  time.Duration
 
-	// CloudIdentityTokenLifetime (Step 73a, §27.3) is how long a CP-minted
+	// CloudIdentityTokenLifetime (§27.3) is how long a CP-minted
 	// cloud-identity OIDC token (POST /sessions/{id}/cloud-identity-token)
 	// remains valid before its own `exp` claim expires. §27.3 gives this
 	// explicitly: "exp ≈ 10 minutes" -- taken literally as 10 * time.Minute,
@@ -2308,7 +2308,7 @@ type Timeouts struct {
 	// further without a stated reason.
 	CloudIdentityTokenLifetime time.Duration
 
-	// CloudIdentitySigningKeyOverlapWindow (Step 73a, §27.3) is how long a
+	// CloudIdentitySigningKeyOverlapWindow (§27.3) is how long a
 	// just-retired oidc_signing_keys row keeps publishing in the JWKS
 	// response after RotateSigningKeys marks its own retired_at, before it
 	// drops out entirely -- §27.3's own rotation rule: "an overlap window
@@ -2327,7 +2327,7 @@ type Timeouts struct {
 	// longer overlap being safer, never shorter).
 	CloudIdentitySigningKeyOverlapWindow time.Duration
 
-	// CloudIdentityConfigFetchTimeout (Step 73b, "cloud identity: sandbox-
+	// CloudIdentityConfigFetchTimeout ("cloud identity: sandbox-
 	// side consumption + kubeconfig injection", §27.3/§27.4) bounds a
 	// SINGLE ATTEMPT at CP's /sessions/{id}/cloud-identity-config delivery
 	// endpoint (internal/sandboxagent/credentials.CPClient.
@@ -2357,7 +2357,7 @@ type Timeouts struct {
 	CloudIdentityConfigFetchRetryBaseDelay time.Duration
 	CloudIdentityConfigFetchRetryMaxDelay  time.Duration
 
-	// CloudIdentityTokenMintTimeout (Step 73b, §27.3) bounds a SINGLE
+	// CloudIdentityTokenMintTimeout (§27.3) bounds a SINGLE
 	// ATTEMPT at CP's /sessions/{id}/cloud-identity-token minting endpoint
 	// (internal/sandboxagent/credentials.CPClient.MintCloudIdentityToken),
 	// tried up to CloudIdentityTokenMintMaxAttempts times (below) --

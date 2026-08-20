@@ -112,8 +112,8 @@ func maxShippable(a, b Shippable) Shippable {
 // i.e. what Shippable would be if coverage, premise, description
 // adequacy, and counter-review were all perfectly clean. RiskLevel is not
 // itself one of the four named raise-only floors (coverage and premise,
-// per §8.2/Step 45; description adequacy, §26.2/Step 67; counter-review,
-// §26.4/Step 69 — see ComputeShippable's own doc comment below for the
+// per §8.2; description adequacy, §26.2; counter-review,
+// §26.4 — see ComputeShippable's own doc comment below for the
 // full, current list) — see doc.go's design call #2 for why it is instead
 // treated as the baseline those four floors can only ever raise, never
 // lower, keeping "raise-only" uniform across all five inputs to
@@ -142,8 +142,8 @@ func baselineFromRisk(r RiskLevel) Shippable {
 }
 
 // ComputeShippable is domain/review's single exported pure function for
-// deriving Shippable (§8.2/Step 45, extended by §26.2/Step 67 and again by
-// §26.4/Step 69) — the ONLY sanctioned way any caller computes an
+// deriving Shippable (§8.2, extended by §26.2 and again by
+// §26.4) — the ONLY sanctioned way any caller computes an
 // authoritative Shippable value. It is a pure function of the reviewer's
 // own RiskLevel plus the FOUR independent raise-only floors (coverage,
 // premise, description adequacy, counter-review), composed via max(rank):
@@ -154,10 +154,10 @@ func baselineFromRisk(r RiskLevel) Shippable {
 //	             rank(AdequacyFloor(adequacy)),
 //	             rank(CounterReviewFloor(counterReview)))
 //
-// adequacy (§26.2, Step 67) is this function's own THIRD floor input,
+// adequacy (§26.2) is this function's own THIRD floor input,
 // added alongside the original two (coverage, premise) Step 45 already
 // established — see AdequacyFloor's own doc comment (adequacy.go) for its
-// full policy. counterReview (§26.4, Step 69) is the FOURTH, most recent
+// full policy. counterReview (§26.4) is the FOURTH, most recent
 // addition — see CounterReviewFloor's own doc comment (counterreview.go)
 // for its full policy, and that type's own doc comment for why a caller on
 // the LIGHT path (where counter-review never runs at all) must pass
@@ -167,7 +167,7 @@ func baselineFromRisk(r RiskLevel) Shippable {
 //
 // Deliberately NOT a parameter here: any model-proposed value
 // (ProposedShippable). This is not an oversight — it is the whole point of
-// §8.2/Step 45's "Shippable is server-computed, never the model's
+// §8.2's "Shippable is server-computed, never the model's
 // self-report" rule (doc.go's own top-level section): the model's own
 // guess is structurally incapable of influencing this function's result,
 // because it is not a parameter this signature even accepts. A caller

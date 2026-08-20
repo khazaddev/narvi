@@ -90,7 +90,7 @@ type CreateAutomationInvocationParams struct {
 	TotalRuns    int32       `json:"total_runs"`
 }
 
-// Queries backing AutomationInvocationStore (Step 51, "automations:
+// Queries backing AutomationInvocationStore ("automations:
 // engine", §3.5), migrations/000052_automation_invocations.up.sql.
 // Fast, cheap, durable hand-off (mirrors internal/app/releasereview.
 // Enqueue's own identical "one INSERT, the real work happens later on a

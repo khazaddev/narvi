@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for the GitHub webhook ingress adapter (Step 32,
+// Integration tests for the GitHub webhook ingress adapter (
 // "GitHub ingress", §8.2), against a real Postgres instance -- gated
 // behind the "integration" build tag, matching internal/adapters/inbound/
 // httpapi's own testcontainers-Postgres-plus-embedded-migrations
@@ -264,7 +264,7 @@ func postWebhook(t *testing.T, rig testRig, body []byte, deliveryID string) int 
 	return postWebhookEventType(t, rig, body, deliveryID, "issue_comment")
 }
 
-// postWebhookEventType is postWebhook's own generalization (Step 46,
+// postWebhookEventType is postWebhook's own generalization (
 // "review sessions", §8.2): every pre-Step-46 test in this file only ever
 // posts an "issue_comment" event, so postWebhook itself stays a thin,
 // unchanged wrapper around this -- this Step's own new tests below need to
@@ -322,7 +322,7 @@ func pullRequestLabeledBody(repoFullName, cloneRepoName, cloneURL string, prNumb
 // test that wires both to the same instance.
 //
 // diffOwner/diffRepo/diffBase/diffHead/diffToken (audit fix, test-coverage
-// finding, updated for Step 62 review finding C2) record GetCompareDiff's own
+// finding, updated for) record GetCompareDiff's own
 // last call args -- asserted against in
 // TestGitHubIntegration_InlineDiffAndStackPreFetched_FoldedIntoTurnPrompt
 // below, closing a confirmed gap where this fake used to ignore its own
@@ -664,7 +664,7 @@ func TestGitHubIntegration_InlineDiffAndStackPreFetched_FoldedIntoTurnPrompt(t *
 	fetcher := &fakeReviewContextFetcher{
 		pr: githubapi.PullRequest{
 			HeadRef: "feature-x",
-			// Step 62 review finding C2: HeadSHA/BaseRef are now REQUIRED on
+			// HeadSHA/BaseRef are now REQUIRED on
 			// this fixture -- reviewcontext.Fetch pins the diff fetch to
 			// exactly these two values (GetCompareDiff), so a fixture
 			// that left them at their own zero value would silently
@@ -706,10 +706,10 @@ func TestGitHubIntegration_InlineDiffAndStackPreFetched_FoldedIntoTurnPrompt(t *
 		t.Errorf("prompt = %q, want it to contain the pre-fetched stack context block", prompt)
 	}
 
-	// Audit fix (test-coverage finding, updated for Step 62 review finding
-	// C2): prove reviewcontext.Fetch's own GetCompareDiff call was
-	// actually made with THIS mention's own owner/repo/token AND -- the
-	// C2 fix's own core property -- pinned to EXACTLY pr.BaseRef/
+	// Audit fix (test-coverage finding): prove reviewcontext.Fetch's own
+	// GetCompareDiff call was actually made with THIS mention's own
+	// owner/repo/token AND -- the fix's own core property -- pinned to
+	// EXACTLY pr.BaseRef/
 	// pr.HeadSHA (never some other, independently-suppliable value).
 	// owner ("acme") and repo ("prefetch-repo") are deliberately
 	// distinguishable strings, so a swapped-argument regression at either
@@ -720,7 +720,7 @@ func TestGitHubIntegration_InlineDiffAndStackPreFetched_FoldedIntoTurnPrompt(t *
 			fetcher.diffOwner, fetcher.diffRepo, fetcher.diffBase, fetcher.diffHead, fetcher.diffToken, "acme", "prefetch-repo", "main", "resolved-head-sha", "test-bot-token")
 	}
 
-	// Step 62 review finding C2: the turn's own persisted review_head_sha
+	// the turn's own persisted review_head_sha
 	// must equal exactly the SHA the diff above was pinned to -- proving
 	// the fix end to end, through the real HTTP handler and real
 	// Postgres, not just reviewcontext.Fetch in isolation.

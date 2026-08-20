@@ -113,7 +113,7 @@ func fallbackModelRef() *promptModelRef {
 // prompt_async endpoint (§7: "POSTs prompt_async"). model is already
 // resolved (resolveModel) before this is called.
 //
-// cmd.PlanMode (Step 37, "plan mode, web", §8.1) selects OpenCode's own
+// cmd.PlanMode ("plan mode, web", §8.1) selects OpenCode's own
 // native "plan" agent via the request's "agent" field when true, omitted
 // (OpenCode's own default "build" agent) otherwise -- see
 // promptAsyncRequest's own doc comment (types.go) for the full,

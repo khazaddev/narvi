@@ -44,7 +44,7 @@ func hasOpenTurn(turns []sqlcgen.Turn) bool {
 	return false
 }
 
-// CreateTurn backs POST /api/sessions/{sessionID}/turns (Step 28, "turn
+// CreateTurn backs POST /api/sessions/{sessionID}/turns ("turn
 // recovery", §8.7 "Recovery UX: relaunch-and-resume (conversation id
 // replay)"): the relaunch-and-resume REST API. Enqueues a new Pending turn
 // on an EXISTING session -- 404 if the session doesn't exist, 409 if
@@ -296,7 +296,7 @@ const (
 )
 
 // CreateTurnOptions bundles CreateTurnCore/createTurnLocked's own REST-only,
-// opt-in concerns (Step 58, §28.5) into the ONE trailing variadic parameter
+// opt-in concerns (§28.5) into the ONE trailing variadic parameter
 // a bare "attachmentIDs ...pgtype.UUID" used to occupy alone -- Go permits
 // only one variadic parameter, and it must be last, so a second,
 // independent optional concern (StorageConfigured, added by this batch's
@@ -331,7 +331,7 @@ type CreateTurnOptions struct {
 	StorageConfigured bool
 
 	// Effort mirrors modelID's own "per-message override" role one field
-	// over (Step 59, §29.8) -- bundled into this same options struct
+	// over (§29.8) -- bundled into this same options struct
 	// rather than a new positional parameter alongside modelID for the
 	// identical reason AttachmentIDs/StorageConfigured are: every one of
 	// this core's five OTHER call sites (reviewretrigger.go, linear/
@@ -343,7 +343,7 @@ type CreateTurnOptions struct {
 	// Configured. Only CreateTurn's own REST handler below ever sets it.
 	Effort *string
 
-	// ReviewHeadSHA (Step 62 review finding C2, CRITICAL, fixed) is the
+	// ReviewHeadSHA is the
 	// commit SHA THIS turn's own pre-fetched review diff was anchored to
 	// -- non-nil ONLY for a review-session turn (reviewretrigger.go's own
 	// manual-retrigger path; the GitHub mention/label-retrigger path via
@@ -360,7 +360,7 @@ type CreateTurnOptions struct {
 	// leaves this nil, exactly like Effort/StorageConfigured above.
 	ReviewHeadSHA *string
 
-	// ReviewDepth/ReviewDepthDecision (Step 68, §26.3) mirror
+	// ReviewDepth/ReviewDepthDecision (§26.3) mirror
 	// ReviewHeadSHA's own identical shape one field further -- non-nil
 	// ONLY for a review-session turn, the SAME callers that set
 	// ReviewHeadSHA. Stored verbatim onto turns.review_depth/
@@ -409,7 +409,7 @@ type CreateTurnOptions struct {
 // the rest (the policy-gated open-turn check, insert, audit, commit,
 // dispatch) to createTurnLocked below.
 //
-// Exported (Step 38, "plan mode, cross-channel", §8.1/§13.3) so Slack's
+// Exported ("plan mode, cross-channel", §8.1/§13.3) so Slack's
 // own "Request changes" modal submission (internal/adapters/inbound/slack/
 // interactive.go) can create a real plan_mode=true turn through the EXACT
 // SAME path POST .../turns itself uses, rather than a third, duplicated
@@ -445,7 +445,7 @@ type CreateTurnOptions struct {
 // precisely so a still-unlinked actor's call can keep its existing,
 // documented bot-attribution behavior unchanged).
 //
-// opts (Step 58, §28.5, extended by this batch's own FIX D) is a TRAILING
+// opts (§28.5, extended by this batch's own FIX D) is a TRAILING
 // VARIADIC parameter, deliberately not a plain struct: mirrors workflows'
 // own "constructed fresh from pool, not threaded as a new parameter"
 // precedent just above in spirit, but for genuinely caller-supplied values
@@ -459,7 +459,7 @@ type CreateTurnOptions struct {
 // only CreateTurn's own handler below, the sole caller that ever has
 // either to pass, changed at all.
 //
-// epistemicCheckDefault (Step 61, "builder epistemic pre-action check",
+// epistemicCheckDefault ("builder epistemic pre-action check",
 // §20.4) is a REQUIRED positional parameter, deliberately NOT bundled into
 // CreateTurnOptions' own trailing variadic slot: unlike StorageConfigured/
 // Effort there (genuinely REST-only concerns, §28.5/§29.8, safe to leave
@@ -540,7 +540,7 @@ func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.
 // (cmd/control-plane/main.go) always passes the SAME, real *postgres.
 // PlanStore, so this is never nil outside tests.
 //
-// intentSvc (Step 64, §23.1/§23.2) is this function's own plan_followup
+// intentSvc (§23.1/§23.2) is this function's own plan_followup
 // classifier collaborator -- nil-safe exactly like plans immediately
 // above (a nil intentSvc, or a nil plans, skips classification entirely
 // and falls back to the pre-Step-64 "always decline" awaiting-plan gate
@@ -694,7 +694,7 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	}
 
 	// Awaiting-plan gate (this batch's own follow-up fix, §8.1; extended by
-	// Step 64, §23.2/§23.3): an ordinary (planMode == false) turn must never
+	// §23.2/§23.3): an ordinary (planMode == false) turn must never
 	// dispatch while sessionID has a plan sitting in StatusAwaitingApproval
 	// -- that plan is work a human has not yet approved, and BEFORE the
 	// original fix, any reply matching neither plandomain.MatchVerdict nor
@@ -818,7 +818,7 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	}
 
 	effectivePrompt, effectiveModelID, effectiveEffort := prompt, modelID, effort
-	// epistemicCheckOverride/epistemicCheckSessionKnown (Step 61,
+	// epistemicCheckOverride/epistemicCheckSessionKnown (
 	// §20.2/§20.4): epistemicCheckSessionKnown starts false -- the same
 	// safe, off-by-default fallback the sessErr != nil branch below already
 	// applies to workflow-engine resolution, reused here rather than a
@@ -933,7 +933,7 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 		ReviewHeadSha:       reviewHeadSHA,
 		ReviewDepth:         reviewDepth,
 		ReviewDepthDecision: reviewDepthDecision,
-		// answerOnly (Step 64, §23.2) is nil ("classification did not
+		// answerOnly (§23.2) is nil ("classification did not
 		// apply") for every turn that predates this Step, or that never hit
 		// the plan_followup block above -- see that block's own doc
 		// comment for the full enumeration. By construction, the only real

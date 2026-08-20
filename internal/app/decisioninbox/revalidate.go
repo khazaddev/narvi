@@ -25,7 +25,7 @@ import (
 //
 // Resolves the target PR via a live, actor-scoped ListOpenPRsForUser
 // search (the human path's own natural "is this PR genuinely assigned to
-// the clicking actor" proof, Step 60 review finding A4's own reasoning,
+// the clicking actor" proof own reasoning,
 // unchanged by this Step), then delegates every remaining check to
 // revalidateCore below -- the SAME core RevalidateForAutoMerge (§21.2
 // stage 2) shares, so a human-clicked confirm and a machine-initiated
@@ -34,8 +34,7 @@ import (
 //
 // A store error from the §17 sentinel-fix exclusion or the open-findings
 // count (both inside revalidateCore) is propagated outright as err,
-// refusing the merge (Step 60 review findings A1/A3's own "fail CLOSED"
-// requirement) -- neither is a legitimate "this PR fails eligibility"
+// refusing the merge (a fail-CLOSED requirement) -- neither is a legitimate "this PR fails eligibility"
 // domain answer the way every OTHER ok=false return is; both are
 // infrastructure failures this function has no safe way to interpret as
 // "not blocking", so the caller (httpapi's MergePullRequest) surfaces a
@@ -63,8 +62,8 @@ func RevalidateForMerge(ctx context.Context, deps Deps, sourceControl ports.Sour
 	}
 	if target == nil {
 		if truncated {
-			// Step 60 review finding C1's own truncated signal, applied here:
-			// a degraded/partial live read (e.g. one of GitHub's own
+			// The truncated signal, applied here: a degraded/partial
+			// live read (e.g. one of GitHub's own
 			// search queries failed) means this function genuinely cannot
 			// tell "not assigned to you" from "we simply failed to see
 			// it" -- asserting the former with confidence here would be a
@@ -119,7 +118,7 @@ func RevalidateForAutoMerge(ctx context.Context, deps Deps, sourceControl ports.
 // buildPROpenItem used to classify this PR as ready_to_merge in the
 // first place (§17 exclusion, not a draft, not a handoff PR, platform-
 // authored, zero open findings, the REAL §21.2 auto-approval eligibility
-// engine), PLUS HasChangesRequested (Step 60 review finding A4) -- never a
+// engine), PLUS HasChangesRequested -- never a
 // narrower "just check CI is still green" shortcut, since ANY of these
 // facts (a new commit landed dropping CI red, a reviewer requested
 // changes, a needs-human label applied...) could have changed since the
@@ -142,7 +141,7 @@ func revalidateCore(ctx context.Context, deps Deps, repoFullName string, prNumbe
 		return false, "", "this pull request is a handoff item, not an ordinary code-review merge decision", nil
 	}
 
-	// Step 62 review finding C4: a degraded review-decision read (GitHub's
+	// a degraded review-decision read (GitHub's
 	// reviews endpoint itself failed) must never be indistinguishable from
 	// a clean "no changes requested" read -- checked BEFORE
 	// HasChangesRequested itself so a degraded read gets its own distinct,
@@ -183,7 +182,7 @@ func revalidateCore(ctx context.Context, deps Deps, repoFullName string, prNumbe
 		return false, "", "this pull request has no review verdict of record", nil
 	}
 
-	// Step 62 review finding C3: a genuine repo_settings read error here means
+	// a genuine repo_settings read error here means
 	// this repo's OWN configured policy (its diff-size threshold, its
 	// sensitive-tag list) cannot be established at all -- propagated
 	// outright as err, exactly like the §17 sentinel-fix exclusion/
@@ -197,7 +196,7 @@ func revalidateCore(ctx context.Context, deps Deps, repoFullName string, prNumbe
 	if cfgErr != nil {
 		return false, "", "", fmt.Errorf("decisioninbox: revalidate for merge: load eligibility config: %w", cfgErr)
 	}
-	// Step 62 review finding C1: ChangedFileCount/TouchedBlastRadius are BOTH
+	// ChangedFileCount/TouchedBlastRadius are BOTH
 	// derived here from target -- target is revalidateCore's own
 	// already-fetched, server-side ports.OpenPR (RevalidateForMerge's
 	// live ListOpenPRsForUser search, or RevalidateForAutoMerge's live

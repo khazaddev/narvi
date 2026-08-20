@@ -5,7 +5,7 @@ package providercredential
 // (migrations/000056_provider_credentials.up.sql,
 // migrations/000061_provider_credentials_user_scope.up.sql) verbatim --
 // repo/environment/global (§25.3's own "sourced per-repo/per-environment/
-// global" line) plus ScopeUser (Step 59, §29.4). Step 72 (§27.1) widens
+// global" line) plus ScopeUser (§29.4). Step 72 (§27.1) widens
 // this package's own charter: sandbox_secrets (migrations/
 // 000090_sandbox_secrets.up.sql, a SEPARATE table with its own SEPARATE
 // Postgres sandbox_secret_scope ENUM) resolves through this SAME Scope
@@ -37,7 +37,7 @@ const (
 	// credential applies org-wide, with nothing more specific configured.
 	ScopeGlobal Scope = "global"
 	// ScopeUser means scope_target_id is a users.id, stringified -- a
-	// personally-linked account (Step 59, §29.4: a ChatGPT Plus/Pro
+	// personally-linked account (§29.4: a ChatGPT Plus/Pro
 	// subscription is an individual seat), more specific than any
 	// environment/repo/global org key. v1 creates ScopeUser rows ONLY via
 	// the ChatGPT link flow (internal/app/chatgptlink), always kind=oauth
@@ -54,7 +54,7 @@ const (
 	// automation/doc.go's own deferral note, the SAME two sources this
 	// package's doc.go already cites for why environment outranks repo).
 	// Schema-only as of Step 72: nothing in this codebase yet WRITES a
-	// ScopeAutomation sandbox_secrets row (§8.4/Step 52's own deferred
+	// ScopeAutomation sandbox_secrets row (§8.4's own deferred
 	// per-automation-secrets follow-up owns that CRUD surface), so no
 	// production Resolve call ever actually sees one today -- but the
 	// value, and its priority below, are real and load-bearing NOW so
@@ -70,8 +70,8 @@ const (
 // outranks repo" citation trail (§12.2 item 5 / automation/doc.go, NOT
 // the Step 53 brief's own "repo before environment" paraphrase). ScopeUser
 // and ScopeAutomation both sit at the HEAD, ahead of every org-level
-// scope (Step 59, §29.4 for ScopeUser: "a personally-linked account is
-// more specific than any environment/repo/global org key"; Step 72, §27.1
+// scope (§29.4 for ScopeUser: "a personally-linked account is
+// more specific than any environment/repo/global org key"; §27.1
 // for ScopeAutomation: "automation slots in as the most-specific level"
 // for sandbox_secrets' own 4 scopes) -- the two are numbered 0 and 1
 // rather than tied, purely to keep this map a genuine total order (a

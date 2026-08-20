@@ -52,7 +52,7 @@ type Engine struct {
 	// caller, an ordinary (never review-session) build turn, so no F7-style
 	// hardcoded-false carve-out applies here.
 	epistemicCheckDefault bool
-	// rolloutMode/repoSettings (Step 76, §10 Phase 6, §32) are the SAME
+	// rolloutMode/repoSettings (§10 Phase 6, §32) are the SAME
 	// two REQUIRED httpapi.CreateSessionOnTx parameters every other
 	// caller now threads through -- createRunAndSession (fanout.go) is
 	// this Engine's own ONE caller. An automation-created session is

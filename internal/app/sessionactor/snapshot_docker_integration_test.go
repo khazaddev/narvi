@@ -119,7 +119,7 @@ func TestTriggerSnapshotBestEffort_DockerFalseSession_StillSnapshots(t *testing.
 	}
 }
 
-// --- §9.3-class resilience scenario #17: restore-with-docker (§27.8, Step 74) ---
+// --- §9.3-class resilience scenario #17: restore-with-docker (§27.8) ---
 //
 // §27.8's own closing bullet: "Snapshotting a running dockerd: daemon/
 // image-store state inside snapshots is untested territory; Step 74

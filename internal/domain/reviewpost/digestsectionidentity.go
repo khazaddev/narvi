@@ -7,7 +7,7 @@ import (
 )
 
 // DigestSection names one section of the merge-readout digest a maintainer
-// can contest/confirm (§26.5, Step 69, "measuring the readout"). A closed,
+// can contest/confirm (§26.5, "measuring the readout"). A closed,
 // small vocabulary -- unlike Finding's file-path-keyed identity
 // (finding.go), a digest section is not per-file, so this is the whole
 // "what" a piece of feedback is about.
@@ -19,7 +19,7 @@ type DigestSection string
 // <reason>" exactly) -- the other four are named here so the read model
 // (per-section contest/confirm counts) and ComputeDigestSectionIdentity
 // below are never hard-coded to just one section, even though v1 ships
-// only one capture path onto them. DigestSectionContestedPoints (Step 69,
+// only one capture path onto them. DigestSectionContestedPoints (
 // §26.4/§26.5) names the "Contested points" section (rendercomment.go's
 // own renderContestedPoints) so §26.5's per-section contest mechanism can
 // address it too, the same "named for the read model even without its own

@@ -162,7 +162,7 @@ type storeBundle struct {
 	// §22.3's own learned false-positive advisory block.
 	falsePositivePattern *postgres.FalsePositivePatternStore
 
-	// providerCredential is a B2 fix (adversarial review of Step 69, §26.4)
+	// providerCredential is a B2 fix (adversarial review of §26.4)
 	// own addition: sessionconfig.go's own reviewCredentialedProviders
 	// (called from reviewCounterReviewerModel) reads it to learn which of
 	// counterReviewerProviderPreference's fixed 3 providers this SESSION
@@ -308,7 +308,7 @@ type Registry struct {
 	// since handleReviewRetriggerDebounceTimer needs the SAME "diff
 	// providably anchored to a live-fetched head sha" guarantee every
 	// OTHER review-trigger path already gets via internal/app/
-	// reviewcontext.Fetch (Step 62 review finding C2's own fix) -- see that
+	// reviewcontext.Fetch -- see that
 	// package's own doc comment. *githubapi.Adapter (the SAME instance
 	// diffFetcher/sourceControl above already wire) satisfies this
 	// directly, with no adapter-side change. May be nil (tests that never
@@ -373,7 +373,7 @@ type Registry struct {
 	// this codebase.
 	epistemicCheckDefault bool
 
-	// rolloutMode (Step 76, §10 Phase 6, §32) is RegistryOptions.
+	// rolloutMode (§10 Phase 6, §32) is RegistryOptions.
 	// RolloutMode's own resolved value (see that field's own doc comment
 	// for why this is an OPTIONS field, not a required NewRegistry
 	// parameter, unlike epistemicCheckDefault immediately above), threaded

@@ -50,7 +50,7 @@ type CreateAutomationRunParams struct {
 	SessionID    pgtype.UUID         `json:"session_id"`
 }
 
-// Queries backing AutomationRunStore (Step 51, "automations: engine",
+// Queries backing AutomationRunStore ("automations: engine",
 // §3.5), migrations/000053_automation_runs.up.sql.
 // sessionID is sqlc.narg (nullable): set when this run's own
 // CreateSessionOnTx call (app/automation's own fanout.go) succeeded for

@@ -71,7 +71,7 @@ type PullRequestResolver interface {
 //     RepoCloneURL are left exactly as parseIssueComment already set them
 //     (the base repo), mirroring L15's identical fallback for
 //     pull_request_review_comment's own sibling nullable field. m.Stack is
-//     ALSO set here (Step 46, "review sessions", §17.6's amendment) when
+//     ALSO set here ("review sessions", §17.6's amendment) when
 //     GitHub reports one -- the exact "incremental addition to a call this
 //     ingress already makes for every issue_comment mention, not a new
 //     outbound call" §17.6 itself describes: this is the ONE call this

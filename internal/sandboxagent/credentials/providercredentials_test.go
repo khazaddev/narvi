@@ -63,7 +63,7 @@ func TestCPClient_FetchProviderCredentials_RequestShape(t *testing.T) {
 }
 
 // TestCPClient_FetchProviderCredentials_OAuthEntry proves the "oauth"
-// Auth-union member (Step 59, §29.6) decodes correctly, and -- critically
+// Auth-union member (§29.6) decodes correctly, and -- critically
 // -- that AuthValue has no field a "refresh" key in the response COULD
 // populate even if a buggy/malicious CP response tried to send one.
 func TestCPClient_FetchProviderCredentials_OAuthEntry(t *testing.T) {

@@ -251,7 +251,7 @@ func TestRenderTurnPrompt_DiffAndStackOrdering(t *testing.T) {
 // three optional context blocks, when all present at once, render in a
 // fixed order: diff (the primary review artifact) first, then description
 // (the pre-fetched title/body the descriptionAdequacy check compares
-// against digest.summary -- adversarial-review fix, §26.2/Step 67's own
+// against digest.summary -- adversarial-review fix, §26.2's own
 // follow-up), then stack (auxiliary context) last, before the
 // unconditional verdict-tool block.
 func TestRenderTurnPrompt_DiffThenDescriptionThenStackOrdering(t *testing.T) {
@@ -278,7 +278,7 @@ func TestRenderTurnPrompt_DiffThenDescriptionThenStackOrdering(t *testing.T) {
 }
 
 // TestRenderTurnPrompt_VerdictToolInstructionsAlwaysLast proves the
-// verdict-tool-calling block (Step 47, §8.2/§5.2) is unconditionally
+// verdict-tool-calling block (§8.2/§5.2) is unconditionally
 // appended after every other optional piece (diff, stack) and after the
 // human's own basePrompt -- confirmed 46 findings deep or not, an agent
 // reading top-to-bottom always sees "what to review" before "how to
@@ -760,7 +760,7 @@ func TestRenderTurnPrompt_CostBudget_GoldenParagraph(t *testing.T) {
 }
 
 // TestRenderTurnPrompt_CostBudget_LoopbackEndpoint is this Step's own
-// central pin (Step 70, §26.7/§26.9): the cost-budget paragraph now
+// central pin (§26.7/§26.9): the cost-budget paragraph now
 // instructs a real GET to a loopback endpoint carrying the ceiling as a
 // query parameter, rather than asking the agent to self-estimate spend --
 // and NEVER routes architecture-scribe through that check, on either

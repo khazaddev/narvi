@@ -46,7 +46,7 @@ type SyncResult struct {
 	// State is the boot machine's own final state for this repo
 	// (internal/domain/gitstate): gitstate.StateReady on success, one of
 	// the five terminal failure states otherwise (including
-	// gitstate.StateFetchFailed, Step 40, §19.3 -- the boot-time fetch
+	// gitstate.StateFetchFailed, §19.3 -- the boot-time fetch
 	// failed and the degrade policy did not allow proceeding), or the zero
 	// State (the empty string, never actually assigned) if this repo never
 	// even entered the machine (a validation failure, a real `git status`
@@ -728,7 +728,7 @@ func gitFetchRef(ctx context.Context, sup *supervisor.Supervisor, credHelperArg,
 // failure) is returned as a real error. fullRef is always a caller-supplied,
 // already-fully-qualified ref path (refs/heads/<branch> or
 // refs/remotes/origin/<branch>) -- shared by branchExistsLocally (a LOCAL
-// branch) and remoteBranchExists (Step 40, §19.3: a REMOTE-TRACKING branch,
+// branch) and remoteBranchExists (§19.3: a REMOTE-TRACKING branch,
 // checking whether this Step's own new boot-time fetch step actually
 // fetched it), each of which supplies its own prefix so this function itself
 // stays agnostic to which kind of ref it is checking.

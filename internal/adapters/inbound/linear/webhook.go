@@ -163,7 +163,7 @@ type Deps struct {
 	// IntentClassifier simply skips classification entirely.
 	IntentClassifier *intentclassifier.Service
 
-	// EpistemicCheckDefault (Step 61, "builder epistemic pre-action
+	// EpistemicCheckDefault ("builder epistemic pre-action
 	// check", §20.4) is threaded through to handlePrompted's own
 	// httpapi.CreateTurnCore call below exactly like every other caller
 	// now gets -- production wiring (cmd/control-plane/main.go) passes
@@ -171,7 +171,7 @@ type Deps struct {
 	// caller does.
 	EpistemicCheckDefault bool
 
-	// RolloutMode/RepoSettings (Step 76, §10 Phase 6, §32) are threaded
+	// RolloutMode/RepoSettings (§10 Phase 6, §32) are threaded
 	// through to handleCreated's own httpapi.CreateSessionCore call below
 	// exactly like EpistemicCheckDefault already is -- both are REQUIRED
 	// parameters of that function now (its own doc comment), so a
@@ -1117,7 +1117,7 @@ func (deps Deps) postThoughtNotice(ctx context.Context, organizationID, agentSes
 // Step adds it, this call simply starts failing (logged, non-fatal) once
 // a workspace's stored token expires, until an admin reconnects it.
 //
-// body is now a parameter (Step 39, "identities + full RBAC", §13.2
+// body is now a parameter ("identities + full RBAC", §13.2
 // update) rather than always the fixed acknowledgmentBody constant --
 // handleCreated's own caller passes acknowledgmentBody with an identity-
 // link notice appended (appendNotice), when there is one; every other

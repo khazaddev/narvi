@@ -441,7 +441,7 @@ type GetWorkflowBindingForRepoParams struct {
 	RepoFullName *string      `json:"repo_full_name"`
 }
 
-// Queries backing WorkflowStore (Step 55, "workflow execution engine",
+// Queries backing WorkflowStore ("workflow execution engine",
 // §25.6/§25.7/§25.8), the first real reader/writer of Step 54's own dark
 // schema (migrations/000057_workflows.up.sql). internal/app/workflowengine
 // is this file's only caller: it resolves which (lane, repo) binding and

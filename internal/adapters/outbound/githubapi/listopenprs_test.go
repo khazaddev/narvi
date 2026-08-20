@@ -197,7 +197,7 @@ func TestListOpenPRsForUser_OneQueryFailingDoesNotBlankTheOther(t *testing.T) {
 	if len(prs) != 1 || prs[0].Number != 5 {
 		t.Errorf("ListOpenPRsForUser() = %+v, want exactly PR #5 from the surviving query", prs)
 	}
-	// Step 60 review finding C1: the surviving query's own result is still
+	// the surviving query's own result is still
 	// returned in full (never blanked out), but truncated must still be
 	// true -- this result is a known-incomplete picture (the assignee:
 	// query's own failure means any PR only discoverable THAT way is

@@ -96,7 +96,7 @@ type fakeSourceControl struct {
 	accessErr        error
 	accessErrFor     map[string]error // keyed by "owner/repo"; overrides accessErr if present
 
-	// registerStackCalls (Step 48, "sentinels + suggestions", §17.2/§17.6)
+	// registerStackCalls ("sentinels + suggestions", §17.2/§17.6)
 	// is this fake's own extension for RegisterPRStack -- recorded so a
 	// test can prove createSentinelFixPRBestEffort (pushpr.go) calls it
 	// exactly once, with the origin+fix PR numbers bottom-to-top, AFTER
@@ -245,7 +245,7 @@ func (f *fakeSourceControl) lastAccessCtxDeadline() (time.Time, bool) {
 	return f.accessCtxs[len(f.accessCtxs)-1].Deadline()
 }
 
-// GetFileContent/UpdateFileContent (Step 48, §12.2 item 2) are never
+// GetFileContent/UpdateFileContent (§12.2 item 2) are never
 // reached from this package (apply-suggestion is an httpapi-only surface)
 // -- clear "not implemented" errors, mirroring whiteboxFakeSourceControl's
 // own identical precedent (internal/app/imagebuild).
@@ -257,7 +257,7 @@ func (f *fakeSourceControl) UpdateFileContent(context.Context, ports.UpdateFileC
 	return "", errors.New("fakeSourceControl: UpdateFileContent not implemented")
 }
 
-// RegisterPRStack (Step 48, §17.2/§17.6) records every call this fake
+// RegisterPRStack (§17.2/§17.6) records every call this fake
 // receives and returns a caller-configured error -- registerStackErr
 // defaults to nil (registration "succeeds"), mirroring nextErr's own
 // default-success precedent for CreatePR above.
@@ -298,14 +298,14 @@ func (f *fakeSourceControl) UpdatePRBody(context.Context, ports.UpdatePRBodySpec
 	return errors.New("fakeSourceControl: UpdatePRBody not implemented")
 }
 
-// ListMergedBetween (Step 50, "release PR review", §15.2) is never
+// ListMergedBetween ("release PR review", §15.2) is never
 // reached from this package either -- same "not implemented" precedent
 // as CreateBranch above.
 func (f *fakeSourceControl) ListMergedBetween(context.Context, ports.ListMergedBetweenSpec) ([]ports.MergedPR, bool, error) {
 	return nil, false, errors.New("fakeSourceControl: ListMergedBetween not implemented")
 }
 
-// ListOpenPRsForUser/ResolveCodeOwners/MergePR (Step 60, "decision inbox:
+// ListOpenPRsForUser/ResolveCodeOwners/MergePR ("decision inbox:
 // read model + API", §16.2) are never reached from this package -- same
 // "not implemented" precedent as ListMergedBetween above.
 func (f *fakeSourceControl) ListOpenPRsForUser(context.Context, ports.ListOpenPRsForUserSpec) ([]ports.OpenPR, bool, error) {

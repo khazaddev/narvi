@@ -228,7 +228,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 	// function's own transact below has committed, never inside it (see
 	// pushpr.go's own top comment for why).
 	var pushAfterCommit *pushSignal
-	// gitSyncReceived is set true by the "git_sync" case below (Step 29,
+	// gitSyncReceived is set true by the "git_sync" case below (
 	// "gitstate in-sandbox", §3.4 design section 6) -- acted on (a real
 	// SandboxCommander.SendCommand call replying with GitSyncComplete)
 	// only AFTER this function's own transact below has committed, never
@@ -816,7 +816,7 @@ type snapshotPlan struct {
 }
 
 // triggerSnapshotBestEffort implements design decision 1's own post-turn
-// snapshot trigger (Step 22, "snapshots & restore", docs/IMPLEMENTATION_
+// snapshot trigger ("snapshots & restore", docs/IMPLEMENTATION_
 // PLAN.md row 22's own "post-turn snapshot" bullet, and §3.3's own "On
 // terminal event: complete turn, trigger snapshot..."). Called from
 // handleSandboxEvent's own post-commit block ONLY when cmd.Type ==
@@ -935,7 +935,7 @@ func (a *Actor) triggerSnapshotBestEffort(ctx context.Context) {
 			return fmt.Errorf("sessionactor: resolve docker_required for snapshot eligibility: %w", err)
 		}
 		if dockerRequired {
-			a.logger.Info("sessionactor: skipping snapshot trigger for a Docker-required session (§27.8 unresolved VM-runtime snapshot-parity point, Step 74; resume-only recovery until proven safe)",
+			a.logger.Info("sessionactor: skipping snapshot trigger for a Docker-required session (§27.8 unresolved VM-runtime snapshot-parity point; resume-only recovery until proven safe)",
 				"session_id", a.sessionID.String())
 			return nil
 		}
@@ -1034,7 +1034,7 @@ func (a *Actor) revertSnapshotBestEffort(ctx context.Context) {
 }
 
 // sendGitSyncCompleteBestEffort implements handleSandboxEvent's own
-// git_sync reply (Step 29, "gitstate in-sandbox", §3.4 design section 6):
+// git_sync reply ("gitstate in-sandbox", §3.4 design section 6):
 // a real sandboxws.GitSyncComplete command, a pure acknowledgment carrying
 // no fields beyond the envelope (commands.schema.json's own
 // GitSyncComplete def) -- mirrors sendPushBestEffort/triggerSnapshotBestEffort's

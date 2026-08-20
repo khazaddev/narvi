@@ -12,7 +12,7 @@ import (
 )
 
 // ChatGPTLinkAttemptStore is a thin, pass-through wrapper around the
-// sqlc-generated chatgpt_link_attempts queries (Step 59, "models", §29.3,
+// sqlc-generated chatgpt_link_attempts queries ("models", §29.3,
 // migrations/000062_chatgpt_oauth_credentials.up.sql) -- the ChatGPT-
 // account-OAuth link flow's own short-lived device-code nonce table,
 // mirroring IdentityLinkPromptStore's own "no caching, no retries, no

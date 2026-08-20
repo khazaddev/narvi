@@ -17,7 +17,7 @@ import (
 // one outbound GitHub call the first time it is seen within this one
 // call) ONE ResolveCodeOwners call will ever resolve -- mirrors
 // maxOpenPRsForUser's own (listopenprs.go) identical "bounded from day
-// one" discipline (Step 60 review finding B3). A CODEOWNERS file's content is,
+// one" discipline. A CODEOWNERS file's content is,
 // in the end, arbitrary text: it is read from the PR's own BASE ref (this
 // file's own ResolveCodeOwners doc comment -- deliberately never the
 // attacker-controlled head), but a repository's base-branch CODEOWNERS
@@ -51,7 +51,7 @@ type simpleUserResponse struct {
 	Login string `json:"login"`
 }
 
-// ResolveCodeOwners implements ports.SourceControl (Step 60, "decision
+// ResolveCodeOwners implements ports.SourceControl ("decision
 // inbox: read model + API", §16.2): fetches the repo's own CODEOWNERS
 // file (the first of codeownersCandidatePaths' own three GitHub-
 // documented locations that actually exists at spec.Ref), parses and
@@ -86,7 +86,7 @@ type simpleUserResponse struct {
 // batch" discipline (mergedbetween.go's buildMergedPR).
 //
 // Bounded to at most maxCodeOwnerRefsPerCall DISTINCT NEW owner-token
-// resolutions (Step 60 review finding B3) -- once reached, any FURTHER
+// resolutions -- once reached, any FURTHER
 // not-yet-seen "@login"/"@org/team-slug" token is simply skipped for the
 // rest of this call (already-resolved tokens, cached in userCache/
 // teamCache below, keep resolving for free regardless), and a single

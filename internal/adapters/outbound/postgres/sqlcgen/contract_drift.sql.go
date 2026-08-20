@@ -14,7 +14,7 @@ const getContractDriftSnapshot = `-- name: GetContractDriftSnapshot :one
 SELECT repo_key, last_repo_sha, last_contracts_fingerprint, updated_at FROM contract_drift_snapshots WHERE repo_key = $1
 `
 
-// Queries backing contract_drift_snapshots (Step 27, "mocking + contract
+// Queries backing contract_drift_snapshots ("mocking + contract
 // drift", §14.3, migrations/000025_mock_config_contract_drift.up.sql). See
 // that migration's own doc comment for the table's shape and the
 // last_contracts_fingerprint=="" sentinel meaning. Written/read ONLY by

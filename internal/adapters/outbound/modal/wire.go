@@ -16,7 +16,7 @@ import "github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 
 // createSandboxRequest is the body POSTed to /v1/sandboxes.
 //
-// # No privileged-mode field, deliberately, permanently (§27.5, Step 74)
+// # No privileged-mode field, deliberately, permanently (§27.5)
 //
 // This struct's field set is closed by construction: Runtime is a
 // two-value enum (runtimeGVisor's empty default, or runtimeVM — see
@@ -35,7 +35,7 @@ type createSandboxRequest struct {
 	SessionConfig sessionconfig.SessionConfig `json:"sessionConfig"`
 
 	// Runtime maps ports.CreateSpec.Docker onto Modal's own VM-runtime
-	// sandbox option (§27.5, Step 74, "Modal concretely": "default Modal
+	// sandbox option (§27.5, "Modal concretely": "default Modal
 	// sandboxes run on gVisor, where dockerd's overlay2/bridge-networking
 	// stack does not run cleanly; Modal's VM runtime option gives the
 	// sandbox a real kernel"). Empty (omitted from the wire entirely)
@@ -45,7 +45,7 @@ type createSandboxRequest struct {
 	Runtime string `json:"runtime,omitempty"`
 
 	// NetworkPolicy maps ports.CreateSpec.EgressPolicy onto Modal's own
-	// sandbox network controls (§27.6, Step 74). Nil (omitted from the
+	// sandbox network controls (§27.6). Nil (omitted from the
 	// wire entirely) means no egress restriction requested — Modal's own
 	// default open egress. See networkPolicyFromSpec.
 	NetworkPolicy *networkPolicyWire `json:"networkPolicy,omitempty"`
@@ -86,7 +86,7 @@ type imageBuildRequest struct {
 	RuntimeVersion string                           `json:"runtimeVersion,omitempty"`
 
 	// CacheVolume, when present, requests the build-time dependency cache
-	// (§19.1's closing paragraph, Step 43(c); ports.ImageSpec.CacheMount's
+	// (§19.1's closing paragraph(c); ports.ImageSpec.CacheMount's
 	// own doc comment has the full contract). omitempty: a spec with no
 	// CacheMount produces a request byte-for-byte identical to what this
 	// adapter sent before this field existed — no behavior change for a

@@ -86,7 +86,7 @@ func TestShippableRank_TotalOrder(t *testing.T) {
 			// no floor of their own (AdequacyFloor/CounterReviewFloor's own
 			// doc comments) -- held fixed here so this table's own
 			// pre-existing risk/coverage/premise interplay assertions are
-			// unaffected by the §26.2/Step 67 and §26.4/Step 69 additions;
+			// unaffected by the §26.2 and §26.4 additions;
 			// see TestComputeShippable_AdequacyRaiseOnly,
 			// TestComputeShippable_CounterReviewRaiseOnly, and
 			// TestComputeShippable_FourFloorCompositionMatrix below for
@@ -137,7 +137,7 @@ func TestComputeShippable_RiskBaseline(t *testing.T) {
 // coverage-floor-state × premise-floor-state × description-adequacy-
 // floor-state × counter-review-floor-state matrix (extended by §26.4/Step
 // 69 from its own prior three-floor version, itself extended once already
-// by §26.2/Step 67 from an original two-floor version): every one of the
+// by §26.2 from an original two-floor version): every one of the
 // five TestsCoverageState values under test
 // (adequate/insufficient/skipped/zero/unrecognized) crossed with every one
 // of the five PremiseState values under test
@@ -303,7 +303,7 @@ func TestComputeShippable_RaiseOnly(t *testing.T) {
 }
 
 // TestComputeShippable_AdequacyRaiseOnly is AdequacyFloor's own dedicated
-// raise-only proof (§26.2/Step 67), isolated from every other input:
+// raise-only proof (§26.2), isolated from every other input:
 // risk/coverage/premise are held at their cleanest legal values (low/
 // adequate/ok, baseline ShippableAuto) so each row isolates exactly what
 // the description-adequacy floor alone contributes, exhaustively over
@@ -367,7 +367,7 @@ func TestComputeShippable_MisleadingRaisesShippable(t *testing.T) {
 }
 
 // TestComputeShippable_CounterReviewRaiseOnly is CounterReviewFloor's own
-// dedicated raise-only proof (§26.4/Step 69), isolated from every other
+// dedicated raise-only proof (§26.4), isolated from every other
 // input: risk/coverage/premise/adequacy are held at their cleanest legal
 // values (low/adequate/ok/ok, baseline ShippableAuto) so each row isolates
 // exactly what the counter-review floor alone contributes, exhaustively

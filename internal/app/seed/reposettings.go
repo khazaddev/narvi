@@ -21,12 +21,12 @@ import (
 // postgres/reposettings_store.go). block_on_high_risk/
 // sentinel_autofix_enabled are the one EXCEPTION: RepoSettingsStore.
 // Upsert writes both together (it predates the column-scoped
-// convention, Step 62 review finding C5's own fix only landed for the LATER
+// convention own fix only landed for the LATER
 // toggles) -- so when only one of the two is declared, this function
 // first reads the current row to carry the undeclared one through
 // unchanged, rather than resetting it to false.
 //
-// # SessionsEnabled (Step 76, §10 Phase 6, §32) is why this tool exists
+// # SessionsEnabled (§10 Phase 6, §32) is why this tool exists
 // for cohort rollout at all
 //
 // Under NARVI_ROLLOUT_MODE=cohort, httpapi.CreateSessionOnTx refuses

@@ -1,7 +1,7 @@
 //go:build integration
 
 // Integration tests for GitHubPRSessionStore (§8.2's "atomic claim
-// coalescing of concurrent @mentions" -- Step 32, "GitHub ingress"). Kept
+// coalescing of concurrent @mentions" -- "GitHub ingress"). Kept
 // in its own file, mirroring webhookdelivery_store_integration_test.go's
 // own precedent of a focused file per query/claim primitive.
 package postgres_test

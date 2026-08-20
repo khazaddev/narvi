@@ -1,4 +1,4 @@
-// Package linear implements Linear ingress (Step 34, "Linear ingress",
+// Package linear implements Linear ingress ("Linear ingress",
 // §8.10) end to end:
 //
 //   - Workspace OAuth connection (install.go, callback.go, oauth.go): a

@@ -11,7 +11,7 @@ import (
 )
 
 // ImageBuildStore is a thin, pass-through wrapper around the sqlc-generated
-// image_builds queries (Step 26, "image builds", §8.5-note/§10-P2; Step
+// image_builds queries ("image builds", §8.5-note/§10-P2; Step
 // 41, "warm boot: shared fingerprint", §19.1). No caching, no retries, no
 // business rules -- fingerprinting lives in domain/imagebuild, the
 // spawn-time lookup/best-effort-upsert lives in

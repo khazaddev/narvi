@@ -1,5 +1,5 @@
 // This file (prbody.go) implements ports.SourceControl.GetPRBody/
-// UpdatePRBody (Step 67, "review digest: description adequacy + graduated
+// UpdatePRBody ("review digest: description adequacy + graduated
 // remediation", §26.2) -- the two real GitHub REST API calls the
 // description-autofix notifier (internal/app/outboxworker) uses to
 // re-fetch a pull request's own CURRENT body, then overwrite it, at
@@ -37,7 +37,7 @@ type getPRBodyResponse struct {
 	Body *string `json:"body"`
 }
 
-// GetPRBody implements ports.SourceControl (Step 67, §26.2): a real GET
+// GetPRBody implements ports.SourceControl (§26.2): a real GET
 // https://api.github.com/repos/{owner}/{repo}/pulls/{number} call,
 // authenticated with token as a Bearer token -- like GetPullRequest, this
 // method is agnostic to whose token it's handed (production wiring,
@@ -82,7 +82,7 @@ type updatePRBodyRequest struct {
 	Body string `json:"body"`
 }
 
-// UpdatePRBody implements ports.SourceControl (Step 67, §26.2): a real
+// UpdatePRBody implements ports.SourceControl (§26.2): a real
 // PATCH https://api.github.com/repos/{owner}/{repo}/pulls/{number} call,
 // authenticated with spec.Token, setting body to spec.Body ONLY -- never
 // title, never any other field this endpoint also accepts.

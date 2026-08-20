@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for RepoSettingsStore (§8.2/Step 47, §21.2's own
+// Integration tests for RepoSettingsStore (§8.2, §21.2's own
 // per-repo blockOnHighRisk policy flag) against a real Postgres instance.
 package postgres_test
 
@@ -160,18 +160,18 @@ func TestRepoSettingsStore_ColumnScopedUpserts_NeverClobberEachOther(t *testing.
 }
 
 // TestRepoSettingsStore_AutoMergeEnabled_SchemaDefaultsToFalse is the T3
-// regression test (Step 62 review, fixed): migrations/000069_repo_settings_
+// regression test: migrations/000069_repo_settings_
 // auto_approval.up.sql's own `auto_merge_enabled BOOLEAN NOT NULL DEFAULT
 // false` is exercised here via TWO real, production-reachable INSERT
 // paths that never mention that column at all -- Upsert (block_on_high_
-// risk/sentinel_autofix_enabled) and, since Step 62 review finding C5's own
-// column-scoped split, UpsertAutoApprovalEligibility -- proving the
+// risk/sentinel_autofix_enabled) and, via the column-scoped split,
+// UpsertAutoApprovalEligibility -- proving the
 // SCHEMA's own default, not merely the Go-layer AutoMergeEnabled
 // function's identical-looking but INDEPENDENT "missing row -> false"
 // fallback (config.go), which a mutation to the SQL DEFAULT clause alone
 // would never touch. Verified by running the mutation described in this
 // test's own doc comment (flip DEFAULT false to DEFAULT true in the
-// migration) -- see this Step's own report for the confirmed result.
+// migration): confirmed to fail without the schema default in place.
 func TestRepoSettingsStore_AutoMergeEnabled_SchemaDefaultsToFalse(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
@@ -188,7 +188,7 @@ func TestRepoSettingsStore_AutoMergeEnabled_SchemaDefaultsToFalse(t *testing.T) 
 		}
 	})
 
-	t.Run("via UpsertAutoApprovalEligibility (Step 62 review finding C5's own column-scoped path)", func(t *testing.T) {
+	t.Run("via UpsertAutoApprovalEligibility (the column-scoped path)", func(t *testing.T) {
 		const repoFullName = "acme/schema-default-via-eligibility"
 		maxFiles := int32(10)
 		created, err := store.UpsertAutoApprovalEligibility(ctx, repoFullName, &maxFiles, nil)

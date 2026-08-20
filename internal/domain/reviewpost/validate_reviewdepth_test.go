@@ -11,7 +11,7 @@ import (
 
 // deepValidInput mirrors validInput() but additionally fills in the three
 // Step 68 deep-path-only digest fields, marks ReviewDepth deep, and
-// (§26.4/Step 69) sets CounterReview -- a caller on the deep path must
+// (§26.4) sets CounterReview -- a caller on the deep path must
 // pass ALL of these to validate.
 func deepValidInput() reviewpost.VerdictInput {
 	in := validInput()
@@ -187,7 +187,7 @@ func TestValidateVerdictInput_CounterReviewCheckedLastOfAll(t *testing.T) {
 }
 
 // TestValidateVerdictInput_FactCheckCheckedBeforeDeepPathBlock proves
-// §26.6/Step 69's own FactCheck check runs BEFORE the deep-path-only block
+// §26.6's own FactCheck check runs BEFORE the deep-path-only block
 // (it is unconditional, so it must never be positioned inside a block that
 // only ever runs on the deep path) -- a deep-path payload with BOTH a
 // garbled FactCheck AND an empty ArchDecisions must report

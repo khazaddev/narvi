@@ -179,7 +179,7 @@ type InsertSentinelFixIfAbsentParams struct {
 	OriginHeadBranch      string      `json:"origin_head_branch"`
 }
 
-// Queries backing SentinelFixStore (Step 48, "sentinels + suggestions",
+// Queries backing SentinelFixStore ("sentinels + suggestions",
 // §17) -- see migrations/000047_sentinel_fixes.up.sql's own doc comment
 // for the full table design and its two-step claim idiom.
 // Step ONE of the atomic claim (mirrors github_pr_sessions' own identical

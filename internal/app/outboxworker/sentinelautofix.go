@@ -113,7 +113,7 @@ type sentinelAutoFixNotifier struct {
 	// call below is an ordinary (never review-session) build session, so
 	// no F7-style hardcoded-false carve-out applies here.
 	epistemicCheckDefault bool
-	// rolloutMode/repoSettings (Step 76, §10 Phase 6, §32) are the SAME
+	// rolloutMode/repoSettings (§10 Phase 6, §32) are the SAME
 	// two REQUIRED httpapi.CreateSessionOnTx parameters every other
 	// caller now threads through -- spawnClaimedChildSession's own
 	// CreateSessionOnTx call below needs both. See Deliver's own updated

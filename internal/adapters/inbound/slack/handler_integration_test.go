@@ -236,7 +236,7 @@ func newSlackTestRigWithEpistemicCheckDefault(t *testing.T, pool *pgxpool.Pool, 
 		TimestampWindow: 5 * time.Minute,
 		SlackAPIBaseURL: ackServer.URL,
 		AckTimeout:      platform.DefaultTimeouts().SlackAckTimeout,
-		// IdentityLink/SlackClient/Timeouts (Step 39, "identities + full
+		// IdentityLink/SlackClient/Timeouts ("identities + full
 		// RBAC", §13.2): ackServer above answers EVERY path (including
 		// /users.info) with a bare {"ok":true}, so GetUserEmail resolves
 		// to (email="", ok=false) for every fixture event's own "user" id

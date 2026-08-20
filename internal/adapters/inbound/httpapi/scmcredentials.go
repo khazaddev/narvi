@@ -85,11 +85,11 @@
 // check logged Warn and returned 403 unconditionally on ANY GetByID
 // failure, never distinguishing the two).
 //
-// Audit remediation (Step 47, "server-side verdict", §8.2/§5.2 confirmed
+// Audit remediation ("server-side verdict", §8.2/§5.2 confirmed
 // finding): a REVIEW session (one with a github_pr_sessions row,
 // reviewverdict.go's own identical reverse-lookup precedent) never pushes
 // or opens a PR -- it only clones a PR's head branch read-only, for inline
-// code-review context (§8.2/Step 46), and its own output reaches GitHub
+// code-review context (§8.2), and its own output reaches GitHub
 // exclusively through the verdict-posting tool (reviewverdict.go, Step
 // 47), which authenticates with cfg.GitHubBotToken, never a per-commenter
 // OAuth token. Handing such a session's SANDBOX the session CREATOR's own

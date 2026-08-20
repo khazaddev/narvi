@@ -26,7 +26,7 @@ type CreateCloudIdentityBindingParams struct {
 	ScopeTargetID *string                   `json:"scope_target_id"`
 }
 
-// Queries backing CloudIdentityBindingStore (Step 73a, "cloud identity:
+// Queries backing CloudIdentityBindingStore ("cloud identity:
 // OIDC issuer, bindings, minting", §27.3) --
 // migrations/000093_cloud_identity_bindings.up.sql. params travels as
 // opaque JSONB bytes end to end here -- identifiers, never secrets (this

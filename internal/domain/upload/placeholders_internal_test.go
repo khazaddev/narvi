@@ -50,7 +50,7 @@ func TestPlaceholderTokensMatchReviewPackage(t *testing.T) {
 // TestPlaceholderTokensMatchTurnPackage is
 // TestPlaceholderTokensMatchReviewPackage's own exact mirror for
 // internal/domain/turn's three EPISTEMIC_OUTCOME_TOOL_* placeholders
-// (turn/epistemicpreamble.go, Step 61/§20.2) -- added by F1 (adversarial
+// (turn/epistemicpreamble.go, §20.2) -- added by F1 (adversarial
 // review): these three were the verified omission (placeholderTokens'
 // own doc comment, prompt.go) that let an attacker-controlled filename
 // carrying a literal "{{EPISTEMIC_OUTCOME_TOOL_BEARER}}" survive
@@ -76,7 +76,7 @@ func TestPlaceholderTokensMatchTurnPackage(t *testing.T) {
 // TestPlaceholderTokensExactCount pins placeholderTokens' own total size --
 // this package's own three, plus review's own four, plus turn's own three,
 // no more no less (F1, adversarial review: bumped 6 -> 9 when turn's three
-// EPISTEMIC_OUTCOME_TOOL_* literals were registered; Step 70, §26.7/§26.9:
+// EPISTEMIC_OUTCOME_TOOL_* literals were registered; §26.7/§26.9:
 // bumped 9 -> 10 when review's own fourth, ReviewCostBudgetToolURLPlaceholder,
 // was registered). A future family that grows this list without a
 // corresponding drift-matcher test above (or without the general

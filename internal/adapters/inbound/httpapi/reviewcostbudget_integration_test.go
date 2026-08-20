@@ -153,8 +153,8 @@ func TestPutReviewCostBudget_ExplicitZeroRejected_BadRequest(t *testing.T) {
 }
 
 // TestPutReviewCostBudget_PreservesAutoMergeToggle_ColumnScoped proves the
-// column-scoped write discipline this endpoint's own doc comment describes
-// (Step 62 review finding C5's pattern): arming auto-merge first, then
+// column-scoped write discipline this endpoint's own doc comment describes:
+// arming auto-merge first, then
 // separately configuring the cost budget, must never silently disarm
 // auto-merge as a side effect -- mirrors
 // TestPutReviewDepthConfig_PreservesAutoMergeToggle_ColumnScoped exactly.

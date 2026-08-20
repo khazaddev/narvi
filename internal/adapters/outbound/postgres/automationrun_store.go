@@ -11,7 +11,7 @@ import (
 )
 
 // AutomationRunStore is a thin, pass-through wrapper around the
-// sqlc-generated automation_runs queries (Step 51, "automations: engine",
+// sqlc-generated automation_runs queries ("automations: engine",
 // §3.5).
 type AutomationRunStore struct {
 	q *sqlcgen.Queries

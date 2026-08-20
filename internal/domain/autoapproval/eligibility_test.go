@@ -13,8 +13,7 @@ import (
 // file's own mutation-testing discipline, matching the old
 // internal/domain/decisioninbox/eligibility_test.go this package
 // replaces). FilesChanged/BlastRadius are still populated here, matching
-// what a real posted verdict looks like, but -- Step 62 review finding C1
-// (CRITICAL, fixed) -- ComputeEligible never reads either field anymore;
+// what a real posted verdict looks like, but ComputeEligible never reads either field anymore;
 // see TestComputeEligible_IgnoresModelSelfReportedFilesChangedAndBlastRadius
 // below for the test that pins exactly that.
 func cleanVerdict() review.Verdict {
@@ -169,7 +168,7 @@ func TestComputeEligible(t *testing.T) {
 		},
 
 		// --- criterion 5: diff size under the configured threshold --
-		// Step 62 review finding C1: now gated on ChangedFileCount (the
+		// now gated on ChangedFileCount (the
 		// server-fetched fact), never Verdict.FilesChanged. ---
 		{
 			name:         "a diff exceeding the configured file-count threshold is not eligible",
@@ -236,8 +235,8 @@ func TestComputeEligible(t *testing.T) {
 			wantReason:   autoapproval.ReasonNone,
 		},
 
-		// --- criterion 7: no sensitive path touched -- Step 62 review finding
-		// C1: now gated on TouchedBlastRadius (the server-DERIVED fact,
+		// --- criterion 7: no sensitive path touched -- gated on
+		// TouchedBlastRadius (the server-DERIVED fact,
 		// autoapproval.ClassifyChangedPaths over the PR's real changed
 		// files), never Verdict.BlastRadius. ---
 		{

@@ -3,7 +3,7 @@ package reviewtriage
 // EffortHigh is the fixed reasoning-effort variant string Step 68's own
 // deep path forces (§26.3: "deep = frontier tier + high effort") --
 // mirrors sandboxws.Prompt.Effort's own already-shipped, free-form
-// per-model "variant" string (Step 59, §29.8: "valid values owned per-
+// per-model "variant" string (§29.8: "valid values owned per-
 // model by OpenCode's catalog variants maps, no Narvi-side enum"); "high"
 // is the one variant present on every real model in this codebase's own
 // model catalog snapshot (internal/app/modelcatalog/snapshot.json),

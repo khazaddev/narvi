@@ -1,7 +1,7 @@
 package turn
 
 // EpistemicOutcome is the closed 3-value vocabulary the builder epistemic
-// pre-action check (§20, Step 61) reports on a build turn: whether the
+// pre-action check (§20) reports on a build turn: whether the
 // devil's-advocate preamble (epistemicpreamble.go) surfaced anything worth
 // a second look, and how seriously. Matches the epistemic_outcome Postgres
 // enum (migrations/000066_builder_epistemic_check.up.sql) exactly -- the

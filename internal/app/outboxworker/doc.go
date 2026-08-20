@@ -1,5 +1,5 @@
 // Package outboxworker is the process-wide background outbox-delivery
-// loop (Step 35, "outbox delivery", §5.1/§9.3 scenario 9) -- a sibling of
+// loop ("outbox delivery", §5.1/§9.3 scenario 9) -- a sibling of
 // app/reconciler and app/imagebuild, not folded into either
 // (TECHNICAL_PLAN.md §1's own repo-layout convention: one package per
 // major loop/subsystem under internal/app/).

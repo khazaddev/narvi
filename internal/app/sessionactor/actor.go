@@ -166,7 +166,7 @@ type Actor struct {
 	// dispatch.go, timerfired.go).
 	epistemicCheckDefault bool
 
-	// rolloutMode (Step 76, §10 Phase 6, §32) is the SAME
+	// rolloutMode (§10 Phase 6, §32) is the SAME
 	// Registry.rolloutMode value every Actor this Registry hydrates
 	// shares (registry.go's own field doc comment, and RegistryOptions.
 	// RolloutMode's own doc comment for why this is an options field, not

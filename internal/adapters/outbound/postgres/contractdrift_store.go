@@ -9,7 +9,7 @@ import (
 )
 
 // ContractDriftStore is a thin, pass-through wrapper around the sqlc-
-// generated contract_drift_snapshots queries (Step 27, "mocking + contract
+// generated contract_drift_snapshots queries ("mocking + contract
 // drift", §14.3, migrations/000025_mock_config_contract_drift.up.sql). No
 // caching, no retries, no business rules -- HasDrifted's own truth table
 // lives in internal/domain/contractdrift, the spawn-time read/best-effort-

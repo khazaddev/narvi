@@ -598,7 +598,7 @@ func TestGetPullRequest_EscapesOwnerAndRepo(t *testing.T) {
 }
 
 // TestGetPullRequest_StackPresent proves a real GitHub "stack" object
-// riding on the pull-request resource (§17.6's amendment, Step 46, "review
+// riding on the pull-request resource (§17.6's amendment, "review
 // sessions") is parsed into PullRequest.Stack.
 func TestGetPullRequest_StackPresent(t *testing.T) {
 	t.Parallel()
@@ -678,7 +678,7 @@ func TestGetPullRequest_NoStackIsNil(t *testing.T) {
 	}
 }
 
-// TestGetPullRequestDiff_Success proves GetPullRequestDiff (Step 46,
+// TestGetPullRequestDiff_Success proves GetPullRequestDiff (
 // "review sessions", §8.2) requests GitHub's own raw diff media type
 // against the SAME pulls/{number} endpoint GetPullRequest uses, and
 // returns the response body verbatim, un-truncated, when it fits within
@@ -839,8 +839,7 @@ func TestGetPullRequestDiff_EscapesOwnerAndRepo(t *testing.T) {
 
 // TestGetCompareDiff_Success proves the happy path: GET
 // /repos/{owner}/{repo}/compare/{base}...{head}, content-negotiated for
-// the SAME diff media type GetPullRequestDiff uses -- Step 62 review finding
-// C2's own new adapter method.
+// the SAME diff media type GetPullRequestDiff uses.
 func TestGetCompareDiff_Success(t *testing.T) {
 	t.Parallel()
 
@@ -1563,7 +1562,7 @@ func TestCheckRepoAccess_EscapesOwnerAndRepo(t *testing.T) {
 	}
 }
 
-// TestCreateCommitStatus_Success proves CreateCommitStatus (Step 57, "RWX
+// TestCreateCommitStatus_Success proves CreateCommitStatus ("RWX
 // provider + previews", §4.1.2 point 3) posts the right shape to
 // /repos/{owner}/{repo}/statuses/{sha}.
 func TestCreateCommitStatus_Success(t *testing.T) {

@@ -2,7 +2,7 @@
 
 // Integration test for WebhookDeliveryStore.Claim (§5.1's "Dedupe/
 // coalescing (webhook events, concurrent PR @mentions) via
-// INSERT ... ON CONFLICT atomic claims" -- Step 31, "webhook toolkit").
+// INSERT ... ON CONFLICT atomic claims" -- "webhook toolkit").
 // Kept in its own file, mirroring
 // sandbox_upsertforspawn_integration_test.go's own precedent of a
 // focused file per query rather than growing

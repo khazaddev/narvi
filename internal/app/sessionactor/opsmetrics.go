@@ -121,7 +121,7 @@ type opsMetrics struct {
 	falseFailure metric.Int64Counter
 
 	// rolloutRefused is the Phase 6 audit's own fix for Finding 4:
-	// session_rollout_refused_total (Step 76, §32) was, before this fix,
+	// session_rollout_refused_total (§32) was, before this fix,
 	// incremented ONLY by httpapi.checkRolloutGate -- the session-creation-
 	// time half of §32's own "fail-closed, twice" pair. The dispatch-time
 	// half (this package's own refuseIfRolloutUnenrolled/

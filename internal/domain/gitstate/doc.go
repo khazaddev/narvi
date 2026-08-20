@@ -33,7 +33,7 @@
 //     "sequencing is explicit and testable in isolation from real git I/O"
 //     piece this package's own house style (§11) asks for.
 //   - StateFetching/StateFetchFailed and TriggerForFetch (state.go/
-//     sequence.go, Step 40, §19.3): the boot sequence's new real starting
+//     sequence.go, §19.3): the boot sequence's new real starting
 //     point -- a bounded, credentialed `git fetch` attempt, run BEFORE the
 //     original stash-if-dirty/checkout/pop sequence (which now begins from
 //     StateIdle exactly as before, unchanged) -- plus the non-negotiable

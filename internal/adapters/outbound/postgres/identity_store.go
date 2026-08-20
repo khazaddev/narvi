@@ -81,7 +81,7 @@ func (s *IdentityStore) ListVerifiedUserIDsByEmail(ctx context.Context, email st
 
 // ListForUser returns every identity linked to userID, oldest-first --
 // backs the members API's own "linked identities" listing per member
-// (Step 39, "identities + full RBAC", §13.2/§13.3).
+// ("identities + full RBAC", §13.2/§13.3).
 func (s *IdentityStore) ListForUser(ctx context.Context, userID pgtype.UUID) ([]sqlcgen.Identity, error) {
 	return s.q.ListIdentitiesForUser(ctx, userID)
 }

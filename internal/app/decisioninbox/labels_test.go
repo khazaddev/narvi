@@ -6,7 +6,7 @@ package decisioninbox
 // longer gate merge eligibility at all -- see revalidate_integration_test.go's
 // own note at the former MostRestrictiveRiskLabelWins_Refused site). This
 // file tests classifyPRLabels DIRECTLY instead, so its own precedence
-// rule (Step 60 review finding A6: "most restrictive risk label wins, never
+// rule ( "most restrictive risk label wins, never
 // whichever GitHub happens to return last") keeps real, targeted
 // coverage rather than being silently dropped.
 

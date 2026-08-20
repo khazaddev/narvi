@@ -34,7 +34,7 @@
 //     the configurable egress proxy") is honored when configured, and
 //     bypassed (direct connection) when not.
 //   - BuildImage's optional build-time dependency cache (§19.1's closing
-//     paragraph, Step 43(c), third iteration: immutable versioned cache
+//     paragraph(c), third iteration: immutable versioned cache
 //     snapshots, ports.ImageSpec.CacheMount) is a PURE ACCELERATOR: a
 //     request carrying no CacheMount is byte-for-byte unaffected, and
 //     cache trouble reported by the (invented) wire protocol — a

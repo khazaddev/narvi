@@ -112,7 +112,7 @@ func TestCreateTurnRequestRoundTrip(t *testing.T) {
 	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/CreateTurnRequest")
 
 	modelID := "claude-sonnet-5"
-	// AttachmentIds populated (Step 58, §28.5; review-fix coverage
+	// AttachmentIds populated (§28.5; review-fix coverage
 	// addition, FIX H) -- this field had zero round-trip coverage before
 	// this batch anywhere in this file.
 	roundTrip(t, sch, restdtos.CreateTurnRequest{
@@ -133,7 +133,7 @@ func TestCreateTurnRequestRoundTrip_NullModelId(t *testing.T) {
 	})
 }
 
-// TestCreateSessionRequestRoundTrip_WithEffort (Step 59, §29.8) exercises
+// TestCreateSessionRequestRoundTrip_WithEffort (§29.8) exercises
 // effort/buildEffort with real, non-null values -- mirrors
 // TestCreateSessionRequestRoundTrip's own modelId/buildModelId fixture
 // immediately above (deliberately distinct values, same reasoning: a
@@ -160,7 +160,7 @@ func TestCreateSessionRequestRoundTrip_WithEffort(t *testing.T) {
 	})
 }
 
-// TestCreateTurnRequestRoundTrip_WithEffort (Step 59, §29.8) mirrors
+// TestCreateTurnRequestRoundTrip_WithEffort (§29.8) mirrors
 // TestCreateTurnRequestRoundTrip's own modelId fixture, one field over.
 func TestCreateTurnRequestRoundTrip_WithEffort(t *testing.T) {
 	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/CreateTurnRequest")
@@ -176,7 +176,7 @@ func TestCreateTurnRequestRoundTrip_WithEffort(t *testing.T) {
 	})
 }
 
-// TestCreateSessionRequestRoundTrip_WithEpistemicCheckEnabled (Step 61,
+// TestCreateSessionRequestRoundTrip_WithEpistemicCheckEnabled (
 // §20.4) exercises epistemicCheckEnabled with a real, non-null value --
 // mirrors TestCreateSessionRequestRoundTrip_WithEffort's own
 // buildEffort fixture immediately above. The absent-key case (this
@@ -201,7 +201,7 @@ func TestCreateSessionRequestRoundTrip_WithEpistemicCheckEnabled(t *testing.T) {
 	})
 }
 
-// TestPostEpistemicOutcomeRequestRoundTrip (Step 61, "builder epistemic
+// TestPostEpistemicOutcomeRequestRoundTrip ("builder epistemic
 // pre-action check", §20.2) covers all three EpistemicOutcome values --
 // mirrors internal/domain/turn.AllEpistemicOutcomes' own exhaustive-list
 // discipline, one layer up at the wire-contract level, so a fourth value
@@ -232,7 +232,7 @@ func TestPostEpistemicOutcomeResponseRoundTrip(t *testing.T) {
 }
 
 // TestChatGPTLinkStatusRoundTrip_Pending exercises the ChatGPTLinkStatus
-// (Step 59, §29.3/§29.9) shape for an in-progress device-flow attempt --
+// (§29.3/§29.9) shape for an in-progress device-flow attempt --
 // every optional field populated.
 func TestChatGPTLinkStatusRoundTrip_Pending(t *testing.T) {
 	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/ChatGPTLinkStatus")
@@ -711,7 +711,7 @@ func TestConfirmUploadResponseRoundTrip(t *testing.T) {
 	})
 }
 
-// TestDecisionInboxItemRoundTrip (Step 60, §16) covers all four kinds --
+// TestDecisionInboxItemRoundTrip (§16) covers all four kinds --
 // each exercising a DIFFERENT subset of the object's many kind-conditional
 // nullable fields, so an accidental omitempty on any one of them (this
 // object has more required-but-nullable fields than any other DTO in this
@@ -751,7 +751,7 @@ func TestDecisionInboxItemRoundTrip(t *testing.T) {
 			Findings:               &findings,
 			IsHandoff:              &isHandoff,
 			HasApprovingReview:     &hasApprovingReview,
-			// hasChangesRequested (Step 60 review finding P1-4, second round):
+			// hasChangesRequested:
 			// false here -- this row is ready_to_merge, which could never
 			// legitimately coexist with a true value (RevalidateForMerge
 			// hard-blocks the merge on it) -- see the
@@ -769,7 +769,7 @@ func TestDecisionInboxItemRoundTrip(t *testing.T) {
 		})
 	})
 
-	// AwaitingApprovalHandoffPR (Step 60 review finding C4) covers the OTHER
+	// AwaitingApprovalHandoffPR covers the OTHER
 	// PR-shaped kind=awaiting_approval sub-case a plain plan row (below)
 	// does not: a handoff-labeled PR rides awaiting_approval instead of
 	// an ordinary code-review kind, but is still a PR row -- ciGreen/
@@ -786,7 +786,7 @@ func TestDecisionInboxItemRoundTrip(t *testing.T) {
 		findings := 0
 		isHandoff := true
 		hasApprovingReview := false
-		// hasChangesRequested TRUE here (Step 60 review finding P1-4, second
+		// hasChangesRequested TRUE here (second
 		// round) -- the one PR-shaped kind=awaiting_approval case in this
 		// test that round-trips a true value, proving marshal/unmarshal of
 		// a REAL non-null payload for this new field, not merely a null
@@ -953,7 +953,7 @@ func TestListDecisionInboxResponseRoundTrip(t *testing.T) {
 		})
 	})
 
-	// GitHubLinkedButFetchFailed (Step 60 review finding C1) is the THIRD
+	// GitHubLinkedButFetchFailed is the THIRD
 	// state scmAsOf==null alone could not previously distinguish: a
 	// linked identity exists, but the live PR fetch itself failed (a
 	// revoked token, a GitHub incident, a timeout) -- scmAsOf stays null
@@ -970,7 +970,7 @@ func TestListDecisionInboxResponseRoundTrip(t *testing.T) {
 		})
 	})
 
-	// PartialReadStillHasARealAsOf (Step 60 review findings P1-2/P1-3, second
+	// PartialReadStillHasARealAsOf (second
 	// round) is a FOURTH state, distinct from GitHubLinkedButFetchFailed
 	// above: scmAsOf non-null AND scmFetchFailed true, together -- a
 	// truncated/partial GitHub read (one discovery query failed while the

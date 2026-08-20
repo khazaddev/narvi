@@ -47,7 +47,7 @@ import (
 const scopedEnvironmentProvenanceTag = provenance.ScopedEnvironment
 
 // ChildSessionOptions is CreateSessionOnTx's own additive, OPTIONAL extra
-// parameter (Step 48, "sentinels + suggestions", §17.2) -- a variadic
+// parameter ("sentinels + suggestions", §17.2) -- a variadic
 // trailing parameter (see CreateSessionOnTx's own signature) so every
 // EXISTING call site (every caller before this Step, including internal/
 // adapters/inbound/github's own coalesce.go, which imports this function
@@ -85,7 +85,7 @@ type ChildSessionOptions struct {
 	// access -- never a scoped prototyping environment").
 	ProvenanceTag *string
 
-	// ReviewHeadSHA (Step 62 review finding C2, CRITICAL, fixed) is
+	// ReviewHeadSHA is
 	// unrelated to every other field on this struct (none of which this
 	// function's OWN doc comment's "parent/child" framing describes) --
 	// bundled into this SAME trailing-variadic options struct anyway,
@@ -104,7 +104,7 @@ type ChildSessionOptions struct {
 	// (turn.go) for the full "why".
 	ReviewHeadSHA *string
 
-	// ReviewDepth/ReviewDepthDecision (Step 68, §26.3) mirror
+	// ReviewDepth/ReviewDepthDecision (§26.3) mirror
 	// ReviewHeadSHA's own identical shape immediately above -- see
 	// CreateTurnOptions.ReviewDepth/ReviewDepthDecision's own doc comment
 	// (turn.go) for the full "why".
@@ -337,7 +337,7 @@ func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *p
 			return
 		}
 
-		// rolloutMode/repoSettings (Step 76, §32): a 403 with an explicit
+		// rolloutMode/repoSettings (§32): a 403 with an explicit
 		// "repository not enrolled" message (checkRolloutGate's own
 		// Message) is exactly what the generic writeError(w, cerr.Status,
 		// cerr.Message) branch immediately below already produces for
@@ -398,7 +398,7 @@ type CreateSessionError struct {
 	Status  int
 	Message string
 
-	// RolloutRefusal (Step 76, §10 Phase 6, §32) is true iff this error
+	// RolloutRefusal (§10 Phase 6, §32) is true iff this error
 	// came from checkRolloutGate (rolloutgate.go) -- a PERMANENT policy
 	// refusal ("this repo is not enrolled in the cohort rollout"), never a
 	// transient failure. §32's own "machine-checkable refusal marker"
@@ -427,7 +427,7 @@ type validatedCreateSessionInput struct {
 	hasMockConfig bool
 	contractsPath string
 
-	// docker/hasDocker (Step 74, §27.5) mirror pathScope/hasPathScope's own
+	// docker/hasDocker (§27.5) mirror pathScope/hasPathScope's own
 	// shape: docker is req.Docker itself (a plain bool, no tri-state
 	// needed -- absent and explicit-false are behaviorally identical), and
 	// hasDocker is docker's own value, kept as a separate field purely for
@@ -437,7 +437,7 @@ type validatedCreateSessionInput struct {
 	docker    bool
 	hasDocker bool
 
-	// egressPolicy/hasEgressPolicy (Step 74, §27.6) mirror mockConfig's own
+	// egressPolicy/hasEgressPolicy (§27.6) mirror mockConfig's own
 	// shape: hasEgressPolicy is true whenever the request body carried an
 	// "egressPolicy" key at all (req.EgressPolicy != nil); egressPolicy is
 	// the already-validated (environment.ValidateEgressPolicy) domain
@@ -540,7 +540,7 @@ func validateCreateSessionRequest(req restdtos.CreateSessionRequest) (validatedC
 		}
 	}
 
-	// docker (Step 74, §27.5) is a plain, always-present bool (unlike
+	// docker (§27.5) is a plain, always-present bool (unlike
 	// pathScope/mockConfig's own genuinely-optional-key shape) -- see
 	// validatedCreateSessionInput.docker's own doc comment for why no
 	// tri-state is needed. Nothing to validate here: every bool value is
@@ -704,7 +704,7 @@ func checkSubstrateCapabilitiesUpFront(registry *sessionactor.Registry, req rest
 // why (F7: a review session must never get the builder-only preamble,
 // mirroring reviewretrigger.go's identical REUSE-branch precedent).
 //
-// rolloutMode/repoSettings (Step 76, §10 Phase 6, §32) are REQUIRED
+// rolloutMode/repoSettings (§10 Phase 6, §32) are REQUIRED
 // parameters, not a variadic/optional trailing slot -- deliberately
 // mirroring epistemicCheckDefault's own "every call site must
 // compile-time-decide what to pass, never a silently-defaulted zero
@@ -752,7 +752,7 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 	// the session row itself, so the session insert below can set
 	// environment_id to it directly, whenever ANY of pathScope/mockConfig/
 	// docker/egressPolicy was supplied -- matching CreateSession's own doc
-	// comment (row 27's "either" gate, extended by Step 74, §27.5/§27.6,
+	// comment (row 27's "either" gate, extended by §27.5/§27.6,
 	// to the two new independent attributes). environment_id/
 	// provenanceTag both stay their pgtype/Go zero values (NULL) when NONE
 	// is present, identical to every session created before this batch.
@@ -774,7 +774,7 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 			contractsPathCol = &contractsPath
 		}
 
-		// egress_policy_mode/egress_policy_allowlist (Step 74, §27.6)
+		// egress_policy_mode/egress_policy_allowlist (§27.6)
 		// store the CUSTOMER's own configured policy ONLY -- the
 		// server-appended allowlist floor is never persisted here; it is
 		// computed fresh every time a SessionConfig is assembled from
@@ -853,12 +853,12 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 		// Step 59 (§29.8): build_effort mirrors build_model_id's own
 		// shape/storage convention exactly, one field over.
 		BuildEffort: (*string)(req.BuildEffort),
-		// ParentSessionID/SpawnDepth (Step 48, §17.2, migrations/000045):
+		// ParentSessionID/SpawnDepth (§17.2, migrations/000045):
 		// zero values (pgtype.UUID{}, int32(0)) for every ordinary
 		// session -- see ChildSessionOptions' own doc comment.
 		ParentSessionID: opts.ParentSessionID,
 		SpawnDepth:      opts.SpawnDepth,
-		// EpistemicCheckEnabled (Step 61, "builder epistemic pre-action
+		// EpistemicCheckEnabled ("builder epistemic pre-action
 		// check", §20.4) mirrors BuildModelID's own "always stored,
 		// nil/absent means no session-level override" convention exactly
 		// -- consulted later by turn.ResolveEpistemicCheckEnabled
@@ -960,7 +960,7 @@ func TriggerDispatch(ctx context.Context, registry *sessionactor.Registry, sessi
 // already-open tx, and call TriggerDispatch itself once its own outer
 // transaction has committed and hasPrompt is true.
 //
-// rolloutMode/repoSettings (Step 76, §32) are threaded straight through to
+// rolloutMode/repoSettings (§32) are threaded straight through to
 // CreateSessionOnTx below, unchanged -- see that function's own doc
 // comment for why both are required, not optional.
 func CreateSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, req restdtos.CreateSessionRequest, createdBy pgtype.UUID, epistemicCheckDefault bool, rolloutMode platform.RolloutMode, repoSettings *postgres.RepoSettingsStore) (sqlcgen.Session, *CreateSessionError) {

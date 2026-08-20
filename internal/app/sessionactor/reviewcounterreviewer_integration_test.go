@@ -16,7 +16,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/ports"
 )
 
-// This file proves B2's own fix (adversarial review of Step 69, §26.4)
+// This file proves B2's own fix (adversarial review of §26.4)
 // against a REAL Postgres instance: reviewCounterReviewerModel's own new
 // credential-gating step (reviewCredentialedProviders, sessionconfig.go)
 // genuinely reaches provider_credentials, not merely the pure ranking

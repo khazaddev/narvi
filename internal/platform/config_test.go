@@ -579,7 +579,7 @@ func TestLoadModalConfig(t *testing.T) {
 }
 
 // TestLoadGitHubWebhookConfig mirrors TestLoadModalConfig's own table
-// shape: NARVI_GITHUB_WEBHOOK_SECRET/NARVI_GITHUB_BOT_HANDLE (Step 32,
+// shape: NARVI_GITHUB_WEBHOOK_SECRET/NARVI_GITHUB_BOT_HANDLE (
 // "GitHub ingress", §8.2) are each individually required -- never
 // defaulted, matching every other secret/credential this file already
 // reads.

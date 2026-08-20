@@ -73,7 +73,7 @@ func New(cfg Config) (*Provider, error) {
 // snapshot-based provider ("restore = new gen") rather than a
 // persistent-resume one.
 //
-// DockerInSandbox/EgressPolicy report true (§27.5/§27.6, Step 74): Modal
+// DockerInSandbox/EgressPolicy report true (§27.5/§27.6): Modal
 // maps CreateSpec.Docker onto its own VM runtime option and
 // CreateSpec.EgressPolicy onto its own sandbox network controls (see
 // runtimeForSpec/networkPolicyFromSpec below) — both real, substrate-
@@ -100,7 +100,7 @@ func (p *Provider) Capabilities() ports.Capabilities {
 // CreateSandbox POSTs spec to /v1/sandboxes, with the full SESSION_CONFIG
 // document nested under "sessionConfig" as one JSON blob (§4.1).
 //
-// spec.Docker/spec.EgressPolicy (§27.5/§27.6, Step 74) are mapped onto
+// spec.Docker/spec.EgressPolicy (§27.5/§27.6) are mapped onto
 // Modal's own Runtime/NetworkPolicy wire fields via runtimeForSpec/
 // networkPolicyFromSpec, read from spec's OWN top-level duplicate
 // fields — never from spec.SessionConfig.Docker/EgressPolicy, even
@@ -188,7 +188,7 @@ func (p *Provider) RestoreFromSnapshot(ctx context.Context, id ports.SnapshotID,
 // BuildImage POSTs to /v1/images.
 //
 // # Cache-mount decline-and-fall-back-to-cold-build (§19.1's closing
-// # paragraph, Step 43(c), third iteration: immutable versioned cache
+// # paragraph(c), third iteration: immutable versioned cache
 // # snapshots)
 //
 // When spec.CacheMount is set, the first attempt carries it as
@@ -264,7 +264,7 @@ func (p *Provider) BuildImage(ctx context.Context, spec ports.ImageSpec) (ports.
 }
 
 // runtimeGVisor/runtimeVM are createSandboxRequest/restoreSandboxRequest.
-// Runtime's own closed two-value vocabulary (§27.5, Step 74).
+// Runtime's own closed two-value vocabulary (§27.5).
 // runtimeGVisor is Modal's own default gVisor sandbox — deliberately the
 // EMPTY string, so a Docker-false request omits Runtime from the wire
 // entirely (json:",omitempty") rather than sending an explicit

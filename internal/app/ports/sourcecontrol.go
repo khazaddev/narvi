@@ -116,7 +116,7 @@ type ResolveBranchSHASpec struct {
 }
 
 // ResolveContractsFingerprintSpec is what SourceControl.
-// ResolveContractsFingerprint (Step 27, "mocking + contract drift", §14.3)
+// ResolveContractsFingerprint ("mocking + contract drift", §14.3)
 // needs to fingerprint a repo's configured contracts directory at one ref.
 // Owner/Repo/Token are the same generic source-control concepts
 // CreatePRSpec/ResolveBranchSHASpec already use, not GitHub-specific field
@@ -162,7 +162,7 @@ type CheckRepoAccessSpec struct {
 	Token string
 }
 
-// GetFileContentSpec is what SourceControl.GetFileContent (Step 48,
+// GetFileContentSpec is what SourceControl.GetFileContent (
 // "sentinels + suggestions", §12.2 item 2) needs to read one file's own
 // current content at a ref -- the apply-suggestion endpoint's own
 // precondition read, before it ever attempts to validate or commit a
@@ -183,7 +183,7 @@ type GetFileContentSpec struct {
 	Token string
 }
 
-// UpdateFileContentSpec is what SourceControl.UpdateFileContent (Step 48,
+// UpdateFileContentSpec is what SourceControl.UpdateFileContent (
 // §12.2 item 2) needs to commit a new version of one file directly onto a
 // branch, via the source-control host's Contents API -- the apply-
 // suggestion endpoint's own write, once ValidateSuggestionApplies (pure,
@@ -213,7 +213,7 @@ type UpdateFileContentSpec struct {
 	Token string
 }
 
-// UpdatePRBodySpec is what SourceControl.UpdatePRBody (Step 67, §26.2's
+// UpdatePRBodySpec is what SourceControl.UpdatePRBody (§26.2's
 // own "graduated remediation") needs to overwrite one pull request's own
 // body field directly, via the source-control host's own pull-request
 // update endpoint. Body is the caller's own ALREADY-COMPOSED new body
@@ -241,7 +241,7 @@ type UpdatePRBodySpec struct {
 	Token string
 }
 
-// RegisterPRStackSpec is what SourceControl.RegisterPRStack (Step 48,
+// RegisterPRStackSpec is what SourceControl.RegisterPRStack (
 // §17.2/§17.6) needs to register an already-open origin+fix PR pair as a
 // real GitHub stack, once both exist.
 type RegisterPRStackSpec struct {
@@ -280,7 +280,7 @@ type CreateBranchSpec struct {
 	Token string
 }
 
-// ListMergedBetweenSpec is what SourceControl.ListMergedBetween (Step 50,
+// ListMergedBetweenSpec is what SourceControl.ListMergedBetween (
 // "release PR review", §15.2) needs: BaseRef/HeadRef mirror a release
 // PR's own base/head branches (or SHAs) exactly the way a real `git
 // compare BaseRef...HeadRef` names a range -- ListMergedBetween reports
@@ -438,7 +438,7 @@ type PRPerson struct {
 	Login      string
 }
 
-// OpenPR is one open pull request ListOpenPRsForUser reports (Step 60,
+// OpenPR is one open pull request ListOpenPRsForUser reports (
 // §16.2: "ListOpenPRsForUser(ctx, user) ([]OpenPR, error) (review state,
 // CI at head SHA, labels, assignees/reviewers)"). Every field is this
 // PR's CURRENT, live state -- there is no historical/as-of-an-earlier-SHA
@@ -489,7 +489,7 @@ type OpenPR struct {
 	// state instead of one fixed historical SHA.
 	HasApprovingReview  bool
 	HasChangesRequested bool
-	// ReviewDecisionDegraded (Step 62 review finding C4, BLOCKER, fixed) is
+	// ReviewDecisionDegraded is
 	// true iff the fetch that produced HasApprovingReview/
 	// HasChangesRequested above itself failed (a transient HTTP error, or
 	// a response that did not decode) -- githubapi.fetchReviewDecision's
@@ -578,7 +578,7 @@ type OpenPR struct {
 	// touches zero files" -- the SAME "confirmed negative" vs. "could not
 	// confirm" distinction ReviewDecisionDegraded/CIConclusionUnknown
 	// already draw elsewhere on this same struct, applied here to the
-	// identical ambiguity Step 62 review finding C1 originally fixed for
+	// identical ambiguity already closed for
 	// Verdict.FilesChanged/BlastRadius, now closed for THIS field's own
 	// failure/truncation modes too.
 	ChangedFilesListDegraded bool
@@ -589,7 +589,7 @@ type OpenPR struct {
 	UpdatedAt time.Time
 }
 
-// Owner is one CODEOWNERS entry resolved for ONE input path (Step 60,
+// Owner is one CODEOWNERS entry resolved for ONE input path (
 // §16.2: "ResolveCodeOwners(ctx, repo, paths) ([]Owner, error)...
 // CODEOWNERS teams resolve to persons through the identity graph
 // (§13.2)"). Exactly one of two shapes:
@@ -650,7 +650,7 @@ type ListOpenPRsForUserSpec struct {
 	Token            string
 }
 
-// ResolveCodeOwnersSpec is what SourceControl.ResolveCodeOwners (Step 60,
+// ResolveCodeOwnersSpec is what SourceControl.ResolveCodeOwners (
 // §16.2) needs: Owner/Repo/Token are the same generic source-control
 // concepts every other spec in this file already uses. Ref is the commit
 // SHA (or branch) the CODEOWNERS file itself is read at -- callers MUST
@@ -706,7 +706,7 @@ func (e *MergePRError) Error() string {
 	return fmt.Sprintf("sourcecontrol: merge pr: http %d: %s", e.Status, e.Message)
 }
 
-// MergePRSpec is what SourceControl.MergePR (Step 60, §16.2's own Merge
+// MergePRSpec is what SourceControl.MergePR (§16.2's own Merge
 // endpoint) needs. Owner/Repo/Number/Token are the same generic source-
 // control concepts every other spec in this file already uses (Number
 // mirrors PRRef.Number/RegisterPRStackSpec.PRNumbers' own plain-int
@@ -794,7 +794,7 @@ type SourceControl interface {
 	ResolveBranchSHA(ctx context.Context, spec ResolveBranchSHASpec) (sha string, resolvedBranch string, err error)
 
 	// ResolveContractsFingerprint fingerprints spec.Path's directory
-	// listing at spec.Ref (Step 27, "mocking + contract drift", §14.3).
+	// listing at spec.Ref ("mocking + contract drift", §14.3).
 	// exists=false, err=nil means "no directory exists at that path/ref"
 	// -- a legitimate, expected outcome (most repos/refs have no
 	// contracts directory at all), NOT an error: callers MUST be able to
@@ -834,7 +834,7 @@ type SourceControl interface {
 	// for every session in the fleet.
 	CheckRepoAccess(ctx context.Context, spec CheckRepoAccessSpec) (bool, error)
 
-	// GetFileContent reads spec.Path's own content at spec.Ref (Step 48,
+	// GetFileContent reads spec.Path's own content at spec.Ref (
 	// §12.2 item 2). exists=false, err=nil means the file does not exist
 	// at that ref -- a legitimate answer (the apply-suggestion endpoint
 	// treats this as "stale: the file this finding named no longer
@@ -844,7 +844,7 @@ type SourceControl interface {
 	GetFileContent(ctx context.Context, spec GetFileContentSpec) (content, sha string, exists bool, err error)
 
 	// UpdateFileContent commits spec.Content onto spec.Branch at spec.Path,
-	// replacing the blob spec.SHA names (Step 48, §12.2 item 2) -- returns
+	// replacing the blob spec.SHA names (§12.2 item 2) -- returns
 	// the new commit's own SHA. Errors are plain, exactly like CreatePR/
 	// ResolveBranchSHA above -- a stale spec.SHA (the file changed since
 	// it was read) is one real, expected way this call fails; the caller
@@ -853,7 +853,7 @@ type SourceControl interface {
 	UpdateFileContent(ctx context.Context, spec UpdateFileContentSpec) (commitSHA string, err error)
 
 	// GetPRBody fetches owner/repo#number's CURRENT body text directly
-	// (Step 67, §26.2) -- the description-autofix notifier's own "read
+	// (§26.2) -- the description-autofix notifier's own "read
 	// the live body before overwriting it" step, so the original text it
 	// preserves (internal/domain/reviewpost.RenderAutofixBody) is always
 	// this PR's REAL current body, never the reviewing agent's own
@@ -867,7 +867,7 @@ type SourceControl interface {
 	GetPRBody(ctx context.Context, owner, repo string, number int, token string) (body string, found bool, err error)
 
 	// UpdatePRBody overwrites owner/repo#number's own body field with
-	// spec.Body (Step 67, §26.2) -- the description-autofix notifier's
+	// spec.Body (§26.2) -- the description-autofix notifier's
 	// own real write, called ONLY after this port's caller has already
 	// (a) re-verified server-side that the target PR is Narvi-authored
 	// AND this repo's own descriptionAutofix flag is on (§5.2: never
@@ -892,7 +892,7 @@ type SourceControl interface {
 	RegisterPRStack(ctx context.Context, spec RegisterPRStackSpec) error
 
 	// ListMergedBetween reports every PR merged into spec.HeadRef since it
-	// diverged from spec.BaseRef (Step 50, "release PR review", §15.2) --
+	// diverged from spec.BaseRef ("release PR review", §15.2) --
 	// for a release PR itself, spec.BaseRef/HeadRef are simply that PR's
 	// own base/head branches, so this answers exactly "which already-
 	// individually-reviewed PRs does this release PR bundle". Errors are
@@ -929,7 +929,7 @@ type SourceControl interface {
 
 	// ListOpenPRsForUser reports every open pull request the account named
 	// by spec.GitHubExternalID can currently see and is involved in as an
-	// assignee or requested reviewer (Step 60, "decision inbox: read
+	// assignee or requested reviewer ("decision inbox: read
 	// model + API", §16.2) -- the decision inbox's own primary PR-
 	// discovery call. Errors are plain, exactly like every other method on
 	// this port except MergePR below -- this is a best-effort READ feeding
@@ -937,7 +937,7 @@ type SourceControl interface {
 	// interactive action a caller needs a granular failure reason for.
 	//
 	// truncated mirrors ListMergedBetween's own identical (merged,
-	// truncated, err) shape below (Step 60 review finding C1): true whenever
+	// truncated, err) shape below: true whenever
 	// this adapter KNOWS the returned prs slice is an incomplete picture
 	// of every PR spec's own account is actually involved in right now --
 	// e.g. one of the underlying discovery queries itself failed (a
@@ -952,7 +952,7 @@ type SourceControl interface {
 
 	// GetOpenPR fetches ONE specific (owner, repo, number) pull request's
 	// current OpenPR state DIRECTLY -- no search, no scoping to any
-	// particular account's own assignments (Step 62, §21.2 stage 2). The
+	// particular account's own assignments (§21.2 stage 2). The
 	// minimal port extension internal/app/automerge's own machine-
 	// initiated caller needs: ListOpenPRsForUser above is fundamentally
 	// shaped around "which PRs is THIS human account involved in", a
@@ -988,7 +988,7 @@ type SourceControl interface {
 	// ListOpenPRsForUser's own doc comment gives.
 	ResolveCodeOwners(ctx context.Context, spec ResolveCodeOwnersSpec) ([]Owner, error)
 
-	// MergePR merges spec.Number (Step 60, §16.2's own Merge endpoint) --
+	// MergePR merges spec.Number (§16.2's own Merge endpoint) --
 	// the ONE method on this port an interactive, human-facing HTTP
 	// handler calls synchronously and must render a genuinely different
 	// outcome for (see MergePRError's own doc comment for why this is the

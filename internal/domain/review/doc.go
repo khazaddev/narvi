@@ -1,5 +1,5 @@
 // Package review implements the code-review domain's structured verdict
-// (§8.2/Step 45): a first-class, typed outcome of an automated code review,
+// (§8.2): a first-class, typed outcome of an automated code review,
 // and the two independent, raise-only "floors" (coverage, premise) that
 // compose into Shippable — the field the automated-approval engine (§21.2,
 // a later Step) will gate on. Every function here is pure per §11: no I/O,
@@ -35,7 +35,7 @@
 //     parameter at all — the model's guess is not merely "not trusted", it
 //     is structurally incapable of influencing the computation, because
 //     there is no parameter for it to influence. A caller (a later Step's
-//     verdict-posting tool, §8.2/Step 47) is expected to populate
+//     verdict-posting tool, §8.2) is expected to populate
 //     Verdict.Shippable with exactly ComputeShippable's result and never
 //     with a converted ProposedShippable — see verdict.go's own doc
 //     comment.
@@ -45,9 +45,9 @@
 // The original five this section named when it was first written, all
 // feeding directly into Shippable: CoverageFloor (the coverage floor),
 // PremiseFloor (the premise floor), AdequacyFloor (the
-// description-adequacy floor, §26.2/Step 67 — the THIRD raise-only floor,
+// description-adequacy floor, §26.2 — the THIRD raise-only floor,
 // added to the original two Step 45 established), CounterReviewFloor (the
-// counter-review floor, §26.4/Step 69 — the FOURTH raise-only floor), and
+// counter-review floor, §26.4 — the FOURTH raise-only floor), and
 // ComputeShippable (the one composition seam a later Step calls). Plus
 // three more this package has since grown to also own, each its own pure
 // decision/render function unrelated to any Shippable floor:
@@ -103,7 +103,7 @@
 //     DescriptionAdequacyMisleading (AdequacyFloor, adequacy.go, §26.2/
 //     Step 67).
 //   - CounterReviewStatus: unrecognized ranks with CounterReviewSkipped
-//     (CounterReviewFloor, counterreview.go, §26.4/Step 69) — see that
+//     (CounterReviewFloor, counterreview.go, §26.4) — see that
 //     type's own doc comment for the one deliberate exception to this
 //     package's usual "every enum feeds a floor on every verdict"
 //     framing: this field has no meaning at all on the light path, so
@@ -135,7 +135,7 @@
 //     three-tier RiskLevel scale alone never claims to detect.
 //
 //  2. RiskLevel's baseline is not one of this Step's two named "floors".
-//     §8.2/Step 45 is explicit that there are exactly two independent
+//     §8.2 is explicit that there are exactly two independent
 //     raise-only floors: coverage and premise. RiskLevel plainly has to
 //     feed Shippable somehow — a risk-map verdict whose own overall risk
 //     assessment had zero effect on auto-approval eligibility would
@@ -162,7 +162,7 @@
 //     §21.1 ("the structured type means this is pure storage, never
 //     re-parsing anything out of posted comment text") and §22.1 ("a
 //     hash/text of the finding stored at the moment the verdict that
-//     raised it was posted — §8.2/Step 45's structured type already
+//     raised it was posted — §8.2's structured type already
 //     carries this data; storing it is not new capture, just retention")
 //     both describe Step 45's verdict type as already carrying
 //     per-finding content. But IMPLEMENTATION_PLAN.md's own Step 45 row
@@ -190,7 +190,7 @@
 //     match (unrecognized ranks with DocsDriftStateFound) already on
 //     record rather than invented ad hoc when that Step arrives.
 //
-//  6. (§26.2, Step 67) AdequacyFloor is the THIRD raise-only floor,
+//  6. (§26.2) AdequacyFloor is the THIRD raise-only floor,
 //     composing into ComputeShippable the SAME way as the original two —
 //     max(rank), never a special case. §26.2 names only "misleading" as
 //     a floor trigger ("misleading floors Shippable at needs_human");
@@ -210,7 +210,7 @@
 //     already states for ProposedShippable, restated here because §26.2's
 //     own text calls it out by name for this specific floor.
 //
-//  7. (§26.4, Step 69) CounterReviewFloor is the FOURTH raise-only floor,
+//  7. (§26.4) CounterReviewFloor is the FOURTH raise-only floor,
 //     composing into ComputeShippable the SAME way as the original
 //     three — max(rank), never a special case. Unlike coverage/premise/
 //     adequacy, this floor's own input has no meaning on the light path

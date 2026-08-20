@@ -1,5 +1,5 @@
 // Package rwx implements the RWX (rwx.com) SandboxProvider adapter and PR
-// preview links (Step 57, §4.1.1/§4.1.2) — internal/app/ports.
+// preview links (§4.1.1/§4.1.2) — internal/app/ports.
 // SandboxProvider's SECOND real implementation, alongside
 // internal/adapters/outbound/modal, integrating RWX's real, public product
 // exactly as modal integrates Modal's API and githubapi integrates

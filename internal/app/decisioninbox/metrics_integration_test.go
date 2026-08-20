@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for Metrics (Step 60, "decision inbox: read model +
+// Integration tests for Metrics ("decision inbox: read model +
 // API", §16.2's own decision-latency metric) against a REAL Postgres
 // instance -- gated behind the "integration" build tag, same package/
 // newTestPool precedent as aggregate_integration_test.go.
@@ -18,7 +18,7 @@ import (
 )
 
 // TestMetrics_PositivePath proves Metrics computes a real, non-sentinel
-// median for a genuinely decided plan (Step 60 review finding T7 -- only the
+// median for a genuinely decided plan (only the
 // EMPTY case was previously asserted, so `return 0, 0, false, nil` passed
 // unconditionally). A plan created then immediately approved via the
 // real, guarded ApproveIfAwaitingApproval transition (decided_at = now(),
@@ -134,8 +134,7 @@ func TestMetrics_WindowBoundary(t *testing.T) {
 	if sampleSize != 1 {
 		t.Errorf("Metrics() sampleSize = %d, want 1 (only the in-window plan -- the out-of-window one must be excluded)", sampleSize)
 	}
-	// Step 60 review finding (TEST BATCH, second round): this fixture's own
-	// created_at/decided_at gap is a KNOWN, exact 10 minutes (both
+	// This fixture's own created_at/decided_at gap is a KNOWN, exact 10 minutes (both
 	// timestamps above are derived from the SAME inWindowDecidedAt value,
 	// so the sub-microsecond remainder Postgres truncates on write is
 	// identical for both, and the DIFFERENCE survives exactly) -- the one
@@ -150,8 +149,7 @@ func TestMetrics_WindowBoundary(t *testing.T) {
 }
 
 // TestMetrics_1000RowCap proves maxRecentlyDecidedPlans (1000) actually
-// bounds the query (Step 60 review finding T7's own "cover... the 1000-row
-// cap") -- 1001 already-decided, in-window plan rows are bulk-seeded via
+// bounds the query -- 1001 already-decided, in-window plan rows are bulk-seeded via
 // raw SQL (reusing one session/turn -- plans carries no uniqueness
 // constraint beyond its own partial "one awaiting_approval per session"
 // index, which decided rows never touch) rather than 1001 round trips

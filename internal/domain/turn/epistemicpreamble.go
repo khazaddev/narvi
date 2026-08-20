@@ -115,7 +115,7 @@ const (
 //     the agent's own natural-language reply (§20.2's own "never
 //     prompt-only" requirement; this codebase's standing invariant that a
 //     structured signal is a typed field on a payload, never a marker
-//     scraped from markdown, Step 45/§26.4/§29).
+//     scraped from markdown, §26.4/§29).
 const epistemicPreamble = "" +
 	"Before you take any substantial action on this turn (editing files, running commands, opening a pull request, or similar), pause and think it through the way a deliberately skeptical second reviewer would, in this order:\n" +
 	"1. Does anything about the action you are about to take rest on an assumption you have not actually verified -- about the codebase, the task, or your own prior steps this session?\n" +

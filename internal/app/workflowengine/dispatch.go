@@ -57,7 +57,7 @@ type Resolution struct {
 	// proof: nil stays nil, inheriting turns.model_id/sessions.
 	// build_model_id exactly as today, no override).
 	ModelID *string
-	// Effort mirrors ModelID exactly, one field over (Step 59, §29.8's
+	// Effort mirrors ModelID exactly, one field over (§29.8's
 	// "workflow engine echo"): the resolved step's own Effort when
 	// non-nil, otherwise the caller's own effort UNCHANGED.
 	Effort *string

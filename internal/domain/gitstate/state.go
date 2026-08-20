@@ -13,9 +13,9 @@ import (
 // produced it -- see RequiresStashRecovery, the P0 check this exists for.
 type State string
 
-// The twelve boot-sequence states: the original ten (Step 29, §3.4's own
+// The twelve boot-sequence states: the original ten (§3.4's own
 // stash-if-dirty -> checkout -> pop sequence) plus StateFetching/
-// StateFetchFailed (Step 40, §19.3's own boot-time fetch step, which now
+// StateFetchFailed (§19.3's own boot-time fetch step, which now
 // runs BEFORE any of the original ten -- see StateFetching's own doc
 // comment for why it is a new, separate initial state rather than a
 // redefinition of StateIdle, whose own meaning/transitions are completely
@@ -72,7 +72,7 @@ const (
 	// A stash exists and has not been popped -- this is a P0 state
 	// requiring manual recovery (see RequiresStashRecovery).
 	StatePopFailed State = "pop_failed"
-	// StateFetchFailed is terminal failure (§19.3, Step 40): the boot-time
+	// StateFetchFailed is terminal failure (§19.3): the boot-time
 	// fetch itself failed AND the degrade policy does not allow proceeding
 	// anyway -- i.e. the session explicitly named a branch (repo.Branch !=
 	// nil) that is neither already local nor fetchable from the remote.

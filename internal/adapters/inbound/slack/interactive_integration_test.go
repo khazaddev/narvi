@@ -1,7 +1,7 @@
 //go:build integration
 
 // Full HTTP-level integration tests for internal/adapters/inbound/slack's
-// POST /webhooks/slack/interactive handler (Step 38, "plan mode,
+// POST /webhooks/slack/interactive handler ("plan mode,
 // cross-channel", §8.1/§13.3), against a real Postgres instance --
 // mirrors handler_integration_test.go's own testcontainers convention
 // exactly, reusing that file's newTestPool (same package).

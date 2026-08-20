@@ -1,4 +1,4 @@
-// This file (seed.go) implements the "seed" subcommand (Step 75,
+// This file (seed.go) implements the "seed" subcommand (
 // "config/data seeding", §10-P6, §13.4): `control-plane seed -manifest
 // <path> [-dry-run]`. Thin by design -- flag parsing, config load, DB
 // pool + migrations (the SAME applyMigrations helper serve() itself

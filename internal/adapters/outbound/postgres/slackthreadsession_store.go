@@ -13,7 +13,7 @@ import (
 
 // SlackThreadSessionStore is a thin, pass-through wrapper around the
 // sqlc-generated slack_thread_sessions queries (§8.10's thread↔session
-// mapping, Step 33 "Slack ingress"). No caching, no retries, no business
+// mapping "Slack ingress"). No caching, no retries, no business
 // rules -- see migrations/000029_slack_thread_sessions.up.sql's own doc
 // comment for the atomic-claim design this wraps.
 type SlackThreadSessionStore struct {

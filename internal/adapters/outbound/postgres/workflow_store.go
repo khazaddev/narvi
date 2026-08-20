@@ -12,7 +12,7 @@ import (
 )
 
 // WorkflowStore is a thin, pass-through wrapper around the sqlc-generated
-// workflow_* queries (Step 55, "workflow execution engine", §25.6/§25.7/
+// workflow_* queries ("workflow execution engine", §25.6/§25.7/
 // §25.8) -- the first real reader/writer of Step 54's own dark schema
 // (migrations/000057_workflows.up.sql). No caching, no retries, no
 // business rules: definition/binding resolution, run/step-run lifecycle
@@ -253,7 +253,7 @@ func (s *WorkflowStore) CountStepRunsForStepDefinition(ctx context.Context, runI
 
 // DecideStepRun renders verdict (approve/reject/revise) on stepRunID,
 // guarded to the SAME "AND status = 'awaiting_decision'" precondition for
-// all three (Step 56, §25.9) -- mirrors PlanStore's own ApproveIfAwaitingApproval/
+// all three (§25.9) -- mirrors PlanStore's own ApproveIfAwaitingApproval/
 // RejectIfAwaitingApproval :execrows shape exactly: rowsAffected == 0 means
 // this call did NOT win the decision (already decided by an earlier call,
 // or a stale/foreign id), rowsAffected == 1 means it did. decisionText is

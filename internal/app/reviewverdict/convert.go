@@ -87,7 +87,7 @@ func recordFromRow(row sqlcgen.ReviewVerdict) reviewverdict.Record {
 	}
 }
 
-// counterReviewFromRow reads row's own counter_review column (Step 69,
+// counterReviewFromRow reads row's own counter_review column (
 // §26.4) into review.CounterReviewStatus -- row.CounterReview == nil (a
 // pre-Step-69 row, or any light-path row -- §26.9) degrades to the zero
 // value, mirroring reviewPathFromRow's own identical "absent column ->
@@ -99,7 +99,7 @@ func counterReviewFromRow(row sqlcgen.ReviewVerdict) review.CounterReviewStatus 
 	return review.CounterReviewStatus(*row.CounterReview)
 }
 
-// factCheckFromRow reads row's own fact_check column (Step 69, §26.6)
+// factCheckFromRow reads row's own fact_check column (§26.6)
 // into reviewpost.FactCheckStatus -- row.FactCheck == nil (a pre-Step-69
 // row) degrades to the zero value, mirroring counterReviewFromRow's own
 // identical precedent immediately above.
@@ -123,7 +123,7 @@ func factCheckKilledFromRow(row sqlcgen.ReviewVerdict) int {
 	return int(*row.FactCheckKilled)
 }
 
-// reviewPathFromRow reads row's own review_path column (Step 68, §26.3)
+// reviewPathFromRow reads row's own review_path column (§26.3)
 // into reviewtriage.ReviewDepth -- row.ReviewPath == nil (a pre-Step-68
 // row, or a verdict whose own turn never resolved a depth) degrades to
 // the zero value ReviewDepth(""), mirroring digestFromRow's own identical

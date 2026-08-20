@@ -115,7 +115,7 @@ func sentinelFixAgentEntryValue() sentinelFixAgentEntry {
 	}
 	return sentinelFixAgentEntry{
 		Mode:        "primary",
-		Description: "Sentinel auto-fix: restricted to test/doc paths only (Step 48, §17.2).",
+		Description: "Sentinel auto-fix: restricted to test/doc paths only (§17.2).",
 		Permission: map[string]map[string]string{
 			"edit": permission,
 		},

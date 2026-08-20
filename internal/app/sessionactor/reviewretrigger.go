@@ -23,7 +23,7 @@
 // Postgres reads; ACTUALLY enqueueing one (step 4) needs a fresh,
 // live-fetched diff/head-sha (internal/app/reviewcontext.Fetch, the SAME
 // "diff provably anchored to a live GetPullRequest call" guarantee every
-// other review-trigger path already gets, Step 62 review finding C2's own
+// other review-trigger path already gets own
 // fix) -- a real outbound GitHub API call. This mirrors dispatch.go's own
 // established "plan inside a transact, real network call OUTSIDE any
 // transaction, result written back in a fresh transact" shape
@@ -130,7 +130,7 @@ type reviewRetriggerDecision struct {
 	budgetNoticeAlreadySent bool
 	latestVerdictRiskLevel  string
 
-	// latestVerdictReviewPath (Step 68, §26.3) is the latest posted
+	// latestVerdictReviewPath (§26.3) is the latest posted
 	// verdict's own review_path column -- §24's own re-review floor
 	// input ("once deep, a PR stays deep, even if the delta itself
 	// would independently route light"). Empty when no verdict has ever
@@ -247,7 +247,7 @@ func (a *Actor) handleReviewRetriggerDebounceTimer(ctx context.Context) error {
 			// correctness difference (both reads name the SAME latest
 			// review_verdicts row for this repoFullName/prNumber).
 			//
-			// Adversarial-review fix (Step 69, §26.4/§26.7): computed
+			// Adversarial-review fix (§26.4/§26.7): computed
 			// BEFORE composeAutoRetriggerPrompt now, not after -- this
 			// lane previously rendered the prompt FIRST and only computed
 			// the floored depth afterward, so reviewCtx.DeepPath (never
@@ -725,7 +725,7 @@ func (a *Actor) composeAutoRetriggerPrompt(ctx context.Context, repoFullName str
 // now matches it, closing what was a real, if narrow, divergence between
 // the two.
 //
-// workflowengine (Step 55, §25.6) wiring is DELIBERATELY NOT duplicated:
+// workflowengine (§25.6) wiring is DELIBERATELY NOT duplicated:
 // createTurnLocked calls workflowengine.ResolveStepForNewTurn/AttachTurn
 // for every turn it creates, so that turn picks up its lane's configured
 // workflow prompt/model/effort and is tracked by a workflow run --
@@ -741,7 +741,7 @@ func (a *Actor) composeAutoRetriggerPrompt(ctx context.Context, repoFullName str
 // test in this codebase exercises today. Left as a documented, deliberate
 // omission (rereview finding 9) rather than a speculative rewrite of this
 // file's own prompt-composition contract.
-// reviewDepth/reviewDepthDecision/modelID/effort (Step 68, §26.3) are
+// reviewDepth/reviewDepthDecision/modelID/effort (§26.3) are
 // decision's own finalReviewDepth/reviewDepthDecisionJSON/triageModelID/
 // triageEffort fields, already computed and FLOORED (§24) by
 // handleReviewRetriggerDebounceTimer before this function's own caller

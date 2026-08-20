@@ -80,7 +80,7 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"viewer cannot prompt any session", authz.RoleViewer, authz.ActionPromptSession, false, false},
 		{"viewer cannot prompt even an owned/joined session", authz.RoleViewer, authz.ActionPromptSession, true, false},
 
-		// Row 2b (Step 58, §28.5): upload to a session -- the SAME §13.3
+		// Row 2b (§28.5): upload to a session -- the SAME §13.3
 		// row as prompting (ActionPromptSession above): admin/maintainer
 		// on ANY session; member ONLY on own/joined; viewer never,
 		// regardless (review-fix coverage addition, FIX F -- this action
@@ -94,7 +94,7 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"viewer cannot upload to any session", authz.RoleViewer, authz.ActionUploadToSession, false, false},
 		{"viewer cannot upload even to an owned/joined session", authz.RoleViewer, authz.ActionUploadToSession, true, false},
 
-		// Row 2b (Step 60, §16.2): merge a decision-inbox PR -- the SAME
+		// Row 2b (§16.2): merge a decision-inbox PR -- the SAME
 		// §13.3 row as prompting/uploading above (ActionMergePR's own doc
 		// comment, action.go): admin/maintainer on ANY PR; member ONLY on
 		// one already resolved as assigned to them (OwnedOrJoined); viewer
@@ -119,7 +119,7 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"viewer cannot approve any plan", authz.RoleViewer, authz.ActionApprovePlan, false, false},
 		{"viewer cannot approve even an owned/joined plan", authz.RoleViewer, authz.ActionApprovePlan, true, false},
 
-		// Row 2d (Step 54, §25.11): decide a workflow run's HITL step --
+		// Row 2d (§25.11): decide a workflow run's HITL step --
 		// own/joined-aware, the SAME shape as approve-plan above by
 		// §25.11's explicit "same row as ActionApprovePlan": admin/
 		// maintainer on ANY run, member ONLY on own/joined, viewer never.
@@ -132,7 +132,7 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"viewer cannot decide any workflow step", authz.RoleViewer, authz.ActionDecideWorkflowStep, false, false},
 		{"viewer cannot decide even an owned/joined workflow step", authz.RoleViewer, authz.ActionDecideWorkflowStep, true, false},
 
-		// Row 2 (Step 59, §29.9): link/unlink the caller's OWN ChatGPT
+		// Row 2 (§29.9): link/unlink the caller's OWN ChatGPT
 		// account -- the SAME own-aware shape as ActionApprovePlan/
 		// ActionDecideWorkflowStep above ("own-aware like
 		// ActionApprovePlan's own row", action.go's own doc comment):
@@ -163,7 +163,7 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"member cannot resume even a session they own/joined", authz.RoleMember, authz.ActionResumeSession, true, false},
 		{"viewer cannot resume any session", authz.RoleViewer, authz.ActionResumeSession, false, false},
 
-		// Row 3 (Step 59, §29.9): view the admin shadow-comparison tooling
+		// Row 3 (§29.9): view the admin shadow-comparison tooling
 		// (GET /api/admin/shadow-compare) -- the SAME "ANY session,
 		// admin/maintainer ONLY, no member own/joined escape hatch" shape
 		// as ActionStopSession/ActionResumeSession immediately above

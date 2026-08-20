@@ -11,7 +11,7 @@ import (
 )
 
 // AutomationInvocationStore is a thin, pass-through wrapper around the
-// sqlc-generated automation_invocations queries (Step 51, "automations:
+// sqlc-generated automation_invocations queries ("automations:
 // engine", §3.5).
 type AutomationInvocationStore struct {
 	q *sqlcgen.Queries

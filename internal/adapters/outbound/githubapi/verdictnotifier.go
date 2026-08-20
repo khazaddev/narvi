@@ -13,7 +13,7 @@ import (
 // VerdictPayload is the JSON shape internal/app/outboxworker expects to
 // find in an outbox entry's own payload column for a
 // ports.NotificationKindGitHubVerdict row -- enqueued by internal/
-// adapters/inbound/httpapi/reviewverdict.go (Step 47, "server-side
+// adapters/inbound/httpapi/reviewverdict.go ("server-side
 // verdict", §8.2) at verdict-posting-tool-call time. Owner/Repo/PRNumber
 // are the review session's own PR identity (github_pr_sessions); Event is
 // one of internal/domain/reviewpost.FormalReviewEvent's own two values

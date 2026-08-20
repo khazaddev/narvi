@@ -11,7 +11,7 @@ import (
 // HandoffPayload is the JSON shape internal/app/outboxworker expects to
 // find in an outbox entry's own payload column for a
 // ports.NotificationKindHandoffSentinel row -- enqueued by internal/app/
-// sessionactor/handoffsentinel.go (Step 49, "handoff-readiness sentinel",
+// sessionactor/handoffsentinel.go ("handoff-readiness sentinel",
 // §14.4) once a scoped-session PR's own sentinel run has something to
 // report. Owner/Repo/PRNumber are the PR's own identity; Body is the
 // ALREADY-RENDERED comment (internal/domain/handoff.RenderComment's own

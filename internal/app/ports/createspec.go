@@ -48,7 +48,7 @@ type CreateSpec struct {
 	Image string
 
 	// Docker is the second deliberate exception to "don't duplicate
-	// SessionConfig" (§27.5, Step 74) — kept as its own top-level field,
+	// SessionConfig" (§27.5) — kept as its own top-level field,
 	// like Gen, so a provider can act on this Environment's own
 	// docker_required flag WITHOUT ever parsing the opaque SESSION_CONFIG
 	// document itself (the Modal adapter's own CreateSandbox/
@@ -56,7 +56,7 @@ type CreateSpec struct {
 	// option). MUST equal SessionConfig.Docker; see Validate.
 	Docker bool
 
-	// EgressPolicy is the third such exception (§27.6, Step 74), carried
+	// EgressPolicy is the third such exception (§27.6), carried
 	// exactly like Docker above for the identical reason: the provider
 	// substrate enforces this (Modal's own sandbox network controls), so
 	// it must be reachable without parsing SESSION_CONFIG. Nil means "no
@@ -89,7 +89,7 @@ func (e *GenMismatchError) Error() string {
 // DockerMismatchError is returned by CreateSpec.Validate when Docker and
 // SessionConfig.Docker disagree — the identical deliberate-duplicate
 // safety net GenMismatchError provides for Gen, applied to CreateSpec's
-// second such field (§27.5, Step 74).
+// second such field (§27.5).
 type DockerMismatchError struct {
 	Docker              bool
 	SessionConfigDocker bool
@@ -183,7 +183,7 @@ type ImageSpec struct {
 }
 
 // CacheMount is ImageSpec.CacheMount's own value type (§19.1's closing
-// paragraph, Step 43(c), third iteration): a request to mount one specific,
+// paragraph(c), third iteration): a request to mount one specific,
 // already-published, IMMUTABLE cache version read-only into a build
 // sandbox, and to publish a brand-new version if this build succeeds — to
 // avoid re-downloading every dependency from a cold, empty filesystem on

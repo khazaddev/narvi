@@ -78,7 +78,7 @@ const githubAPIBaseURL = "https://api.github.com"
 // OAuth2 token endpoint both live under this host), passed to
 // linearapi.New's own apiBaseURL parameter in production wiring -- the
 // ONLY place this literal appears in this binary's wiring, mirroring
-// githubAPIBaseURL's own identical precedent immediately above (Step 34,
+// githubAPIBaseURL's own identical precedent immediately above (
 // "Linear ingress", §8.10).
 const linearAPIBaseURL = "https://api.linear.app"
 
@@ -89,7 +89,7 @@ const linearAPIBaseURL = "https://api.linear.app"
 const slackAPIBaseURL = "https://slack.com/api"
 
 // This is intentionally a bare-bones dispatch, not a flag-parsing
-// library: two subcommands, "serve" and "seed" (Step 75, "config/data
+// library: two subcommands, "serve" and "seed" ("config/data
 // seeding", §10-P6/§13.4 -- see seed.go). "seed" lives here, as a
 // control-plane subcommand, rather than its own cmd/ binary: it needs
 // the SAME DB access and the SAME platform.Load() config "serve" already
@@ -172,7 +172,7 @@ func serve() error {
 
 	// hub is the single shared piece of state connecting the app-layer
 	// actor to the adapter-layer client sockets (§6.2's "→ broadcast
-	// stream", Step 19): constructed once here, then threaded through to
+	// stream"): constructed once here, then threaded through to
 	// BOTH sessionactor.NewRegistry (as the ports.EventBroadcaster every
 	// Actor's successful transact commits to) and wshub.NewClientHandler
 	// (so it can register/unregister each subscribed connection) -- see
@@ -247,7 +247,7 @@ func serve() error {
 			GitHubBotHandle:   cfg.GitHubBotHandle,
 			ReviewDiffFetcher: sourceControl,
 			ReviewModelDeep:   cfg.ReviewModelDeep,
-			// RolloutMode (Step 76, §10 Phase 6, §32): dispatch.go's own
+			// RolloutMode (§10 Phase 6, §32): dispatch.go's own
 			// refuseIfRolloutUnenrolled -- the dispatch-time half of the
 			// "fail-closed, twice" pair -- consults this on every
 			// Spawn/Restore/Resume attempt.
@@ -319,7 +319,7 @@ func serve() error {
 	releaseManifestPendingStore := postgres.NewReleaseManifestPendingStore(pool)
 	linearAgentSessionStore := postgres.NewLinearAgentSessionStore(pool)
 
-	// blobStore/uploadSweeper (Step 58, "uploads, blob storage & the
+	// blobStore/uploadSweeper ("uploads, blob storage & the
 	// in-sandbox download_file tool", §28.7) are constructed ONLY when
 	// cfg.ObjectStorage is non-nil -- mirrors cfg.RWXAccessToken's own
 	// "absent = feature off" precedent below, one level deeper: with no
@@ -370,20 +370,20 @@ func serve() error {
 	// webhookDeliveryStore is Step 31's own provider-agnostic dedupe claim,
 	// shared across Steps 32/33/34's own GitHub/Slack/Linear ingress (see
 	// the Linear ingress block below, which reuses this SAME store rather
-	// than constructing its own). slackThreadSessionStore (Step 33, "Slack
+	// than constructing its own). slackThreadSessionStore ("Slack
 	// ingress", §8.10) is the thread<->session mapping (see
 	// internal/adapters/inbound/slack's own doc.go); githubPRSessionStore
-	// (Step 32, "GitHub ingress", §8.2) is the per-PR review-session
+	// ("GitHub ingress", §8.2) is the per-PR review-session
 	// coalescing claim (see internal/adapters/inbound/github's own doc.go).
 	webhookDeliveryStore := postgres.NewWebhookDeliveryStore(pool)
 	slackThreadSessionStore := postgres.NewSlackThreadSessionStore(pool)
 	githubPRSessionStore := postgres.NewGitHubPRSessionStore(pool)
-	// repoSettingsStore (Step 47, "server-side verdict", §8.2/§21.2) backs
+	// repoSettingsStore ("server-side verdict", §8.2/§21.2) backs
 	// the admin repo-settings REST routes below AND the verdict-posting
 	// tool's own blockOnHighRisk read (reviewverdict.go) -- one store,
 	// shared, never a second independently-constructed copy.
 	repoSettingsStore := postgres.NewRepoSettingsStore(pool)
-	// timerStore (Step 65, "review: automatic re-review on new commits",
+	// timerStore ("review: automatic re-review on new commits",
 	// §24.1) backs the synchronize webhook lane's own DIRECT, actor-
 	// bypassing session_timers write below (githubingress.Config.Timers)
 	// -- a standalone instance over the SAME pool every other store here
@@ -391,19 +391,19 @@ func serve() error {
 	// *postgres.TimerStore internally, never exported, so this webhook
 	// handler needs its own).
 	timerStore := postgres.NewTimerStore(pool)
-	// providerCredentialStore (Step 53, "provider credential injection",
+	// providerCredentialStore ("provider credential injection",
 	// §25.1/§25.3) backs the 3 scoped management CRUD route groups below
 	// AND the sandbox-facing delivery endpoint (providercredentialsdelivery.go)
 	// -- one store, shared, never a second independently-constructed copy.
 	providerCredentialStore := postgres.NewProviderCredentialStore(pool)
-	// sandboxSecretStore/openCodeConfigStore (Step 72, "sandbox secrets &
+	// sandboxSecretStore/openCodeConfigStore ("sandbox secrets &
 	// opencode config", §27.1/§27.2) back their own scoped management CRUD
 	// route groups below AND their own sandbox-facing delivery endpoints
 	// (sandboxsecretsdelivery.go/opencodeconfigdelivery.go) -- mirrors
 	// providerCredentialStore's own identical "one store, shared" pattern.
 	sandboxSecretStore := postgres.NewSandboxSecretStore(pool)
 	openCodeConfigStore := postgres.NewOpenCodeConfigStore(pool)
-	// cloudIdentityBindingStore/oidcSigningKeyStore (Step 73a, "cloud
+	// cloudIdentityBindingStore/oidcSigningKeyStore ("cloud
 	// identity: OIDC issuer, bindings, minting", §27.3) back the binding
 	// management CRUD route groups, the signing-key rotation trigger, the
 	// public discovery/JWKS routes, AND the sandbox-facing minting
@@ -411,14 +411,14 @@ func serve() error {
 	// sandboxSecretStore's own identical "one store, shared" pattern.
 	cloudIdentityBindingStore := postgres.NewCloudIdentityBindingStore(pool)
 	oidcSigningKeyStore := postgres.NewOIDCSigningKeyStore(pool)
-	// clusterBindingStore (Step 73b, "cloud identity: sandbox-side
+	// clusterBindingStore ("cloud identity: sandbox-side
 	// consumption + kubeconfig injection", §27.4) backs the cluster-binding
 	// management route group (clusterbindings.go) AND the sandbox-facing
 	// cloud-identity-config delivery endpoint (cloudidentityconfigdelivery.go)
 	// -- mirrors cloudIdentityBindingStore's own identical "one store,
 	// shared" pattern.
 	clusterBindingStore := postgres.NewClusterBindingStore(pool)
-	// chatGPTLinkAttemptStore/chatGPTDeviceFlow (Step 59, "models: Codex
+	// chatGPTLinkAttemptStore/chatGPTDeviceFlow ("models: Codex
 	// via ChatGPT-account OAuth", §29.3/§29.5/§29.9) back the self-service
 	// link-flow REST routes (chatgptlink.go) AND the refresh pump
 	// (chatgptrefresh) -- one store/client each, shared, never a second
@@ -439,7 +439,7 @@ func serve() error {
 		TokenEncryptionKey:  cfg.TokenEncryptionKey,
 		Timeouts:            cfg.Timeouts,
 	}
-	// reviewFindingStore/sentinelFixStore (Step 48, "sentinels +
+	// reviewFindingStore/sentinelFixStore ("sentinels +
 	// suggestions", §17/§22.1) back the verdict-posting tool's own
 	// per-finding upsert + sentinel-auto-fix claim (reviewverdict.go), the
 	// rebut/apply-suggestion endpoints (reviewfindings.go), and re-review
@@ -447,13 +447,13 @@ func serve() error {
 	// shared, never a second independently-constructed copy.
 	reviewFindingStore := postgres.NewReviewFindingStore(pool)
 	sentinelFixStore := postgres.NewSentinelFixStore(pool)
-	// falsePositivePatternStore (Step 63, "review: learned false-positive
+	// falsePositivePatternStore ("review: learned false-positive
 	// patterns", §22.2/§22.3/§22.4) backs the GitHub capture command, the
 	// advisory-injection fetch (internal/app/reviewcontext), and the
 	// audit-view/retire REST endpoints -- one store, shared, never a
 	// second independently-constructed copy.
 	falsePositivePatternStore := postgres.NewFalsePositivePatternStore(pool)
-	// reviewDigestSectionFeedbackStore (Step 69, "review deep path:
+	// reviewDigestSectionFeedbackStore ("review deep path:
 	// adversarial counter-review + readout measurement", §26.5) backs the
 	// GitHub `arch recap wrong: <reason>` capture command -- one store,
 	// shared, never a second independently-constructed copy, mirroring
@@ -461,7 +461,7 @@ func serve() error {
 	// above.
 	reviewDigestSectionFeedbackStore := postgres.NewReviewDigestSectionFeedbackStore(pool)
 	// reviewVerdictStore/autoApprovalOutcomeStore/digestSendStateStore
-	// (Step 62, "review verdict persistence, analytics, digest &
+	// ("review verdict persistence, analytics, digest &
 	// automated approval", §21) back the verdict-posting tool's own
 	// review_verdicts insert (reviewverdict.go), the real auto-approval
 	// eligibility engine's own latest-verdict read (both decision-inbox
@@ -476,19 +476,19 @@ func serve() error {
 		RepoSettings:         repoSettingsStore,
 		ReviewFindings:       reviewFindingStore,
 		AutoApprovalOutcomes: autoApprovalOutcomeStore,
-		// DigestSectionFeedback (Step 69, §26.5) backs appreviewverdict.
+		// DigestSectionFeedback (§26.5) backs appreviewverdict.
 		// DigestContestationRate -- the SAME reviewDigestSectionFeedbackStore
 		// instance the GitHub capture command above already uses.
 		DigestSectionFeedback: reviewDigestSectionFeedbackStore,
 		Timeouts:              cfg.Timeouts,
 	}
-	// digestChannelStore (Step 62, §21.3) backs internal/app/digest's own
+	// digestChannelStore (§21.3) backs internal/app/digest's own
 	// channel-discovery step -- constructed here, alongside its own
 	// sibling stores, though the digest.Deps/automerge.Deps bundles that
 	// actually use it are assembled further below, once decisionInboxDeps
 	// (automerge.Deps embeds the full decisioninbox.Deps) exists.
 	digestChannelStore := postgres.NewDigestChannelStore(pool)
-	// workflowStore (Step 55, "workflow execution engine", §25.6) backs
+	// workflowStore ("workflow execution engine", §25.6) backs
 	// the generic step-outcome-posting tool (workflowstepoutcome.go) --
 	// sessionactor's own Registry constructs its OWN WorkflowStore
 	// internally (newStoreBundle, registry.go), and createTurnLocked
@@ -650,7 +650,7 @@ func serve() error {
 	// request two different request-identity mechanisms.
 	router.Get("/health", healthHandler(pool, cfg.Timeouts))
 
-	// OIDC discovery + JWKS (Step 73a, "cloud identity: OIDC issuer,
+	// OIDC discovery + JWKS ("cloud identity: OIDC issuer,
 	// bindings, minting", §27.3): deliberately mounted PUBLICLY,
 	// UNAUTHENTICATED -- outside auth.Middleware AND, unlike every other
 	// route this file mounts outside that middleware (scm-credentials,
@@ -692,7 +692,7 @@ func serve() error {
 	router.Post("/sessions/{sessionID}/scm-credentials",
 		httpapi.ScmCredentials(sessionStore, sandboxStore, identityStore, userStore, githubPRSessionStore, cfg.GitHubBotToken, cfg.TokenEncryptionKey, cfg.Timeouts))
 
-	// provider-credentials (Step 53, "provider credential injection",
+	// provider-credentials ("provider credential injection",
 	// §25.1/§25.3): deliberately mounted OUTSIDE /api/sessions and outside
 	// auth.Middleware entirely, mirroring scm-credentials immediately above
 	// exactly (see httpapi/providercredentialsdelivery.go's own doc
@@ -701,7 +701,7 @@ func serve() error {
 	router.Post("/sessions/{sessionID}/provider-credentials",
 		httpapi.ProviderCredentialsDelivery(sessionStore, sandboxStore, providerCredentialStore, cfg.TokenEncryptionKey))
 
-	// sandbox-secrets / opencode-config (Step 72, "sandbox secrets &
+	// sandbox-secrets / opencode-config ("sandbox secrets &
 	// opencode config", §27.1/§27.2): deliberately mounted OUTSIDE
 	// /api/sessions and outside auth.Middleware entirely, mirroring
 	// provider-credentials immediately above VERBATIM (see
@@ -712,7 +712,7 @@ func serve() error {
 	router.Post("/sessions/{sessionID}/opencode-config",
 		httpapi.OpenCodeConfigDelivery(sessionStore, sandboxStore, openCodeConfigStore))
 
-	// cloud-identity-token (Step 73a, "cloud identity: OIDC issuer,
+	// cloud-identity-token ("cloud identity: OIDC issuer,
 	// bindings, minting", §27.3): deliberately mounted OUTSIDE
 	// /api/sessions and outside auth.Middleware entirely, mirroring
 	// provider-credentials/sandbox-secrets immediately above VERBATIM
@@ -728,7 +728,7 @@ func serve() error {
 	router.Post("/sessions/{sessionID}/cloud-identity-token",
 		httpapi.MintCloudIdentityToken(sessionStore, sandboxStore, cloudIdentityBindingStore, oidcSigningKeyStore, cfg.TokenEncryptionKey, cfg.CloudIdentityIssuerURL, cfg.Timeouts))
 
-	// cloud-identity-config (Step 73b, "cloud identity: sandbox-side
+	// cloud-identity-config ("cloud identity: sandbox-side
 	// consumption + kubeconfig injection", §27.3/§27.4): deliberately
 	// mounted OUTSIDE /api/sessions and outside auth.Middleware entirely,
 	// mirroring cloud-identity-token immediately above -- another
@@ -754,7 +754,7 @@ func serve() error {
 	router.Post("/sessions/{sessionID}/snapshot",
 		httpapi.SnapshotMint(sandboxStore, sandboxProvider))
 
-	// review/verdict (Step 47, "server-side verdict", §8.2/§5.2): the
+	// review/verdict ("server-side verdict", §8.2/§5.2): the
 	// verdict-posting TOOL -- deliberately mounted OUTSIDE /api/sessions
 	// and outside auth.Middleware entirely, mirroring scm-credentials/
 	// snapshot-mint immediately above exactly (see httpapi/reviewverdict.go's
@@ -769,7 +769,7 @@ func serve() error {
 	router.Post("/sessions/{sessionID}/review/verdict",
 		httpapi.PostReviewVerdict(pool, sandboxStore, sessionStore, githubPRSessionStore, repoSettingsStore, reviewFindingStore, sentinelFixStore, outboxStore, reviewVerdictStore, turnStore, eventStore, cfg.GitHubBotHandle, cfg.GitHubBotToken, sourceControl, findingRelocationResolver, cfg.Timeouts))
 
-	// workflow/step-outcome (Step 55, "workflow execution engine", §25.6):
+	// workflow/step-outcome ("workflow execution engine", §25.6):
 	// the GENERIC step-outcome-posting tool -- deliberately mounted
 	// OUTSIDE /api/sessions and outside auth.Middleware entirely,
 	// mirroring review/verdict immediately above exactly (see
@@ -782,7 +782,7 @@ func serve() error {
 	router.Post("/sessions/{sessionID}/workflow/step-outcome",
 		httpapi.PostWorkflowStepOutcome(sandboxStore, workflowStore))
 
-	// turn/epistemic-outcome (Step 61, "builder epistemic pre-action
+	// turn/epistemic-outcome ("builder epistemic pre-action
 	// check", §20.2): the devil's-advocate preamble's own required
 	// structured-signal-reporting tool -- deliberately mounted OUTSIDE
 	// /api/sessions and outside auth.Middleware entirely, mirroring
@@ -791,7 +791,7 @@ func serve() error {
 	router.Post("/sessions/{sessionID}/turn/epistemic-outcome",
 		httpapi.PostEpistemicOutcome(sandboxStore, turnStore))
 
-	// uploads mint/confirm/content (Step 58, "uploads, blob storage & the
+	// uploads mint/confirm/content ("uploads, blob storage & the
 	// in-sandbox download_file tool", §28.4/§28.5): deliberately mounted
 	// OUTSIDE /api/sessions and outside auth.Middleware entirely, mirroring
 	// scm-credentials/snapshot-mint/review-verdict/workflow-step-outcome
@@ -807,7 +807,7 @@ func serve() error {
 	router.Get("/sessions/{sessionID}/uploads/{uploadID}/content",
 		httpapi.UploadContent(sandboxStore, artifactStore, blobStore, cfg.ObjectStorage, cfg.Timeouts))
 
-	// Slack ingress (Step 33, §8.10): deliberately mounted OUTSIDE
+	// Slack ingress (§8.10): deliberately mounted OUTSIDE
 	// /api/sessions and outside auth.Middleware entirely -- Slack itself
 	// is the caller here, authenticated via its own request-signing
 	// scheme (X-Slack-Signature/X-Slack-Request-Timestamp), not a
@@ -844,11 +844,11 @@ func serve() error {
 		// independently-constructed copy.
 		Participants:     participantStore,
 		IntentClassifier: intentClassifierSvc,
-		// EpistemicCheckDefault (Step 61, §20.4): the SAME platform.Config
+		// EpistemicCheckDefault (§20.4): the SAME platform.Config
 		// value every other CreateTurnCore-reaching caller below also
 		// receives.
 		EpistemicCheckDefault: cfg.EpistemicCheckDefault,
-		// RolloutMode/RepoSettings (Step 76, §10 Phase 6, §32): the SAME
+		// RolloutMode/RepoSettings (§10 Phase 6, §32): the SAME
 		// cfg.RolloutMode/repoSettingsStore every other CreateSessionCore-
 		// reaching caller in this file also receives.
 		RolloutMode:     cfg.RolloutMode,
@@ -860,7 +860,7 @@ func serve() error {
 		TimestampWindow: cfg.Timeouts.WebhookTimestampFreshnessWindow,
 		SlackAPIBaseURL: slackAPIBaseURL,
 		AckTimeout:      cfg.Timeouts.SlackAckTimeout,
-		// IdentityLink/SlackClient/Timeouts (Step 39, "identities + full
+		// IdentityLink/SlackClient/Timeouts ("identities + full
 		// RBAC", §13.2): SlackClient reuses the SAME slackNotifier
 		// instance already constructed above (for the outbox delivery
 		// worker and the interactivity route immediately below), never a
@@ -870,7 +870,7 @@ func serve() error {
 		Timeouts:     cfg.Timeouts,
 	}))
 
-	// Slack INTERACTIVITY ingress (Step 38, "plan mode, cross-channel",
+	// Slack INTERACTIVITY ingress ("plan mode, cross-channel",
 	// §8.1/§13.3) -- a SEPARATE route from the Events API ingress
 	// immediately above (structurally different payload shape; see
 	// internal/adapters/inbound/slack/interactive.go's own top doc comment
@@ -890,12 +890,12 @@ func serve() error {
 		SlackClient:         slackNotifier,
 		AuditLog:            auditLogStore,
 		IdentityLink:        appIdentityLinkDeps,
-		// Participants (Step 39, "identities + full RBAC", §13.2/§13.3):
+		// Participants ("identities + full RBAC", §13.2/§13.3):
 		// the SAME participantStore instance Step 37's own REST plan
 		// approve/reject endpoints already use (constructed once, above),
 		// never a second, independently-constructed copy.
 		Participants: participantStore,
-		// EpistemicCheckDefault (Step 61, §20.4): see slack.Deps' own
+		// EpistemicCheckDefault (§20.4): see slack.Deps' own
 		// identical field above -- this route's own CreateTurnCore call
 		// always names planMode=true, so this value never actually
 		// changes behavior here today (§20.3), but is threaded for the
@@ -906,7 +906,7 @@ func serve() error {
 		Timeouts:              cfg.Timeouts,
 	}))
 
-	// GitHub webhook ingress (Step 32, "GitHub ingress", §8.2): mounted
+	// GitHub webhook ingress ("GitHub ingress", §8.2): mounted
 	// OUTSIDE auth.Middleware entirely, mirroring scm-credentials/
 	// snapshot-mint immediately above exactly -- this route authenticates
 	// via GitHub's own HMAC webhook signature, not a browser cookie. See
@@ -935,7 +935,7 @@ func serve() error {
 			// instance every other caller above already uses -- threaded
 			// through to CreateTurnForBot's own awaiting-plan gate.
 			Plans: planStore,
-			// ReviewTriage/ReviewModelDeep (Step 68, §26.3): the SAME
+			// ReviewTriage/ReviewModelDeep (§26.3): the SAME
 			// repoSettingsStore/reviewVerdictStore instances every other
 			// caller above already uses, never a second, independently-
 			// constructed copy.
@@ -946,7 +946,7 @@ func serve() error {
 				Sessions:       sessionStore,
 			},
 			ReviewModelDeep: cfg.ReviewModelDeep,
-			// RolloutMode/RepoSettings (Step 76, §10 Phase 6, §32): the
+			// RolloutMode/RepoSettings (§10 Phase 6, §32): the
 			// SAME cfg.RolloutMode/repoSettingsStore every other
 			// CreateSessionOnTx-reaching caller in this file also
 			// receives -- a DEDICATED field pair, not a reuse of
@@ -967,7 +967,7 @@ func serve() error {
 		githubingress.Config{
 			WebhookSecret: cfg.GitHubWebhookSecret,
 			BotHandle:     cfg.GitHubBotHandle,
-			// ReReviewLabel/DiffFetcher (Step 46, "review sessions", §8.2):
+			// ReReviewLabel/DiffFetcher ("review sessions", §8.2):
 			// the manual re-trigger-via-label lane's own configured label
 			// name, and the SAME *githubapi.Adapter instance already
 			// constructed above (sourceControl) as PullRequests/Comments --
@@ -975,19 +975,19 @@ func serve() error {
 			// wired as this Step's own diff/stack pre-fetch source.
 			ReReviewLabel: cfg.GitHubReReviewLabel,
 			DiffFetcher:   sourceControl,
-			// ReviewFindings (Step 48, §22.1): the SAME reviewFindingStore
+			// ReviewFindings (§22.1): the SAME reviewFindingStore
 			// instance every other caller above already uses.
 			ReviewFindings: reviewFindingStore,
-			// FalsePositivePatterns (Step 63, §22.3): the SAME
+			// FalsePositivePatterns (§22.3): the SAME
 			// falsePositivePatternStore instance every other caller
 			// (RetriggerReview, the capture/lifecycle endpoints below)
 			// already uses.
 			FalsePositivePatterns: falsePositivePatternStore,
-			// FalsePositivePatternCapture (Step 63, §22.2): the SAME
+			// FalsePositivePatternCapture (§22.2): the SAME
 			// falsePositivePatternStore instance, satisfying this
 			// structurally different (write) interface.
 			FalsePositivePatternCapture: falsePositivePatternStore,
-			// ArchRecapContestCapture/ArchRecapVerdicts (Step 69, §26.5):
+			// ArchRecapContestCapture/ArchRecapVerdicts (§26.5):
 			// reviewDigestSectionFeedbackStore is the SAME instance this
 			// deployment has exactly one of; reviewVerdictDeps is the SAME
 			// bundle every other review-verdict reader in this file already
@@ -1022,12 +1022,12 @@ func serve() error {
 			// githubActorLinkNoticeStore's own construction below.
 			PublicBaseURL: cfg.PublicBaseURL,
 			LinkNotices:   githubActorLinkNoticeStore,
-			// SentinelFixes/RepoSettings/AuditLog (Step 48, §17.4/§17.5):
+			// SentinelFixes/RepoSettings/AuditLog (§17.4/§17.5):
 			// the SAME instances every other caller above already uses.
 			SentinelFixes: sentinelFixStore,
 			RepoSettings:  repoSettingsStore,
 			AuditLog:      auditLogStore,
-			// PendingChecks/ReleaseLabel/ReleaseBranchPattern (Step 50,
+			// PendingChecks/ReleaseLabel/ReleaseBranchPattern (
 			// "release PR review", §15; PendingChecks itself is
 			// blocking-finding fix #1): releaseManifestPendingStore is the
 			// SAME instance constructed above, alongside outboxStore --
@@ -1040,14 +1040,14 @@ func serve() error {
 			PendingChecks:        releaseManifestPendingStore,
 			ReleaseLabel:         cfg.GitHubReleaseLabel,
 			ReleaseBranchPattern: cfg.GitHubReleaseBranchPattern,
-			// Timers (Step 65, §24.1): the standalone timerStore instance
+			// Timers (§24.1): the standalone timerStore instance
 			// constructed above, backing this lane's own direct,
 			// actor-bypassing review_retrigger_debounce timer arm.
 			Timers: timerStore,
 		},
 	))
 
-	// Auth routes (§13.1/§13.4, Step 20): how a session is obtained/
+	// Auth routes (§13.1/§13.4): how a session is obtained/
 	// discarded in the first place, so — obviously — mounted OUTSIDE any
 	// auth gate. See internal/adapters/inbound/auth's own doc.go for the
 	// full routes/outcome-table writeup.
@@ -1068,7 +1068,7 @@ func serve() error {
 	))
 	router.Post("/auth/logout", auth.NewLogoutHandler(userSessionStore, secureCookies))
 
-	// /auth/identity-link/{nonce}: the magic-link consume flow (Step 39,
+	// /auth/identity-link/{nonce}: the magic-link consume flow (
 	// "identities + full RBAC", §13.2 step 4's own "connect your account"
 	// link) -- deliberately mounted OUTSIDE auth.Middleware entirely, like
 	// the auth routes immediately above: this handler authenticates the
@@ -1083,7 +1083,7 @@ func serve() error {
 		AppIdentityLink: appIdentityLinkDeps,
 	}))
 
-	// /api/members, /api/audit-log (Step 39, "identities + full RBAC",
+	// /api/members, /api/audit-log ("identities + full RBAC",
 	// §13.2/§13.3): the backend-only members API -- list members (with
 	// role, linked identities, pending-link state), an admin-only
 	// role-change endpoint, admin manual link/unlink of an identity, and a
@@ -1100,7 +1100,7 @@ func serve() error {
 		r.Delete("/{userID}/identities/{identityID}", httpapi.UnlinkMemberIdentity(pool, identityStore, auditLogStore))
 	})
 
-	// /api/me/chatgpt-link (Step 59, "models: Codex via ChatGPT-account
+	// /api/me/chatgpt-link ("models: Codex via ChatGPT-account
 	// OAuth", §29.3/§29.9): self-service link/status/unlink -- gated
 	// behind auth.Middleware exactly like /api/members above; each
 	// handler renders the real authz.ActionLinkChatGPTAccount verdict
@@ -1116,7 +1116,7 @@ func serve() error {
 		r.Delete("/", httpapi.DeleteChatGPTLink(chatGPTLinkDeps))
 	})
 
-	// /api/models (Step 59, "models: Catalog", §8 item 8/§29/§25.2) --
+	// /api/models ("models: Catalog", §8 item 8/§29/§25.2) --
 	// mounted exactly like /api/members above: gated behind auth.
 	// Middleware only, with the handler itself rendering the real
 	// authz.ActionViewAnalytics verdict (everyone including viewer).
@@ -1125,7 +1125,7 @@ func serve() error {
 		r.Get("/", httpapi.GetModelCatalog())
 	})
 
-	// /api/admin/shadow-compare (Step 59, "shadow-comparison tooling for
+	// /api/admin/shadow-compare ("shadow-comparison tooling for
 	// review", §9.4/§18.5) -- mounted exactly like /api/members above:
 	// gated behind auth.Middleware, with the handler itself rendering the
 	// real authz.ActionViewShadowComparison verdict (admin/maintainer
@@ -1139,7 +1139,7 @@ func serve() error {
 		r.Get("/", httpapi.ListAuditLog(auditLogStore))
 	})
 
-	// /api/decision-inbox (Step 60, "decision inbox: read model + API",
+	// /api/decision-inbox ("decision inbox: read model + API",
 	// §16 -- Phase 5 half: read model + endpoints; the UI is Phase 7).
 	// decisionInboxDeps bundles every Postgres store the read model
 	// aggregates (internal/app/decisioninbox.Build's own doc comment: a
@@ -1165,7 +1165,7 @@ func serve() error {
 		ReviewVerdict:      reviewVerdictDeps,
 	}
 
-	// automergeWorker/digestPump (Step 62, §21.2 stage 2/§21.3): both
+	// automergeWorker/digestPump (§21.2 stage 2/§21.3): both
 	// started below, alongside every other background loop, through the
 	// SAME errgroup (§11: no naked goroutine). automergeWorker reuses
 	// decisionInboxDeps in full (internal/app/decisioninbox.
@@ -1230,7 +1230,7 @@ func serve() error {
 		r.Get("/{sessionID}", httpapi.GetSession(sessionStore))
 		r.Get("/{sessionID}/events", httpapi.ListEvents(sessionStore, eventStore))
 		r.Get("/{sessionID}/artifacts", httpapi.ListArtifacts(sessionStore, artifactStore))
-		// uploads (Step 58, "uploads, blob storage & the in-sandbox
+		// uploads ("uploads, blob storage & the in-sandbox
 		// download_file tool", §28.4/§28.5): the browser twins of the
 		// sandbox-bearer mint/confirm/content endpoints registered outside
 		// /api above. mint/confirm are gated by authz.ActionUploadToSession
@@ -1242,11 +1242,11 @@ func serve() error {
 		r.Post("/{sessionID}/uploads/{uploadID}/complete", httpapi.ConfirmUploadAPI(sessionStore, participantStore, pool, artifactStore, eventStore, outboxStore, sandboxStore, hub, blobStore, cfg.ObjectStorage))
 		r.Get("/{sessionID}/uploads/{uploadID}/content", httpapi.UploadContentAPI(sessionStore, artifactStore, blobStore, cfg.ObjectStorage, cfg.Timeouts))
 		r.Post("/{sessionID}/ws-token", httpapi.MintWSToken(sessionStore, wsTokenStore, cfg.Timeouts))
-		// turns (Step 28, "turn recovery", §8.7): the relaunch-and-resume
+		// turns ("turn recovery", §8.7): the relaunch-and-resume
 		// REST API -- enqueues a new turn on an existing session, 409 if
 		// one is already in flight. See httpapi/turn.go's own doc comment.
 		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessionStore, turnStore, planStore, participantStore, auditLogStore, registry, intentClassifierSvc, cfg.ObjectStorage, cfg.EpistemicCheckDefault))
-		// plans (Step 37, "plan mode, web", §8.1/§12.2 item 3): the
+		// plans ("plan mode, web", §8.1/§12.2 item 3): the
 		// approve/reject HITL actions -- see httpapi/planapprove.go's own
 		// doc comment for the full sequencing. outboxStore/
 		// linearAgentSessionStore (Step 38, "plan mode, cross-channel") feed
@@ -1258,14 +1258,14 @@ func serve() error {
 		// client had no way to ever discover a planId to approve. See
 		// httpapi/plans.go's own doc comment.
 		r.Get("/{sessionID}/plans", httpapi.ListPlans(sessionStore, planStore))
-		// review/retrigger (Step 46, "review sessions", §8.2's own manual
+		// review/retrigger ("review sessions", §8.2's own manual
 		// re-trigger-via-BUTTON surface, §12.2 item 2's "re-run action") --
 		// see httpapi/reviewretrigger.go's own doc comment. githubPRSessionStore/
 		// sourceControl/cfg.GitHubBotToken are the SAME instances the
 		// GitHub webhook ingress wiring above already constructs, never a
 		// second, independently-constructed copy.
 		r.Post("/{sessionID}/review/retrigger", httpapi.RetriggerReview(pool, sessionStore, turnStore, planStore, auditLogStore, registry, githubPRSessionStore, sourceControl, reviewFindingStore, falsePositivePatternStore, cfg.GitHubBotToken, cfg.Timeouts, appreviewtriage.Deps{RepoSettings: repoSettingsStore, ReviewVerdicts: reviewVerdictStore, Artifacts: artifactStore, Sessions: sessionStore}, cfg.ReviewModelDeep))
-		// review/findings/{identityHash}/rebut + apply-suggestion (Step 48,
+		// review/findings/{identityHash}/rebut + apply-suggestion (
 		// "sentinels + suggestions", §12.2 item 2/§22.1) -- maintainer+
 		// only (authz.ActionEditReviewVerdict, checked inside each
 		// handler). identityStore/sourceControl/cfg.TokenEncryptionKey are
@@ -1276,7 +1276,7 @@ func serve() error {
 		r.Post("/{sessionID}/review/findings/{identityHash}/apply-suggestion", httpapi.ApplySuggestion(sessionStore, githubPRSessionStore, reviewFindingStore, identityStore, sourceControl, cfg.TokenEncryptionKey, cfg.Timeouts))
 	})
 
-	// /api/workflow-runs/{runId}/steps/{stepRunId}/decide (Step 56, "workflow
+	// /api/workflow-runs/{runId}/steps/{stepRunId}/decide ("workflow
 	// HITL gate + circuit breaker", §25.9/§25.10/§25.11): the HITL
 	// approve/reject/revise verdict endpoint -- see httpapi/decideworkflowstep.go's
 	// own doc comment for the full sequencing. slackThreadSessionStore/
@@ -1289,7 +1289,7 @@ func serve() error {
 		r.Post("/{runId}/steps/{stepRunId}/decide", httpapi.DecideWorkflowStep(pool, sessionStore, turnStore, participantStore, workflowStore, slackThreadSessionStore, linearAgentSessionStore, githubPRSessionStore, outboxStore, registry, cfg.EpistemicCheckDefault))
 	})
 
-	// /api/repos/{owner}/{repo}/settings (Step 47, "server-side verdict",
+	// /api/repos/{owner}/{repo}/settings ("server-side verdict",
 	// §8.2/§21.2): admin-only read/write of a repo's own blockOnHighRisk
 	// policy flag -- see httpapi/reposettings.go's own doc comment. Mounted
 	// behind auth.Middleware like every other browser-facing REST route in
@@ -1301,7 +1301,7 @@ func serve() error {
 		r.Put("/", httpapi.PutRepoSettings(repoSettingsStore, githubPRSessionStore))
 	})
 
-	// /api/repos/{owner}/{repo}/false-positive-patterns (Step 63, "review:
+	// /api/repos/{owner}/{repo}/false-positive-patterns ("review:
 	// learned false-positive patterns", §22.4): the audit-view/retire
 	// lifecycle surface -- see httpapi/falsepositivepatterns.go's own doc
 	// comment. Capture itself (§22.2) has no REST route at all; it is the
@@ -1317,7 +1317,7 @@ func serve() error {
 	})
 
 	// /api/repos/{owner}/{repo}/auto-approval-settings,
-	// /api/repos/{owner}/{repo}/auto-merge (Step 62, §21.2): TWO further,
+	// /api/repos/{owner}/{repo}/auto-merge (§21.2): TWO further,
 	// separately-gated routes -- see httpapi/reposettings.go's own
 	// PutAutoApprovalSettings/PutAutoMergeToggle doc comments for why
 	// these are not folded into PUT /settings above (a maintainer
@@ -1333,7 +1333,7 @@ func serve() error {
 		r.Put("/", httpapi.PutAutoMergeToggle(repoSettingsStore, reviewVerdictDeps, githubPRSessionStore))
 	})
 
-	// /api/repos/{owner}/{repo}/auto-retrigger-review (Step 65, §24.5): a
+	// /api/repos/{owner}/{repo}/auto-retrigger-review (§24.5): a
 	// further, separately-gated route mirroring auto-merge above -- see
 	// httpapi/reposettings.go's own PutAutoRetriggerReviewToggle doc
 	// comment.
@@ -1342,7 +1342,7 @@ func serve() error {
 		r.Put("/", httpapi.PutAutoRetriggerReviewToggle(repoSettingsStore, githubPRSessionStore))
 	})
 
-	// /api/repos/{owner}/{repo}/description-autofix (Step 67, §26.2): a
+	// /api/repos/{owner}/{repo}/description-autofix (§26.2): a
 	// further, separately-gated route mirroring auto-retrigger-review
 	// above -- see httpapi/reposettings.go's own
 	// PutDescriptionAutofixToggle doc comment.
@@ -1351,7 +1351,7 @@ func serve() error {
 		r.Put("/", httpapi.PutDescriptionAutofixToggle(repoSettingsStore, githubPRSessionStore))
 	})
 
-	// /api/repos/{owner}/{repo}/review-depth (Step 68, §26.3): a further,
+	// /api/repos/{owner}/{repo}/review-depth (§26.3): a further,
 	// separately-gated route mirroring description-autofix above -- see
 	// httpapi/reposettings.go's own PutReviewDepthConfig doc comment.
 	router.Route("/api/repos/{owner}/{repo}/review-depth", func(r chi.Router) {
@@ -1359,7 +1359,7 @@ func serve() error {
 		r.Put("/", httpapi.PutReviewDepthConfig(repoSettingsStore, githubPRSessionStore))
 	})
 
-	// /api/repos/{owner}/{repo}/review-cost-budget (Step 69, §26.7): a
+	// /api/repos/{owner}/{repo}/review-cost-budget (§26.7): a
 	// further, separately-gated route mirroring review-depth above -- see
 	// httpapi/reposettings.go's own PutReviewCostBudget doc comment.
 	router.Route("/api/repos/{owner}/{repo}/review-cost-budget", func(r chi.Router) {
@@ -1367,7 +1367,7 @@ func serve() error {
 		r.Put("/", httpapi.PutReviewCostBudget(repoSettingsStore, githubPRSessionStore))
 	})
 
-	// /api/repos/{owner}/{repo}/review-analytics (Step 62, §21.1):
+	// /api/repos/{owner}/{repo}/review-analytics (§21.1):
 	// read-only GET over the three analytics rollups (timeseries,
 	// top-risk-driver breakdown, "Review finding outcomes" KPI) -- see
 	// httpapi/reviewanalytics.go's own doc comment. Gated by the existing
@@ -1380,7 +1380,7 @@ func serve() error {
 
 	// /api/repos/{owner}/{repo}/provider-credentials,
 	// /api/environments/{environmentID}/provider-credentials,
-	// /api/provider-credentials (Step 53, "provider credential injection",
+	// /api/provider-credentials ("provider credential injection",
 	// §25.1/§25.3): the 3 scope-partitioned CRUD route groups over
 	// provider_credentials -- see httpapi/providercredentials.go's own doc
 	// comment for the full route table and RBAC-per-scope rationale. Each
@@ -1415,7 +1415,7 @@ func serve() error {
 
 	// /api/repos/{owner}/{repo}/sandbox-secrets,
 	// /api/environments/{environmentID}/sandbox-secrets,
-	// /api/sandbox-secrets (Step 72, "sandbox secrets & opencode config",
+	// /api/sandbox-secrets ("sandbox secrets & opencode config",
 	// §27.1): the 3 scope-partitioned CRUD route groups over
 	// sandbox_secrets -- mirrors the 3 provider-credentials route groups
 	// immediately above verbatim (see httpapi/sandboxsecrets.go's own doc
@@ -1445,7 +1445,7 @@ func serve() error {
 	})
 
 	// /api/environments/{environmentID}/cloud-identity-bindings,
-	// /api/cloud-identity-bindings (Step 73a, "cloud identity: OIDC
+	// /api/cloud-identity-bindings ("cloud identity: OIDC
 	// issuer, bindings, minting", §27.3): the 2 scope-partitioned CRUD
 	// route groups over cloud_identity_bindings -- narrower than
 	// provider-credentials/sandbox-secrets' own 3-way split (no repo
@@ -1478,7 +1478,7 @@ func serve() error {
 		r.Put("/{bindingID}", httpapi.UpdateGlobalCloudIdentityBinding(pool, cloudIdentityBindingStore, auditLogStore))
 		r.Delete("/{bindingID}", httpapi.DeleteGlobalCloudIdentityBinding(pool, cloudIdentityBindingStore, auditLogStore))
 	})
-	// /api/cloud-identity/signing-keys/rotate (Step 73a, §27.3/§27.8):
+	// /api/cloud-identity/signing-keys/rotate (§27.3/§27.8):
 	// the admin-only, manual rotation TRIGGER -- see
 	// httpapi/cloudidentitykeys.go's own doc comment for the full
 	// "why manual, admin-triggered" design (this Step's own gap-2
@@ -1496,7 +1496,7 @@ func serve() error {
 		r.Post("/rotate", httpapi.RotateCloudIdentitySigningKey(pool, oidcSigningKeyStore, auditLogStore, cfg.TokenEncryptionKey, cfg.Timeouts))
 	})
 
-	// /api/environments/{environmentID}/cluster-binding (Step 73b, "cloud
+	// /api/environments/{environmentID}/cluster-binding ("cloud
 	// identity: sandbox-side consumption + kubeconfig injection", §27.4):
 	// the ONE scope (environment-only, no global fallback -- §27.4's own
 	// "one cluster per Environment in v1") GET/PUT/DELETE singleton route
@@ -1519,7 +1519,7 @@ func serve() error {
 	})
 
 	// /api/environments/{environmentID}/opencode-config,
-	// /api/opencode-config (Step 72, §27.2): the 2 scope-partitioned
+	// /api/opencode-config (§27.2): the 2 scope-partitioned
 	// GET/PUT/DELETE singleton route groups over opencode_configs --
 	// reuses the SAME 2 actions (ActionManageEnvSecrets/
 	// ActionManageGlobalSecrets) the sandbox-secrets/provider-credentials
@@ -1541,7 +1541,7 @@ func serve() error {
 		r.Delete("/", httpapi.DeleteGlobalOpenCodeConfigHandler(openCodeConfigStore))
 	})
 
-	// /api/automations (Step 52, "automations: triggers & extras", §8.4):
+	// /api/automations ("automations: triggers & extras", §8.4):
 	// the CRUD surface Step 51 ("automations: engine") never built --
 	// automationStore is the SAME instance automationEngine (constructed
 	// above) already uses, never a second, independently-constructed copy.
@@ -1566,7 +1566,7 @@ func serve() error {
 		r.Delete("/{automationID}/webhook-token", httpapi.RevokeAutomationWebhookToken(automationStore))
 	})
 
-	// /webhooks/automations/{automationID} (Step 52, §8.4's own "webhook-
+	// /webhooks/automations/{automationID} (§8.4's own "webhook-
 	// facing API surface"): deliberately mounted OUTSIDE auth.Middleware
 	// entirely, mirroring /webhooks/linear's own precedent immediately
 	// below -- this is authenticated by a per-automation bearer token
@@ -1578,7 +1578,7 @@ func serve() error {
 	// not a style preference).
 	router.Post("/webhooks/automations/{automationID}", automationwebhook.NewHandler(automationStore, automationInvocationStore))
 
-	// Linear ingress (Step 34, "Linear ingress", §8.10) -- see
+	// Linear ingress ("Linear ingress", §8.10) -- see
 	// internal/adapters/inbound/linear's own doc.go for the full design.
 	// Kept as one self-contained block, separate from the auth/REST
 	// sections above, to keep this Step's own diff to this shared file
@@ -1626,11 +1626,11 @@ func serve() error {
 		DefaultRepoName:    cfg.LinearDefaultRepoName,
 		DefaultRepoURL:     cfg.LinearDefaultRepoURL,
 		Timeouts:           cfg.Timeouts,
-		// Plans/Outbox (Step 38, "plan mode, cross-channel", §8.1/§13.3):
+		// Plans/Outbox ("plan mode, cross-channel", §8.1/§13.3):
 		// handlePrompted's own new plan-verdict keyword check.
 		Plans:  planStore,
 		Outbox: outboxStore,
-		// AuditLog/IdentityLink/Participants (Step 39, "identities + full
+		// AuditLog/IdentityLink/Participants ("identities + full
 		// RBAC", §13.2/§13.3): Participants is the SAME participantStore
 		// instance Step 37's own REST plan approve/reject endpoints already
 		// use (constructed once, above), never a second, independently-
@@ -1638,18 +1638,18 @@ func serve() error {
 		AuditLog:     auditLogStore,
 		IdentityLink: appIdentityLinkDeps,
 		Participants: participantStore,
-		// EpistemicCheckDefault (Step 61, §20.4): the SAME platform.Config
+		// EpistemicCheckDefault (§20.4): the SAME platform.Config
 		// value every other CreateTurnCore-reaching caller above also
 		// receives.
 		EpistemicCheckDefault: cfg.EpistemicCheckDefault,
-		// RolloutMode/RepoSettings (Step 76, §10 Phase 6, §32): the SAME
+		// RolloutMode/RepoSettings (§10 Phase 6, §32): the SAME
 		// cfg.RolloutMode/repoSettingsStore every other CreateSessionCore-
 		// reaching caller in this file also receives.
 		RolloutMode:  cfg.RolloutMode,
 		RepoSettings: repoSettingsStore,
 	}))
 
-	// Outbox delivery worker (Step 35, "outbox delivery", §5.1/§9.3
+	// Outbox delivery worker ("outbox delivery", §5.1/§9.3
 	// scenario 9): three real ports.Notifier implementations, one per
 	// NotificationKind, assembled into a single kind->Notifier routing map
 	// -- see internal/app/outboxworker's own doc.go for the full pump
@@ -1675,7 +1675,7 @@ func serve() error {
 	// doc comment for why.
 	githubNotifier := githubapi.NewBotNotifier(sourceControl, cfg.GitHubBotToken)
 	linearNotifier := outboxworker.NewLinearNotifier(linearClient, linearInstallationStore, cfg.TokenEncryptionKey)
-	// githubVerdictNotifier (Step 47, "server-side verdict", §8.2) wraps
+	// githubVerdictNotifier ("server-side verdict", §8.2) wraps
 	// the SAME sourceControl *githubapi.Adapter instance every other
 	// GitHub-flavored notifier/caller above already uses, authenticated
 	// with the SAME cfg.GitHubBotToken githubNotifier itself uses --
@@ -1683,21 +1683,21 @@ func serve() error {
 	// the (now-blocked-for-review-sessions) generic outcome comment used
 	// to be, never a per-commenter credential.
 	githubVerdictNotifier := githubapi.NewVerdictNotifier(sourceControl, cfg.GitHubBotToken)
-	// sentinelAutoFixNotifier (Step 48, "sentinels + suggestions", §17.2)
+	// sentinelAutoFixNotifier ("sentinels + suggestions", §17.2)
 	// spawns the child session -- reviewFindingStore/sentinelFixStore are
 	// the SAME instances every other caller above already uses.
 	sentinelAutoFixNotifier := outboxworker.NewSentinelAutoFixNotifier(pool, sessionStore, turnStore, environmentStore, auditLogStore, registry, sentinelFixStore, reviewFindingStore, sourceControl, cfg.GitHubBotToken, cfg.Timeouts, cfg.EpistemicCheckDefault, cfg.RolloutMode, repoSettingsStore)
-	// handoffNotifier (Step 49, "handoff-readiness sentinel", §14.4) posts
+	// handoffNotifier ("handoff-readiness sentinel", §14.4) posts
 	// the handoff-readiness comment and applies the "handoff" label on a
 	// scoped session's PR -- the SAME sourceControl/cfg.GitHubBotToken
 	// every other GitHub-flavored notifier above already uses.
 	handoffNotifier := githubapi.NewHandoffNotifier(sourceControl, cfg.GitHubBotToken)
-	// releaseManifestNotifier (Step 50, "release PR review", §15.2) posts
+	// releaseManifestNotifier ("release PR review", §15.2) posts
 	// the release manifest check's own summary comment -- the SAME
 	// sourceControl/cfg.GitHubBotToken every other GitHub-flavored
 	// notifier above already uses.
 	releaseManifestNotifier := githubapi.NewReleaseManifestNotifier(sourceControl, cfg.GitHubBotToken)
-	// descriptionAutofixNotifier (Step 67, "review digest: description
+	// descriptionAutofixNotifier ("review digest: description
 	// adequacy + graduated remediation", §26.2) re-verifies Narvi-
 	// authorship and this repo's own descriptionAutofix flag, fresh, at
 	// delivery time, then rewrites a Narvi-authored PR's own body -- the
@@ -1750,7 +1750,7 @@ func serve() error {
 		ports.NotificationKindLinearDigest: outboxworker.NewDigestLinearNotifier(),
 	}
 
-	// rwxPreviewNotifier/githubPreviewLinkNotifier (Step 57, "RWX provider
+	// rwxPreviewNotifier/githubPreviewLinkNotifier ("RWX provider
 	// + previews", §4.1.1/§4.1.2) are registered ONLY when cfg.RWXAccessToken
 	// is configured -- see that env var's own doc comment (platform/
 	// config.go) for why this platform-wide credential is optional, unlike
@@ -1773,7 +1773,7 @@ func serve() error {
 		outboxNotifiers[ports.NotificationKindGitHubPreviewLink] = githubapi.NewPreviewLinkNotifier(sourceControl, cfg.GitHubBotToken)
 	}
 
-	// blob_delete (Step 58, §28.4) is registered ONLY when blobStore is
+	// blob_delete (§28.4) is registered ONLY when blobStore is
 	// configured -- mirrors the RWX block immediately above exactly. When
 	// absent, a blob_delete row (which can only ever be enqueued by
 	// confirmUploadCore/uploadsweep, both of which are themselves

@@ -104,7 +104,7 @@ type UpsertLinearInstallationParams struct {
 	ConnectedByUserID     pgtype.UUID        `json:"connected_by_user_id"`
 }
 
-// Queries backing LinearInstallationStore (Step 34, "Linear ingress",
+// Queries backing LinearInstallationStore ("Linear ingress",
 // §8.10's own "OAuth" scope -- migrations/000031_linear_installations.
 // up.sql's own doc comment has the full "why this table, why keyed by
 // organization_id" writeup).

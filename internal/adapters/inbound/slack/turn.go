@@ -57,7 +57,7 @@ import (
 // own already-resolved actorUserID, which previously had nowhere at all to
 // flow into for a reply on an existing thread.
 //
-// intentSvc (Step 64, §23.1/§23.2) is threaded straight through to
+// intentSvc (§23.1/§23.2) is threaded straight through to
 // httpapi.CreateTurnCore's own plan_followup block, exactly like plans
 // immediately before it -- handleEvent's own caller passes the SAME
 // deps.IntentClassifier every other classification use in this package

@@ -44,7 +44,7 @@ func (s *EnvironmentStore) WithTx(tx pgx.Tx) *EnvironmentStore {
 // ValidatePathScope, mockConfigured/contractsPath already resolved from the
 // request's own optional mockConfig key (httpapi.CreateSession's own doc
 // comment), and dockerRequired/egressPolicyMode/egressPolicyAllowlist
-// (Step 74, §27.5/§27.6) already resolved from the request's own optional
+// (§27.5/§27.6) already resolved from the request's own optional
 // docker/egressPolicy keys and already validated by internal/domain/
 // environment.ValidateEgressPolicy -- this method performs no validation
 // of its own.

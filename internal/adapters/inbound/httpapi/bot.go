@@ -97,7 +97,7 @@ func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *post
 // caller -- see that function's own doc comment (turn.go) for the nil-safe
 // "skips the gate" contract this shares with them.
 //
-// intentSvc (Step 64, §23.1/§23.2) is threaded through exactly like plans
+// intentSvc (§23.1/§23.2) is threaded through exactly like plans
 // immediately above -- github/coalesce.go's own REUSE-path caller passes
 // the SAME real *intentclassifier.Service every other createTurnLocked
 // caller does, so a GitHub-bot mention reply arriving while a plan is
@@ -105,7 +105,7 @@ func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *post
 // other ingress channel's ordinary reply now does (see createTurnLocked's
 // own doc comment, turn.go).
 //
-// epistemicCheckDefault (Step 61, §20.4) is threaded through to
+// epistemicCheckDefault (§20.4) is threaded through to
 // createTurnLocked exactly like planMode immediately before it -- a
 // REQUIRED parameter, not one left at a zero-value default, so a
 // GitHub-bot-created build turn honors the SAME platform-wide
@@ -113,7 +113,7 @@ func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *post
 // own doc comment, turn.go, for why this is required rather than bundled
 // into a variadic options slot).
 //
-// reviewHeadSHA (Step 62 review finding C2, CRITICAL, fixed) is non-nil ONLY
+// reviewHeadSHA is non-nil ONLY
 // for github/coalesce.go's own REUSE-path caller (an @mention or label
 // re-trigger enqueuing a new turn on an ALREADY-EXISTING review session)
 // -- the commit SHA THIS turn's own pre-fetched review diff was anchored
@@ -137,7 +137,7 @@ func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *post
 // itself, by the time it reaches this function, already carries
 // review.RenderTurnPrompt's own folded-in diff/stack/verdict-tool text,
 // which must never reach the plan_followup classifier.
-// effort/reviewDepth/reviewDepthDecision (Step 68, §26.3) mirror
+// effort/reviewDepth/reviewDepthDecision (§26.3) mirror
 // reviewHeadSHA's own identical "non-nil ONLY for github/coalesce.go's
 // own REUSE-path caller" shape, one field further -- see
 // CreateTurnOptions.Effort/ReviewDepth/ReviewDepthDecision's own doc

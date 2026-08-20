@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for ListDecisionInbox/MergePullRequest (Step 60,
+// Integration tests for ListDecisionInbox/MergePullRequest (
 // "decision inbox: read model + API", §16) against a REAL Postgres
 // instance -- gated behind the "integration" build tag. Deliberately a
 // SELF-CONTAINED router (auth.Middleware + these two routes only) rather
@@ -95,8 +95,8 @@ type fakeMergeSourceControl struct {
 	mergeCalls []ports.MergePRSpec
 
 	// listOpenPRsCalls counts every ListOpenPRsForUser call this fake
-	// receives -- Step 60 review finding A5's own regression guard: a viewer,
-	// unconditionally denied ActionMergePR, must be rejected at the cheap
+	// receives -- a viewer, unconditionally denied ActionMergePR, must be
+	// rejected at the cheap
 	// role-only pre-check BEFORE the expensive live SCM re-validation ever
 	// calls this method at all.
 	listOpenPRsCalls int
@@ -361,9 +361,8 @@ func TestMergePullRequest_HappyPath(t *testing.T) {
 		t.Errorf("MergePR calls = %+v, want exactly one call with HeadSHA=headsha1204 (the freshly revalidated head, never a stale/client-supplied one)", fakeSCM.mergeCalls)
 	}
 
-	// Step 62 review findings T1/M5 (fixed): this human 1-click merge path
-	// must now record a 'confirmed' auto-approval outcome -- BEFORE this
-	// fix, RecordConfirmed's only real caller was the armed auto-merge
+	// This human 1-click merge path must now record a 'confirmed'
+	// auto-approval outcome -- previously, RecordConfirmed's only real caller was the armed auto-merge
 	// worker, so this endpoint (the ONE merge path every unarmed repo
 	// actually uses, for the entire calibration window §21.2 names this
 	// metric as existing to inform) never contributed a single
@@ -373,7 +372,7 @@ func TestMergePullRequest_HappyPath(t *testing.T) {
 		t.Fatalf("count auto-approval outcomes: %v", err)
 	}
 	if total != 1 || contested != 0 {
-		t.Errorf("outcome counts = (total=%d, contested=%d), want (1, 0) -- the human 1-click merge must record a 'confirmed' outcome (Step 62 review findings T1/M5)", total, contested)
+		t.Errorf("outcome counts = (total=%d, contested=%d), want (1, 0) -- the human 1-click merge must record a 'confirmed' outcome", total, contested)
 	}
 }
 
@@ -443,8 +442,8 @@ func TestMergePullRequest_NotPlatformAuthored(t *testing.T) {
 // (planapprove_integration_test.go), which the merge endpoint uniquely
 // lacked.
 //
-// Also proves Step 60 review finding A5's own regression guard in the same
-// request: a viewer must be rejected by the cheap, role-only authz
+// Also proves the same regression guard in the same request applies here:
+// a viewer must be rejected by the cheap, role-only authz
 // pre-check BEFORE the expensive live SCM re-validation ever runs --
 // ListOpenPRsForUser must never be called at all for a role
 // unconditionally denied ActionMergePR.
@@ -479,7 +478,7 @@ func TestMergePullRequest_Viewer_Returns403(t *testing.T) {
 		t.Errorf("MergePR called %d times, want 0 -- a viewer must never reach the actual merge call", len(fakeSCM.mergeCalls))
 	}
 	if fakeSCM.listOpenPRsCalls != 0 {
-		t.Errorf("ListOpenPRsForUser called %d times, want 0 (Step 60 review finding A5: a viewer must be rejected by the cheap role-only pre-check BEFORE the expensive live SCM re-validation ever runs)", fakeSCM.listOpenPRsCalls)
+		t.Errorf("ListOpenPRsForUser called %d times, want 0 (a viewer must be rejected by the cheap role-only pre-check BEFORE the expensive live SCM re-validation ever runs)", fakeSCM.listOpenPRsCalls)
 	}
 }
 
@@ -560,8 +559,9 @@ func TestMergePullRequest_MergePRErrorStatusMapping(t *testing.T) {
 }
 
 // TestListDecisionInbox_HandoffPR_FieldsPopulated is the DTO-mapping half
-// of Step 60 review finding C4 (the domain-Item half is covered separately in
-// aggregate_integration_test.go's TestBuild_PRLabelVariations): a
+// of the handoff-PR-fields invariant (the domain-Item half is covered
+// separately in aggregate_integration_test.go's
+// TestBuild_PRLabelVariations): a
 // handoff-labeled PR's ciGreen/findings/isHandoff/hasApprovingReview/
 // hasChangesRequested must all render non-null over the wire even though
 // it rides kind=awaiting_approval instead of an ordinary ready_to_merge/
@@ -624,13 +624,13 @@ func TestListDecisionInbox_HandoffPR_FieldsPopulated(t *testing.T) {
 		t.Errorf("HasApprovingReview = %v, want a non-nil pointer to TRUE (fixture sets HasApprovingReview: true -- previously this was asserted non-nil only, never for its real value)", row.HasApprovingReview)
 	}
 	if row.HasChangesRequested == nil || !*row.HasChangesRequested {
-		t.Errorf("HasChangesRequested = %v, want a non-nil pointer to TRUE (Step 60 review finding P1-4, second round: this DTO field previously did not exist on the wire at all)", row.HasChangesRequested)
+		t.Errorf("HasChangesRequested = %v, want a non-nil pointer to TRUE (this DTO field previously did not exist on the wire at all)", row.HasChangesRequested)
 	}
 }
 
 // TestListDecisionInbox_FindingsUnknownRendersNullNotTheFailClosedSentinel
-// is the wire-level regression test for Step 60 review finding P3-3 (second
-// round): A1's fail-closed sentinel (openFindingsUnknownFailClosed, the
+// is the wire-level regression test proving that the fail-closed sentinel
+// (openFindingsUnknownFailClosed, the
 // synthetic value 1) exists ONLY to fail buildPROpenItem's own eligibility
 // computation closed on a genuine ReviewFindings store error -- it must
 // never be presented on the wire as an honest, real findings count. This

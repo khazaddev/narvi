@@ -12,7 +12,7 @@ import (
 
 // GitHubPRSessionStore is a thin, pass-through wrapper around the
 // sqlc-generated github_pr_sessions queries (§8.2's "atomic claim
-// coalescing of concurrent @mentions", Step 32 "GitHub ingress"). No
+// coalescing of concurrent @mentions" "GitHub ingress"). No
 // caching, no retries, no business rules -- the coalescing DECISION
 // (create a new session vs. reuse an existing one) lives in
 // internal/adapters/inbound/github/coalesce.go, which is the only caller
@@ -79,7 +79,7 @@ func (s *GitHubPRSessionStore) GetBySessionID(ctx context.Context, sessionID pgt
 }
 
 // SetHeadSHA is REMOVED as of migrations/000072_turns_review_head_sha.up.sql
-// (Step 62 review finding C2, CRITICAL, fixed) -- github_pr_sessions.
+// -- github_pr_sessions.
 // pending_head_sha (and this method) is superseded by turns.
 // review_head_sha, set once at turn-creation time
 // (internal/adapters/inbound/httpapi's createTurnLocked/CreateSessionOnTx)

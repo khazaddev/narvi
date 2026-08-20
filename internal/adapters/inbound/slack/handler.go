@@ -127,7 +127,7 @@ const (
 	// handlePrompted).
 	ackNotAuthorizedReplyText = "You're not authorized to prompt this session."
 
-	// ackNotEnrolledText (Step 76, §10 Phase 6, §32) is posted instead of
+	// ackNotEnrolledText (§10 Phase 6, §32) is posted instead of
 	// ackNewSessionText when checkRolloutGate refuses because this
 	// deployment's own default repo is not enrolled in the cohort
 	// rollout -- mirrors ackNotAuthorizedText's own terminal-in-thread-ack
@@ -267,14 +267,14 @@ type Deps struct {
 	// safe): a nil IntentClassifier simply skips classification entirely.
 	IntentClassifier *intentclassifier.Service
 
-	// EpistemicCheckDefault (Step 61, "builder epistemic pre-action
+	// EpistemicCheckDefault ("builder epistemic pre-action
 	// check", §20.4) is threaded through to addTurn's own createTurnLocked
 	// call (turn.go) exactly like every other caller now gets --
 	// production wiring (cmd/control-plane/main.go) passes the SAME
 	// platform.Config.EpistemicCheckDefault value every other caller does.
 	EpistemicCheckDefault bool
 
-	// RolloutMode/RepoSettings (Step 76, §10 Phase 6, §32) are threaded
+	// RolloutMode/RepoSettings (§10 Phase 6, §32) are threaded
 	// through to resolveOrClaimSession's own httpapi.CreateSessionCore
 	// call below exactly like EpistemicCheckDefault already is -- both
 	// are REQUIRED parameters of that function now (its own doc
@@ -301,7 +301,7 @@ type Deps struct {
 	AckTimeout time.Duration
 }
 
-// NewHandler builds the POST /webhooks/slack handler (§8.10, Step 33 --
+// NewHandler builds the POST /webhooks/slack handler (§8.10 --
 // see doc.go's own full request-handling writeup).
 func NewHandler(deps Deps) http.HandlerFunc {
 	ack := newAckClient(deps.SlackHTTPClient, deps.SlackAPIBaseURL, deps.BotToken)
@@ -606,7 +606,7 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 
 	res, ok := resolveOrClaimSession(ctx, deps, ack, logger, ev, channel, key, actorUserID, prompt)
 
-	// Security-remediation addition (Step 39, "identities + full RBAC",
+	// Security-remediation addition ("identities + full RBAC",
 	// §13.2): notice (the "connected your account" confirmation, or --
 	// far more sensitive -- the magic-link URL itself) is posted via
 	// chat.postEphemeral, visible ONLY to ev.User, NEVER appended to the
@@ -930,7 +930,7 @@ func (deps Deps) handlePlanVerdict(ctx context.Context, ack *ackClient, logger *
 // session, races to claim the mapping, and falls back to the winner's
 // session id on a lost claim. ok reports whether the caller should
 // continue at all (false on a genuine error, already logged). creator is
-// handleEvent's own already-resolved actor (Step 39, "identities + full
+// handleEvent's own already-resolved actor ("identities + full
 // RBAC", §13.2) -- Valid iff the mentioning Slack user is already linked,
 // or was just auto-linked this call; invalid (bot attribution) otherwise,
 // exactly matching this function's own PREVIOUS unconditional-bot-

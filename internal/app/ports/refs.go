@@ -35,7 +35,7 @@ type SnapshotID string
 type BuildRef string
 
 // BuildOutcome is BuildImage's own success return value (§19.1's closing
-// paragraph, Step 43(c), third iteration: immutable versioned cache
+// paragraph(c), third iteration: immutable versioned cache
 // snapshots).
 type BuildOutcome struct {
 	// Ref is the provider's own opaque identifier for the built image —

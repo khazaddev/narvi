@@ -232,7 +232,7 @@ type PlanDecidedPayload struct {
 
 // DigestPayload is the JSON shape this package expects to find in an
 // outbox entry's own payload column for a ports.NotificationKindSlackDigest
-// row (Step 62, §21.3) -- enqueued by internal/app/digest.Pump. Text is
+// row (§21.3) -- enqueued by internal/app/digest.Pump. Text is
 // ALREADY fully rendered (internal/domain/digest.Render's own
 // deterministic output, Slack mrkdwn dialect) -- this package does no
 // further conversion/templating of it, unlike PlanApprovalPayload's own
@@ -339,7 +339,7 @@ func (c *Client) PostPlanApprovalMessage(ctx context.Context, payload PlanApprov
 }
 
 // PostMessage posts plain text (already fully rendered mrkdwn, e.g.
-// internal/domain/digest.Render's own deterministic output, Step 62,
+// internal/domain/digest.Render's own deterministic output,
 // §21.3) to channel -- no Block Kit, no interactive elements, exactly
 // the shape a compliance/status artifact needs and nothing more. Reuses
 // postMessageWithBlocksRequest with Blocks left nil (its own `omitempty`

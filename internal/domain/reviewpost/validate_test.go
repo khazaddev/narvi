@@ -119,7 +119,7 @@ func TestValidateVerdictInput(t *testing.T) {
 			wantErr: reviewpost.ErrEmptySummary,
 		},
 		{
-			name:    "empty digest summary (Step 66, §26.1: required on every review)",
+			name:    "empty digest summary (§26.1: required on every review)",
 			mutate:  func(in *reviewpost.VerdictInput) { in.Digest.Summary = "" },
 			wantErr: reviewpost.ErrEmptyDigestSummary,
 		},
@@ -129,7 +129,7 @@ func TestValidateVerdictInput(t *testing.T) {
 			wantErr: reviewpost.ErrEmptyDigestSummary,
 		},
 		{
-			name: "empty ArchDecisions/StackRisks/UnverifiedLimits is legal (Step 66: requested, not required, until §26.3/Step 68 defines the deep path)",
+			name: "empty ArchDecisions/StackRisks/UnverifiedLimits is legal (Step 66: requested, not required, until §26.3 defines the deep path)",
 			mutate: func(in *reviewpost.VerdictInput) {
 				in.Digest.ArchDecisions = nil
 				in.Digest.StackRisks = ""
@@ -138,7 +138,7 @@ func TestValidateVerdictInput(t *testing.T) {
 			wantErr: nil,
 		},
 		{
-			name:    "missing digest.descriptionAdequacy (zero value, §26.2/Step 67: required on every review)",
+			name:    "missing digest.descriptionAdequacy (zero value, §26.2: required on every review)",
 			mutate:  func(in *reviewpost.VerdictInput) { in.Digest.DescriptionAdequacy = "" },
 			wantErr: reviewpost.ErrInvalidDescriptionAdequacy,
 		},
@@ -160,7 +160,7 @@ func TestValidateVerdictInput(t *testing.T) {
 			wantErr: nil,
 		},
 		{
-			name:    "empty digest.adequacyExplanation (§26.2/Step 67: required on every review)",
+			name:    "empty digest.adequacyExplanation (§26.2: required on every review)",
 			mutate:  func(in *reviewpost.VerdictInput) { in.Digest.AdequacyExplanation = "" },
 			wantErr: reviewpost.ErrEmptyAdequacyExplanation,
 		},
@@ -319,7 +319,7 @@ func TestBuildVerdict_ShippableAlwaysComputedNeverCopiedFromProposed(t *testing.
 	}
 }
 
-// TestBuildVerdict_MisleadingAdequacyRaisesShippable is §26.2/Step 67's
+// TestBuildVerdict_MisleadingAdequacyRaisesShippable is §26.2's
 // own end-to-end pin, one layer up from
 // TestComputeShippable_MisleadingRaisesShippable (internal/domain/review):
 // an otherwise-completely-clean VerdictInput (low risk, ok premise,
@@ -383,7 +383,7 @@ func TestBuildVerdict_AdequacyNeverAffectsRiskLevel(t *testing.T) {
 	}
 }
 
-// TestBuildVerdict_CounterReviewSkippedRaisesShippable is §26.4/Step 69's
+// TestBuildVerdict_CounterReviewSkippedRaisesShippable is §26.4's
 // own end-to-end pin, one layer up from
 // TestComputeShippable_CounterReviewSkippedRaisesShippable
 // (internal/domain/review/shippable_test.go): an otherwise-completely-clean,
@@ -491,7 +491,7 @@ func TestBuildVerdict_ExplicitCounterReviewSkippedNeverOverwrittenOnLightPath(t 
 
 // TestBuildVerdict_CorroboratedDeepPathKeepsCounterReviewDoneFloor pins
 // the ORDINARY, expected-common-case outcome of the second substitution
-// (§26.4, Step 71): a deep-path verdict that claims CounterReview: done
+// (§26.4): a deep-path verdict that claims CounterReview: done
 // AND whose claim the caller has independently corroborated against the
 // persisted sub_task_finish trace (CounterReviewCorroborated: true) keeps
 // counterReviewForFloor at CounterReviewDone -- floor stays whatever

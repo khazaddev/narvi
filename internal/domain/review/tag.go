@@ -7,7 +7,7 @@ package review
 // migrations, contracts) plus five siblings of comparably broad blast
 // radius. Validating a caller-supplied tag list against this vocabulary
 // (e.g. rejecting an unrecognized tag string from a model tool call) is
-// the job of whichever Step accepts that external input (§8.2/Step 47),
+// the job of whichever Step accepts that external input (§8.2),
 // not this package — nothing here consumes BlastRadius computationally,
 // so no validity-checking function is exported (doc.go: "keep everything
 // else unexported").

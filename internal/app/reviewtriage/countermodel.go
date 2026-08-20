@@ -20,7 +20,7 @@ import (
 var counterReviewerProviderPreference = []string{"anthropic", "openai", "google"}
 
 // ResolveCounterReviewerModel picks the counter-reviewer sub-task's own
-// opposing-model-family override (§26.4, Step 69) -- the "provider/model"
+// opposing-model-family override (§26.4) -- the "provider/model"
 // string internal/adapters/outbound/opencode.MergeReviewSubAgentsConfig
 // writes into the counter-reviewer custom OpenCode agent's own "model"
 // field (opencode.json), pinning that ONE sub-task to a model family
@@ -78,7 +78,7 @@ var counterReviewerProviderPreference = []string{"anthropic", "openai", "google"
 // Within the opposing provider's own model list, this function prefers a
 // Reasoning-capable model (modelcatalog.Model.Reasoning) -- the closest
 // proxy this catalog exposes to "frontier tier" (§29's own doc comment:
-// no dedicated review-model-selection/tiering mechanism predates Step 68,
+// no dedicated review-model-selection/tiering mechanism predates
 // which itself is "an optional operator override rather than a catalog-
 // driven tiering system" -- there is no richer tier signal to consult),
 // falling back to every model in that provider's own list when none is

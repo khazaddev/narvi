@@ -33,7 +33,7 @@
 // export surface. review/tag.go's own doc comment anticipates exactly
 // this split: "Validating a caller-supplied tag list against this
 // vocabulary... is the job of whichever Step accepts that external input
-// (§8.2/Step 47), not this package" -- ValidateVerdictInput (validate.go)
+// (§8.2), not this package" -- ValidateVerdictInput (validate.go)
 // is that validation, deliberately NOT added to review itself.
 //
 // # File layout
@@ -43,7 +43,7 @@
 //     validated VerdictInput into a review.Verdict, populating Shippable
 //     via review.ComputeShippable exactly per that package's CONTRACT).
 //   - formalreview.go: FormalReviewEvent, ComputeFormalReviewEvent -- the
-//     formal-review gate's own event decision (§8.2/Step 47's "submitting
+//     formal-review gate's own event decision (§8.2's "submitting
 //     an actual GitHub PR review rather than a comment"), and the
 //     blockOnHighRisk policy flag's own effect on it (§21.2: "reuses the
 //     SAME formal-review submission path and carries no independent

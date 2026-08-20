@@ -11,7 +11,7 @@ import (
 )
 
 // PlanStore is a thin, pass-through wrapper around the sqlc-generated
-// plans queries (Step 37, "plan mode, web", §8.1/§12.2 item 3). No
+// plans queries ("plan mode, web", §8.1/§12.2 item 3). No
 // caching, no retries, no business rules -- version numbering and
 // supersede decisions live in internal/domain/plan; internal/app/
 // sessionactor/planrecord.go and internal/adapters/inbound/httpapi/

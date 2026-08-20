@@ -72,7 +72,7 @@ func TestAllProviders_EveryEntryIsValid(t *testing.T) {
 }
 
 // TestAllEnvVarNames_IsTheUnionAcrossEveryProvider pins AllEnvVarNames'
-// own documented contract (Step 72, §27.1): the flattened union of every
+// own documented contract (§27.1): the flattened union of every
 // Provider's own EnvVarNames, in AllProviders' own declaration order --
 // this is the exact set internal/domain/sandboxsecret.ValidateName rejects
 // as sandbox_secrets names, so a drift here would silently reopen the

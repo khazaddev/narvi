@@ -95,7 +95,7 @@ func newHookRerunDurationHistogram() metric.Float64Histogram {
 // BootModeBuild/BootModeFresh setup.sh run (expected to take minutes,
 // against an empty cache) lands in the exact same bucket set as a
 // BootModeRepoImage+workspaceMoved rerun (expected to be fast, against an
-// already-warm cache) -- the one distinction §19.6/Step 43's own adoption
+// already-warm cache) -- the one distinction §19.6's own adoption
 // trigger ("full reruns eroding warm-boot latency") needs to query on.
 func recordHookRerunDuration(ctx context.Context, repoName string, hook string, bootMode string, workspaceMoved bool, seconds float64, failed bool) {
 	h := hookRerunDurationHistogram()

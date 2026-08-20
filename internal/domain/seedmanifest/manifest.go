@@ -169,7 +169,7 @@ type RepoSetting struct {
 	AutoMergeEnabled       *bool  `yaml:"autoMergeEnabled,omitempty"`
 	AutoRetriggerReview    *bool  `yaml:"autoRetriggerReviewEnabled,omitempty"`
 	DescriptionAutofix     *bool  `yaml:"descriptionAutofixEnabled,omitempty"`
-	// SessionsEnabled (Step 76, §10 Phase 6, §32) is the cohort-rollout
+	// SessionsEnabled (§10 Phase 6, §32) is the cohort-rollout
 	// enrollment gate -- repo_settings.sessions_enabled, migrations/
 	// 000096_repo_settings_sessions_enabled.up.sql. Nil (the default) is
 	// left completely untouched, exactly like every sibling field on this
@@ -184,7 +184,7 @@ type RepoSetting struct {
 }
 
 // RWXPreview is one repo's RWX preview integration config (repo_settings.
-// rwx_preview_* columns, Step 57, §4.1.2) -- this tool's concrete answer
+// rwx_preview_* columns, §4.1.2) -- this tool's concrete answer
 // to Step 75's "integrations" checklist item. See internal/app/seed/
 // doc.go for why the OTHER kind of "integration" this codebase names
 // (authz.ActionManageIntegrations: Slack/Linear WORKSPACE OAuth

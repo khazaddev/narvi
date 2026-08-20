@@ -81,14 +81,14 @@ type RepoInfo struct {
 //
 // An empty repos slice is a correct, immediate no-op (returns nil).
 //
-// workspaceMoved (§19.4, Step 42) is the per-repo predicate
+// workspaceMoved (§19.4) is the per-repo predicate
 // boot.ComputeWorkspaceMoved computes once per boot from
 // /narvi/image-manifest.json -- consulted by sandboxboot.EvaluateHook for
 // exactly one cell (repo_image + HookSetup). nil is a correct, safe input
 // (every entry defaults to "moved", via workspaceMovedFor) -- the shape
 // every OTHER mode's own call already used before this parameter existed.
 //
-// ladder (§19.6, Step 43) is the per-repo SetupRerunLadder map
+// ladder (§19.6) is the per-repo SetupRerunLadder map
 // boot.ComputeSetupRerunLadder computes once per boot, alongside
 // workspaceMoved -- consulted ONLY for the exact same cell workspaceMoved
 // itself is (repo_image + HookSetup + workspaceMoved: true), to decide
@@ -98,13 +98,13 @@ type RepoInfo struct {
 // full setup.sh" floor, via ladderFor) -- matching workspaceMoved's own nil
 // precedent exactly.
 //
-// setupRetryDelay (§19.6, Step 43 fix) is the pause runSetupRerunLadder
+// setupRetryDelay (§19.6 fix) is the pause runSetupRerunLadder
 // waits between the full-setup.sh tier's first failed attempt and its own
 // single required retry (see that function's own doc comment) -- consulted
 // ONLY inside that one retry path, so any value is a safe input for every
 // OTHER call site/outcome.
 //
-// secretEnv (Step 72, "sandbox secrets & opencode config", §27.1,
+// secretEnv ("sandbox secrets & opencode config", §27.1,
 // adversarial-review HIGH fix) is zero or more already-built "NAME=VALUE"
 // entries -- a session's own resolved general sandbox_secrets rows --
 // appended to every spawned hook's own env, AFTER supervisor.EnvWithout
@@ -511,7 +511,7 @@ func hookScriptPresent(scriptPath string) (bool, error) {
 // never lose a buffer that was never inside the cancelled operation to
 // begin with.
 //
-// secretEnv (Step 72, §27.1, adversarial-review HIGH fix) is appended
+// secretEnv (§27.1, adversarial-review HIGH fix) is appended
 // after supervisor.EnvWithout, exactly mirroring opencodeproc.Spawn's own
 // pattern -- see RunHooks' own doc comment for the full "why threaded,
 // never os.Setenv" reasoning. A repo's own setup.sh/start.sh IS one of the

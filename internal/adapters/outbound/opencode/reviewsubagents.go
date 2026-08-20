@@ -138,7 +138,7 @@ var noToolAccess = map[string]bool{
 func architectureScribeAgentEntry() reviewSubAgentEntry {
 	return reviewSubAgentEntry{
 		Mode:        "subagent",
-		Description: "Deep-path review: virgin-context architecture-decision recap from the diff + repo conventions (Step 69, §26.4). Read-only.",
+		Description: "Deep-path review: virgin-context architecture-decision recap from the diff + repo conventions (§26.4). Read-only.",
 		Permission:  readOnlyEditPermission,
 	}
 }
@@ -155,7 +155,7 @@ func architectureScribeAgentEntry() reviewSubAgentEntry {
 func counterReviewerAgentEntry(counterReviewerModel string) reviewSubAgentEntry {
 	return reviewSubAgentEntry{
 		Mode:        "subagent",
-		Description: "Deep-path review: adversarial counter-review of the primary reviewer's own findings (Step 69, §26.4). Read-only, tool-equipped.",
+		Description: "Deep-path review: adversarial counter-review of the primary reviewer's own findings (§26.4). Read-only, tool-equipped.",
 		Permission:  readOnlyEditPermission,
 		Model:       counterReviewerModel,
 	}
@@ -172,7 +172,7 @@ func counterReviewerAgentEntry(counterReviewerModel string) reviewSubAgentEntry 
 func factCheckAgentEntry() reviewSubAgentEntry {
 	return reviewSubAgentEntry{
 		Mode:        "subagent",
-		Description: "Both review paths: diff-only fact-check that kills a finding only when provably wrong from the diff text alone (Step 69, §26.6). No tool access.",
+		Description: "Both review paths: diff-only fact-check that kills a finding only when provably wrong from the diff text alone (§26.6). No tool access.",
 		Permission:  readOnlyEditPermission,
 		Tools:       noToolAccess,
 	}

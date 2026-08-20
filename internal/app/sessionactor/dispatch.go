@@ -153,7 +153,7 @@ import (
 // own doc comment ("Empty means the provider's own default base image") --
 // a non-empty, clearly-named value is used instead of leaving Image empty,
 // so a real SandboxProvider's own request log unambiguously shows which
-// image narvi asked for. Its real build definition (§27.7, Step 74:
+// image narvi asked for. Its real build definition (§27.7:
 // Playwright+Chromium, ripgrep, typescript-language-server+typescript,
 // the Docker CLI/engine binaries, and §27.4's three cloud exec-
 // credential plugins, every version pinned) is deploy/sandbox-image/
@@ -1170,7 +1170,7 @@ func (a *Actor) planFreshSpawn(
 	}
 
 	// Docker/EgressPolicy are threaded from cfg's own just-assembled
-	// fields (§27.5/§27.6, Step 74) -- the SAME deliberate top-level
+	// fields (§27.5/§27.6) -- the SAME deliberate top-level
 	// duplication Gen already has, above: a provider must be able to act
 	// on either without ever parsing the opaque SessionConfig document.
 	// spec.Validate() below is what catches the two copies ever
@@ -1247,7 +1247,7 @@ func (a *Actor) planRestore(
 	}
 
 	// Docker/EgressPolicy are threaded from cfg's own just-assembled
-	// fields (§27.5/§27.6, Step 74) -- the SAME deliberate top-level
+	// fields (§27.5/§27.6) -- the SAME deliberate top-level
 	// duplication Gen already has, above: a provider must be able to act
 	// on either without ever parsing the opaque SessionConfig document.
 	// spec.Validate() below is what catches the two copies ever
@@ -1995,7 +1995,7 @@ func (a *Actor) failDispatchedTurn(ctx context.Context, turnID pgtype.UUID, reas
 // start... so follow-up prompts on a fresh sandbox resume the same
 // conversation").
 //
-// Exported (Step 55, "workflow execution engine", §25.6) specifically so
+// Exported ("workflow execution engine", §25.6) specifically so
 // internal/adapters/inbound/httpapi's own characterization test
 // (workflowengine_characterization_integration_test.go) can call the EXACT
 // same function real dispatch uses to build the wire payload from a turn row,

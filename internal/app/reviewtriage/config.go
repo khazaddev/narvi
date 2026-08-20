@@ -66,7 +66,7 @@ func LoadConfig(ctx context.Context, deps Deps, repoFullName string) (reviewtria
 		// and the line/root thresholds still apply regardless.
 	}
 
-	// CostBudget (§26.7, Step 69): each of the two columns independently
+	// CostBudget (§26.7): each of the two columns independently
 	// overrides ONLY its own DefaultCostBudget field when Valid -- an
 	// admin who configured only review_cost_budget_deep_usd (leaving
 	// review_cost_budget_light_usd NULL) still gets the built-in $0.50

@@ -11,7 +11,7 @@ import (
 )
 
 // SentinelFixStore is a thin, pass-through wrapper around the
-// sqlc-generated sentinel_fixes queries (Step 48, "sentinels +
+// sqlc-generated sentinel_fixes queries ("sentinels +
 // suggestions", §17) -- see migrations/000047_sentinel_fixes.up.sql's own
 // doc comment for the table's full design and its two-step claim idiom
 // (mirroring github_pr_sessions' own established precedent).

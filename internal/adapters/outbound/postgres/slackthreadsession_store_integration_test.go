@@ -1,7 +1,7 @@
 //go:build integration
 
 // Integration tests for SlackThreadSessionStore.Claim/Get (§8.10's
-// thread↔session mapping, Step 33 "Slack ingress") -- mirrors
+// thread↔session mapping "Slack ingress") -- mirrors
 // webhookdelivery_store_integration_test.go's own precedent of a
 // focused file per query rather than growing postgres_integration_test.go's
 // single pipeline test.

@@ -56,7 +56,7 @@ const (
 	// FindingStatusRebutted is a finding a maintainer+ has explicitly
 	// dismissed (§22.1's content-based rebuttal identity, scoped down to
 	// what THIS Step needs -- the learned-false-positive-pattern table
-	// itself is Step 59, out of this Step's scope).
+	// itself is out of this Step's scope).
 	FindingStatusRebutted FindingStatus = "rebutted"
 	// FindingStatusFixPending is a finding a sentinel-auto-fix child
 	// session has been spawned for, fix PR not yet open. Suppresses the
@@ -78,7 +78,7 @@ const (
 )
 
 // FindingInput is a review-verdict-posting-tool call's own typed
-// per-finding fields (§8.2/Step 47's VerdictInput, extended -- restdtos.
+// per-finding fields (§8.2's VerdictInput, extended -- restdtos.
 // PostReviewVerdictRequest.findings, additive and optional, so an old
 // caller posting no findings at all keeps posting exactly as before Step
 // 48) -- everything BuildFinding needs BEFORE IdentityHash is

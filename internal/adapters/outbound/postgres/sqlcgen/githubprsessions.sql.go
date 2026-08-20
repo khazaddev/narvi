@@ -78,7 +78,7 @@ type EnsureGitHubPRSessionRowParams struct {
 }
 
 // Queries backing GitHubPRSessionStore (§8.2's "atomic claim coalescing of
-// concurrent @mentions", Step 32 "GitHub ingress"). See
+// concurrent @mentions" "GitHub ingress"). See
 // migrations/000028_github_pr_sessions.up.sql's own doc comment for the
 // full two-step claim design (ensure the row exists via ON CONFLICT, then
 // lock + branch via FOR UPDATE) these three queries implement together.

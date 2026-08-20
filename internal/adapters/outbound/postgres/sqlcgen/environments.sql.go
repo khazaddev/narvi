@@ -41,7 +41,7 @@ type CreateEnvironmentParams struct {
 // contracts_path=NULL (the ordinary, unscoped-mock case) when the
 // request's mockConfig key was absent; see httpapi.CreateSession's own
 // doc comment for exactly how these three are resolved from one request.
-// docker_required/egress_policy_mode/egress_policy_allowlist (Step 74,
+// docker_required/egress_policy_mode/egress_policy_allowlist (
 // §27.5/§27.6) are the caller's own resolved docker/egressPolicy presence
 // -- docker_required=false and both egress_policy_* columns NULL (the
 // ordinary, no-substrate-requirement case) when the request carried

@@ -61,7 +61,7 @@ func ListArtifacts(sessions *postgres.SessionStore, artifacts *postgres.Artifact
 // sqlcgen.Artifact.Metadata is likewise a plain []byte needing the same
 // json.RawMessage treatment to avoid base64-encoding.
 func artifactWireMap(a sqlcgen.Artifact) map[string]interface{} {
-	// status/failureReason (Step 58, §28.6) are additive fields on the
+	// status/failureReason (§28.6) are additive fields on the
 	// wire ArtifactsResponse shape, mirroring the sandbox-ws artifact
 	// event's own identical additive change and wshub's own
 	// artifactWireMap twin -- always present here (never omitted), since

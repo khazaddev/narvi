@@ -32,7 +32,7 @@ import (
 // a malformed services.yml is an authoring bug worth surfacing loudly, not
 // masking behind a silent fallback to the hook contract.
 //
-// workspaceMoved (§19.4, Step 42) is passed straight through to
+// workspaceMoved (§19.4) is passed straight through to
 // runRepoHooks for the services.yml-absent (hook-contract) branch -- see
 // RunHooks's own doc comment. A repo supervised via services.yml never
 // consults it at all: that path never runs setup.sh/start.sh through
@@ -40,17 +40,17 @@ import (
 // supervision code path" design), so workspaceMoved has nothing to gate
 // there.
 //
-// ladder (§19.6, Step 43) is passed straight through to runRepoHooks
+// ladder (§19.6) is passed straight through to runRepoHooks
 // alongside workspaceMoved, for the identical reason and the identical
 // services.yml-branch exemption.
 //
-// setupRetryDelay (§19.6, Step 43 fix) is likewise passed straight through
+// setupRetryDelay (§19.6 fix) is likewise passed straight through
 // to runRepoHooks -- consulted only inside its own full-setup.sh retry
 // path (runSetupRerunLadder's own doc comment), so it is a safe input
 // regardless of which branch (services.yml or hook-contract) a given repo
 // actually takes.
 //
-// secretEnv (Step 72, §27.1, adversarial-review HIGH fix) is zero or more
+// secretEnv (§27.1, adversarial-review HIGH fix) is zero or more
 // already-built "NAME=VALUE" entries -- a session's own resolved general
 // sandbox_secrets rows -- passed straight through to runRepoHooks for the
 // hook-contract branch, and appended to services.Run's own env for the

@@ -35,7 +35,7 @@ type mergePRResponse struct {
 	Merged bool   `json:"merged"`
 }
 
-// MergePR implements ports.SourceControl (Step 60, "decision inbox: read
+// MergePR implements ports.SourceControl ("decision inbox: read
 // model + API", §16.2's own Merge endpoint): a real PUT
 // https://api.github.com/repos/{owner}/{repo}/pulls/{number}/merge call,
 // authenticated with spec.Token as the ACTING user (the person who

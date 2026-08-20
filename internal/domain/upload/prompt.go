@@ -22,7 +22,7 @@ import (
 // and epistemicOutcomeToolGenPlaceholderLiteral are the identical byte-for-byte
 // treatment for internal/domain/turn's own EpistemicOutcomeToolURLPlaceholder/
 // EpistemicOutcomeToolBearerPlaceholder/EpistemicOutcomeToolGenPlaceholder
-// (turn/epistemicpreamble.go, Step 61/§20.2) -- the SAME layering
+// (turn/epistemicpreamble.go, §20.2) -- the SAME layering
 // restriction bars importing internal/domain/turn here too (neither
 // internal/app/ports nor the standard library), so these are duplicated as
 // raw literals exactly like review's three immediately above, never
@@ -30,7 +30,7 @@ import (
 //
 // reviewCostBudgetToolURLPlaceholderLiteral is the SAME byte-for-byte
 // treatment for internal/domain/review's own
-// ReviewCostBudgetToolURLPlaceholder (review/context.go, Step 70, §26.7/
+// ReviewCostBudgetToolURLPlaceholder (review/context.go, §26.7/
 // §26.9) -- a fourth placeholder FAMILY, but a single literal (this one has
 // no bearer/gen counterpart: the endpoint it points at needs no
 // authentication at all, reviewcostbudgetserver.go's own doc comment).

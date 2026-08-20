@@ -11,7 +11,7 @@ import (
 // names (lowercase, matching sqlcgen.ProviderCredentialProvider's own
 // string values, e.g. "anthropic") this session has at least one
 // RESOLVABLE candidate for -- ResolveCounterReviewerModel's own
-// credentialedProviders input (B2 fix, §26.4/Step 69: "prefer no pin over
+// credentialedProviders input (B2 fix, §26.4: "prefer no pin over
 // guessing when the opposing provider is not known-credentialed").
 //
 // Existence only, never a resolved VALUE: this never decrypts anything and

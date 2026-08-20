@@ -11,7 +11,7 @@ import (
 )
 
 // FalsePositivePatternStore is a thin, pass-through wrapper around the
-// sqlc-generated review_false_positive_patterns queries (Step 63, "review:
+// sqlc-generated review_false_positive_patterns queries ("review:
 // learned false-positive patterns", §22.2/§22.4) -- see migrations/
 // 000073_review_false_positive_patterns.up.sql's own doc comment for the
 // table's full design. No caching, no retries, no business rules --

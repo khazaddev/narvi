@@ -102,7 +102,7 @@ func newTestRigWithReviewTriage(t *testing.T, fetcher *fakeReviewContextFetcher)
 		Identities:   rig.identities,
 		Users:        rig.users,
 		Participants: narvipg.NewParticipantStore(pool),
-		// ReviewTriage (Step 68, §26.3) -- the ONE addition versus
+		// ReviewTriage (§26.3) -- the ONE addition versus
 		// newTestRig: real stores, so ComputeDecision's own repo_settings/
 		// review_verdicts reads (and, via them, domainreviewtriage.Floor)
 		// are genuinely exercised through this package's webhook ingress.
@@ -277,8 +277,8 @@ func markTurnProcessing(ctx context.Context, t *testing.T, rig testRig, turnID p
 // fix means archDecisions/stackRisks/unverifiedLimits are REQUIRED, not
 // merely requested, on a turn whose own review_depth is "deep" (this
 // file's own end-to-end test posts this against exactly such a turn).
-// factCheck/factCheckKilled (Step 69, §26.6) are REQUIRED unconditionally,
-// both paths; counterReview (Step 69, §26.4) is REQUIRED on this deep-path
+// factCheck/factCheckKilled (§26.6) are REQUIRED unconditionally,
+// both paths; counterReview (§26.4) is REQUIRED on this deep-path
 // turn specifically.
 const validDeepVerdictRequestJSON = `{
 	"riskLevel": "high",

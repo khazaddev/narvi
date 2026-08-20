@@ -25,7 +25,7 @@ type ClaimHandoffSentinelRunParams struct {
 	SessionID    pgtype.UUID `json:"session_id"`
 }
 
-// Queries backing HandoffSentinelStore (Step 49, "handoff-readiness
+// Queries backing HandoffSentinelStore ("handoff-readiness
 // sentinel", §14.4) -- see migrations/000049_handoff_sentinel_runs.up.sql's
 // own doc comment for the full table design and its single-step claim
 // idiom.

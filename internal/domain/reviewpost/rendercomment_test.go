@@ -484,7 +484,7 @@ func TestRenderVerdictComment_DescriptionAdequacyHeaderBullet(t *testing.T) {
 }
 
 // TestRenderVerdictComment_ProposedBodyRendersSuggestionSection proves
-// §26.2/Step 67's own "Suggested PR description" block renders when
+// §26.2's own "Suggested PR description" block renders when
 // digest.ProposedBody is non-blank, inside a collapsed <details> block, so
 // a long proposed rewrite does not dominate the rendered comment.
 func TestRenderVerdictComment_ProposedBodyRendersSuggestionSection(t *testing.T) {

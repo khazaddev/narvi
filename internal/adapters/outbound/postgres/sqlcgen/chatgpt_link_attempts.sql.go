@@ -27,7 +27,7 @@ type CreateChatGPTLinkAttemptParams struct {
 }
 
 // Queries backing ChatGPTLinkAttemptStore -- the ChatGPT-account-OAuth
-// link flow's own short-lived nonce table (Step 59, §29.3,
+// link flow's own short-lived nonce table (§29.3,
 // migrations/000062_chatgpt_oauth_credentials.up.sql). Mirrors identity_
 // link_prompts.sql's own query shapes (queries/identity_link_prompts.sql)
 // adapted for a direct per-user link rather than a provider+external-id

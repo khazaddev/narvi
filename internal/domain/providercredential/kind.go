@@ -2,7 +2,7 @@ package providercredential
 
 // Kind distinguishes a static API-key credential from an OAuth-derived
 // one -- matches the Postgres provider_credential_kind ENUM
-// (migrations/000062_chatgpt_oauth_credentials.up.sql) verbatim (Step 59,
+// (migrations/000062_chatgpt_oauth_credentials.up.sql) verbatim (
 // §29.4). Every row created before this Step is, and remains, KindAPIKey
 // (the column's own DB DEFAULT) -- Kind is a new axis alongside Scope and
 // Provider, not a replacement for either: a KindOAuth row is always
@@ -17,7 +17,7 @@ const (
 	// KindAPIKey is a plaintext-at-encryption static credential (an API
 	// key), delivered to a sandbox as an env var (providercredentialsdelivery
 	// .go's "api" Auth-union member, §29.6). This is every provider_
-	// credentials row's Kind before Step 59, and the column's own DB
+	// credentials row's Kind before and the column's own DB
 	// DEFAULT.
 	KindAPIKey Kind = "api_key"
 	// KindOAuth is a token pair obtained via an OAuth device/browser flow

@@ -197,7 +197,7 @@ func TestRunBootSequence_BootModeFresh_DoesNotRunCleanTreeStep(t *testing.T) {
 	repoDir := filepath.Join(workspaceDir, "repo1")
 
 	// setup.sh's residue must SURVIVE for BootModeFresh: the clean-tree
-	// step is BootModeBuild-only (§3.4/Step 29 Part E), so a fresh boot's
+	// step is BootModeBuild-only (§3.4 Part E), so a fresh boot's
 	// own dirty tree is left exactly as setup.sh produced it.
 	status := gitOutput(t, repoDir, "status", "--porcelain")
 	if status == "" {

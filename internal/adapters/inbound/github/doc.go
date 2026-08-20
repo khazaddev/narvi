@@ -1,4 +1,4 @@
-// Package github implements the GitHub webhook ingress adapter (Step 32,
+// Package github implements the GitHub webhook ingress adapter (
 // "GitHub ingress", §8.2's own phrase "atomic claim coalescing of
 // concurrent @mentions"). It is the INGRESS layer only: detect a PR
 // @mention of this deploy's own bot handle, atomically coalesce
@@ -37,7 +37,7 @@
 //     header, malformed hex, mismatch) is rejected 401, fail-closed.
 //  3. Claim (provider="github", deliveryID=the "X-GitHub-Delivery"
 //     header) via postgres.WebhookDeliveryStore.Claim (§5.1's atomic
-//     INSERT ... ON CONFLICT dedupe, Step 31) -- a redelivery of an
+//     INSERT ... ON CONFLICT dedupe) -- a redelivery of an
 //     already-claimed delivery id is acknowledged 200 without being
 //     processed again.
 //  4. Parse "X-GitHub-Event": only "issue_comment" (a comment on an issue

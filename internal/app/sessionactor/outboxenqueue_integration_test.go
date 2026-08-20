@@ -190,7 +190,7 @@ func TestCompleteProcessingTurn_GitHubOrigin_EnqueuesNoRawCommentOutboxRow(t *te
 	})
 
 	if n := countOutboxRowsForSession(ctx, t, pool, sessionID); n != 0 {
-		t.Errorf("outbox row count = %d, want 0 (raw-comment posting must be blocked for a review session, §8.2/Step 47)", n)
+		t.Errorf("outbox row count = %d, want 0 (raw-comment posting must be blocked for a review session, §8.2)", n)
 	}
 }
 

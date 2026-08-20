@@ -38,7 +38,7 @@ const githubDeliveryProvider = "github"
 const signatureHeaderPrefix = "sha256="
 
 // diffFetcher is Config.DiffFetcher's own declared type -- the union of
-// reviewcontext.Fetcher (review-turn-context assembly, Step 62 review finding
+// reviewcontext.Fetcher (review-turn-context assembly
 // C2's own narrower interface) and prDiffFetcher (pullrequestevent.go's
 // sentinel-fix merge-gate, a genuinely different consumer of the SAME
 // underlying *githubapi.Adapter) -- see Config.DiffFetcher's own doc
@@ -96,7 +96,7 @@ type Config struct {
 	PullRequests PullRequestResolver
 	Timeouts     platform.Timeouts
 
-	// ReReviewLabel (Step 46, "review sessions", §8.2) is this deployment's
+	// ReReviewLabel ("review sessions", §8.2) is this deployment's
 	// own configured label NAME (platform.Config.GitHubReReviewLabel) a
 	// maintainer applies to a PR to manually re-trigger its review session
 	// -- parsePullRequestLabeled's own matching criterion (payload.go).
@@ -105,7 +105,7 @@ type Config struct {
 	// fires -- see that function's own doc comment.
 	ReReviewLabel string
 
-	// DiffFetcher (Step 46, "review sessions", §8.2) fetches this PR's own
+	// DiffFetcher ("review sessions", §8.2) fetches this PR's own
 	// inline pre-fetched diff (and, when not already known from the
 	// triggering event's own payload, its GitHub-native stack context,
 	// §17.6) via internal/app/reviewcontext.Fetch -- folded into every
@@ -126,7 +126,7 @@ type Config struct {
 	// cmd/control-plane/main.go) satisfies this directly.
 	DiffFetcher diffFetcher
 
-	// ReviewFindings (Step 48, "sentinels + suggestions", §22.1) fetches
+	// ReviewFindings ("sentinels + suggestions", §22.1) fetches
 	// this PR's own currently open+rebutted review_findings rows
 	// (internal/app/reviewcontext.FetchAlreadyAnswered), rendered as a
 	// deterministic "already answered" fact block PREPENDED to (never
@@ -137,7 +137,7 @@ type Config struct {
 	// plane/main.go) satisfies this directly.
 	ReviewFindings reviewcontext.FindingsFetcher
 
-	// FalsePositivePatterns (Step 63, "review: learned false-positive
+	// FalsePositivePatterns ("review: learned false-positive
 	// patterns", §22.3) fetches this repo's own currently-active learned
 	// false-positive patterns and renders them as an advisory content
 	// block, prepended to every review turn's own prompt exactly like
@@ -151,7 +151,7 @@ type Config struct {
 	// main.go) satisfies this directly.
 	FalsePositivePatterns reviewcontext.FalsePositivePatternsFetcher
 
-	// FalsePositivePatternCapture (Step 63, §22.2) is this handler's own
+	// FalsePositivePatternCapture (§22.2) is this handler's own
 	// dispatch-before-router capture surface -- see
 	// falsepositivecapture.go's own doc comment for the full "why before
 	// parseMention" reasoning. Nil-safe: nil (this package's own
@@ -165,7 +165,7 @@ type Config struct {
 	// main.go).
 	FalsePositivePatternCapture FalsePositivePatternCapturer
 
-	// ArchRecapContestCapture (Step 69, §26.5) is this handler's own
+	// ArchRecapContestCapture (§26.5) is this handler's own
 	// dispatch-before-router capture surface for the `arch recap wrong:
 	// <reason>` command -- see archrecapcontest.go's own doc comment for
 	// the full "why before parseMention" reasoning (identical to
@@ -177,7 +177,7 @@ type Config struct {
 	// ReviewDigestSectionFeedbackStore (cmd/control-plane/main.go)
 	// satisfies this directly.
 	ArchRecapContestCapture ArchRecapContestCapturer
-	// ArchRecapVerdicts (Step 69, §26.5) resolves the PR's own latest
+	// ArchRecapVerdicts (§26.5) resolves the PR's own latest
 	// posted verdict so tryCaptureArchRecapContest can hash the CURRENTLY-
 	// CONTESTED arch recap content -- see that function's own doc comment.
 	// A zero-value appreviewverdict.Deps{} (ReviewVerdicts == nil) is
@@ -234,7 +234,7 @@ type Config struct {
 	// directly in production.
 	LinkNotices ActorLinkNoticeClaimer
 
-	// SentinelFixes/RepoSettings/AuditLog (Step 48, "sentinels +
+	// SentinelFixes/RepoSettings/AuditLog ("sentinels +
 	// suggestions", §17.4/§17.5) back the NEW `pull_request`/action=="closed"
 	// merge-gating lane (pullrequestevent.go) -- SentinelFixes looks up
 	// whether the closing PR had a sentinel-auto-fix in flight at all
@@ -248,7 +248,7 @@ type Config struct {
 	RepoSettings  *postgres.RepoSettingsStore
 	AuditLog      *postgres.AuditLogStore
 
-	// PendingChecks/ReleaseLabel/ReleaseBranchPattern (Step 50, "release
+	// PendingChecks/ReleaseLabel/ReleaseBranchPattern ("release
 	// PR review", §15; PendingChecks itself is blocking-finding fix #1)
 	// back triggerReleaseManifestCheckBestEffort (releasemanifest.go):
 	// PendingChecks is where a detected release PR's own manifest-check
@@ -272,7 +272,7 @@ type Config struct {
 	ReleaseLabel         string
 	ReleaseBranchPattern string
 
-	// Timers (Step 65, "review: automatic re-review on new commits",
+	// Timers ("review: automatic re-review on new commits",
 	// §24.1) backs the NEW `pull_request`/action=="synchronize" lane
 	// (pullrequestsynchronize.go): the exported postgres.TimerStore.Upsert
 	// this handler calls DIRECTLY, bypassing the actor's mailbox entirely
@@ -601,7 +601,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 				m.CommentBody = advisory + m.CommentBody
 			}
 		}
-		// fetchedHeadSHA (Step 62 review finding C2, CRITICAL, fixed) is
+		// fetchedHeadSHA is
 		// captured OUTSIDE the block below so it survives to the
 		// CreateOrJoin call further down, which threads it onto the
 		// turn this mention actually creates/joins (turns.
@@ -619,7 +619,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		// value is no longer trustworthy for that purpose) -- m.HeadSHA
 		// itself is left fully populated by its own existing parsing
 		// logic regardless, simply unread on this one path now.
-		// prCtx (Step 68, §26.3) is hoisted to this outer scope -- unlike
+		// prCtx (§26.3) is hoisted to this outer scope -- unlike
 		// fetchedHeadSHA (its own pre-existing identical hoist, one line
 		// below), the WHOLE struct is needed further down, to compute this
 		// mention's own light/deep triage decision BEFORE rendering the
@@ -693,7 +693,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 			flooredDepth = domainreviewtriage.Floor(triageDecision.Depth, priorReviewDepth)
 		}
 		prCtx.DeepPath = flooredDepth == domainreviewtriage.DepthDeep
-		// ReviewCostBudgetUSD (Step 69, §26.7): the SAME triageConfig
+		// ReviewCostBudgetUSD (§26.7): the SAME triageConfig
 		// ComputeDecision already resolved, above -- no second
 		// repo_settings read, mirroring internal/adapters/inbound/httpapi/
 		// reviewretrigger.go's own identical addition.
@@ -885,7 +885,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 			return
 		}
 
-		// Step 62 review finding C2 (CRITICAL, fixed): fetchedHeadSHA is
+		// fetchedHeadSHA is
 		// already persisted onto the turn CreateOrJoin just created/joined
 		// (turns.review_head_sha, set atomically as part of that turn's
 		// own INSERT) -- no separate post-hoc write needed here anymore;

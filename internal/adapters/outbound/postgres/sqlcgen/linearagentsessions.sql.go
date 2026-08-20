@@ -32,7 +32,7 @@ type ClaimLinearAgentSessionRow struct {
 	Inserted       bool               `json:"inserted"`
 }
 
-// Queries backing LinearAgentSessionStore (Step 34, "Linear ingress",
+// Queries backing LinearAgentSessionStore ("Linear ingress",
 // §8.10 -- migrations/000030_linear_agent_sessions.up.sql's own doc
 // comment has the full "why this table exists at all" writeup).
 // Atomic first-writer-wins claim on agent_session_id -- the SAME

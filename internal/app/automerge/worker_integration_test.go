@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for internal/app/automerge.Worker (Step 62, §21.2
+// Integration tests for internal/app/automerge.Worker (§21.2
 // stage 2) against a real Postgres instance.
 package automerge_test
 

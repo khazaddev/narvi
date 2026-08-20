@@ -382,7 +382,7 @@ var (
 // above) in ONE transaction, then deletes EVERY pending prompt for that
 // same (provider, externalID) so a stale link can never be replayed.
 //
-// # Deliberate design note (Step 39, "identities + full RBAC", §13.2 --
+// # Deliberate design note ("identities + full RBAC", §13.2 --
 // security review remediation)
 //
 // This function performs NO correlation at all between authenticatedUserID

@@ -14,7 +14,7 @@ import (
 )
 
 // OIDCSigningKeyStore is a thin, pass-through wrapper around the
-// sqlc-generated oidc_signing_keys queries (Step 73a, "cloud identity:
+// sqlc-generated oidc_signing_keys queries ("cloud identity:
 // OIDC issuer, bindings, minting", §27.3,
 // migrations/000092_oidc_signing_keys.up.sql). No caching, no retries, no
 // business rules beyond Rotate's own atomicity -- like every other store

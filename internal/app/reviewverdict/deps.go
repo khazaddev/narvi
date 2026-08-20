@@ -23,7 +23,7 @@ type Deps struct {
 	RepoSettings         *postgres.RepoSettingsStore
 	ReviewFindings       *postgres.ReviewFindingStore
 	AutoApprovalOutcomes *postgres.AutoApprovalOutcomeStore
-	// DigestSectionFeedback (Step 69, §26.5) backs DigestContestationRate
+	// DigestSectionFeedback (§26.5) backs DigestContestationRate
 	// below -- nil-safe: a nil store degrades that ONE function to
 	// ok=false (never a panic), mirroring this package's own established
 	// "a caller that doesn't need a given rollup simply never wires its

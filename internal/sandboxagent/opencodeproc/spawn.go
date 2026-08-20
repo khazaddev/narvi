@@ -45,7 +45,7 @@ type Result struct {
 // its base URL plus a best-effort version string. See doc.go for the full
 // rationale of each step.
 //
-// providerCredentialEnv (Step 53, "provider credential injection",
+// providerCredentialEnv ("provider credential injection",
 // §25.1/§25.3) is zero or more already-built "NAME=VALUE" entries --
 // mapped from a resolved provider credential onto its own OpenCode env-var
 // name(s), via internal/domain/providercredential.EnvVarNames -- appended
@@ -58,7 +58,7 @@ type Result struct {
 // pre-Step-53 behavior -- every existing call site keeps compiling and
 // behaving identically by simply passing nil.
 //
-// sandboxSecretEnv (Step 72, "sandbox secrets & opencode config", §27.1/
+// sandboxSecretEnv ("sandbox secrets & opencode config", §27.1/
 // §27.2, adversarial-review HIGH fix) is zero or more already-built
 // "NAME=VALUE" entries covering EVERYTHING this Step injects: a session's
 // own resolved general sandbox_secrets rows, plus (when an environment

@@ -21,7 +21,7 @@ func discardLogger() *slog.Logger {
 // trip, exactly the point of that interface being narrow and locally
 // defined (fetch.go's own doc comment).
 //
-// Step 62 review finding C2 (CRITICAL, fixed): GetCompareDiff replaces the
+// GetCompareDiff replaces the
 // PREVIOUS GetPullRequestDiff here, and callOrder (below) is this file's
 // own NEW assertion surface -- proving GetPullRequest always runs BEFORE
 // GetCompareDiff, and that the diff fetch is PINNED to exactly what
@@ -299,7 +299,7 @@ func TestFetch_DiffFetchFails_HeadSHAStillReported(t *testing.T) {
 }
 
 // TestFetch_TitleBodyThreadedThrough_EvenWhenDiffFetchFails is the
-// adversarial-review fix's own regression test (§26.2/Step 67's own
+// adversarial-review fix's own regression test (§26.2's own
 // follow-up, review.PreFetchedContext.Title's own doc comment): Title/Body
 // come from the SAME already-succeeded GetPullRequest call HeadSHA itself
 // is resolved from, so a LATER diff-fetch failure must not erase them --

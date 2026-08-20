@@ -57,7 +57,7 @@ type RecordAutoApprovalOutcomeParams struct {
 	Outcome      string `json:"outcome"`
 }
 
-// Queries backing AutoApprovalOutcomeStore (Step 62, §21.2 stage 2) -- see
+// Queries backing AutoApprovalOutcomeStore (§21.2 stage 2) -- see
 // migrations/000070_auto_approval_outcomes.up.sql's own doc comment for
 // the contradiction-rate calibration read model's full design.
 // Idempotent per (repo_full_name, pr_number, head_sha) -- the SAME

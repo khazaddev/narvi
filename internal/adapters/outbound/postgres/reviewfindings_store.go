@@ -11,7 +11,7 @@ import (
 )
 
 // ReviewFindingStore is a thin, pass-through wrapper around the
-// sqlc-generated review_findings queries (Step 48, "sentinels +
+// sqlc-generated review_findings queries ("sentinels +
 // suggestions", §17/§22.1) -- see migrations/000046_review_findings.up.sql's
 // own doc comment for the table's full design. No caching, no retries, no
 // business rules -- callers (internal/adapters/inbound/httpapi/

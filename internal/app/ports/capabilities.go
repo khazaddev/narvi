@@ -36,7 +36,7 @@ type Capabilities struct {
 	ImageBuilds bool
 
 	// DockerInSandbox reports whether CreateSandbox/RestoreFromSnapshot
-	// honor CreateSpec.Docker (§27.5, Step 74): a real, isolated dockerd
+	// honor CreateSpec.Docker (§27.5): a real, isolated dockerd
 	// can run inside a spawned sandbox instance. Consulted independently
 	// at two points -- once up front at session-creation time
 	// (internal/adapters/inbound/httpapi.CreateSessionCore, refusing a
@@ -53,7 +53,7 @@ type Capabilities struct {
 
 	// EgressPolicy reports whether CreateSandbox/RestoreFromSnapshot honor
 	// CreateSpec.EgressPolicy, enforcing it at the provider's own network
-	// substrate (§27.6, Step 74: "Modal's own sandbox network controls;
+	// substrate (§27.6: "Modal's own sandbox network controls;
 	// NetworkPolicy for the anticipated Kubernetes provider"). Consulted
 	// the SAME two-point way DockerInSandbox is -- see that field's own
 	// doc comment -- but only when the policy actually requires

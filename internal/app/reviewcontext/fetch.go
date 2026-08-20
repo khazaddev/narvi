@@ -18,7 +18,7 @@ import (
 // directly, with no adapter-side change beyond what this Step already adds
 // to it.
 //
-// GetCompareDiff (Step 62 review finding C2, CRITICAL, fixed) replaces the
+// GetCompareDiff replaces the
 // PREVIOUS GetPullRequestDiff here -- see Fetch's own doc comment for the
 // full "why": GetPullRequestDiff always reflects a PR's CURRENT, moving
 // head, which is exactly the property that let Diff and HeadSHA
@@ -33,11 +33,11 @@ type Fetcher interface {
 
 // Fetch builds review.PreFetchedContext for owner/repo#number -- the ONE
 // shared assembly point every review-session trigger path (a PR @mention,
-// a label retrigger, or the manual re-review REST button, §8.2/Step 46)
+// a label retrigger, or the manual re-review REST button, §8.2)
 // calls before building its own review turn's prompt via
 // review.RenderTurnPrompt.
 //
-// # Step 62 review finding C2 (CRITICAL, fixed): Diff and HeadSHA now come
+// # Diff and HeadSHA now come
 // # from one dependency chain, never two independently-raceable reads
 //
 // BEFORE this fix, Diff (via GetPullRequestDiff, always reflecting a PR's
@@ -131,14 +131,14 @@ func Fetch(ctx context.Context, logger *slog.Logger, fetcher Fetcher, timeouts p
 	// whenever Diff IS non-empty, it is provably anchored to this exact
 	// value (this function's own top doc comment).
 	//
-	// Title/Body (adversarial-review fix, §26.2/Step 67's own follow-up,
+	// Title/Body (adversarial-review fix, §26.2's own follow-up,
 	// review.PreFetchedContext.Title's own doc comment): forwarded verbatim
 	// from the SAME GetPullRequest call HeadSHA itself came from, above --
 	// no separate fetch. Reported even when the diff fetch below failed,
 	// exactly like HeadSHA, since pr itself was already successfully
 	// resolved by this point regardless of what happens to the diff.
 	//
-	// Additions/Deletions/ChangedFilesCount/Labels (§26.3, Step 68) are
+	// Additions/Deletions/ChangedFilesCount/Labels (§26.3) are
 	// likewise forwarded verbatim from the SAME GetPullRequest call --
 	// reported even when the diff fetch below failed, exactly like Title/
 	// Body. ChangedPaths is parsed from diff itself (reviewtriage.

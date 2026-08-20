@@ -9,11 +9,11 @@
 // keeps as WorkflowDefinition in restdtos' flat namespace) mirroring
 // the workflow_* tables (migrations/000057_workflows.up.sql), the
 // StepOutcomeStatus closed enum, and NextStep -- the ONE pure decision
-// function the eventual execution engine (Step 55, §25.6) consults to
+// function the eventual execution engine (§25.6) consults to
 // learn what follows a finished step. No I/O, no time.Now(), no
 // randomness (CLAUDE.md, §11) -- this package is data plus decision
 // functions, nothing more; the impure engine
-// (internal/app/workflowengine, Step 55) and the HITL gate (Step 56,
+// (internal/app/workflowengine, Step 55) and the HITL gate (
 // §25.9) import it, never the reverse.
 //
 // Everything in this package is DARK as of Step 54: no dispatch wiring,

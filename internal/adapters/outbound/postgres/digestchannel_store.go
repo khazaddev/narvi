@@ -10,7 +10,7 @@ import (
 )
 
 // DigestChannelStore is a thin, pass-through wrapper around the
-// sqlc-generated channel-discovery queries (Step 62, §21.3) -- see
+// sqlc-generated channel-discovery queries (§21.3) -- see
 // queries/digestchannels.sql's own doc comment for the full "reusing
 // existing session-thread association tables" design.
 type DigestChannelStore struct {

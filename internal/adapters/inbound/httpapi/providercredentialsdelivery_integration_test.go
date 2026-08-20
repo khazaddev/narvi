@@ -26,7 +26,7 @@ import (
 // (unexported) providerCredentialsResponse for this test's own decode
 // target -- same convention scmCredResponse already establishes in this
 // package for the SCM case. credAuthValue mirrors that file's own
-// credentialAuthValue (Step 59, §29.6) -- deliberately independent Go
+// credentialAuthValue (§29.6) -- deliberately independent Go
 // types on each side of the wire, reconciled by hand, exactly like
 // scmcredentials.go's own documented precedent for this sibling endpoint
 // (providercredentialsdelivery.go's own top doc comment).

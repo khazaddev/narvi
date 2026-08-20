@@ -133,8 +133,8 @@ type CreateAutomationParams struct {
 	EnvVars               []byte                `json:"env_vars"`
 }
 
-// Queries backing AutomationStore (Step 51, "automations: engine", §3.5;
-// Step 52, "automations: triggers & extras", §8.4), migrations/
+// Queries backing AutomationStore ("automations: engine", §3.5;
+// "automations: triggers & extras", §8.4), migrations/
 // 000051_automations.up.sql, migrations/
 // 000055_automations_triggers_and_extras.up.sql.
 // Step 52's own real caller: httpapi.CreateAutomation (POST
@@ -321,7 +321,7 @@ type ListAutomationsParams struct {
 	Status    *AutomationStatus `json:"status"`
 }
 
-// Backs GET /api/automations (Step 52, §8.4's own "creator/status
+// Backs GET /api/automations (§8.4's own "creator/status
 // filters"). Both filters are OPTIONAL and independent -- sqlc.narg's own
 // "IS NULL OR" idiom means an absent (nil) filter matches every row, a
 // present one narrows -- so this single query serves "all automations",

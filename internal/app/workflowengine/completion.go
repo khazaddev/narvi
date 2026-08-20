@@ -19,7 +19,7 @@
 // dispatch.go's own ResolveStepForNewTurn: it only ever starts a new run
 // when none is currently running).
 //
-// # loopguard, HITL notifications, and real auto-dispatch (Step 56, §25.9)
+// # loopguard, HITL notifications, and real auto-dispatch (§25.9)
 //
 // Step 55 shipped this file with loopguard deliberately unconsulted (no
 // built-in workflow could ever reach a needs_fix re-fire through this

@@ -66,17 +66,17 @@ type CreateSessionParams struct {
 // this batch) keeps compiling and behaving identically: both stay NULL,
 // byte-for-byte today's unscoped behavior.
 //
-// build_model_id (Step 37, "plan mode, web", §12.2 item 3) is likewise
+// build_model_id ("plan mode, web", §12.2 item 3) is likewise
 // sqlc.narg -- every EXISTING call site that never sets it keeps
 // compiling and behaving identically (NULL, "use the default model
 // catalog entry", migrations/000034_plan_mode.up.sql's own convention).
 //
-// build_effort (migrations/000063_turn_session_effort.up.sql, Step 59,
+// build_effort (migrations/000063_turn_session_effort.up.sql,
 // §29.8) mirrors build_model_id's own shape exactly, one column over --
 // same sqlc.narg treatment, same "every existing call site keeps
 // compiling and behaving identically (NULL, use the default)" guarantee.
 //
-// parent_session_id/spawn_depth (Step 48, "sentinels + suggestions",
+// parent_session_id/spawn_depth ("sentinels + suggestions",
 // §17.2, migrations/000045) are likewise sqlc.narg/COALESCE-defaulted --
 // every EXISTING call site (every session created before this Step) keeps
 // compiling and behaving identically: parent_session_id stays NULL,
@@ -89,7 +89,7 @@ type CreateSessionParams struct {
 // claim-locked transaction (see that file's own doc comment for why it
 // cannot go through SpawnChildSession's separate transaction instead).
 //
-// epistemic_check_enabled (Step 61, "builder epistemic pre-action check",
+// epistemic_check_enabled ("builder epistemic pre-action check",
 // §20.4, migrations/000066) mirrors build_model_id's own sqlc.narg
 // treatment exactly: every EXISTING call site that never sets it keeps
 // compiling and behaving identically (NULL, "use platform.Config's own

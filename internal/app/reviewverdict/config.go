@@ -15,7 +15,7 @@ import (
 
 // ErrLoadEligibilityConfigFailed is LoadEligibilityConfig's own sentinel
 // for a GENUINE repo_settings read failure (anything other than
-// pgx.ErrNoRows) -- Step 62 review finding C3. Before this fix,
+// pgx.ErrNoRows). Previously,
 // LoadEligibilityConfig had no way to report this at all (it returned a
 // bare autoapproval.EligibilityConfig, no error): a transient store error
 // silently substituted the engine's own WIDER built-in defaults for a
@@ -41,18 +41,20 @@ var ErrLoadEligibilityConfigFailed = errors.New("reviewverdict: load eligibility
 //     overrode that one field.
 //   - A GENUINE read error (anything else) returns
 //     autoapproval.EligibilityConfig{}, ErrLoadEligibilityConfigFailed --
-//     Step 62 review finding C3 (BLOCKER, fixed): this function used to
-//     silently substitute the engine's own WIDER defaults here, the exact
-//     opposite of "cannot establish this repo's policy" fail-closed
-//     behavior an unattended-merge gate requires. THE CALLER MUST TREAT A
-//     NON-NIL ERROR AS "NOT ELIGIBLE", never fall back to the returned
-//     (zero-value, meaningless) config -- see revalidateCore/
-//     computeRealEligibility (internal/app/decisioninbox) for the two real
-//     callers, each failing closed in the way appropriate to its own
-//     context (a hard propagated error for revalidateCore's own action
-//     endpoint; a degraded "not eligible" row for computeRealEligibility's
-//     own best-effort read-model build) -- see each call site's own doc
-//     comment for why the two differ.
+//
+// this function used to
+//
+//	silently substitute the engine's own WIDER defaults here, the exact
+//	opposite of "cannot establish this repo's policy" fail-closed
+//	behavior an unattended-merge gate requires. THE CALLER MUST TREAT A
+//	NON-NIL ERROR AS "NOT ELIGIBLE", never fall back to the returned
+//	(zero-value, meaningless) config -- see revalidateCore/
+//	computeRealEligibility (internal/app/decisioninbox) for the two real
+//	callers, each failing closed in the way appropriate to its own
+//	context (a hard propagated error for revalidateCore's own action
+//	endpoint; a degraded "not eligible" row for computeRealEligibility's
+//	own best-effort read-model build) -- see each call site's own doc
+//	comment for why the two differ.
 func LoadEligibilityConfig(ctx context.Context, deps Deps, repoFullName string) (autoapproval.EligibilityConfig, error) {
 	cfg := autoapproval.DefaultEligibilityConfig()
 
@@ -126,8 +128,7 @@ func GetAutoApprovalSettings(ctx context.Context, deps Deps, repoFullName string
 }
 
 // UpsertAutoMergeToggle idempotently creates-or-updates repoFullName's
-// §21.2 stage-2 auto-merge toggle -- Step 62 review finding C5 (MEDIUM but a
-// privilege boundary, fixed): column-scoped, touches ONLY
+// §21.2 stage-2 auto-merge toggle -- column-scoped, touches ONLY
 // auto_merge_enabled (postgres.RepoSettingsStore.UpsertAutoMergeToggle's
 // own generated-query doc comment) -- see that method's own doc comment
 // for the full "why" this replaces the PREVIOUS combined
@@ -148,8 +149,8 @@ func UpsertAutoMergeToggle(ctx context.Context, deps Deps, repoFullName string, 
 }
 
 // UpsertAutoApprovalEligibility idempotently creates-or-updates
-// repoFullName's §21.2 stage-1 eligibility config -- Step 62 review finding
-// C5's own column-scoped sibling: touches ONLY
+// repoFullName's §21.2 stage-1 eligibility config -- the column-scoped
+// sibling of UpsertAutoMergeToggle above: touches ONLY
 // max_auto_approve_files_changed/sensitive_blast_radius_tags, leaving
 // auto_merge_enabled untouched (postgres.RepoSettingsStore.
 // UpsertAutoApprovalEligibility's own generated-query doc comment) -- see

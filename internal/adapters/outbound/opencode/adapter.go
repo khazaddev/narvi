@@ -134,7 +134,7 @@ type Adapter struct {
 	baseURL    string
 	httpClient *http.Client
 
-	// capabilityRestricted (Step 48, "sentinels + suggestions", §17.2) is
+	// capabilityRestricted ("sentinels + suggestions", §17.2) is
 	// set ONCE, at construction, from SessionConfig.CapabilityRestricted
 	// -- true exactly for a sentinel-auto-fix child session. postPromptAsync
 	// (session.go) is this field's own one reader: every build-mode turn
@@ -277,7 +277,7 @@ var _ ports.AgentRuntime = (*Adapter)(nil)
 // wait before re-dispatching after a first-time transient APIError — see
 // that field's own doc comment above for why this, unlike the compaction
 // retry, needs a backoff at all.
-// capabilityRestricted (Step 48, §17.2) is a trailing, variadic bool
+// capabilityRestricted (§17.2) is a trailing, variadic bool
 // parameter -- so every EXISTING caller (cmd/sandbox-agent/main.go's own
 // production wiring, this package's own newAdapter(t) test helper) keeps
 // compiling and behaving identically (capabilityRestricted false) with no

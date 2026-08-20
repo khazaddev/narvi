@@ -57,7 +57,7 @@ func (s *UserStore) GetByPrimaryEmail(ctx context.Context, email string) (sqlcge
 }
 
 // List returns every user, oldest-first -- backs the members API's own
-// GET /api/members (Step 39, "identities + full RBAC", §13.3).
+// GET /api/members ("identities + full RBAC", §13.3).
 func (s *UserStore) List(ctx context.Context) ([]sqlcgen.User, error) {
 	return s.q.ListUsersOrderedByCreatedAt(ctx)
 }

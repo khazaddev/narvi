@@ -11,7 +11,7 @@ import (
 )
 
 // SandboxSecretStore is a thin, pass-through wrapper around the
-// sqlc-generated sandbox_secrets queries (Step 72, "sandbox secrets &
+// sqlc-generated sandbox_secrets queries ("sandbox secrets &
 // opencode config", §27.1, migrations/000090_sandbox_secrets.up.sql) --
 // this codebase's SECOND generic secret-storage table, mirroring
 // ProviderCredentialStore's own shape exactly. No caching, no retries, no

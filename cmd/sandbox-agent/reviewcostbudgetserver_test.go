@@ -254,8 +254,9 @@ func TestReviewCostBudgetServer_ShutdownClosesTheListener(t *testing.T) {
 	}
 
 	// Serve must return promptly, and with nil -- never leaving its own
-	// goroutine running forever (an orphaned goroutine, the class of leak
-	// Step 13 closed for a different subsystem).
+	// goroutine running forever (an orphaned goroutine, the same class of
+	// leak the process supervisor already closes for a different
+	// subsystem).
 	select {
 	case serveErr := <-serveDone:
 		if serveErr != nil {

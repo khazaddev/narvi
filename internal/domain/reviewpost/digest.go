@@ -25,7 +25,7 @@ import "github.com/khazaddev/narvi/internal/domain/review"
 // parser, on principle" stance. Requested on every review; validation-
 // enforced (at least one entry with real, non-blank content -- see
 // validate.go's own hasNonBlankArchDecision) ONLY when the posting
-// VerdictInput's own ReviewDepth is reviewtriage.DepthDeep (Step 68,
+// VerdictInput's own ReviewDepth is reviewtriage.DepthDeep (
 // §26.3, which now exists and defines that deep path) -- see Digest's own
 // doc comment below for the full "Enforcement" picture.
 type ArchDecision struct {
@@ -51,7 +51,7 @@ type ArchDecision struct {
 
 // Digest is the merge readout's own typed content (§26.1, IMPLEMENTATION_
 // PLAN.md's Step 66 row: "Digest{Summary, ArchDecisions[], StackRisks,
-// UnverifiedLimits}", extended by §26.2/Step 67's own
+// UnverifiedLimits}", extended by §26.2's own
 // "DescriptionAdequacy/AdequacyExplanation/ProposedBody" addition below)
 // -- a NEW, ADDITIVE field alongside VerdictInput's
 // pre-existing Summary (validate.go), never a replacement for it: the two
@@ -79,7 +79,7 @@ type ArchDecision struct {
 // (reject-don't-repair at the posting endpoint)". Step 68 (§26.3, the
 // light/deep triage) now exists and defines that deep path. Summary
 // (ValidateVerdictInput's own ErrEmptyDigestSummary check, validate.go)
-// and §26.2/Step 67's own DescriptionAdequacy/AdequacyExplanation
+// and §26.2's own DescriptionAdequacy/AdequacyExplanation
 // (ErrInvalidDescriptionAdequacy/ErrEmptyAdequacyExplanation, same file)
 // are hard-required on EVERY review, light and deep alike -- the
 // description-adequacy check is a normal, always-on part of every review,
@@ -91,7 +91,7 @@ type ArchDecision struct {
 // ValidateVerdictInput's own ErrEmptyDigestArchDecisions/
 // ErrEmptyDigestStackRisks/ErrEmptyDigestUnverifiedLimits -- whenever the
 // posting VerdictInput's own ReviewDepth is reviewtriage.DepthDeep.
-// ProposedBody (§26.2/Step 67) stays REQUESTED-but-never-required on
+// ProposedBody (§26.2) stays REQUESTED-but-never-required on
 // every path, deep included -- unlike the other three, §26.3 never made
 // it deep-path-mandatory (most reviews, light or deep, propose no PR-body
 // rewrite at all), mirroring VerdictInput.Findings' own "additive,
@@ -107,7 +107,7 @@ type Digest struct {
 	// (§26.1 item 3) -- nil/empty is legal on the LIGHT path (a PR with no
 	// structural decision worth naming, e.g. a pure bugfix), but REQUIRED
 	// (at least one entry with real, non-blank content) on the DEEP path
-	// (Step 68, §26.3) -- see ValidateVerdictInput's own
+	// (§26.3) -- see ValidateVerdictInput's own
 	// ErrEmptyDigestArchDecisions check and hasNonBlankArchDecision
 	// (validate.go) for the exact rule.
 	ArchDecisions []ArchDecision
@@ -118,7 +118,7 @@ type Digest struct {
 	// unchanged by this Step), which covers the SAME section's own "blast
 	// radius in the existing fixed vocabulary" requirement. Empty string
 	// is legal on the LIGHT path, but REQUIRED non-blank on the DEEP path
-	// (Step 68, §26.3, ValidateVerdictInput's own ErrEmptyDigestStackRisks)
+	// (§26.3, ValidateVerdictInput's own ErrEmptyDigestStackRisks)
 	// -- rendered only when non-blank (rendercomment.go).
 	StackRisks string
 	// UnverifiedLimits is the readout's own explicit, honest "what was
@@ -126,7 +126,7 @@ type Digest struct {
 	// run the migration against a production-sized table; did not verify
 	// the new retry path under actual network partition". Empty string is
 	// legal on the LIGHT path, but REQUIRED non-blank on the DEEP path
-	// (Step 68, §26.3, ValidateVerdictInput's own
+	// (§26.3, ValidateVerdictInput's own
 	// ErrEmptyDigestUnverifiedLimits) -- rendered only when non-blank.
 	UnverifiedLimits string
 
@@ -182,7 +182,7 @@ type Digest struct {
 	// only.
 	ProposedBody string
 
-	// ContestedPoints (§26.4, Step 69) is the deep path's own "Contested
+	// ContestedPoints (§26.4) is the deep path's own "Contested
 	// points" digest section -- free-text prose naming where the primary
 	// reviewer's own findings/digest and the counter-reviewer sub-task's
 	// own adjudication genuinely disagreed (§26.4: "inter-agent

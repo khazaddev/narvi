@@ -50,7 +50,7 @@ type ProviderCredentialsFetcher interface {
 }
 
 // AuthValue mirrors internal/adapters/inbound/httpapi's own (unexported)
-// credentialAuthValue byte-for-byte (Step 59, §29.6) -- independently
+// credentialAuthValue byte-for-byte (§29.6) -- independently
 // declared here, reconciled by hand, exactly like providerCredentials
 // Response's own pre-Step-59 doc comment already established for this
 // sibling endpoint (scmcredentials.go's identical precedent). Has
@@ -68,7 +68,7 @@ type AuthValue struct {
 
 // providerCredentialsResponse mirrors internal/adapters/inbound/httpapi's
 // own (unexported) providerCredentialsResponse -- a map from provider name
-// to its resolved AuthValue (Step 59, §29.6 -- a plain plaintext-string
+// to its resolved AuthValue (§29.6 -- a plain plaintext-string
 // map before this Step).
 type providerCredentialsResponse struct {
 	Credentials map[string]AuthValue `json:"credentials"`
@@ -80,7 +80,7 @@ type providerCredentialsResponse struct {
 // header -- the SAME two headers Fetch already sends, mirroring that
 // method's own exact header-name/convention choices -- and expects back
 // {"credentials": {"<provider>": {"type": "api"|"oauth", ...}, ...}} on a
-// 2xx response (Step 59, §29.6). A provider with nothing configured for
+// 2xx response (§29.6). A provider with nothing configured for
 // this session is simply ABSENT from the map, never an error of its own;
 // the map itself may legitimately be empty (the overwhelming common case:
 // no provider credential configured at any scope for this session).

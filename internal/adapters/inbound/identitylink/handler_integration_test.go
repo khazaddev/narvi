@@ -1,7 +1,7 @@
 //go:build integration
 
 // Full HTTP-level integration tests for GET /auth/identity-link/{nonce}
-// (Step 39, "identities + full RBAC", §13.2's own magic-link consume
+// ("identities + full RBAC", §13.2's own magic-link consume
 // flow) -- mirrors internal/adapters/inbound/httpapi's own testcontainers-
 // Postgres-plus-embedded-migrations convention exactly.
 package identitylink_test

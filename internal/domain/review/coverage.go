@@ -25,7 +25,7 @@ const (
 )
 
 // CoverageFloor is the coverage raise-only floor's single exported pure
-// function (§8.2/Step 45): given the test-coverage sentinel's own assessed
+// function (§8.2): given the test-coverage sentinel's own assessed
 // state, it returns the MOST CONSERVATIVE Shippable value coverage alone
 // ever forces. This function alone decides nothing about whether a PR
 // ships — see ComputeShippable (shippable.go) for the actual composition;

@@ -481,7 +481,7 @@ const (
 
 // rwxAccessTokenEnvVarName configures the real internal/adapters/outbound/
 // rwx package's Dispatches API notifier construction in cmd/control-plane/
-// main.go (Step 57, §4.1.1/§4.1.2). Unlike modalAuthTokenEnvVarName above,
+// main.go (§4.1.1/§4.1.2). Unlike modalAuthTokenEnvVarName above,
 // this is OPTIONAL in every stage: RWX preview links are an off-by-default,
 // per-repo opt-in feature layered ON TOP of this platform-wide credential
 // (§4.1.2 point 1: "absent = feature off"; §24.5's posture) — a deployment
@@ -649,7 +649,7 @@ const intentClassifierActiveSurfacesEnvVarName = "NARVI_INTENT_CLASSIFIER_ACTIVE
 // own model-recognition table.
 
 // cloudIdentityIssuerURLEnvVarName is the env var Load reads for
-// Config.CloudIdentityIssuerURL (Step 73a, §27.3). DELIBERATELY OPTIONAL --
+// Config.CloudIdentityIssuerURL (§27.3). DELIBERATELY OPTIONAL --
 // an empty value means the entire cloud-identity feature is off, fail-
 // closed (see that field's own doc comment) -- but a NON-empty value gets
 // real validation (InvalidCloudIdentityIssuerURLError below), unlike most
@@ -1141,7 +1141,7 @@ type Config struct {
 	ModalEgressProxyURL string
 
 	// RWXAccessToken optionally configures the real internal/adapters/
-	// outbound/rwx package's Dispatches API notifier (Step 57, §4.1.1/
+	// outbound/rwx package's Dispatches API notifier (§4.1.1/
 	// §4.1.2), read from NARVI_RWX_ACCESS_TOKEN. See that env var's own
 	// doc comment above for why this is optional, unlike ModalAuthToken.
 	RWXAccessToken string
@@ -1211,7 +1211,7 @@ type Config struct {
 	// surface runs in shadow.
 	IntentClassifierActiveSurfaces []string
 
-	// CloudIdentityIssuerURL (Step 73a, §27.3) is the public, externally
+	// CloudIdentityIssuerURL (§27.3) is the public, externally
 	// reachable base URL the control plane's own OIDC issuer serves
 	// discovery/JWKS from (GET {CloudIdentityIssuerURL}/.well-known/
 	// openid-configuration, GET {CloudIdentityIssuerURL}/.well-known/
@@ -1432,7 +1432,7 @@ func Load() (*Config, error) {
 	// configuration, not a boot-time failure.
 	gitHubImageBuildToken := os.Getenv(gitHubImageBuildTokenEnvVarName)
 
-	// reviewModelDeep (Step 68, §26.3): OPTIONAL, no default -- an empty
+	// reviewModelDeep (§26.3): OPTIONAL, no default -- an empty
 	// value here is a valid, expected, degraded-gracefully configuration
 	// (reviewModelDeepEnvVarName's own doc comment), not a boot-time
 	// failure.
@@ -1467,7 +1467,7 @@ func Load() (*Config, error) {
 
 	initialAdminEmails := parseCommaSeparatedList(os.Getenv(initialAdminEmailsEnvVarName))
 
-	// epistemicCheckDefault (Step 61, §20.4): optional, default false --
+	// epistemicCheckDefault (§20.4): optional, default false --
 	// mirrors objectStoreUsePathStyle's own identical "empty means
 	// unset, parse only when present, reject anything ParseBool doesn't
 	// recognize" idiom (Load's own object-storage block, below).
@@ -1481,7 +1481,7 @@ func Load() (*Config, error) {
 		}
 	}
 
-	// rolloutMode (Step 76, §32): optional, default rollout.ModeOpen --
+	// rolloutMode (§32): optional, default rollout.ModeOpen --
 	// mirrors epistemicCheckDefault's own identical "empty means unset,
 	// parse only when present" idiom immediately above, but with an
 	// explicit two-value switch (like Stage, envVarName's own block
@@ -1589,7 +1589,7 @@ func Load() (*Config, error) {
 
 	intentClassifierActiveSurfaces := parseCommaSeparatedList(os.Getenv(intentClassifierActiveSurfacesEnvVarName))
 
-	// cloudIdentityIssuerURL (Step 73a, §27.3): DELIBERATELY OPTIONAL --
+	// cloudIdentityIssuerURL (§27.3): DELIBERATELY OPTIONAL --
 	// see cloudIdentityIssuerURLEnvVarName's own doc comment for the full
 	// "off when unset" gating rule and why a non-empty value gets real
 	// URL-shape validation (unlike PublicBaseURL above). Assigned the

@@ -137,14 +137,14 @@ func (f *fakeSourceControl) UpdatePRBody(context.Context, ports.UpdatePRBodySpec
 	return errors.New("fakeSourceControl: UpdatePRBody not implemented")
 }
 
-// ListMergedBetween (Step 50, "release PR review", §15.2) is never
+// ListMergedBetween ("release PR review", §15.2) is never
 // reached from this package either -- same "not implemented" precedent
 // as CreateBranch above.
 func (f *fakeSourceControl) ListMergedBetween(context.Context, ports.ListMergedBetweenSpec) ([]ports.MergedPR, bool, error) {
 	return nil, false, errors.New("fakeSourceControl: ListMergedBetween not implemented")
 }
 
-// ListOpenPRsForUser/ResolveCodeOwners/MergePR (Step 60, "decision inbox:
+// ListOpenPRsForUser/ResolveCodeOwners/MergePR ("decision inbox:
 // read model + API", §16.2) are never reached from this package -- same
 // "not implemented" precedent as ListMergedBetween above.
 func (f *fakeSourceControl) ListOpenPRsForUser(context.Context, ports.ListOpenPRsForUserSpec) ([]ports.OpenPR, bool, error) {
@@ -171,7 +171,7 @@ func (f *fakeSourceControl) shaCallCount() int {
 // exactly (configurable behavior + a recorded-calls slice, mutex-guarded),
 // narrowed to the one method this package's own Builder actually calls.
 //
-// echoPublishedCacheVersion (§19.1's closing paragraph, Step 43(c), third
+// echoPublishedCacheVersion (§19.1's closing paragraph(c), third
 // iteration) models the modal adapter's own real BuildImage contract
 // (BuildOutcome.PublishedCacheVersion's own doc comment): when true (the
 // default a caller opts into per test, mirroring a real adapter's
@@ -464,7 +464,7 @@ func sumImageBuildDurationCount(ctx context.Context, t *testing.T, reader *sdkme
 // Builder in isolation, matching its own doc.go's scope). repo_urls is
 // seeded EMPTY (a base+runtime-only fingerprint) deliberately: Step 41
 // ("warm boot: shared fingerprint", §19.1) has no claim-time SHA
-// resolution mechanism yet (that's Step 42, §19.2/§19.9 -- see attempt's
+// resolution mechanism yet (that's §19.2/§19.9 -- see attempt's
 // own doc comment), so a row naming any repo can never actually reach a
 // real BuildImage call in this package's own tests -- only a repo-less row
 // can, which is exactly what these backoff/streak tests need to exercise
@@ -2566,7 +2566,7 @@ func TestPumpOnce_Success_RequestsCacheMountKeyedOnBaseAndRuntimeVersion(t *test
 	}
 	mount := provider.buildCalls[0].CacheMount
 	if mount == nil {
-		t.Fatal("BuildImage called with ImageSpec.CacheMount = nil, want it populated (§19.1's closing paragraph, Step 43(c))")
+		t.Fatal("BuildImage called with ImageSpec.CacheMount = nil, want it populated (§19.1's closing paragraph(c))")
 	}
 	wantKey := domainimagebuild.CacheVolumeKey("narvi/base:test", "1.0.0-test")
 	if mount.Key != wantKey {

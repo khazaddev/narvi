@@ -131,7 +131,7 @@ type StepDefinition struct {
 	Order   int
 	Kind    StepKind
 	ModelID *string
-	// Effort mirrors ModelID's own shape and semantics exactly (Step 59,
+	// Effort mirrors ModelID's own shape and semantics exactly (
 	// §29.8's "workflow engine echo"): nil inherits exactly what the
 	// session would use today (turns.effort/sessions.build_effort), a
 	// non-nil value overrides it for this step -- the same "provider/

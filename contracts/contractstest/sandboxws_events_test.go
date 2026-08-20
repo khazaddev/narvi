@@ -159,7 +159,7 @@ func TestSandboxEventsRoundTrip(t *testing.T) {
 	})
 
 	// TestSandboxEventsGitSyncRepoRequired is this batch's own schema change
-	// (Step 29, "gitstate in-sandbox", §3.4/§14.1 design section 6): GitSync
+	// ("gitstate in-sandbox", §3.4/§14.1 design section 6): GitSync
 	// now REQUIRES a "repo" field disambiguating which of a session's
 	// (always-a-list, §3.4) repos a given stash/checkout/pop phase is
 	// about. Omitting it must fail validation.

@@ -40,7 +40,7 @@ import (
 // sourceControl.shaCallCount() == 0 for exactly this reason: there is no
 // code path left in this Step that could ever make that count anything
 // else. Separately, app/imagebuild.Builder's own attempt has no
-// claim-time SHA resolution mechanism yet (that's Step 42, §19.2/§19.9),
+// claim-time SHA resolution mechanism yet (that's §19.2/§19.9),
 // so a background builder can only ever turn a REPO-LESS pending row into
 // a real 'ready' one in Step 41 -- a repo-bearing pending row this file's
 // own MISS tests create stays unresolved (see

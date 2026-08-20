@@ -36,7 +36,7 @@ type AgentEvent struct {
 }
 
 // ConversationIDReporter is StartTurn's early-conversation-id-reporting
-// callback (Step 28, "turn recovery", §3.3: "The turn records the OpenCode
+// callback ("turn recovery", §3.3: "The turn records the OpenCode
 // conversation id at turn start... so follow-up prompts on a fresh sandbox
 // resume the same conversation — never lazily"). StartTurn's own final
 // string return value cannot, by itself, satisfy that requirement: it is

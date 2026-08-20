@@ -24,7 +24,7 @@ type CreateOIDCSigningKeyParams struct {
 	PublicJwk           []byte `json:"public_jwk"`
 }
 
-// Queries backing OIDCSigningKeyStore (Step 73a, "cloud identity: OIDC
+// Queries backing OIDCSigningKeyStore ("cloud identity: OIDC
 // issuer, bindings, minting", §27.3) --
 // migrations/000092_oidc_signing_keys.up.sql. private_key_encrypted is
 // ciphertext (platform.EncryptToken output) end to end here; nothing in

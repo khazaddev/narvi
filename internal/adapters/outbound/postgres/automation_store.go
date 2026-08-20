@@ -11,7 +11,7 @@ import (
 )
 
 // AutomationStore is a thin, pass-through wrapper around the sqlc-generated
-// automations queries (Step 51, "automations: engine", §3.5). No caching,
+// automations queries ("automations: engine", §3.5). No caching,
 // no business rules -- EvaluateFailureStrike/Transition (internal/domain/
 // automation) are pure and live there; the CAS-guarded claim-and-record
 // loop lives in app/automation.
@@ -71,14 +71,14 @@ func (s *AutomationStore) ResetConsecutiveFailures(ctx context.Context, id pgtyp
 
 // Resume applies automation.TriggerResume: Paused -> Active, resetting the
 // consecutive-failure streak. Backs POST /api/automations/{id}/resume
-// (Step 52, §8.4). pgx.ErrNoRows means id is not currently Paused (a
+// (§8.4). pgx.ErrNoRows means id is not currently Paused (a
 // no-op, not an error the caller should surface as one).
 func (s *AutomationStore) Resume(ctx context.Context, id pgtype.UUID) (sqlcgen.Automation, error) {
 	return s.q.ResumeAutomation(ctx, id)
 }
 
 // Pause applies automation.TriggerAutoPause via a direct admin action
-// (POST /api/automations/{id}/pause, Step 52, §8.4) -- the manual-pause
+// (POST /api/automations/{id}/pause, §8.4) -- the manual-pause
 // twin of Resume above; see PauseAutomation's own generated doc comment
 // for why this reuses TriggerAutoPause rather than a dedicated trigger.
 // pgx.ErrNoRows means id is not currently Active (a no-op, not an error
@@ -132,7 +132,7 @@ func (s *AutomationStore) RevokeWebhookToken(ctx context.Context, id pgtype.UUID
 }
 
 // List returns every automation matching the given optional creator/status
-// filters (Step 52, §8.4's own "creator/status filters") -- backs GET
+// filters (§8.4's own "creator/status filters") -- backs GET
 // /api/automations. A zero-value createdBy (Valid: false) or nil status
 // matches every row for that filter.
 func (s *AutomationStore) List(ctx context.Context, createdBy pgtype.UUID, status *sqlcgen.AutomationStatus) ([]sqlcgen.Automation, error) {

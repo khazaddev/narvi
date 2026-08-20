@@ -424,7 +424,7 @@ type UpsertReviewFindingParams struct {
 	SuggestedFix *string `json:"suggested_fix"`
 }
 
-// Queries backing ReviewFindingStore (Step 48, "sentinels + suggestions",
+// Queries backing ReviewFindingStore ("sentinels + suggestions",
 // §17/§22.1) -- see migrations/000046_review_findings.up.sql's own doc
 // comment for the full table design.
 // The one write every verdict post with findings makes, once per finding

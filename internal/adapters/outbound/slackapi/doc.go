@@ -1,4 +1,4 @@
-// Package slackapi holds the Slack Notifier adapter (Step 35, "outbox
+// Package slackapi holds the Slack Notifier adapter ("outbox
 // delivery", §5.1/§8.10) -- a real chat.postMessage client implementing
 // ports.Notifier, consumed EXCLUSIVELY via the outbox (internal/app/
 // outboxworker), never called directly by any inbound handler.

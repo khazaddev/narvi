@@ -1,5 +1,5 @@
 // Package imagebuild is the process-wide background image-build loop
-// (Step 26, "image builds", §8.5-note/§10-P2/§3.5) -- a sibling of
+// ("image builds", §8.5-note/§10-P2/§3.5) -- a sibling of
 // app/reconciler and app/sessionactor, not folded into either
 // (TECHNICAL_PLAN.md §1's own repo-layout convention: one package per
 // major loop/subsystem under internal/app/).
@@ -22,7 +22,7 @@
 //  2. For each claimed row, OUTSIDE any transaction: resolves each named
 //     repo's current default-branch tip SHA from the row's own persisted
 //     (base, repo_urls, runtime_version) -- repo_urls, not repo_shas since
-//     Step 41/§19.1 renamed the column and re-keyed it on each repo's
+//     §19.1 renamed the column and re-keyed it on each repo's
 //     normalized clone URL rather than a resolved SHA (migrations/
 //     000039_image_builds_shared_fingerprint.up.sql's own doc comment) --
 //     then calls ports.SandboxProvider.BuildImage with those concrete,

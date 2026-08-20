@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for internal/app/digest.Pump (Step 62, §21.3)
+// Integration tests for internal/app/digest.Pump (§21.3)
 // against a real Postgres instance.
 package digest_test
 

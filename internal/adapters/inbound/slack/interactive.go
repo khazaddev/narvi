@@ -138,7 +138,7 @@ type InteractiveDeps struct {
 	// auto-link or create a magic-link prompt.
 	IdentityLink identitylink.Deps
 
-	// EpistemicCheckDefault (Step 61, "builder epistemic pre-action
+	// EpistemicCheckDefault ("builder epistemic pre-action
 	// check", §20.4) is threaded through to handleViewSubmission's own
 	// httpapi.CreateTurnCore call below exactly like Deps.
 	// EpistemicCheckDefault (handler.go) -- production wiring
@@ -264,7 +264,7 @@ func NewInteractivityHandler(deps InteractiveDeps) http.HandlerFunc {
 			deps.handleBlockActions(ctx, logger, []byte(rawPayload))
 			w.WriteHeader(http.StatusOK)
 		case "view_submission":
-			// handleViewSubmission (Step 39, "identities + full RBAC",
+			// handleViewSubmission ("identities + full RBAC",
 			// §13.2/§13.3 update) now writes its OWN response: an ordinary
 			// empty-body 200 on success/no-op (Slack's own documented
 			// contract, closes the modal), or a real Slack
@@ -534,7 +534,7 @@ func (deps InteractiveDeps) decideAndUpdateMessage(ctx context.Context, logger *
 	// precedent for that case exactly.
 	decidedBy, notice := resolveSlackActorSingleAttempt(decideCtx, logger, deps.SlackClient, deps.IdentityLink, deps.Timeouts.SlackInteractivityIdentityFetchTimeout, slackUserID)
 
-	// Security-remediation addition (Step 39, "identities + full RBAC",
+	// Security-remediation addition ("identities + full RBAC",
 	// §13.2): notice (the "connected your account" confirmation, or --
 	// far more sensitive -- the magic-link URL itself) is delivered via
 	// chat.postEphemeral, visible ONLY to slackUserID (the clicking user),

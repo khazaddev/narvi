@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration proof for migrations/000057_workflows.up.sql (Step 54,
+// Integration proof for migrations/000057_workflows.up.sql (
 // "domain/workflow + loopguard + schema", §25.4/§25.8): the three
 // built-in workflow definitions, their steps and edge, and the three
 // global bindings come out of migrate-up seeded and well-formed in

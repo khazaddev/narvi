@@ -46,7 +46,7 @@ type CreatePlanParams struct {
 	PlanModelID *string     `json:"plan_model_id"`
 }
 
-// Queries backing PlanStore (Step 37, "plan mode, web", §8.1/§12.2 item
+// Queries backing PlanStore ("plan mode, web", §8.1/§12.2 item
 // 3), migrations/000034_plan_mode.up.sql.
 //
 // CreatePlan/SupersedePlan/ListPlanSummariesForSession back

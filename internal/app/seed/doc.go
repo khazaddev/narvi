@@ -114,7 +114,7 @@
 //     can fabricate that exchange -- there is no "value" an operator
 //     could paste in. This tool's own answer to Step 75's "integrations"
 //     checklist item is therefore RWX preview settings
-//     (repo_settings.rwx_preview_*, Step 57, §4.1.2): static,
+//     (repo_settings.rwx_preview_*, §4.1.2): static,
 //     operator-known config (a dispatch key + endpoint template + org
 //     slug) with an existing store method
 //     (RepoSettingsStore.UpsertPreviewSettings) and, as of today, NO

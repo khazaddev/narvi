@@ -30,7 +30,7 @@ import (
 // all, rather than existing with a value the auto-approval eligibility
 // engine's own stale-verdict guard could never honestly evaluate.
 //
-// digest (Step 66, §26.1, extended by Step 67, §26.2) is forwarded
+// digest (§26.1, extended by §26.2) is forwarded
 // verbatim onto the SAME row's own seven digest_* columns (migrations/
 // 000077_review_verdicts_digest.up.sql,
 // 000078_review_verdicts_description_adequacy.up.sql) -- digest.Summary/
@@ -62,14 +62,14 @@ import (
 // local sanitized copy is never visible to that already-completed
 // rendering. See reviewpost.SanitizeDigest's own doc comment for the full
 // "no double-escaping, verified not assumed" argument.
-// reviewPath (Step 68, §26.3) is the posting turn's own turns.
+// reviewPath (§26.3) is the posting turn's own turns.
 // review_depth, forwarded verbatim -- empty ("", reviewtriage.ReviewDepth
 // zero value) is a legitimate, common value (a verdict whose own turn
 // never resolved a depth, or a caller that predates this Step), persisted
 // as a genuine SQL NULL, never the literal string "" (nonEmptyStringPtr
 // below).
 //
-// counterReview/factCheck/factCheckKilled (Step 69, §26.4/§26.6) are
+// counterReview/factCheck/factCheckKilled (§26.4/§26.6) are
 // forwarded verbatim from the SAME already-validated VerdictInput this
 // verdict/digest were themselves built from -- counterReview's own empty
 // value (light path, §26.9) persists as NULL via nonEmptyStringPtr

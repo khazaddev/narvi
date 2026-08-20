@@ -11,7 +11,7 @@ import (
 )
 
 // CloudIdentityBindingStore is a thin, pass-through wrapper around the
-// sqlc-generated cloud_identity_bindings queries (Step 73a, "cloud
+// sqlc-generated cloud_identity_bindings queries ("cloud
 // identity: OIDC issuer, bindings, minting", §27.3,
 // migrations/000093_cloud_identity_bindings.up.sql). No caching, no
 // retries, no business rules -- kind/scope validation (including the

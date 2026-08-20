@@ -1,5 +1,5 @@
 // This file (planawaitingreply.go) closes Finding 1 of this batch's own
-// follow-up fix (Step 37/38, §8.1): GitHub's own bot-ingress path
+// follow-up fix (§8.1): GitHub's own bot-ingress path
 // (httpapi.CreateTurnForBot, bot.go, reused by coalesce.go's REUSE path)
 // already hits the SAME awaiting-plan gate (createTurnLocked, httpapi/
 // turn.go) that Slack/Linear ingress hit -- but until this fix, the
