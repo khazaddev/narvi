@@ -73,7 +73,14 @@ services:
   # NARVI_OBJECT_STORE_BUCKET value exactly -- a mismatch here would only
   # surface once someone actually ran `make dev` and tried to upload
   # something.
+  #
+  # Deliberately on the "init" profile, NOT part of the default `up --wait`
+  # stack: this container exits 0 after creating the bucket, and Compose
+  # treats an exited one-shot as a `--wait` failure even when the exit code
+  # is success. `make dev` brings up postgres + minio with `--wait`, then
+  # runs this explicitly via `compose --profile init run --rm minio-init`.
   minio-init:
+    profiles: ["init"]
     image: minio/mc:RELEASE.2025-08-13T08-35-41Z
     depends_on:
       minio:

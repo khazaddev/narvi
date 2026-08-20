@@ -33,10 +33,22 @@ The specification is written to be executed by an AI coding agent, one Step at a
 ## Development
 
 ```bash
+make dev     # local Postgres + MinIO (docker-compose.dev.yml), then narvi serve on :8080
 make build   # go build ./...
 make lint    # golangci-lint + the project's custom static-analysis checks
 make test    # go test -race ./...
 ```
+
+`make dev` waits only on the long-running compose services (Postgres, MinIO).
+MinIO bucket provisioning runs separately: `minio-init` is on Compose's `init`
+profile because it is a one-shot container that exits after creating the dev
+bucket — including it in `up --wait` makes Compose fail even on a successful
+exit. Override published ports per worktree via an untracked `.env` (see
+`.example.env`).
+
+For the embedded web UI, run `make web-build` once, then start with
+`go run -tags web_assets ./cmd/control-plane serve` (or rebuild `make dev` to
+pass that tag — today it serves API-only with a placeholder page at `/`).
 
 ## License
 
