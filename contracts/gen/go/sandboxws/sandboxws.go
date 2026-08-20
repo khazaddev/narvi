@@ -313,6 +313,176 @@ func (j *BootProgress) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// §33.3: best-effort relay of ONE sandbox_agent_*_duration_seconds data point
+// sandbox-agent has ALREADY measured (its own time.Since bracket) -- the control
+// plane records it into the matching histogram
+// (internal/app/sessionactor/opsmetrics.go) instead of sandbox-agent recording it
+// locally and risking losing it to the ephemeral sandbox's own
+// bounded-shutdown-flush/SIGKILL exposure (§33.1). NOT critical (no ackId):
+// telemetry never earns a place among §6.1's critical acked types, and its loss
+// must never fail a boot or a turn (§33.3 point 1). 'metric' selects which of the
+// four sandbox-emitted histograms (§33.1) this data point belongs to; 'seconds' is
+// the exact already-measured value, never re-derived control-plane-side (§33.2
+// records why control-plane derivation was tried and rejected for all four). Every
+// property below 'seconds' is that instrument's own low-cardinality tag set --
+// only the subset naming this event's own 'metric' applies, per each property's
+// own description -- EXCEPT 'repo', which rides this event for per-session
+// debugging (the events log) only and is deliberately NEVER treated as a metric
+// attribute: an unbounded-cardinality value (§33.3 point 3), the identical
+// repo-is-log-only split GitSync's own 'repo' property note above already
+// documents for a sibling event.
+type BootTiming struct {
+	// boot_duration and hook_rerun_duration only: the sandboxboot.BootMode this data
+	// point ran under. Null/absent for git_fetch_duration/git_checkout_duration.
+	BootMode BootTimingBootMode `json:"bootMode,omitempty,omitzero" yaml:"bootMode,omitempty" mapstructure:"bootMode,omitempty"`
+
+	// git_fetch_duration only (§19.3's own degrade policy). Null/absent for every
+	// other metric.
+	Degraded BootTimingDegraded `json:"degraded,omitempty,omitzero" yaml:"degraded,omitempty" mapstructure:"degraded,omitempty"`
+
+	// boot_duration/hook_rerun_duration/git_checkout_duration only: whether the
+	// measured operation itself failed. Null/absent for git_fetch_duration, which
+	// uses 'degraded' instead -- a boot-time fetch failure the §19.3 degrade policy
+	// allowed to proceed is a distinct fact from a hard failure.
+	Failed BootTimingFailed `json:"failed,omitempty,omitzero" yaml:"failed,omitempty" mapstructure:"failed,omitempty"`
+
+	// Gen corresponds to the JSON schema field "gen".
+	Gen int `json:"gen" yaml:"gen" mapstructure:"gen"`
+
+	// hook_rerun_duration only: the hook script name (sandboxboot.Hook --
+	// setup.sh/start.sh). Null/absent for every other metric.
+	Hook BootTimingHook `json:"hook,omitempty,omitzero" yaml:"hook,omitempty" mapstructure:"hook,omitempty"`
+
+	// MessageId corresponds to the JSON schema field "messageId".
+	MessageId string `json:"messageId" yaml:"messageId" mapstructure:"messageId"`
+
+	// Which of §33.1's four sandbox-emitted histograms
+	// (sandbox_agent_boot_duration_seconds,
+	// sandbox_agent_hook_rerun_duration_seconds,
+	// sandbox_agent_git_fetch_duration_seconds,
+	// sandbox_agent_git_checkout_duration_seconds) this data point belongs to.
+	Metric BootTimingMetric `json:"metric" yaml:"metric" mapstructure:"metric"`
+
+	// hook_rerun_duration/git_fetch_duration/git_checkout_duration only: which repo
+	// (SessionConfig.repos[].name) this data point is about. Null/absent for
+	// boot_duration, a whole-boot measurement with no single repo. See this
+	// definition's own top-level description for why this rides the event log only
+	// and is never a metric attribute.
+	Repo BootTimingRepo `json:"repo,omitempty,omitzero" yaml:"repo,omitempty" mapstructure:"repo,omitempty"`
+
+	// The already-measured wall-clock duration, in seconds -- the SAME time.Since
+	// bracket the deleted sandbox-side histogram used to record locally. Never
+	// recomputed control-plane-side.
+	Seconds float64 `json:"seconds" yaml:"seconds" mapstructure:"seconds"`
+
+	// SessionId corresponds to the JSON schema field "sessionId".
+	SessionId string `json:"sessionId" yaml:"sessionId" mapstructure:"sessionId"`
+
+	// Type corresponds to the JSON schema field "type".
+	Type string `json:"type" yaml:"type" mapstructure:"type"`
+
+	// hook_rerun_duration only (§19.4). Null/absent for every other metric.
+	WorkspaceMoved BootTimingWorkspaceMoved `json:"workspaceMoved,omitempty,omitzero" yaml:"workspaceMoved,omitempty" mapstructure:"workspaceMoved,omitempty"`
+}
+
+// boot_duration and hook_rerun_duration only: the sandboxboot.BootMode this data
+// point ran under. Null/absent for git_fetch_duration/git_checkout_duration.
+type BootTimingBootMode *string
+
+// git_fetch_duration only (§19.3's own degrade policy). Null/absent for every
+// other metric.
+type BootTimingDegraded *bool
+
+// boot_duration/hook_rerun_duration/git_checkout_duration only: whether the
+// measured operation itself failed. Null/absent for git_fetch_duration, which uses
+// 'degraded' instead -- a boot-time fetch failure the §19.3 degrade policy allowed
+// to proceed is a distinct fact from a hard failure.
+type BootTimingFailed *bool
+
+// hook_rerun_duration only: the hook script name (sandboxboot.Hook --
+// setup.sh/start.sh). Null/absent for every other metric.
+type BootTimingHook *string
+
+type BootTimingMetric string
+
+const BootTimingMetricBootDuration BootTimingMetric = "boot_duration"
+const BootTimingMetricGitCheckoutDuration BootTimingMetric = "git_checkout_duration"
+const BootTimingMetricGitFetchDuration BootTimingMetric = "git_fetch_duration"
+const BootTimingMetricHookRerunDuration BootTimingMetric = "hook_rerun_duration"
+
+var enumValues_BootTimingMetric = []interface{}{
+	"boot_duration",
+	"hook_rerun_duration",
+	"git_fetch_duration",
+	"git_checkout_duration",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *BootTimingMetric) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_BootTimingMetric {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_BootTimingMetric, v)
+	}
+	*j = BootTimingMetric(v)
+	return nil
+}
+
+// hook_rerun_duration/git_fetch_duration/git_checkout_duration only: which repo
+// (SessionConfig.repos[].name) this data point is about. Null/absent for
+// boot_duration, a whole-boot measurement with no single repo. See this
+// definition's own top-level description for why this rides the event log only and
+// is never a metric attribute.
+type BootTimingRepo *string
+
+// hook_rerun_duration only (§19.4). Null/absent for every other metric.
+type BootTimingWorkspaceMoved *bool
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *BootTiming) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["gen"]; raw != nil && !ok {
+		return fmt.Errorf("field gen in BootTiming: required")
+	}
+	if _, ok := raw["messageId"]; raw != nil && !ok {
+		return fmt.Errorf("field messageId in BootTiming: required")
+	}
+	if _, ok := raw["metric"]; raw != nil && !ok {
+		return fmt.Errorf("field metric in BootTiming: required")
+	}
+	if _, ok := raw["seconds"]; raw != nil && !ok {
+		return fmt.Errorf("field seconds in BootTiming: required")
+	}
+	if _, ok := raw["sessionId"]; raw != nil && !ok {
+		return fmt.Errorf("field sessionId in BootTiming: required")
+	}
+	if _, ok := raw["type"]; raw != nil && !ok {
+		return fmt.Errorf("field type in BootTiming: required")
+	}
+	type Plain BootTiming
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if plain.Type != "boot_timing" {
+		return fmt.Errorf("field %s: must be equal to %s", "type", "boot_timing")
+	}
+	*j = BootTiming(plain)
+	return nil
+}
+
 // CRITICAL (requires ackId). outcome MUST match the turn_status terminal states
 // (migrations/000005_turns.up.sql).
 type ExecutionComplete struct {
