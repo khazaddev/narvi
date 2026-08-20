@@ -115,15 +115,15 @@ const CostBudgetSafetyMargin = 0.8
 // this function only ever recommends skipping MORE conservatively as
 // spend rises toward the ceiling, never the reverse.
 //
-// CALLED FROM cmd/sandbox-agent/reviewcostbudgetserver.go (Step 70,
+// CALLED FROM cmd/sandbox-agent/reviewcostbudgetserver.go (§26.5,
 // reviewCostBudgetServer's GET /review-cost-budget handler) -- this
 // function's own first production call site. Before §26.7's
 // enforcement mechanism was ENTIRELY the reviewing agent's own
 // self-governed judgment against the dollar ceiling stated in its
 // prompt (review/context.go's own subAgentOrchestrationInstructions),
-// and this function shipped in Step 69 as a tested, exported pure
+// and this function was originally a tested, exported pure
 // function with zero production callers -- a reference implementation
-// with nothing calling it yet. Step 70 gives a review turn's own agent a
+// with nothing calling it yet. §26.5 gives a review turn's own agent a
 // way to learn the real answer instead of estimating it: a tiny,
 // loopback-only HTTP server inside the sandbox that this function
 // backs directly, reachable via the agent's own tool use (bash/curl),

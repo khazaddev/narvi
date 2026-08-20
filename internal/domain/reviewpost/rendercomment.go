@@ -20,7 +20,7 @@ import (
 // ComputeLabelSync (label.go) just applied, rendered here purely for
 // visibility (mirrors docs/design/mockups.html's own verdict-foot "labels
 // synced: `review:medium-risk`" line); botHandle feeds RerunGuidance.
-// findings (Step 48, additive) is v's own already-built []Finding (nil/
+// findings (§8.2, additive) is v's own already-built []Finding (nil/
 // empty for a verdict reporting none -- every verdict posted before this
 // Step) -- rendered inside the collapsed appendix below, EXACTLY the same
 // "typed fields -> rendered text, never parsed back" discipline as every
@@ -45,7 +45,7 @@ import (
 //     bullets), and shippable class (Shippable). §26.1 item 1 names
 //     exactly these three; TestsCoverage/DocsDrift/FilesChanged/
 //     BlastRadius, previously also rendered as flat bullets here, MOVE
-//     out of the header in Step 66 -- items 4 and 5 below name new, more
+//     out of the header in §26.1 -- items 4 and 5 below name new, more
 //     specific homes for each of them. §26.2 adds ONE further
 //     header bullet -- "Description adequacy" (digest.DescriptionAdequacy
 //     + digest.AdequacyExplanation) -- immediately after Premise: the
@@ -310,8 +310,8 @@ func renderArchDecision(ad ArchDecision) string {
 // immediately under the header bullets) -- all share the identical
 // hazard and all now go through this SAME escaper. That narrative
 // summary was NOT part of the audit finding's own explicitly-scoped
-// field list (it pre-dates Step 66, so it was not one of the fields
-// those Steps added), but it is the identical hazard in the identical
+// field list (it predates that work, so it was not one of the fields
+// added then), but it is the identical hazard in the identical
 // function, one line above "### What this PR does": an unclosed
 // "<details>" there swallows EVERY section below it -- What this PR
 // does, Architecture choices, Risks to the stack, Contested points --

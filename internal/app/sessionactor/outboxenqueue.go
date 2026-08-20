@@ -13,7 +13,7 @@
 //     event arrived from the sandbox (complete/fail/cancel alike).
 //   - timerfired.go's handleTurnDeadlineTimer -- turn_deadline expired
 //     with no such event ever arriving (turn.TriggerTimeout). Added later
-//     than the first: Step 35 wired only the real-event path, leaving a
+//     than the first: §5.1 wired only the real-event path, leaving a
 //     timed-out turn on a Slack/Linear-origin session silent on its
 //     originating channel.
 //
@@ -28,8 +28,8 @@
 // §8.2 ("server-side verdict", §8.2/§5.2) amendment: sessions.
 // spawn_source == 'github' now ALSO enqueues nothing via this generic
 // path -- a github-origin session is always a review session
-// (github_pr_sessions, Step 32, is the only mechanism that ever creates
-// one), and Step 47 forbids a review session's turn completion from
+// (github_pr_sessions, the only mechanism that ever creates
+// one), and §8.2 forbids a review session's turn completion from
 // reaching the PR as an ordinary, untyped comment: the verdict-posting
 // tool (internal/adapters/inbound/httpapi/reviewverdict.go) is now the
 // ONLY sanctioned path. See that switch case's own doc comment, below,

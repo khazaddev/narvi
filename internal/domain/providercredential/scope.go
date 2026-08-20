@@ -53,7 +53,7 @@ const (
 	// (§27.1, doubly confirmed against §12.2 item 5's Settings mockup and
 	// automation/doc.go's own deferral note, the SAME two sources this
 	// package's doc.go already cites for why environment outranks repo).
-	// Schema-only as of Step 72: nothing in this codebase yet WRITES a
+	// Schema-only: nothing in this codebase yet WRITES a
 	// ScopeAutomation sandbox_secrets row (§8.4's own deferred
 	// per-automation-secrets follow-up owns that CRUD surface), so no
 	// production Resolve call ever actually sees one today -- but the
@@ -68,7 +68,7 @@ const (
 // least (highest) -- the single source of truth Resolve's own tie-break
 // walks. See this package's own doc.go for the full "why environment
 // outranks repo" citation trail (§12.2 item 5 / automation/doc.go, NOT
-// the Step 53 brief's own "repo before environment" paraphrase). ScopeUser
+// the §25.1 brief's own "repo before environment" paraphrase). ScopeUser
 // and ScopeAutomation both sit at the HEAD, ahead of every org-level
 // scope (§29.4 for ScopeUser: "a personally-linked account is
 // more specific than any environment/repo/global org key"; §27.1
@@ -79,8 +79,7 @@ const (
 // mean); their RELATIVE order to each other is arbitrary and never
 // actually observed by any production Resolve call, since the two are
 // structurally never candidates in the same call (Scope's own doc comment
-// above). Every OTHER entry's own relative order is unchanged from
-// Step 53.
+// above). Every OTHER entry's own relative order is unchanged.
 var scopePriority = map[Scope]int{
 	ScopeUser:        0,
 	ScopeAutomation:  1,

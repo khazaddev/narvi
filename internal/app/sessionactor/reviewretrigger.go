@@ -134,7 +134,7 @@ type reviewRetriggerDecision struct {
 	// verdict's own review_path column -- §24's own re-review floor
 	// input ("once deep, a PR stays deep, even if the delta itself
 	// would independently route light"). Empty when no verdict has ever
-	// been posted for this PR, or when the latest one predates Step 68 /
+	// been posted for this PR, or when the latest one predates §26.3 /
 	// never resolved a depth -- both degrade identically to "nothing to
 	// floor against", mirroring latestVerdictRiskLevel's own identical
 	// "no prior verdict" zero-value convention immediately above.
@@ -260,8 +260,8 @@ func (a *Actor) handleReviewRetriggerDebounceTimer(ctx context.Context) error {
 			// the D2-class contradiction the OTHER two trigger lanes
 			// (internal/adapters/inbound/httpapi/reviewretrigger.go,
 			// internal/adapters/inbound/github/handler.go) were already
-			// fixed against, that this lane alone had never received. Before
-			// Step 69 this only mis-set the prompt's own wording; Step 69
+			// fixed against, that this lane alone had never received. Previously
+			// this only mis-set the prompt's own wording; now it
 			// makes it a guaranteed 400 (reviewpost.ValidateVerdictInput's
 			// own ErrInvalidCounterReview/ErrEmptyDigestArchDecisions) on
 			// every such verdict, since the agent was never told
@@ -324,7 +324,7 @@ func (a *Actor) handleReviewRetriggerDebounceTimer(ctx context.Context) error {
 			// httpapi.RetriggerReview's own manual-button lane and
 			// internal/adapters/inbound/github/handler.go's own mention/
 			// label lane byte-for-byte in ordering. Moved to AFTER the
-			// depth/cost-budget computation above (Step 69 fix, this
+			// depth/cost-budget computation above (§26.4, this
 			// block's own doc comment) -- reviewCtx.DeepPath/
 			// ReviewCostBudgetUSD must already reflect the FLOORED depth
 			// this turn is about to persist before its own prompt renders.

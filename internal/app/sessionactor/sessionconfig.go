@@ -75,8 +75,8 @@ func reposFromJSON(raw []byte) ([]sessionconfig.SessionConfigReposElem, error) {
 // PathScope (§14.1 -- §14.1's own clone-step enforcement needs
 // the sandbox process to actually receive these glob patterns, since
 // sandbox-agent is a separate process from the control plane and only
-// knows what it's told via NARVI_SESSION_CONFIG), DockerRequired (§27.5,
-// Step 74), and EgressPolicy (§27.6) -- Step 74 folds its own
+// knows what it's told via NARVI_SESSION_CONFIG), DockerRequired (§27.5),
+// and EgressPolicy (§27.6) -- this folds its own
 // two new derivations into what §3.4's own environmentPathScope
 // (now this function) already fetched, rather than adding two more
 // independent queries against the SAME row inside the SAME transact.
@@ -311,7 +311,7 @@ func reviewCredentialRepoFullNames(rawRepos []byte) ([]string, error) {
 //
 //   - BootMode: the caller-supplied bootMode -- Fresh for a plain spawn
 //     (dispatch.go's planFreshSpawn), SnapshotRestore for a restore
-//     (dispatch.go's planRestore, Step 22 "snapshots & restore", design
+//     (dispatch.go's planRestore, §3.2 "snapshots & restore", design
 //     decision 6b: "thread a boolean/enum parameter through
 //     assembleSessionConfig rather than hardcoding a second copy of this
 //     function"). §8.5 ("image builds") upgrades a Fresh value to
@@ -326,7 +326,7 @@ func reviewCredentialRepoFullNames(rawRepos []byte) ([]string, error) {
 //     defeating the entire point of image prebuilding. A restore's own
 //     BootMode is deliberately never upgraded this way (see
 //     resolveAndSetImage's own doc comment for why). BootModeBuild remains
-//     an unused placeholder even after Step 26 -- ports.SandboxProvider.
+//     an unused placeholder even after §8.5 -- ports.SandboxProvider.
 //     BuildImage's own signature (§4.1) carries no SessionConfig at all, so
 //     there is no SessionConfig for this control plane to ever stamp
 //     BootModeBuild onto; that value is reserved for whatever

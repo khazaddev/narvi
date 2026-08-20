@@ -13,10 +13,10 @@
 // invert the dependency direction hexagonal architecture exists to
 // enforce: adapters depend on ports, ports never depend on adapters.
 //
-// SandboxProvider (§4.1) is the first port implemented, at Step 12,
-// against two adapters: internal/adapters/outbound/modal (Step 12, real)
-// and internal/adapters/outbound/rwx (a stub through Step 56; Step 57
-// makes it a real second implementation — same interface, per §4.1.1's
+// SandboxProvider (§4.1) is the first port implemented,
+// against two adapters: internal/adapters/outbound/modal (real)
+// and internal/adapters/outbound/rwx (a stub, later becoming a real
+// second implementation — same interface, per §4.1.1's
 // design). See sandboxprovider.go, capabilities.go, createspec.go,
 // refs.go, and providererror.go for the interface and its supporting
 // value types.

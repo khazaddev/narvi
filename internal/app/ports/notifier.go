@@ -63,7 +63,7 @@ const (
 	// doc.go): that package's own top comment explicitly deferred a
 	// richer, asynchronous, retried "progressive" AgentActivity update
 	// (the "progressive" half of §8.10) to "a future Step" once the real
-	// Notifier/outbox consumer existed -- Step 35 shipped that consumer,
+	// Notifier/outbox consumer existed -- §5.1 shipped that consumer,
 	// but nothing ever enqueued a mid-turn update through it until now.
 	// Routes to the SAME internal/app/outboxworker linearNotifier already
 	// registered under NotificationKindLinear (reused, not a second
@@ -159,14 +159,14 @@ const (
 	// NotificationKindReleaseManifest already established alongside
 	// NotificationKindGitHub.
 	NotificationKindSlackWorkflowDecision NotificationKind = "slack_workflow_decision"
-	// NotificationKindLinearWorkflowDecision is this SAME Step 56 addition's
+	// NotificationKindLinearWorkflowDecision is this SAME §25.9 addition's
 	// Linear twin -- a THIRD extension of linearNotifier's own
 	// wrapper-per-provider pattern (linearnotifier.go, already extended
 	// twice: outcome+progress), reusing the plain linearapi.Payload shape
 	// (Success always true) verbatim. See NotificationKindSlackWorkflowDecision's
 	// own doc comment above for the full "why a distinct Kind" reasoning.
 	NotificationKindLinearWorkflowDecision NotificationKind = "linear_workflow_decision"
-	// NotificationKindGitHubWorkflowDecision is this SAME Step 56 addition's
+	// NotificationKindGitHubWorkflowDecision is this SAME §25.9 addition's
 	// GitHub twin -- reuses the EXISTING githubapi.BotNotifier instance
 	// (cmd/control-plane/main.go), registered under a second Kind:
 	// BotNotifier.Deliver never inspects notification.Kind at all, so this

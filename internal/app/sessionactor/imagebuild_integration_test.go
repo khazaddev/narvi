@@ -42,7 +42,7 @@ import (
 // else. Separately, app/imagebuild.Builder's own attempt has no
 // claim-time SHA resolution mechanism yet (that's §19.2/§19.9),
 // so a background builder can only ever turn a REPO-LESS pending row into
-// a real 'ready' one in Step 41 -- a repo-bearing pending row this file's
+// a real 'ready' one (§19.1) -- a repo-bearing pending row this file's
 // own MISS tests create stays unresolved (see
 // TestImageBuildPipeline_MissCreatesPendingRow_BuilderCannotYetBuildIt_
 // SpawnStillBaseImage below, and internal/app/imagebuild/
@@ -157,7 +157,7 @@ func TestResolveAndSetImage_NoCachedImage_FallsBackToBaseAndCreatesPendingRow(t 
 	}
 
 	if got := sourceControl.shaCallCount(); got != 0 {
-		t.Fatalf("ResolveBranchSHA call count = %d, want 0 (Step 41: the fingerprint is url-keyed and network-free)", got)
+		t.Fatalf("ResolveBranchSHA call count = %d, want 0 (§19.1: the fingerprint is url-keyed and network-free)", got)
 	}
 
 	// The fingerprint is computed from the repo's clone URL directly --
@@ -219,8 +219,8 @@ func TestResolveAndSetImage_NoCachedImage_FallsBackToBaseAndCreatesPendingRow(t 
 // TestResolveAndSetImage_WarmHit_UsesReadyImageZeroNetworkCalls proves this
 // Step's own exit criterion: existing spawn-path behavior for the
 // warm-HIT case (a fingerprint that already has a 'ready' image_builds
-// row) works end to end, with ZERO network calls, exactly like before
-// Step 41 -- only how the fingerprint itself got computed changed. The
+// row) works end to end, with ZERO network calls, exactly like
+// previously -- only how the fingerprint itself got computed changed. The
 // 'ready' row is seeded directly here (Claim + RecordSuccess against a
 // pending row this test creates), simulating what §19.2's own
 // claim-time resolution will eventually produce for a repo-bearing

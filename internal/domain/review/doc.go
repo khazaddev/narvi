@@ -46,7 +46,7 @@
 // feeding directly into Shippable: CoverageFloor (the coverage floor),
 // PremiseFloor (the premise floor), AdequacyFloor (the
 // description-adequacy floor, §26.2 — the THIRD raise-only floor,
-// added to the original two Step 45 established), CounterReviewFloor (the
+// added to the original two §8.2 established), CounterReviewFloor (the
 // counter-review floor, §26.4 — the FOURTH raise-only floor), and
 // ComputeShippable (the one composition seam a later Step calls). Plus
 // three more this package has since grown to also own, each its own pure
@@ -100,8 +100,7 @@
 //   - PremiseState: unrecognized ranks with PremiseStateNotAPR
 //     (PremiseFloor, premise.go).
 //   - DescriptionAdequacy: unrecognized ranks with
-//     DescriptionAdequacyMisleading (AdequacyFloor, adequacy.go, §26.2/
-//     Step 67).
+//     DescriptionAdequacyMisleading (AdequacyFloor, adequacy.go, §26.2).
 //   - CounterReviewStatus: unrecognized ranks with CounterReviewSkipped
 //     (CounterReviewFloor, counterreview.go, §26.4) — see that
 //     type's own doc comment for the one deliberate exception to this
@@ -117,7 +116,7 @@
 // # Design calls made in this Step, flagged rather than papered over
 //
 //  1. RiskLevel has exactly three values — low/medium/high — not four.
-//     The plan's own Step 45 row names the RiskLevel type but never
+//     The plan's own §8.2 names the RiskLevel type but never
 //     enumerates its values. A fourth "critical" tier was considered and
 //     rejected: nothing in docs/TECHNICAL_PLAN.md or docs/design/
 //     mockups.html ever shows a verdict-level risk beyond "medium" (the
