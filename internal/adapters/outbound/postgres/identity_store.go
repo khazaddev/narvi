@@ -15,7 +15,7 @@ import (
 // up.sql + migrations/000017_auth_v1.up.sql's own access_token_encrypted
 // column). No caching, no retries, no business rules -- the OAuth
 // returning-vs-first-time-sign-in branch and the encrypt-before-store step
-// are internal/adapters/inbound/auth's job (Step 20).
+// are internal/adapters/inbound/auth's job (§13.1).
 type IdentityStore struct {
 	q *sqlcgen.Queries
 }

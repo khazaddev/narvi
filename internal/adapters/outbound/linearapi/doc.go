@@ -4,7 +4,7 @@
 // live against Linear's current developer documentation during §8.10's
 // ("Linear ingress", §8.10) own investigation.
 //
-// Scope note (Step 34): this package deliberately does NOT implement the
+// Scope note (§8.10): this package deliberately does NOT implement the
 // general Notifier port / outbox-consumer abstraction Step 35 owns
 // (§5.1's "Outbox pattern for every outbound side effect... a retry
 // worker delivers with exponential backoff + dead-letter") -- there is no

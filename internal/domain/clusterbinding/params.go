@@ -33,7 +33,7 @@ type OIDCParams struct {
 }
 
 // StaticParams is AuthKindStatic's own params shape -- the sandbox_secrets
-// (Step 72) NAME whose resolved value is the complete, already-usable
+// (§27.1) NAME whose resolved value is the complete, already-usable
 // kubeconfig file content, written to disk verbatim (§27.4: "never
 // env-var-expanded").
 type StaticParams struct {

@@ -64,7 +64,7 @@ func (b *Bridge) SendBestEffort(ctx context.Context, msg any) error {
 // lastBootPhase the next heartbeat carries.
 //
 // event.ServiceName is url.QueryEscape'd before joining: servicemanifest's
-// own Service.Name validation (Step 14) only requires non-empty/unique, no
+// own Service.Name validation (§14.2) only requires non-empty/unique, no
 // charset restriction, so a service literally named e.g. "web:ready" would
 // otherwise produce a phase string indistinguishable from service "web" in
 // phase "ready" -- percent-encoding the name specifically closes that

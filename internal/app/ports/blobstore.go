@@ -2,7 +2,7 @@
 // interface ("no out-of-interface operations") a control-plane caller uses
 // to mint scoped, time-limited credentials against S3-compatible object
 // storage and to verify/reap objects after the fact.
-// internal/adapters/outbound/objstore (Step 58) is, today, its only
+// internal/adapters/outbound/objstore (§8.6) is, today, its only
 // implementation — see doc.go and CLAUDE.md's "don't couple a port to a
 // single adapter" for why this interface must still hold for a second one
 // (a different S3-compatible backend, or a wholly different object-storage

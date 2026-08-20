@@ -1147,7 +1147,7 @@ func (a *Adapter) GetFileContent(ctx context.Context, spec ports.GetFileContentS
 // decode step: resolvecodeowners.go's own CODEOWNERS-file fetch (
 // §16.2) needs the IDENTICAL "GET the Contents API, 404 is a legitimate
 // non-error exists=false, base64-decode on success" sequence this method
-// already established for GetFileContent (Step 48), just for a
+// already established for GetFileContent (§8.2), just for a
 // candidate-location loop instead of one caller-supplied path.
 func (a *Adapter) fetchFileContent(ctx context.Context, owner, repo, path, ref, token string) (content, sha string, exists bool, err error) {
 	contentsPath := fmt.Sprintf("%s/repos/%s/%s/contents/%s?ref=%s",

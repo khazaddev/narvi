@@ -94,7 +94,7 @@
 // given user's sandbox could contain: before Step 41, a warm hit required
 // resolving each repo's SHA under the CREATOR's own GitHub token, which
 // implicitly 404/403'd for a repo that creator could not read. Once the
-// fingerprint became URL-only and the background builder (Step 42) started
+// fingerprint became URL-only and the background builder (§19.2) started
 // resolving/building under a platform-level credential with no notion of
 // which user asked, an authenticated member with ZERO read access to a
 // private repo could name it in a session's repo list, cause a platform-

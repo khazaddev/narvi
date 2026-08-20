@@ -69,7 +69,7 @@
 // migrations/000028_github_pr_sessions.up.sql adds a small mapping table,
 // github_pr_sessions, keyed on the natural (repo_full_name, pr_number)
 // identity -- mirroring webhook_deliveries' own minimal-columns,
-// composite-key shape (Step 31) rather than inventing a different claim
+// composite-key shape (§5.1) rather than inventing a different claim
 // shape, per §5.1's own "INSERT ... ON CONFLICT atomic claims" house
 // style. The claim is a TWO-STEP sequence inside one Postgres
 // transaction, composing two idioms this codebase ALREADY uses elsewhere
@@ -78,7 +78,7 @@
 //  1. `INSERT ... ON CONFLICT (repo_full_name, pr_number) DO NOTHING`
 //     ensures a claim row exists (session_id NULL on a fresh insert) --
 //     the SAME atomic-claim idiom ClaimWebhookDelivery already
-//     establishes (Step 31).
+//     establishes (§5.1).
 //  2. `SELECT session_id ... FOR UPDATE` locks that row for the rest of
 //     the transaction -- the SAME session-row-locking precedent
 //     internal/adapters/inbound/httpapi/turn.go's own CreateTurn already

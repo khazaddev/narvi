@@ -80,7 +80,7 @@ func readLoop(ctx context.Context, conn *websocket.Conn, actor *sessionactor.Act
 			// The actor being gone (ErrActorStopped) or ctx canceled means
 			// no further useful work can happen here in THIS process --
 			// close the connection; the sandbox-agent's own reconnect
-			// (Step 16) will trigger a fresh GetOrSpawn.
+			// (§6.1) will trigger a fresh GetOrSpawn.
 			logger.Warn("wshub: actor.Send failed; closing connection", "error", err)
 			return
 		}
@@ -101,7 +101,7 @@ func readLoop(ctx context.Context, conn *websocket.Conn, actor *sessionactor.Act
 		case <-time.After(timeouts.SandboxEventAckTimeout):
 			// One slow/lost ack must never close the connection: the
 			// sandbox-agent's own ack-buffer-and-resend-on-reconnect
-			// machinery (Step 16) already tolerates a missed ack by
+			// machinery (§6.1) already tolerates a missed ack by
 			// construction -- losing one here is a documented, safe,
 			// non-catastrophic outcome, not something that must be
 			// prevented at all costs.

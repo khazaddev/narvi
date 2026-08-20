@@ -448,7 +448,7 @@ func (a *Actor) handleTurnDeadlineTimer(ctx context.Context) error {
 
 		// sessionRow is fetched once here, reused below both by
 		// OnTurnCompleted (Step 55/56) and by enqueueOutboxNotification
-		// (Step 35) further down this same transact.
+		// (§5.1) further down this same transact.
 		sessionRow, err := a.stores.session.WithTx(tx).Get(ctx, a.sessionID)
 		if err != nil {
 			return fmt.Errorf("sessionactor: get session: %w", err)

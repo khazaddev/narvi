@@ -363,7 +363,7 @@ func TestProvider_CreateSandbox_NoCorrelationIDWhenAbsent(t *testing.T) {
 	}
 }
 
-// --- CreateSandbox: §27.5/§27.6 Docker/EgressPolicy substrate mapping (Step 74) ---
+// --- CreateSandbox: §27.5/§27.6 Docker/EgressPolicy substrate mapping (§27.5) ---
 
 // captureRequestBody starts an httptest.Server that decodes every request
 // body into a generic map (for top-level key presence/absence checks) and

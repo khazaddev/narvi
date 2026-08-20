@@ -63,7 +63,7 @@ type Actor struct {
 	// test, which never exercises the dispatch path at all).
 	commander ports.SandboxCommander
 
-	// provider is this Actor's own SandboxProvider (Step 21) -- the SAME
+	// provider is this Actor's own SandboxProvider (§9.3) -- the SAME
 	// port every Actor of this Registry shares, used only by
 	// handleEnsureDispatched's own spawn branch (dispatch.go) to actually
 	// call CreateSandbox. May be nil (tests that never exercise the spawn
@@ -81,7 +81,7 @@ type Actor struct {
 	// doc comment for the full reasoning.
 	publicBaseURL string
 
-	// sourceControl is this Actor's own ports.SourceControl (Step 21) --
+	// sourceControl is this Actor's own ports.SourceControl (§9.3) --
 	// used only by pushpr.go's createPRBestEffort, once a push_complete
 	// event arrives for a turn that completed successfully, to open a pull
 	// request. May be nil (tests that never exercise the push/PR path,

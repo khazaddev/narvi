@@ -221,7 +221,7 @@ type spawnPlan struct {
 	// exclusive with resume (below) -- EvaluateSpawnDecision's own
 	// priority ordering (spawndecision.go, untouched by this fix) never
 	// returns both kinds for the same call. planDispatch's own two-plan
-	// return shape (Step 21) is deliberately unchanged by this addition --
+	// return shape (§9.3) is deliberately unchanged by this addition --
 	// a restore decision is still exactly branch (a) ("no live sandbox,
 	// needs [re]spawning") planDispatch already recognizes, just
 	// restoring from a snapshot instead of creating fresh.
@@ -299,7 +299,7 @@ type dispatchPlan struct {
 // handleEnsureDispatched implements the EnsureDispatched command (Step
 // 21, design decision 3): read fresh state, decide whether to spawn,
 // resume, or restore a sandbox, or dispatch a pending turn (or do nothing
-// this round), and act. Resume (Step 23) added alongside spawn/restore;
+// this round), and act. Resume (§3.2) added alongside spawn/restore;
 // spawn.resume is checked before spawn.restore since both are carried on
 // the SAME spawnPlan type (its own doc comment above explains why) and
 // are mutually exclusive by construction.

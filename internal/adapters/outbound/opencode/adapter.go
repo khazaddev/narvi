@@ -1452,7 +1452,7 @@ func (a *Adapter) Stop(ctx context.Context, _ sandboxws.Stop) error {
 // CurrentTurnSpentUSD returns the running cost total (turnState.spentUSD,
 // turn.go's own addCost/spentUSDTotal) for whichever turn is currently
 // live on this adapter -- §26.7/§7.1's own accumulator, finally given a
-// real reader (Step 70). Mirrors Stop's own getCurrentSession/lookupTurn
+// real reader (§26.5). Mirrors Stop's own getCurrentSession/lookupTurn
 // precedent immediately above exactly, for the identical reason: a
 // review sub-agent's own budget-check call (cmd/sandbox-agent's loopback
 // review-cost-budget HTTP server) has no OpenCode session id of its own

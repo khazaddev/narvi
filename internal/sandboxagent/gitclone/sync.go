@@ -801,7 +801,7 @@ func remoteBranchExists(ctx context.Context, sup *supervisor.Supervisor, dir, br
 // positional" convention as closely as checkout's own real semantics
 // allow.
 //
-// §19.3 point 2 (Step 40): when branch does NOT exist locally, the base to
+// §19.3 point 2 (§19.3): when branch does NOT exist locally, the base to
 // create it FROM is no longer unconditionally HEAD -- checkoutBase (below)
 // implements the full remote-tracking preference chain the boot-time fetch
 // step (gitFetchStep) makes possible: prefer origin/<branch> (this Step's

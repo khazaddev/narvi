@@ -1267,7 +1267,7 @@ func deepPathVerdictRequestJSON(counterReview string) string {
 }
 
 // seedProcessingDeepPathTurn (§26.4/§7.1) creates a processing
-// turn on sessionID with review_depth "deep" (Step 68) and
+// turn on sessionID with review_depth "deep" (§26.3) and
 // dispatched_sandbox_gen/dispatched_at stamped -- the SAME gen a real
 // sandbox row created by createSandboxWithToken starts at (1, matching
 // every other test in this file that posts X-Sandbox-Gen: "1"). This is
@@ -1448,7 +1448,7 @@ func TestPostReviewVerdict_CounterReviewCorroborated_NotFloored(t *testing.T) {
 }
 
 // TestPostReviewVerdict_CounterReviewUncorroborated_NoFinishEvent_
-// FloorsToNeedsHuman (Step 71) is the central negative case: a
+// FloorsToNeedsHuman (§26.4) is the central negative case: a
 // counter-reviewer sub_task_start was persisted, but no matching
 // sub_task_finish at all -- the sub-task never (verifiably) completed.
 // The self-report still claims counterReview: done, but with nothing in
@@ -1472,7 +1472,7 @@ func TestPostReviewVerdict_CounterReviewUncorroborated_NoFinishEvent_FloorsToNee
 }
 
 // TestPostReviewVerdict_CounterReviewUncorroborated_OnlyDifferentSubAgent
-// Type_FloorsToNeedsHuman (Step 71) is the false-positive guard: the ONLY
+// Type_FloorsToNeedsHuman (§26.4) is the false-positive guard: the ONLY
 // sub-task this session's own trace shows is a DIFFERENT named sub-agent
 // (fact-check, §26.6) that genuinely started and completed -- proving
 // corroborateCounterReview/reviewverdict.CounterReviewCorroborated find

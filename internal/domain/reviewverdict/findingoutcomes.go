@@ -15,7 +15,7 @@ type FindingStatusCount struct {
 }
 
 // FindingOutcomes counts statuses across statuses -- §21.1/§12.2 item 6's
-// own "Review finding outcomes" KPI, read from review_findings (Step 48),
+// own "Review finding outcomes" KPI, read from review_findings (§8.2),
 // the durable, per-finding MUTABLE-status history review_verdicts
 // (append-only, no per-finding status of its own) never carries -- see
 // migrations/000046_review_findings.up.sql's own doc comment for why a

@@ -661,7 +661,7 @@ func subAgentOrchestrationInstructions(deep bool, costBudgetUSD float64, costBud
 		// endpoint below. Falls back to defaultCostBudgetSafetyMarginPercent
 		// (this Step's own proposed 80) for a caller that left the field
 		// unset, rather than rendering a nonsensical "0%". Purely
-		// explanatory now (Step 70): the agent no longer has to APPLY this
+		// explanatory now (§26.5): the agent no longer has to APPLY this
 		// figure itself, only understand roughly what the endpoint's own
 		// "shouldSkip" answer already accounts for.
 		marginPercent := costBudgetSafetyMarginPercent

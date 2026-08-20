@@ -1,5 +1,5 @@
 // This file (reviewcostbudgetprompt.go) closes §26.7/§26.9's own cost-
-// budget mechanism (Step 70): internal/domain/review's own
+// budget mechanism (§26.5): internal/domain/review's own
 // subAgentOrchestrationInstructions (context.go) renders a review turn's
 // prompt with a FIXED placeholder token
 // (review.ReviewCostBudgetToolURLPlaceholder) in place of the real, live

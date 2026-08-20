@@ -12,7 +12,7 @@ import (
 
 // SessionStore is a thin, pass-through wrapper around the sqlc-generated
 // session queries (§4.3 SessionStore). No caching, no retries, no business
-// rules — that lives in app/sessionactor (Step 11+).
+// rules — that lives in app/sessionactor (§2).
 type SessionStore struct {
 	q *sqlcgen.Queries
 }

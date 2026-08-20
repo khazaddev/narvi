@@ -9,7 +9,7 @@
 // workspaceDir/AGENTS.md.
 //
 // Criticality semantics mirror internal/sandboxagent/boot.RunHooks
-// (Step 13) and internal/sandboxagent/services.Run (Step 14) exactly:
+// (§6.4) and internal/sandboxagent/services.Run (§14.2) exactly:
 // repos[0] (§3.4: "position 0 = primary") failing to clone is fatal and
 // stops the whole sequence immediately -- no repo after it is even
 // attempted; a secondary repo's clone failure is logged as a warning

@@ -23,7 +23,7 @@ import "encoding/json"
 //     "edit","pattern":"*","action":"deny"} -- i.e. glob-scoped edit
 //     permission is not a hypothetical capability this Step is hoping
 //     exists; it is the EXACT mechanism ALREADY gating every plan-mode
-//     turn in production today (Step 37).
+//     turn in production today (§8.1).
 //  2. A CUSTOM agent, defined via an opencode.json config file's own
 //     "agent" object with a narrower glob (e.g. "tests/**": "allow",
 //     "docs/**": "allow", "*": "deny" for the "edit" permission), was

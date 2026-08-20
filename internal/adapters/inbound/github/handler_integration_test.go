@@ -224,7 +224,7 @@ func issueCommentBody(repoFullName, repoName, cloneURL string, prNumber int, lab
 // createLinkedGitHubUser creates a Narvi user with role, and a matching
 // "github" identities row for commenterID -- the direct (provider,
 // external_id) link a real GitHub OAuth sign-in would have already
-// produced (Step 20), which is exactly what resolveCommenterActor
+// produced (§13.1), which is exactly what resolveCommenterActor
 // (identity.go) looks up. Batch fix/deny-unlinked-github-actors means
 // EVERY test in this package now needs one of these for its own mention
 // to be processed at all (an unresolved commenter's mention is now

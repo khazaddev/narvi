@@ -151,7 +151,7 @@ func TestImageSpec_CacheMount_CarriesKeyAndPaths(t *testing.T) {
 // silent drift.
 //
 // cmd/sandbox-agent/main.go's own sandboxsecrets.go/opencodeconfig.go
-// (Step 72) never construct or touch a ports.ImageSpec/CreateSpec at
+// (§27.1) never construct or touch a ports.ImageSpec/CreateSpec at
 // all -- grepped for before writing this test -- so the OTHER half of
 // the "never reaches BuildImage" property (that sandbox-agent's own
 // fetch code is never even CALLED during a real image build, because a

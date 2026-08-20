@@ -13,8 +13,8 @@ import (
 
 // SandboxStore is a thin, pass-through wrapper around the sqlc-generated
 // sandbox queries (§4.3 SandboxStore). No caching, no retries, no business
-// rules — that lives in domain/sandbox (Step 07) and app/sessionactor
-// (Step 11+).
+// rules — that lives in domain/sandbox (§3.2) and app/sessionactor
+// (§2).
 type SandboxStore struct {
 	q *sqlcgen.Queries
 }

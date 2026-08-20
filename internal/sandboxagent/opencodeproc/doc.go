@@ -1,8 +1,8 @@
 // Package opencodeproc spawns and supervises the `opencode serve` process
 // this Step's OpenCode adapter (internal/adapters/outbound/opencode) talks
 // to over HTTP+SSE. It is a small, sandbox-agent-side sibling to
-// internal/sandboxagent/services (Step 14) and
-// internal/sandboxagent/gitclone (Step 15): all three spawn a real OS
+// internal/sandboxagent/services (§14.2) and
+// internal/sandboxagent/gitclone (§6.4): all three spawn a real OS
 // process via internal/sandboxagent/supervisor.Supervisor.Spawn (never a
 // bare exec.Command) and wait for it to become usable before handing
 // control back to their caller.

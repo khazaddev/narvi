@@ -7,7 +7,7 @@
 // the stored hash).
 //
 // This is a SEPARATE mechanism from internal/adapters/inbound/wshub's own
-// (Step 18) HashSandboxToken/verifySandboxToken: ws-tokens and sandbox
+// (§3.2) HashSandboxToken/verifySandboxToken: ws-tokens and sandbox
 // tokens have different mint/verify call sites, different backing tables
 // (ws_tokens vs sandboxes.token_hash), and different consumers (a browser
 // client vs a sandbox-agent process) -- see wshub/token.go's own doc

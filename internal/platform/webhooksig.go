@@ -7,7 +7,7 @@
 // Conflating the two would be wrong: no real webhook provider signs
 // "{timestamp}.{payload}" the way Sign/Verify does.
 //
-// # Design note: resolving the HMACWebhookSecret question (Step 31)
+// # Design note: resolving the HMACWebhookSecret question (§5.1)
 //
 // §5.2 lists three directions for Narvi's own internal HMAC scheme:
 // "separate secrets per direction (sandbox→CP, CP→bots, webhook

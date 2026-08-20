@@ -419,7 +419,7 @@ func reviewTagsFromJSON(raw []byte) []review.Tag {
 }
 
 // PutRepoSettings backs PUT /api/repos/{owner}/{repo}/settings: 403 if the
-// caller fails EITHER authz.ActionConfigureBlockOnHighRisk OR (Step 48)
+// caller fails EITHER authz.ActionConfigureBlockOnHighRisk OR (§8.2)
 // authz.ActionToggleSentinelAutoFix -- both admin-only today (§13.3 row
 // 6), checked independently since this ONE endpoint now writes both
 // flags together (repo_settings' own "always the full, current desired

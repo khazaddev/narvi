@@ -40,7 +40,7 @@
 // the REAL deploy/observability directory — no separate CI job needed,
 // and no dashboard/alert can ship naming a metric nothing emits.
 //
-// # The guide-drift extension (Step 78)
+// # The guide-drift extension (§10)
 //
 // "the two checks are the same idea over different sources": every piece
 // above has a direct sibling scanning a DIFFERENT part of this repo's own

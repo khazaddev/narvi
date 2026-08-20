@@ -12,7 +12,7 @@ import (
 
 // TurnStore is a thin, pass-through wrapper around the sqlc-generated turn
 // queries (§4.3 TurnStore). No caching, no retries, no business rules —
-// that lives in domain/turn (Step 08) and app/sessionactor (Step 11+).
+// that lives in domain/turn (§3.1) and app/sessionactor (§2).
 type TurnStore struct {
 	q *sqlcgen.Queries
 }

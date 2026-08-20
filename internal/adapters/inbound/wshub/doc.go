@@ -3,7 +3,7 @@
 // (GET /sessions/{sessionID}/ws), discriminated by ?type=sandbox vs
 // ?type=client via handler.go's own NewHandler dispatcher.
 //
-// # The sandbox socket (Step 18)
+// # The sandbox socket (§3.2)
 //
 // NewSandboxHandler (sandbox.go) backs ?type=sandbox (§6.1) -- the
 // server-side mirror of internal/sandboxagent/wsbridge's client side. It
@@ -30,7 +30,7 @@
 // Read") -- verified directly via `go doc github.com/coder/websocket.Conn`
 // during this Step's own design phase, not merely cited.
 //
-// # The client socket (Step 19)
+// # The client socket (§6.2)
 //
 // NewClientHandler (client.go) backs ?type=client (§6.2) -- see that
 // file's own top comment for the complete handshake outcome table

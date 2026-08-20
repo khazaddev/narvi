@@ -16,8 +16,8 @@ import (
 // retries, no business rules. Create is §9.3's ("e2e happy path") own
 // addition -- app/sessionactor's own createPRBestEffort (pushpr.go) is its
 // first real caller, recording a "pr"-typed artifact once
-// ports.SourceControl.CreatePR succeeds; previews (Step 48) and uploads
-// (Step 49) still have no Create caller.
+// ports.SourceControl.CreatePR succeeds; previews (§8.2) and uploads
+// (§14.4) still have no Create caller.
 type ArtifactStore struct {
 	q *sqlcgen.Queries
 }

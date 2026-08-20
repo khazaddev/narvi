@@ -18,7 +18,7 @@ import "encoding/json"
 // own import-direction rule) can trigger a browser-facing side effect
 // without knowing anything about WebSockets, wshub, or any other
 // adapter-layer concept. internal/adapters/inbound/wshub's own *Hub type
-// (Step 19) is the only implementation today, but nothing about this
+// (§6.2) is the only implementation today, but nothing about this
 // signature is wshub-specific: a future adapter (e.g. a message-bus
 // fan-out for cross-pod delivery) could implement it identically.
 //

@@ -73,7 +73,7 @@ func expectPgErrCode(t *testing.T, err error, code, constraint string) {
 // UNCONDITIONAL persisted-state awaiting-plan gate (Steps 37/38, §8.1:
 // plans.status, plan.MatchVerdict/MatchRevise, turn.go's own
 // ErrPlanAwaitingApproval) on every single plan-mode session, since
-// internal/adapters/inbound/httpapi's createTurnLocked (Step 55) wires
+// internal/adapters/inbound/httpapi's createTurnLocked (§25.6) wires
 // the workflow engine into EVERY new turn unconditionally. Migration
 // 000088 (see its own header comment for the full "why") corrected this:
 // classic plan mode stays the SOLE plan-approval authority, and the

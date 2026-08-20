@@ -66,7 +66,7 @@
 //     body, folding in the verdict's own typed fields, the agent-supplied
 //     narrative Summary (never re-parsed back out of it afterward -- it is
 //     accepted, rendered, and never read again as structured data), the
-//     synced label, RerunGuidance, and (Step 66) the digest sections that
+//     synced label, RerunGuidance, and (§26.1) the digest sections that
 //     now front the appendix findings/coverage/docs-drift content.
 //   - digest.go: Digest, ArchDecision -- §26.1's own merge-readout
 //     content (§26.1): "what this PR does", architecture choices, and

@@ -104,7 +104,7 @@ var emptyReviseFeedbackReplyText = fmt.Sprintf(
 // Deps bundles every dependency NewWebhookHandler needs -- a plain struct
 // (rather than 10+ positional constructor parameters) since this handler
 // genuinely needs this many collaborators: the webhook toolkit pieces
-// (Step 31), the full session-creation path (CreateSessionCore), the
+// (§5.1), the full session-creation path (CreateSessionCore), the
 // Linear-specific dedupe/installation stores, and the outbound client.
 type Deps struct {
 	Pool          *pgxpool.Pool

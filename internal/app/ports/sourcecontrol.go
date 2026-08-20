@@ -746,7 +746,7 @@ type MergePRSpec struct {
 }
 
 // SourceControl is the port that creates a pull request against a source-
-// control host (§4.3). internal/adapters/outbound/githubapi (Step 21) is
+// control host (§4.3). internal/adapters/outbound/githubapi (§9.3) is
 // the first real implementation; internal/adapters/outbound/gitlabapi
 // remains an untouched stub -- this port exists specifically so a future
 // GitLab implementation can satisfy the SAME interface (CLAUDE.md: "don't

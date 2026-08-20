@@ -31,7 +31,7 @@ type CreateArtifactParams struct {
 // the first real artifact-minting caller anywhere in this codebase
 // (app/sessionactor's own createPRBestEffort records a "pr"-typed artifact
 // once SourceControl.CreatePR succeeds, see pushpr.go) -- previews (Step
-// 48) and uploads (Step 49) remain the only artifact_type values with no
+// 48) and uploads (§14.4) remain the only artifact_type values with no
 // Create caller yet.
 func (q *Queries) CreateArtifact(ctx context.Context, arg CreateArtifactParams) (Artifact, error) {
 	row := q.db.QueryRow(ctx, createArtifact,

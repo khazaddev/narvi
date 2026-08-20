@@ -8,7 +8,7 @@ import "github.com/khazaddev/narvi/internal/domain/review"
 // actual GitHub PR review rather than a comment". Deliberately only two
 // of GitHub's three real event values are ever produced here: APPROVE is
 // never returned by ComputeFormalReviewEvent below, on purpose -- §21.2's
-// criteria-driven auto-approval eligibility engine (Step 58) is the
+// criteria-driven auto-approval eligibility engine (§8.6) is the
 // future, dedicated machinery for approving a PR; this Step never
 // approves anything itself (IMPLEMENTATION_PLAN.md's own Step 47 row:
 // "auto-approval is criteria-driven, never label-triggered... the

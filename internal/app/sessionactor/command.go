@@ -53,7 +53,7 @@ type TimerFired struct {
 func (TimerFired) isCommand() {}
 
 // SandboxEvent is delivered by internal/adapters/inbound/wshub's sandbox
-// WS read loop (Step 18) for every inbound frame on a sandbox's live
+// WS read loop (§3.2) for every inbound frame on a sandbox's live
 // connection, once that connection's own handshake-time gen has already
 // been validated (§6.1: "403 on id/gen mismatch" is enforced at connect
 // time; this per-message Gen is the SEPARATE per-message half of §3.2's

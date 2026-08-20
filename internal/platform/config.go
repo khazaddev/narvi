@@ -559,7 +559,7 @@ const (
 
 // linearDefaultRepoNameEnvVarName and linearDefaultRepoURLEnvVarName name
 // the single repo a Linear-originated session's Repos field is populated
-// with (both required, no default). Scope note (Step 34): Linear's own
+// with (both required, no default). Scope note (§8.10): Linear's own
 // AgentSessionEvent webhook payload carries no repository information at
 // all (confirmed against Linear's real schema during this Step's
 // investigation — an agent is expected to either already know its own

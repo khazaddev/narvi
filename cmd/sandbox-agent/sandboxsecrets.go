@@ -1,7 +1,7 @@
 // This file (sandboxsecrets.go) implements §27.1's own ("sandbox
 // secrets & opencode config", §27.1) sandbox-agent-side FETCH +
 // INJECTION-ENV-BUILDING of general sandbox_secrets, mirroring main.go's
-// own fetchProviderCredentials/providerCredentialSpawnEnv split (Step 53)
+// own fetchProviderCredentials/providerCredentialSpawnEnv split (§25.1)
 // exactly in spirit, adapted to this feature's own "thread into EVERY
 // spawned process" requirement rather than opencode serve alone.
 //

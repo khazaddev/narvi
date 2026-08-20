@@ -63,7 +63,7 @@ func TopRiskDrivers(ctx context.Context, deps Deps, repoFullName string, now tim
 }
 
 // FindingOutcomes computes repoFullName's own §21.1/§12.2 item 6
-// "Review finding outcomes" KPI, read from review_findings (Step 48) --
+// "Review finding outcomes" KPI, read from review_findings (§8.2) --
 // see internal/domain/reviewverdict.FindingOutcomes' own doc comment for
 // why this reads a DIFFERENT table than Timeseries/TopRiskDrivers above.
 func FindingOutcomes(ctx context.Context, deps Deps, repoFullName string, now time.Time) ([]reviewverdict.FindingStatusCount, bool, error) {

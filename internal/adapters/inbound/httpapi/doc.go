@@ -66,7 +66,7 @@
 //     back the session's own created_by user's GitHub OAuth access token
 //     as a git-over-https credential (§5.2). This is the control-plane
 //     side of the wire contract internal/sandboxagent/credentials.
-//     CPClient (Step 15) already built and tested the client side of.
+//     CPClient (§6.4) already built and tested the client side of.
 //
 // # §3.2 ("snapshots & restore") updates
 //

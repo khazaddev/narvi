@@ -188,7 +188,7 @@ func (a *Actor) enqueueOutboxNotification(ctx context.Context, tx pgx.Tx, sessio
 	case sqlcgen.SessionSpawnSourceGithub:
 		// §8.2 ("server-side verdict", §8.2/§5.2) RAW-COMMENT BLOCKING:
 		// a github-origin session is, by construction, a review session --
-		// github_pr_sessions (Step 32) is the ONLY mechanism that ever
+		// github_pr_sessions (§8.2) is the ONLY mechanism that ever
 		// creates one (internal/adapters/inbound/github/doc.go). Before
 		// this Step, EVERY turn completion on such a session posted this
 		// generic, system-synthesized outcomeText string ("Turn completed

@@ -5776,7 +5776,7 @@ func (j *ReviewAnalytics) UnmarshalJSON(value []byte) error {
 
 // One review_findings row's own REST wire shape
 // (migrations/000046_review_findings.up.sql) -- returned by the rebut and
-// apply-suggestion endpoints (Step 48) so a caller can confirm the resulting
+// apply-suggestion endpoints (§8.2) so a caller can confirm the resulting
 // state.
 type ReviewFinding struct {
 	// Description corresponds to the JSON schema field "description".
@@ -6779,7 +6779,7 @@ func (j *UpdateProviderCredentialRequest) UnmarshalJSON(value []byte) error {
 
 // Request body for PUT /api/repos/{owner}/{repo}/settings -- always the full,
 // current desired state (never a partial patch), matching RepoSettings' own shape.
-// sentinelAutofixEnabled (Step 48) is deliberately OPTIONAL, not required, exactly
+// sentinelAutofixEnabled (§8.2) is deliberately OPTIONAL, not required, exactly
 // like every other additive field this schema has ever grown (e.g.
 // CreateSessionRequest.buildModelId) -- an old caller that only ever knew about
 // blockOnHighRisk keeps compiling/working unchanged; PutRepoSettings' own 'always

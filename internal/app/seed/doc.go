@@ -122,7 +122,7 @@
 //     yet" -- that file's own doc comment) -- making this tool the
 //     first real way to populate it.
 //
-//   - cloud_identity_bindings / cluster_bindings (Step 73) are also out
+//   - cloud_identity_bindings / cluster_bindings (§27.3) are also out
 //     of scope: both are environment-or-global scoped, and the
 //     environment half of that inherits the exact same "no standalone
 //     Environment" gap above; a global-only subset would be an

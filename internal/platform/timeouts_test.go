@@ -698,7 +698,7 @@ func TestDefaultTimeouts_Step35StandaloneFields(t *testing.T) {
 // populated with a sensible default, does not disturb either invariant
 // chain, and is genuinely much tighter than SlackAckTimeout -- the specific
 // property this field exists to fix (a confirmed adversarial-review
-// finding): SlackAckTimeout (Step 33) was sized for the Events API's own
+// finding): SlackAckTimeout (§8.10) was sized for the Events API's own
 // in-thread ack, a completely different and much less time-pressured
 // budget than Slack's real interactivity payload ack window (a hard ~3s),
 // so reusing it for the interactivity path silently permitted the handler

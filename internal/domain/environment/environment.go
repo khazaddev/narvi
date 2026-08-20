@@ -20,7 +20,7 @@ type Environment struct {
 	PathScope []string
 
 	// DockerRequired is §27.5's per-Environment "docker: required" flag
-	// (Step 74). false is the ordinary, unchanged-behavior default. A
+	// (§27.5). false is the ordinary, unchanged-behavior default. A
 	// true value is assumed to have already passed the fail-closed
 	// provider-capability check both call sites run independently
 	// (httpapi.CreateSessionCore at session-creation time,
@@ -29,7 +29,7 @@ type Environment struct {
 	// CheckSubstrateCapabilities.
 	DockerRequired bool
 
-	// EgressPolicy is §27.6's per-Environment egress_policy (Step 74). Its
+	// EgressPolicy is §27.6's per-Environment egress_policy (§27.5). Its
 	// zero value (Mode == "") means "no policy attached to this
 	// Environment" -- today's unchanged, unrestricted behavior. A non-zero
 	// value is assumed to have already passed ValidateEgressPolicy;

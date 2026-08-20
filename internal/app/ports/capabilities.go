@@ -7,7 +7,7 @@ package ports
 // provider implements every operation identically.
 //
 // Example split (§3.2): Modal is the snapshot-based provider ("restore =
-// new gen") and reports Resume: false; RWX (Step 57) is the second real
+// new gen") and reports Resume: false; RWX (§4.1) is the second real
 // SandboxProvider implementation — it also reports Resume: false today,
 // pending the empirical stop→start state-preservation verification
 // §4.1.3 names as §4.1's own first exit criterion (see

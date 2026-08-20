@@ -13,7 +13,7 @@ import (
 // EventStore is a thin, pass-through wrapper around the sqlc-generated
 // events queries (§4.3, §6.1's append-only per-session event log). No
 // caching, no retries, no business rules — appending an event as part of
-// a state transition is app/sessionactor's job (Step 11+), always inside
+// a state transition is app/sessionactor's job (§2), always inside
 // that transition's own transaction (§2: "state transition + appended
 // event + outbox entries commit in ONE Postgres transaction"). Reading
 // back a page of that log (ListForSession, Step 19) has no such

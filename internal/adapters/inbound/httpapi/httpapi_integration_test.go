@@ -453,7 +453,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		// (unconfigured) -- no test in this package needs a specific
 		// deep-tier model id, only the depth decision itself.
 		r.Post("/{sessionID}/review/retrigger", httpapi.RetriggerReview(rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, rig.prSessions, rig.diffFetcher, rig.reviewFindings, rig.falsePositivePatterns, rig.botToken, platform.DefaultTimeouts(), appreviewtriage.Deps{RepoSettings: rig.repoSettings, ReviewVerdicts: rig.reviewVerdicts}, ""))
-		// review/findings/{identityHash}/rebut + apply-suggestion (Step 48)
+		// review/findings/{identityHash}/rebut + apply-suggestion (§8.2)
 		// -- see reviewfindings.go's own doc comment.
 		r.Post("/{sessionID}/review/findings/{identityHash}/rebut", httpapi.RebutReviewFinding(rig.sessions, rig.prSessions, rig.reviewFindings, rig.auditLog))
 		r.Post("/{sessionID}/review/findings/{identityHash}/apply-suggestion", httpapi.ApplySuggestion(rig.sessions, rig.prSessions, rig.reviewFindings, rig.identities, rig.sourceControl, rig.tokenEncryptionKey, platform.DefaultTimeouts()))
@@ -553,7 +553,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
 		r.Post("/{runId}/steps/{stepRunId}/decide", httpapi.DecideWorkflowStep(rig.pool, rig.sessions, rig.turns, rig.participants, rig.workflows, rig.slackThreadSession, rig.linearAgentSessions, rig.prSessions, rig.outbox, rig.registry, false))
 	})
-	// /api/repos/{owner}/{repo}/settings (Step 47) -- mounted behind
+	// /api/repos/{owner}/{repo}/settings (§8.2) -- mounted behind
 	// auth.Middleware, exactly like cmd/control-plane/main.go's own wiring
 	// (see reposettings.go's own doc comment).
 	//
@@ -670,7 +670,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Put("/{credentialID}", httpapi.UpdateGlobalProviderCredentialValue(rig.providerCredentials, rig.tokenEncryptionKey))
 		r.Delete("/{credentialID}", httpapi.DeleteGlobalProviderCredential(rig.providerCredentials))
 	})
-	// provider-credentials delivery (Step 53) is mounted the SAME way as
+	// provider-credentials delivery (§25.1) is mounted the SAME way as
 	// scm-credentials -- see providercredentialsdelivery.go's own doc
 	// comment.
 	router.Post("/sessions/{sessionID}/provider-credentials",

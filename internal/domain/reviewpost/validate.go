@@ -304,7 +304,7 @@ var (
 // Digest.DescriptionAdequacy, Digest.AdequacyExplanation, FactCheck/
 // FactCheckKilled (§26.6, unconditional), Digest.ArchDecisions/
 // StackRisks/UnverifiedLimits/CounterReview (§26.4, ONLY when
-// in.ReviewDepth == reviewtriage.DepthDeep), Findings (Step 48), and --
+// in.ReviewDepth == reviewtriage.DepthDeep), Findings (§8.2), and --
 // hardening, G3, LAST of all -- the seven digest length caps
 // (Digest.Summary/AdequacyExplanation/StackRisks/UnverifiedLimits/
 // ProposedBody/ContestedPoints/each ArchDecision field, unconditional on

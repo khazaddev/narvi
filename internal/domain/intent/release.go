@@ -7,7 +7,7 @@ import "path"
 // it matches a configurable pattern: originates from/targets a
 // release/* branch, or carries a release label." Pure per §11.
 //
-// Unlike review-vs-request/plan-vs-build (Step 36), release-vs-feature
+// Unlike review-vs-request/plan-vs-build (§8.3), release-vs-feature
 // has an EXHAUSTIVE, deterministic answer for every PR: a branch name
 // and label set are always available, with no free-text ambiguity case
 // anywhere in the spec the way an @mention's own prose can be ambiguous.

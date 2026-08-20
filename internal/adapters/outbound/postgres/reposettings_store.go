@@ -181,7 +181,7 @@ func (s *RepoSettingsStore) UpsertReviewDepthConfig(ctx context.Context, repoFul
 }
 
 // UpsertReviewCostBudget writes this repo's own §26.7 cost-ceiling config
-// (Step 69) -- lightUSD/deepUSD nil means "use the engine's own built-in
+// (§26.4) -- lightUSD/deepUSD nil means "use the engine's own built-in
 // default", persisted as a genuine SQL NULL (Float64ToNumeric below),
 // mirroring UpsertReviewDepthConfig's own identical nil-means-default
 // convention immediately above.

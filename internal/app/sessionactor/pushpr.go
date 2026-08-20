@@ -463,7 +463,7 @@ func (a *Actor) sendPushBestEffort(sessionID string, sig *pushSignal) {
 // own creator's decrypted GitHub OAuth token, and record each success as
 // an artifact row (type "pr") -- the ONLY durable place a created PR's
 // URL/number is ever written. This is deliberately what makes it visible
-// to a client: GET /api/sessions/{id}/artifacts (Step 19) and the client
+// to a client: GET /api/sessions/{id}/artifacts (§6.2) and the client
 // WS hub's own SubscribedPayload.artifacts (§6.2) already exist and
 // already read this exact table -- no new wire contract is invented here.
 //

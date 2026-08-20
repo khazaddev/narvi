@@ -1,5 +1,5 @@
 // This file (egresspolicy.go) implements §27.6's per-Environment
-// egress_policy {mode: open|allowlist, allowlist} (Step 74) -- the
+// egress_policy {mode: open|allowlist, allowlist} (§27.5) -- the
 // enforced half of §27.6's egress design. The cooperative half
 // (HTTP_PROXY/HTTPS_PROXY/NO_PROXY, §27.1's own sandbox_secrets
 // mechanism) has no domain type of its own here: it is pure env-var

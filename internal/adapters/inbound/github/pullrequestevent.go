@@ -4,7 +4,7 @@
 // closing. §24.1 already documents (independently of this Step) that
 // "nothing in this codebase today parses GitHub's pull_request event at
 // all" -- eventTypePullRequest (payload.go) is used ONLY for the
-// action=="labeled" manual re-trigger lane (Step 46) before this Step;
+// action=="labeled" manual re-trigger lane (§8.2) before this Step;
 // this file adds the SAME event type's action=="closed" case, exactly
 // the "one generic pull_request handler, switching on action" shape this
 // Step's own design recommends so a later Step (61, action=="synchronize")

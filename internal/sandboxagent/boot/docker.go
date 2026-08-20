@@ -1,5 +1,5 @@
 // This file (docker.go) implements §27.5's own in-sandbox half of
-// Docker-in-sandbox (Step 74): "sandbox-agent supervises dockerd as one
+// Docker-in-sandbox (§27.5): "sandbox-agent supervises dockerd as one
 // more entry in the same process-supervision table as everything else
 // (§14.2's own 'no new supervision code path' rule), with a named
 // boot_progress phase; the CLI/engine binaries come from the toolchain

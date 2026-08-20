@@ -120,7 +120,7 @@ func (rig identityTestRig) post(t *testing.T, body []byte, deliveryID string) in
 
 // createLinkedUser creates a Narvi user with role, and a matching "github"
 // identities row for commenterID -- the direct (provider, external_id)
-// link a real GitHub OAuth sign-in would have already produced (Step 20),
+// link a real GitHub OAuth sign-in would have already produced (§13.1),
 // which is exactly what resolveCommenterActor (identity.go) looks up.
 func (rig identityTestRig) createLinkedUser(t *testing.T, commenterID int64, role sqlcgen.UserRole) sqlcgen.User {
 	t.Helper()
@@ -180,7 +180,7 @@ func issueCommentBodyWithCommenter(repoFullName, repoName, cloneURL string, prNu
 // own regression test for the H4 audit finding: a mention from a GitHub
 // commenter who IS already linked to a Narvi account, but that account is
 // disabled, must NOT create a session -- exactly like a disabled user's
-// Slack/Linear mention is already denied (Step 39), and exactly like
+// Slack/Linear mention is already denied (§13.2), and exactly like
 // auth.Middleware's own Authenticate already rejects that SAME disabled
 // user's web session outright.
 func TestGitHubIntegration_MentionDeniedForDisabledCommenter(t *testing.T) {

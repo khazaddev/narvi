@@ -41,7 +41,7 @@
 //   - A standalone execution-timeout check ("how long can a turn run") is
 //     already Chain A in platform/timeouts.go (ProviderHardCap >
 //     SupervisorTurnCap > TurnDeadline > SSEInactivityTimeout, §5.4) — the
-//     turn domain's concern (Step 08), not sandbox's.
+//     turn domain's concern (§3.1), not sandbox's.
 //   - An in-flight-silence backstop is superseded by Narvi's own two-phase
 //     terminalization + late-success reconciliation (§3.2: a genuinely late
 //     success "reconciles: turn marked completed, session status re-derived,

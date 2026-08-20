@@ -201,7 +201,7 @@ const (
 	// eligibility CONFIG (repo_settings.max_auto_approve_files_changed/
 	// sensitive_blast_radius_tags, migrations/000069_repo_settings_auto_
 	// approval.up.sql -- internal/adapters/inbound/httpapi/reposettings.go's
-	// own PutRepoSettings). Originally reserved (Step 47) for a label-
+	// own PutRepoSettings). Originally reserved (§8.2) for a label-
 	// driven auto-approve rule config that §21.2 supersedes
 	// entirely -- see internal/domain/review's own doc comment on why
 	// auto-approval is now a deterministic, criteria-driven engine with
@@ -230,7 +230,7 @@ const (
 	// already establish for a maintainer-level review-adjacent write.
 	ActionTeachFalsePositivePattern Action = "teach_false_positive_pattern"
 	// ActionManageFalsePositivePatterns covers §22.4's own lifecycle
-	// surface (Step 63): retiring an already-taught pattern and reading
+	// surface (§22): retiring an already-taught pattern and reading
 	// the per-repo audit view (list every pattern, active or retired) --
 	// ONE action gating both, mirroring ActionManageMembers' own
 	// identical "one action gates every read+write endpoint of this

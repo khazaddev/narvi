@@ -53,7 +53,7 @@ import (
 // step-run/turn writes must all land atomically with whatever triggered
 // them (a turn completing, a human's decide-endpoint call).
 type Deps struct {
-	// Workflows is the engine's own pre-existing dependency (Step 55) --
+	// Workflows is the engine's own pre-existing dependency (§25.6) --
 	// every workflow_runs/workflow_step_runs read/write in this package
 	// goes through it.
 	Workflows *postgres.WorkflowStore

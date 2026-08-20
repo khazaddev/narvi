@@ -32,7 +32,7 @@ var ErrNoLiveSandboxConnection = errors.New("ports: no live sandbox connection f
 // inbound wshub adapter, app depends on the port, never the adapter"
 // direction exactly (see eventbroadcaster.go).
 //
-// internal/adapters/inbound/wshub's own SandboxRegistry (Step 21) is the
+// internal/adapters/inbound/wshub's own SandboxRegistry (§9.3) is the
 // only implementation today: a session has AT MOST ONE live sandbox
 // connection at a time (unlike the client-hub's own potentially-many-
 // browser-tabs case EventBroadcaster.Broadcast fans out to), so this is a

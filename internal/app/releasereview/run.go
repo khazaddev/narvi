@@ -41,7 +41,7 @@
 // trigger -- "a PR was just created by a scoped session" -- can fire
 // multiple times for the same PR across retried/resumed turns), this
 // package's one real caller only ever runs on session CREATION, and
-// github_pr_sessions' own per-PR atomic claim (Step 32) already
+// github_pr_sessions' own per-PR atomic claim (§8.2) already
 // guarantees at most one winner ever creates a session for a given PR --
 // so at most one call to Enqueue (and, transitively, at most one call to
 // Run) ever happens per release PR, structurally, with no separate claim

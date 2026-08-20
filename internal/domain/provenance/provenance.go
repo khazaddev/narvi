@@ -54,7 +54,7 @@ package provenance
 // value:
 //
 //  1. §14.1's own label-automation intent (not built by any Step so far).
-//  2. §14.4's own handoff-readiness sentinel (Step 49): sessionactor's own
+//  2. §14.4's own handoff-readiness sentinel (§14.4): sessionactor's own
 //     runHandoffSentinelBestEffort (handoffsentinel.go) checks this tag on
 //     the session that just created a PR before doing ANY further work --
 //     an ordinary (nil-tagged) session's PR is completely untouched, no

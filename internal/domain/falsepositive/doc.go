@@ -27,7 +27,7 @@
 // Deliberately its own package, not a further extension of internal/
 // domain/review or internal/domain/reviewpost: this is a third, distinct
 // concept from either -- review.Verdict is the structured verdict a
-// review session produces (Step 45), reviewpost.Finding is one verdict's
+// review session produces (§8.2), reviewpost.Finding is one verdict's
 // own per-finding content-anchored identity/position (§22.1/§22.1.1,
 // Step 48/63) -- a maintainer-taught PATTERN is neither; it is standing,
 // repo-scoped guidance that exists independently of any single verdict or
