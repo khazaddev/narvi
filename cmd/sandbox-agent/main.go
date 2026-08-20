@@ -742,15 +742,26 @@ func (*commandHandler) HandleGitSyncComplete(_ context.Context, cmd sandboxws.Gi
 // setupSandboxAgentOTel wires this binary's own global OTel MeterProvider
 // (and TracerProvider) exactly the way cmd/control-plane/main.go's serve()
 // already does, via the SAME platform.SetupOTel bootstrap -- this binary was
-// the one production caller that never did (§5.3's own "day one, not later"
-// gap this Step closes for sandbox-agent's own
-// sandbox_agent_hook_rerun_duration_seconds histogram, §19.5(b)).
+// the one production caller that never did (§5.3's own "day one, not
+// later" gap this Step closed).
 //
 // A TracerProvider is registered alongside the MeterProvider (platform.
 // SetupOTel always sets up both together, matching control-plane's own
 // identical call) even though nothing in this binary emits a span today --
 // exactly control-plane's own "bootstrap only, no instruments defined here"
 // scope note, unchanged for this binary.
+//
+// No instrument THIS BINARY owns records through either provider today:
+// §33.3 deleted sandbox-agent's last two local histogram files
+// (internal/sandboxagent/boot/telemetry.go, internal/sandboxagent/
+// gitclone/telemetry.go) and replaced the four data points they used to
+// record with a best-effort boot_timing event relayed over the WS bridge --
+// the control plane does the recording now (internal/app/sessionactor/
+// opsmetrics.go), not this process. This call stays anyway, and that is
+// deliberate, not a leftover: see the otlpEndpoint paragraph below for why
+// installing a REAL (not no-op) MeterProvider/TracerProvider here is
+// load-bearing on its own, independent of any histogram this binary itself
+// records.
 //
 // serviceName is fixed ("narvi-sandbox-agent") rather than parameterized:
 // there is exactly one production caller (run(), below) and no reason for a
@@ -767,15 +778,38 @@ func (*commandHandler) HandleGitSyncComplete(_ context.Context, cmd sandboxws.Gi
 // allowlist floor (allowlistFloorHosts) admits the control-plane host plus
 // the session's git hosts and nothing else, so a collector would not even
 // be reachable if this call somehow acquired one -- but the point is this
-// call site can never acquire one in the first place, by construction, not
-// merely by the network refusing it downstream.
+// call site must never acquire one in the first place. A bare "" literal
+// is not enforced by the compiler or the type system, so
+// main_test.go's own TestSetupSandboxAgentOTel_PassesEmptyEndpoint pins
+// it at the boundary that actually matters: it intercepts the exact
+// otlpEndpoint value THIS call passes to platform.SetupOTel (via the
+// setupOTelFn indirection below) and fails if any future edit threads a
+// non-empty one in -- e.g. wiring cfg.OTLPEndpoint here to give
+// sandbox-agent its own collector would compile, and would pass
+// TestSetupSandboxAgentOTel_InstallsRealMeterProvider below unchanged, but
+// would fail that pin. THIS is §33.4's real anchor and the actual reason
+// setupOTelFn is still called here for a real, working provider even
+// though no in-process instrument uses it today: a future sandbox-side
+// instrument then attaches to a live MeterProvider immediately, with the
+// endpoint already pinned empty, rather than either silently landing on
+// the global no-op (as this binary's own now-deleted instruments once
+// did) or reopening "should this thread config in" as a live question
+// this pin has already answered.
 //
 // Factored out of run() specifically so it is unit-testable in isolation
 // (see main_test.go's own TestSetupSandboxAgentOTel_InstallsRealMeterProvider):
 // run() itself blocks on OS signals / a live WS bridge / a real opencode
 // spawn, none of which this seam needs or touches.
+//
+// setupOTelFn is platform.SetupOTel, indirected through a package-level
+// var purely so main_test.go can intercept the arguments THIS call
+// actually passes without touching the real global OTel SDK state --
+// production code never reassigns it; it is exactly platform.SetupOTel at
+// every real call.
+var setupOTelFn = platform.SetupOTel
+
 func setupSandboxAgentOTel(ctx context.Context) (shutdown func(context.Context) error, err error) {
-	return platform.SetupOTel(ctx, "narvi-sandbox-agent", "")
+	return setupOTelFn(ctx, "narvi-sandbox-agent", "")
 }
 
 // shutdownSandboxAgentOTel bounds one call to shutdown (setupSandboxAgentOTel's
@@ -798,9 +832,14 @@ func setupSandboxAgentOTel(ctx context.Context) (shutdown func(context.Context) 
 // Shutdown are flushing, the underlying write blocks synchronously -- with
 // no bound of its own, that hangs sandbox teardown indefinitely, past
 // whatever grace period the orchestrator expects, and a subsequent
-// force-kill would then discard the still-unflushed metrics (including
-// this batch's own hook-rerun-duration histogram) anyway, defeating the
-// point of flushing at all.
+// force-kill would then discard whatever this flush had not yet gotten out
+// anyway, defeating the point of flushing at all -- true of batch B7's own
+// original hook-rerun-duration histogram back when this reasoning was
+// written, and unchanged in shape now that §33.3 has deleted that
+// histogram and this binary registers no sandbox-side instrument of its
+// own: the same bound still protects whatever a future instrument records
+// here, and today it protects nothing but the timing of an already-empty
+// flush.
 //
 // §33 gave control-plane's own identical-looking call this SAME bound
 // (cmd/control-plane/main.go's shutdownControlPlaneOTel) once an OTLP
@@ -956,30 +995,36 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// §5.3 "day one, not later": sandbox-agent's own hook-rerun-duration
-	// histogram (internal/sandboxagent/boot's recordHookRerunDuration,
-	// §19.5(b)) has, until now, recorded against the no-op global
-	// MeterProvider every process starts with by default -- cmd/control-
-	// plane/main.go is the only caller of platform.SetupOTel today, so this
-	// binary's own metric reached no collector at all. Wired here, exactly
-	// mirroring control-plane's own bootstrap precedent (same function, same
+	// §5.3 "day one, not later": cmd/control-plane/main.go used to be the
+	// ONLY caller of platform.SetupOTel, so this binary ran its entire
+	// life against the no-op global MeterProvider/TracerProvider every
+	// process starts with by default. Wired here, exactly mirroring
+	// control-plane's own bootstrap precedent (same function, same
 	// shutdown/flush shape) -- see this call's own deferred shutdown below
-	// for why that shape (not just construction) is load-bearing.
+	// for why that shape (not just construction) is load-bearing, and
+	// setupSandboxAgentOTel's own doc comment for why a REAL provider is
+	// installed at all when this binary owns no instrument today (§33.4:
+	// it is the anchor for "sandbox-agent never reaches a collector", not
+	// a histogram).
 	//
 	// Registered BEFORE sup/opencodeproc/gitclone/boot.RunBoot ever run:
-	// boot's own hookRerunDurationHistogram resolves LAZILY, via
-	// sync.OnceValue, against whatever MeterProvider is globally registered
-	// the FIRST time a hook actually runs (telemetry.go's own doc comment) --
-	// this call must land before that first use, and runBootSequence (the
-	// earliest possible hook run) happens well after this point in run().
+	// whatever hook-timing/git-timing data those produce is relayed to the
+	// control plane over the WS bridge (onHookRerunTiming/onGitSync below),
+	// never recorded against a local OTel instrument -- there is no
+	// lazily-resolved histogram in this process for this ordering to
+	// protect. Registered first anyway, as early as practical, so that a
+	// future sandbox-side instrument (should one ever get added here)
+	// finds a working MeterProvider already installed rather than racing
+	// its own first use against this call.
 	//
 	// Factored into its own tiny function (setupSandboxAgentOTel, below)
 	// rather than inlined here, specifically so it is unit-testable in
 	// isolation: run() itself is not (it blocks on OS signals / a live WS
 	// bridge / a real opencode spawn), but this seam alone is exactly the
-	// piece this Step's own audit finding is about ("cmd/sandbox-agent never
-	// calls platform.SetupOTel") -- see main_test.go's own
-	// TestSetupSandboxAgentOTel_InstallsRealMeterProvider.
+	// piece §5.3's original audit finding was about ("cmd/sandbox-agent
+	// never calls platform.SetupOTel") -- see main_test.go's own
+	// TestSetupSandboxAgentOTel_InstallsRealMeterProvider and
+	// TestSetupSandboxAgentOTel_PassesEmptyEndpoint.
 	shutdownOTel, err := setupSandboxAgentOTel(ctx)
 	if err != nil {
 		return fmt.Errorf("sandbox-agent: setup otel: %w", err)
