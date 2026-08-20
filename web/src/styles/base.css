@@ -1,0 +1,121 @@
+/*
+ * Base resets + the handful of truly generic primitives this bootstrap
+ * needs (an eyebrow label and a pill-shaped button, both copied from
+ * docs/design/mockups.html's own `.eyebrow`/`.tab` rules) for the
+ * boot screen and the theme toggle. Deliberately NOT a port of the
+ * mockups' full stylesheet -- this bootstrap ships no real views, so only
+ * the tokens (tokens.css) and these two shared primitives exist yet. A
+ * future view styles itself from ./tokens.css directly rather than
+ * growing this file into a second, competing component library.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: var(--text-md);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* docs/design/mockups.html .eyebrow */
+.eyebrow {
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 var(--space-5);
+}
+
+/* docs/design/mockups.html .tab / .tab.active */
+.pill-button {
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--muted);
+  border-radius: var(--radius-pill);
+  padding: var(--space-3) var(--space-8);
+  font-size: var(--text-base-sm);
+  font-weight: 600;
+  font-family: var(--sans);
+  cursor: pointer;
+}
+
+.pill-button:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.pill-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.pill-button[aria-pressed='true'] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--surface);
+}
+
+/* Bootstrap-only app shell -- a placeholder header/body wrapper, not one of
+   the nine mockup views (docs/design/mockups.html). The real views that
+   follow this bootstrap replace the contents of <main>; this shell
+   (header, theme toggle placement) is expected to survive into the real
+   app largely as-is, since none of the nine views' own layouts include a
+   second header of their own. */
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-6) var(--space-9);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.app-header .wordmark {
+  font-weight: 600;
+  font-size: var(--text-lg);
+}
+
+.app-main {
+  flex: 1;
+}
+
+.boot-screen {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: var(--space-12) var(--space-9);
+}
+
+.boot-screen h1 {
+  font-size: var(--text-2xl);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0 0 var(--space-5);
+}
+
+.boot-screen p.body {
+  color: var(--muted);
+  font-size: var(--text-xl);
+  max-width: 66ch;
+  margin: 0;
+}

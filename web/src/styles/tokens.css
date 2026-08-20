@@ -1,0 +1,176 @@
+/*
+ * Design tokens (§12.1: "light/dark via CSS custom properties,
+ * prefers-color-scheme + explicit toggle"). Every color/shadow/font value
+ * below is copied VERBATIM from docs/design/mockups.html's own `:root`,
+ * `@media (prefers-color-scheme: dark)`, `:root[data-theme="light"]`, and
+ * `:root[data-theme="dark"]` blocks (that file's <style>, lines 3-52 at the
+ * time this was extracted) -- never invented independently of the visual
+ * spec (§12's own "resolve against the mockups" rule extends to tokens, not
+ * just layout). Verified by a byte-for-byte diff of the four blocks below
+ * against the mockup's own four blocks -- run that comparison again after
+ * any future mockups.html edit, since nothing here re-derives these values
+ * automatically.
+ *
+ * The mockups define the SAME four values twice on purpose: once keyed by
+ * `prefers-color-scheme` (the system default) and once again, identically,
+ * keyed by an explicit `data-theme` attribute (the toggle override) -- so
+ * the override always renders pixel-identical to what the system default
+ * would have shown for the same choice. src/lib/theme.ts is what sets/
+ * clears `data-theme` on <html>; this file only defines what each state
+ * looks like.
+ */
+
+:root {
+  --ground: #f2f6f5;
+  --surface: #ffffff;
+  --surface-2: #eaf0ee;
+  --ink: #17221f;
+  --muted: #5c6b67;
+  --faint: #8ca09a;
+  --line: #dce5e2;
+  --line-strong: #c4d2cd;
+  --accent: #0e7c6b;
+  --accent-soft: #e0efec;
+  --accent-ink: #0a5a4e;
+  --ok: #2e7d5b;
+  --ok-soft: #e1f0e8;
+  --warn: #9a6b12;
+  --warn-soft: #f5ebd6;
+  --crit: #b0402f;
+  --crit-soft: #f6e3df;
+  --neutral: #5f6f6b;
+  --neutral-soft: #e7ecea;
+  --shadow: 0 1px 2px rgba(23, 34, 31, 0.05), 0 8px 28px rgba(23, 34, 31, 0.08);
+  --mono: 'SF Mono', ui-monospace, 'Cascadia Mono', 'JetBrains Mono', Menlo, monospace;
+  --sans: 'Avenir Next', Seravek, 'Segoe UI', system-ui, sans-serif;
+}
+
+/* System default (no explicit choice made yet, or "system" chosen
+   explicitly -- see theme.ts's own applyTheme: both states mean "no
+   data-theme attribute on <html>"). */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground: #0d1413;
+    --surface: #151e1c;
+    --surface-2: #1b2624;
+    --ink: #e3ece9;
+    --muted: #93a5a0;
+    --faint: #667873;
+    --line: #243230;
+    --line-strong: #32423f;
+    --accent: #3fb89f;
+    --accent-soft: #173129;
+    --accent-ink: #7dd8c3;
+    --ok: #46b380;
+    --ok-soft: #14291f;
+    --warn: #d9a544;
+    --warn-soft: #2e2412;
+    --crit: #e06a5e;
+    --crit-soft: #331813;
+    --neutral: #8fa09b;
+    --neutral-soft: #1f2a28;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 10px 32px rgba(0, 0, 0, 0.4);
+  }
+}
+
+/* Explicit toggle overrides -- win over prefers-color-scheme in BOTH
+   directions (§12.1), e.g. --theme="light" still applies even on a
+   dark-mode OS. */
+:root[data-theme='light'] {
+  --ground: #f2f6f5;
+  --surface: #ffffff;
+  --surface-2: #eaf0ee;
+  --ink: #17221f;
+  --muted: #5c6b67;
+  --faint: #8ca09a;
+  --line: #dce5e2;
+  --line-strong: #c4d2cd;
+  --accent: #0e7c6b;
+  --accent-soft: #e0efec;
+  --accent-ink: #0a5a4e;
+  --ok: #2e7d5b;
+  --ok-soft: #e1f0e8;
+  --warn: #9a6b12;
+  --warn-soft: #f5ebd6;
+  --crit: #b0402f;
+  --crit-soft: #f6e3df;
+  --neutral: #5f6f6b;
+  --neutral-soft: #e7ecea;
+  --shadow: 0 1px 2px rgba(23, 34, 31, 0.05), 0 8px 28px rgba(23, 34, 31, 0.08);
+}
+
+:root[data-theme='dark'] {
+  --ground: #0d1413;
+  --surface: #151e1c;
+  --surface-2: #1b2624;
+  --ink: #e3ece9;
+  --muted: #93a5a0;
+  --faint: #667873;
+  --line: #243230;
+  --line-strong: #32423f;
+  --accent: #3fb89f;
+  --accent-soft: #173129;
+  --accent-ink: #7dd8c3;
+  --ok: #46b380;
+  --ok-soft: #14291f;
+  --warn: #d9a544;
+  --warn-soft: #2e2412;
+  --crit: #e06a5e;
+  --crit-soft: #331813;
+  --neutral: #8fa09b;
+  --neutral-soft: #1f2a28;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 10px 32px rgba(0, 0, 0, 0.4);
+}
+
+/*
+ * Type scale and spacing/radius scale: NOT declared as their own CSS
+ * variables in the mockups (that file hard-codes each value per class), so
+ * these are extracted by cataloguing every distinct value actually used
+ * across docs/design/mockups.html's <style> block and naming the resulting
+ * set -- not invented independently, but not a copy-paste of an existing
+ * token block either, since the mockups never built one. The real views
+ * that follow this bootstrap should use these rather than hard-coding a
+ * font-size/spacing/radius literal again, so the set stays the single
+ * place either scale can be checked against the visual spec.
+ */
+:root {
+  /* Font sizes, smallest to largest -- every distinct font-size found in
+     mockups.html, e.g. --text-2xs is .side-label/.rtable th's 10px,
+     --text-2xl is h1's 30px. */
+  --text-2xs: 10px;
+  --text-xs: 10.5px;
+  --text-sm: 11px;
+  --text-sm-alt: 11.5px;
+  --text-base-sm: 12px;
+  --text-base: 12.5px;
+  --text-md: 13px;
+  --text-lg: 14px;
+  --text-xl: 15.5px;
+  --text-2xl: 30px;
+
+  /* Spacing -- every distinct gap/padding component found in mockups.html,
+     from .chip's 1px vertical padding up to .wrap's 48px page margin. */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 10px;
+  --space-6: 12px;
+  --space-7: 14px;
+  --space-8: 16px;
+  --space-9: 18px;
+  --space-10: 24px;
+  --space-11: 32px;
+  --space-12: 48px;
+
+  /* Border radius -- every distinct border-radius found in mockups.html,
+     from .planlist code's 4px up to .frame's 10px, plus the .chip/.tab
+     pill shape. */
+  --radius-xs: 4px;
+  --radius-sm: 5px;
+  --radius-md: 6px;
+  --radius-lg: 7px;
+  --radius-xl: 8px;
+  --radius-2xl: 10px;
+  --radius-pill: 99px;
+}

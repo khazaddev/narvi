@@ -351,3 +351,72 @@ jobs:
         run: |
           docker rm -f sandbox-dockerd-smoke >/dev/null 2>&1 || true
           docker rmi narvi-sandbox-runtime-base:ci >/dev/null 2>&1 || true
+
+  # web (§12.1, "ui bootstrap"): typecheck + lint + the generated-DTO-name
+  # guard + build for web/ (Vite + React + TanStack Query/Router) -- the
+  # frontend's own equivalent of the "checks" job above, over a different
+  # toolchain. Gated on a path filter computed by hand via `git diff`, the
+  # SAME approach (and the SAME rationale: no third-party paths-filter
+  # action this repo doesn't otherwise depend on) as the sandbox-image
+  # job's own filter immediately above, so a PR that never touches web/
+  # pays nothing for this job beyond the fixed checkout/job-startup
+  # overhead every job already pays.
+  web:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Check for web/ changes
+        id: changes
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if git diff --name-only "$BASE" "$HEAD" -- web/ | grep -q .; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "No changes under web/ -- skipping typecheck/lint/build."
+          fi
+
+      - name: Set up Node
+        if: steps.changes.outputs.relevant == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        if: steps.changes.outputs.relevant == 'true'
+        run: npm ci
+        working-directory: web
+
+      - name: Typecheck
+        if: steps.changes.outputs.relevant == 'true'
+        run: npm run typecheck
+        working-directory: web
+
+      - name: Lint (oxlint)
+        if: steps.changes.outputs.relevant == 'true'
+        run: npm run lint
+        working-directory: web
+
+      # §12.1: "no hand-written response types anywhere" -- see
+      # web/scripts/check-no-dto-redeclaration.mjs's own top comment for
+      # what this catches and why a name-collision check, not a
+      # field-shape comparison.
+      - name: Check no hand-written DTO types
+        if: steps.changes.outputs.relevant == 'true'
+        run: npm run check-dto-types
+        working-directory: web
+
+      - name: Build
+        if: steps.changes.outputs.relevant == 'true'
+        run: npm run build
+        working-directory: web

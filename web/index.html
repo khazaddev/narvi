@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230E7C6B'/%3E%3Ctext x='16' y='22' font-family='system-ui,sans-serif' font-size='18' font-weight='700' text-anchor='middle' fill='%23FFFFFF'%3EN%3C/text%3E%3C/svg%3E"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Narvi</title>
+    <script>
+      // Pre-paint theme application (§12.1's explicit-toggle requirement):
+      // runs synchronously in <head>, before any stylesheet paints, so an
+      // explicit light/dark choice never flashes the wrong theme for one
+      // frame while main.tsx's own initTheme() (src/lib/theme.ts) loads.
+      // "system" (the default -- no stored value, or storage unavailable)
+      // needs no attribute at all: tokens.css's own
+      // `@media (prefers-color-scheme: dark)` block already handles it with
+      // zero JS. The localStorage key ('narvi:theme') is duplicated from
+      // theme.ts's own `storageKey` export on purpose -- see that file's own
+      // comment for why an inline script can't import it directly.
+      (function () {
+        try {
+          var pref = localStorage.getItem('narvi:theme')
+          if (pref === 'light' || pref === 'dark') {
+            document.documentElement.setAttribute('data-theme', pref)
+          }
+        } catch (e) {
+          // Storage unavailable (privacy mode, disabled cookies/storage) --
+          // fall through to "system", same carve-out as theme.ts's own
+          // getStoredPreference.
+        }
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
