@@ -23,7 +23,12 @@ import { requireAuth } from '../../auth/requireAuth'
 import { getSession } from '../../api/endpoints'
 import { ApiError } from '../../api/http'
 import { sessionQueryKeys } from '../../api/queryKeys'
+import { buildCostRollup } from '../../session/costRollup'
+import { Composer } from '../../session/Composer'
+import { parseSandboxSnapshot } from '../../session/sandboxSnapshot'
+import { buildSandboxRailModel } from '../../session/sandboxRail'
 import { SessionHeader } from '../../session/SessionHeader'
+import { SessionRail } from '../../session/SessionRail'
 import { SessionSidebar } from '../../session/SessionSidebar'
 import { isStillBooting } from '../../session/sessionStatus'
 import { Timeline } from '../../session/Timeline'
@@ -58,9 +63,12 @@ function SessionWorkspace() {
   })
   const stream = useSessionStream(sessionId)
   const model = useMemo(() => buildTimelineModel(stream.events), [stream.events])
+  const sandboxModel = useMemo(() => buildSandboxRailModel(stream.events, parseSandboxSnapshot(stream.sandboxState)), [stream.events, stream.sandboxState])
+  const costModel = useMemo(() => buildCostRollup(stream.events), [stream.events])
+  const hasOpenTurn = model.turns.length > 0 && (model.turns[model.turns.length - 1]?.live ?? false)
 
   return (
-    <div className="app no-rail">
+    <div className={sessionQuery.isSuccess ? 'app' : 'app no-rail'}>
       <SessionSidebar />
       <section className="main">
         {sessionQuery.isPending && (
@@ -107,9 +115,11 @@ function SessionWorkspace() {
               sawReady={model.sawReady}
               sessionStatus={sessionQuery.data.status}
             />
+            <Composer sessionId={sessionId} sandboxStatus={sandboxModel.status} hasOpenTurn={hasOpenTurn} />
           </>
         )}
       </section>
+      {sessionQuery.isSuccess && <SessionRail sessionId={sessionId} sandbox={sandboxModel} cost={costModel} />}
     </div>
   )
 }
