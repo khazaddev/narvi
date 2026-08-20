@@ -83,7 +83,7 @@ const githubAPIBaseURL = "https://api.github.com"
 const linearAPIBaseURL = "https://api.linear.app"
 
 // slackAPIBaseURL is Slack's own real Web API base, passed to
-// slack.Deps.SlackAPIBaseURL in production wiring (Step 33, "Slack
+// slack.Deps.SlackAPIBaseURL in production wiring (§8.10, "Slack
 // ingress") -- the ONLY place this literal appears in this binary's
 // wiring, mirroring githubAPIBaseURL's own identical precedent exactly.
 const slackAPIBaseURL = "https://slack.com/api"
@@ -181,7 +181,7 @@ func serve() error {
 
 	// commander is the ports.SandboxCommander every Actor uses to push an
 	// outbound command (a dispatched turn's prompt) to a session's live
-	// sandbox WS connection (Step 21, "e2e happy path", design decision
+	// sandbox WS connection (§9.3, "e2e happy path", design decision
 	// 4) -- constructed once here, then threaded through to BOTH
 	// sessionactor.NewRegistry (as the port) and wshub.NewSandboxHandler
 	// (so it can Register each connection as it completes its handshake),
@@ -224,15 +224,15 @@ func serve() error {
 	// endpoints need. Step 21 adds commander/sandboxProvider/
 	// cfg.PublicBaseURL/sourceControl/cfg.TokenEncryptionKey -- see
 	// internal/app/sessionactor.NewRegistry's own doc comment for what
-	// each is used for. Step 27 ("mocking + contract drift") makes
+	// each is used for. §14.3 ("mocking + contract drift") makes
 	// NewRegistry fallible (constructs the contract_drift_detected OTel
 	// counter), mirroring recon/builder's own identical error handling
-	// immediately below. Step 49 ("handoff-readiness sentinel") adds
+	// immediately below. §14.4 ("handoff-readiness sentinel") adds
 	// diffFetcher -- the SAME sourceControl *githubapi.Adapter instance
 	// passed a second time, satisfying sessionactor.PRDiffFetcher exactly
 	// like it already satisfies the github inbound handler's own
 	// reviewcontext.Fetcher below (DiffFetcher: sourceControl) -- never a
-	// second, independently-constructed client. Step 65 ("review:
+	// second, independently-constructed client. §24 ("review:
 	// automatic re-review on new commits") adds ReviewDiffFetcher --
 	// the SAME sourceControl instance a THIRD time, satisfying
 	// reviewcontext.Fetcher directly (GetPullRequest/GetCompareDiff are
@@ -367,7 +367,7 @@ func serve() error {
 	slackNotifier := slackapi.New(nil, slackAPIBaseURL, cfg.SlackBotToken)
 	planSlackNotifier := outboxworker.NewPlanSlackNotifier(slackNotifier, planStore)
 
-	// webhookDeliveryStore is Step 31's own provider-agnostic dedupe claim,
+	// webhookDeliveryStore is §5.1's own provider-agnostic dedupe claim,
 	// shared across Steps 32/33/34's own GitHub/Slack/Linear ingress (see
 	// the Linear ingress block below, which reuses this SAME store rather
 	// than constructing its own). slackThreadSessionStore ("Slack
@@ -680,7 +680,7 @@ func serve() error {
 		wshub.NewClientHandler(registry, sessionStore, turnStore, sandboxStore, eventStore, artifactStore, wsTokenStore, hub, cfg.Timeouts),
 	))
 
-	// scm-credentials (Step 21, "e2e happy path", design decision 8):
+	// scm-credentials (§9.3, "e2e happy path", design decision 8):
 	// deliberately mounted OUTSIDE /api/sessions and outside auth.
 	// Middleware entirely -- a sandbox-bearer-token-authenticated
 	// endpoint, not a browser-facing one (see that handler's own doc
@@ -745,7 +745,7 @@ func serve() error {
 	router.Post("/sessions/{sessionID}/cloud-identity-config",
 		httpapi.CloudIdentityConfigDelivery(sessionStore, sandboxStore, cloudIdentityBindingStore, clusterBindingStore))
 
-	// snapshot-mint (Step 22, "snapshots & restore", design decision 2):
+	// snapshot-mint (§3.2, "snapshots & restore", design decision 2):
 	// deliberately mounted OUTSIDE /api/sessions and outside auth.
 	// Middleware entirely, mirroring scm-credentials immediately above
 	// exactly (see that handler's own doc comment, and
@@ -925,7 +925,7 @@ func serve() error {
 			AuditLog:         auditLogStore,
 			// Identities/Users/Participants (batch fix/audit-github-actor-
 			// rbac): the SAME identityStore/userStore/participantStore
-			// instances every other caller above already uses (Step 20's
+			// instances every other caller above already uses (§13.1's
 			// own auth wiring, Step 37's own plan approve/reject
 			// endpoints), never a second, independently-constructed copy.
 			Identities:   identityStore,
@@ -1249,7 +1249,7 @@ func serve() error {
 		// plans ("plan mode, web", §8.1/§12.2 item 3): the
 		// approve/reject HITL actions -- see httpapi/planapprove.go's own
 		// doc comment for the full sequencing. outboxStore/
-		// linearAgentSessionStore (Step 38, "plan mode, cross-channel") feed
+		// linearAgentSessionStore (§8.1, "plan mode, cross-channel") feed
 		// DecidePlanOnTx's own cross-channel-notify step (decideplan.go).
 		r.Post("/{sessionID}/plans/{planId}/approve", httpapi.ApprovePlan(pool, sessionStore, turnStore, planStore, participantStore, outboxStore, linearAgentSessionStore, auditLogStore, registry, cfg.EpistemicCheckDefault))
 		r.Post("/{sessionID}/plans/{planId}/reject", httpapi.RejectPlan(pool, sessionStore, turnStore, planStore, participantStore, outboxStore, linearAgentSessionStore, auditLogStore, cfg.EpistemicCheckDefault))
@@ -1655,7 +1655,7 @@ func serve() error {
 	// -- see internal/app/outboxworker's own doc.go for the full pump
 	// design this Builder runs. slackNotifier is a NEW, separate client
 	// from internal/adapters/inbound/slack's own ackClient (that one is
-	// Step 33's own synchronous in-thread ack, never reused here -- see
+	// §8.10's own synchronous in-thread ack, never reused here -- see
 	// that package's own doc.go). githubNotifier wraps the SAME
 	// sourceControl Adapter already constructed above (design decision:
 	// BotNotifier is a sibling type over the same Adapter/doPost

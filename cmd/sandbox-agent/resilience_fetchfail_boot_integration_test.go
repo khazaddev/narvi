@@ -116,7 +116,7 @@ func runBootSequenceRepoImage(t *testing.T, workspaceDir string, branch *string)
 }
 
 // TestResilienceScenario_FetchFailBoot_InventedBranch_DegradesAndBootSucceeds
-// proves the non-fatal half of Step 40's own degrade policy through a REAL,
+// proves the non-fatal half of §19.3's own degrade policy through a REAL,
 // FULL boot sequence: the session names no explicit branch (repos[].branch
 // == nil, so SyncAll invents "narvi/<sessionID>" -- "acceptable from HEAD"
 // per §19.3), the workspace's own origin is unreachable, so the boot-time

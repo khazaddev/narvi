@@ -123,7 +123,7 @@ const envVarPreamblePrefix = "Environment variables for this automation run:"
 // explicit that even provider API keys, the simplest possible case, are
 // not wired into cmd.Env today: "no ANTHROPIC_API_KEY/OPENAI_API_KEY/
 // Google-equivalent is wired anywhere"). Building a SEPARATE, automation-
-// specific env-injection mechanism ahead of Step 53's own generic one would
+// specific env-injection mechanism ahead of §25.1's own generic one would
 // risk exactly the same conflict-or-be-thrown-away outcome this package's
 // own doc.go already names for per-automation secrets. Surfacing env_vars
 // into the dispatched prompt's own text is the honest, working alternative

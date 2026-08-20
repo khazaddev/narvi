@@ -137,7 +137,7 @@ type CreateAutomationParams struct {
 // "automations: triggers & extras", §8.4), migrations/
 // 000051_automations.up.sql, migrations/
 // 000055_automations_triggers_and_extras.up.sql.
-// Step 52's own real caller: httpapi.CreateAutomation (POST
+// §8.4's own real caller: httpapi.CreateAutomation (POST
 // /api/automations). trigger_type/trigger_config/webhook_token_hash back
 // this Step's own condition builder; sandbox_path_scope/
 // sandbox_mock_configured/sandbox_contracts_path back §8.4's own

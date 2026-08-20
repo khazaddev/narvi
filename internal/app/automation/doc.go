@@ -131,7 +131,7 @@
 // ListDueForFanOut's own "AND a.status = 'active'" join condition
 // (queries/automationinvocations.sql) is commit 431e4b3's own "SECOND,
 // independent layer" of defense-in-depth against fanning out a pending
-// invocation whose automation has since been auto-paused -- Step 52's own
+// invocation whose automation has since been auto-paused -- §8.4's own
 // future trigger evaluator is the FIRST layer (never calling CreateInvocation
 // for a paused automation in the first place). Because claimBatch claims an
 // entire BATCH of due invocations inside one transaction, an automation can
@@ -161,7 +161,7 @@
 // exists, fan it out" hand-off (mirrors internal/app/releasereview.Enqueue's
 // own "one cheap INSERT, the real work happens later on a dedicated
 // background loop's own schedule" shape) -- callable directly by this
-// package's own tests today, and ready for Step 52's own trigger evaluator to
+// package's own tests today, and ready for §8.4's own trigger evaluator to
 // call unchanged once it exists. It does NOT itself decide whether an
 // automation should fire; it only validates targets (automation.
 // ValidateTargets) and durably records that a firing has already been

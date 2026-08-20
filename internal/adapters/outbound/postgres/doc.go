@@ -9,7 +9,7 @@
 // UserStore, IdentityStore, EventStore, and ArtifactStore have since
 // landed too, exactly as predicted below (auth/identity's Step 20 for
 // users/identities, Step 18/19 for events, Step 19 for artifacts) —
-// alongside UserSessionStore (Step 20's user_sessions table) and
+// alongside UserSessionStore (§13.1's user_sessions table) and
 // WSTokenStore (Step 19's ws_tokens table), on top of this package's
 // original 12-table scope.
 //

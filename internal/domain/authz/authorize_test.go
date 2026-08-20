@@ -282,7 +282,7 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"maintainer cannot toggle sentinel auto-fix", authz.RoleMaintainer, authz.ActionToggleSentinelAutoFix, false, false},
 		{"member cannot toggle sentinel auto-fix", authz.RoleMember, authz.ActionToggleSentinelAutoFix, false, false},
 		{"viewer cannot toggle sentinel auto-fix", authz.RoleViewer, authz.ActionToggleSentinelAutoFix, false, false},
-		// Backfilling a pre-existing gap found while adding Step 62's own
+		// Backfilling a pre-existing gap found while adding §21's own
 		// row-6 action below: ActionConfigureBlockOnHighRisk (Step 47/48)
 		// had a matrix row but no exhaustive four-role coverage here.
 		{"admin configures block-on-high-risk", authz.RoleAdmin, authz.ActionConfigureBlockOnHighRisk, false, true},

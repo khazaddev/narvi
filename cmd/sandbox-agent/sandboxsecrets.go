@@ -48,7 +48,7 @@
 // it re-runs the SAME ValidateName against every DELIVERED name, a second
 // time, at the point of injection, dropping (never failing the boot on)
 // any name that no longer passes. This defense-in-depth re-validation was
-// added during Step 72's own review round specifically because the write
+// added during §27.1's own review round specifically because the write
 // path and the injection path can drift apart -- a control plane rolled
 // back to a build predating a later reservation, or a row written by some
 // other path entirely, would otherwise still inject a name the CURRENT

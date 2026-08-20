@@ -1,5 +1,5 @@
 // This file (scmcredentials.go) implements POST /sessions/{sessionID}/
-// scm-credentials (Step 21, "e2e happy path", design decision 8) -- the
+// scm-credentials (§9.3, "e2e happy path", design decision 8) -- the
 // control-plane side of the wire contract internal/sandboxagent/
 // credentials.CPClient (Step 15) already built and tested the CLIENT side
 // of. See that package's own cpclient.go doc comment: "THE CP ENDPOINT
@@ -9,7 +9,7 @@
 // scmCredentialsRequest/scmCredentialsResponse exactly, deliberately, not
 // coincidentally.
 //
-// Deliberately mounted OUTSIDE auth.Middleware (Step 20's cookie-based,
+// Deliberately mounted OUTSIDE auth.Middleware (§13.1's cookie-based,
 // browser-user auth): this is a SANDBOX-bearer-token-authenticated
 // endpoint, matching internal/adapters/inbound/wshub/sandbox.go's own
 // header-bearer-token handshake precedent from Step 18 exactly, not a
@@ -161,7 +161,7 @@ type scmCredentialsResponse struct {
 // own (unexported) verifySandboxToken logic for the HASH COMPARISON half
 // only -- SHA-256 hash (wshub.HashSandboxToken, already exported for
 // exactly this reuse) + crypto/subtle.ConstantTimeCompare, never a bare
-// `==` (Step 18's own established constant-time-comparison discipline).
+// `==` (§3.2's own established constant-time-comparison discipline).
 //
 // Deliberately DOES NOT copy wshub's own nil-token_hash bypass (a sandbox
 // row with no token_hash yet minted is treated there as "accept any
@@ -277,7 +277,7 @@ func verifySandboxBearerToken(presented string, storedHash *string) bool {
 //     perspective, not a server malfunction, and mirrors auth.Middleware's
 //     own generic-rejection-body discipline (never distinguishing WHICH
 //     sub-case applied, in the response body -- an enumeration-hardening
-//     precedent this package already established at Step 20). Step 3's
+//     precedent this package already established at §13.1). §5.3's
 //     gen-mismatch reuses the SAME 403 status code but is logged
 //     separately server-side (see the handler body) so it stays
 //     observable without adding a caller-visible distinction.
@@ -536,7 +536,7 @@ func bearerTokenFromHeader(r *http.Request) (string, bool) {
 // A repo whose Url fails to parse, or parses with an empty Host, is
 // skipped rather than erroring the whole request: sessions.repos is
 // already-trusted, already-persisted data by the time this endpoint runs
-// (Step 21's CreateSession already accepted/persisted it) -- this is HOST
+// (§9.3's CreateSession already accepted/persisted it) -- this is HOST
 // COMPARISON against an already-trusted list, not input validation of a
 // new untrusted value, so one defensively-malformed entry should not fail
 // credential minting for every OTHER, well-formed repo host the session

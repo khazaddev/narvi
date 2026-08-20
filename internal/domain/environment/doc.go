@@ -55,6 +55,6 @@
 // sparse-checkout mechanics (cone mode, .git/info/sparse-checkout
 // contents, etc.) -- it only decides WHAT glob patterns a scoped
 // Environment implies and whether a given pattern is well-formed and safe.
-// Actually invoking `git sparse-checkout` inside a sandbox is Step 29's
+// Actually invoking `git sparse-checkout` inside a sandbox is §3.4's
 // job ("gitstate in-sandbox", sandbox-agent), not this one's.
 package environment

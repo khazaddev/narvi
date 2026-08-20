@@ -30,7 +30,7 @@ type CreateIdentityLinkPromptParams struct {
 // migration's own doc comment for the full column-naming reasoning,
 // especially why this is nonce_HASH, not the spec's own literal "nonce").
 //
-// This is Step 39's ("identities + full RBAC") own auto-linking half: the
+// This is §13.2's ("identities + full RBAC") own auto-linking half: the
 // storage shape that migration built now gets its first real reader/
 // writer, internal/app/identitylink.Resolve (creates a row when a fetched
 // profile email matches zero or multiple users) and internal/adapters/

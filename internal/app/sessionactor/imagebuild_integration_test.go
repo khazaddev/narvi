@@ -50,7 +50,7 @@ import (
 // in isolation). The WARM-HIT test below therefore seeds a 'ready' row
 // directly (via ImageBuildStore, bypassing the background builder
 // entirely) rather than relying on the builder to produce one for a
-// repo-bearing fingerprint -- simulating what Step 42's own claim-time
+// repo-bearing fingerprint -- simulating what §19.2's own claim-time
 // resolution will eventually produce for real, so this Step's own exit
 // criterion ("existing spawn-path behavior, the warm-hit case, must work
 // end-to-end") has real, direct coverage today.
@@ -203,7 +203,7 @@ func TestResolveAndSetImage_NoCachedImage_FallsBackToBaseAndCreatesPendingRow(t 
 }
 
 // TestResolveAndSetImage_CreatorContextIrrelevant_ZeroNetworkCallsRegardless
-// (Step 41's own test proving creator context -- no account, disabled,
+// (§19.1's own test proving creator context -- no account, disabled,
 // viewer -- never changed resolveAndSetImage's outcome) has been REMOVED
 // by the audit fix ("warm-boot image access control", HIGH): that was
 // exactly the vulnerability this batch closes -- see the finding this
@@ -222,7 +222,7 @@ func TestResolveAndSetImage_NoCachedImage_FallsBackToBaseAndCreatesPendingRow(t 
 // row) works end to end, with ZERO network calls, exactly like before
 // Step 41 -- only how the fingerprint itself got computed changed. The
 // 'ready' row is seeded directly here (Claim + RecordSuccess against a
-// pending row this test creates), simulating what Step 42's own
+// pending row this test creates), simulating what §19.2's own
 // claim-time resolution will eventually produce for a repo-bearing
 // fingerprint for real -- Step 41's own background builder cannot produce
 // one for a repo-bearing row itself yet (see this file's own top comment).
@@ -308,7 +308,7 @@ func seedReadyImageBuild(ctx context.Context, t *testing.T, store *narvipg.Image
 }
 
 // TestImageBuildPipeline_MissCreatesPendingRow_NoCredentialConfigured_SpawnStillBaseImage
-// proves end to end, from the spawn side, Step 42's own degrade path when
+// proves end to end, from the spawn side, §19.2's own degrade path when
 // the new platform-level GitHub credential (platform.Config.
 // GitHubImageBuildToken) is NOT configured: a cache MISS creates a pending
 // row (scenario (a), re-proved here as part of the full pipeline), the

@@ -229,7 +229,7 @@ type UpdatePRBodySpec struct {
 	Repo   string
 	Number int
 	Body   string
-	// Token authenticates this write -- Step 67's own one real caller
+	// Token authenticates this write -- §26.2's own one real caller
 	// (internal/app/outboxworker's own description-autofix notifier) is a
 	// SYSTEM-INITIATED action with no per-PR human creator to attribute it
 	// to (the target PR may have been opened by a different session
@@ -767,7 +767,7 @@ type SourceControl interface {
 	CreatePR(ctx context.Context, spec CreatePRSpec) (PRRef, error)
 
 	// ResolveBranchSHA returns spec.Branch's current commit SHA (or the
-	// repo's own default branch's, if spec.Branch is empty) -- Step 26's
+	// repo's own default branch's, if spec.Branch is empty) -- §8.5's
 	// ("image builds") own real, control-plane-side fingerprint input,
 	// resolved directly via the source-control host's API rather than
 	// waiting for a sandbox to report anything back (a deliberate design

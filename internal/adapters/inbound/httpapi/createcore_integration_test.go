@@ -1,6 +1,6 @@
 //go:build integration
 
-// -- Step 33, "Slack ingress" -- and split for tx support) --
+// -- §8.10, "Slack ingress" -- and split for tx support) --
 // deliberately in package httpapi (not httpapi_test, unlike this
 // package's other integration tests): even though CreateSessionCore/
 // CreateSessionOnTx are exported today, they remain CreateSession's own

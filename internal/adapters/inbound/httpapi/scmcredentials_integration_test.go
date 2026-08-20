@@ -55,7 +55,7 @@ func createSandboxWithToken(ctx context.Context, t *testing.T, r testRig, sessio
 
 // createSessionWithGitHubIdentity creates a session whose created_by user
 // has a real, encrypted GitHub access token -- the SAME real
-// EncryptToken flow Step 20's own OAuth callback uses, not a shortcut --
+// EncryptToken flow §13.1's own OAuth callback uses, not a shortcut --
 // and whose sessions.repos names a single repo on host "github.com" (the
 // SAME host postScmCredentials' own default request body names), matching
 // the audit remediation's own host-scoping check (design decision 1) so

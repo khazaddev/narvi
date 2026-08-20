@@ -315,7 +315,7 @@ func splitRepositoryURL(repositoryURL string) (owner, repo string, ok bool) {
 // -- ok=false means the detail fetch itself failed (any reason: not
 // found, transient, rate-limited -- this caller, ListOpenPRsForUser's
 // own per-candidate loop, treats every failure identically as "drop this
-// one row", so it has never needed to distinguish them). Step 62's own
+// one row", so it has never needed to distinguish them). §21's own
 // GetOpenPR (getopenpr.go) below needs a FINER distinction (genuinely
 // not found vs. a real error worth propagating), so it calls
 // fetchOpenPRDetail itself and hands the result to buildOpenPRFromDetail

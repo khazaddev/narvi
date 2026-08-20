@@ -294,7 +294,7 @@ func TestSandboxSecretsDelivery_OtherRepo_NotMatched(t *testing.T) {
 	}
 }
 
-// --- Decrypt-only-winners (Step 53's discipline, reused unchanged) ---
+// --- Decrypt-only-winners (§25.1's discipline, reused unchanged) ---
 
 // TestSandboxSecretsDelivery_CorruptedLoser_NeverBlocksWinner is the
 // direct behavioral proof of "decrypt-only-the-winner": a GLOBAL row's

@@ -98,7 +98,7 @@ func TestPostReviewVerdict_UpsertsFindingsWithServerComputedIdentity(t *testing.
 }
 
 // TestPostReviewVerdict_FindingReReportedAtShiftedLine_SameIdentity is
-// Step 48's own explicitly required test at the HTTP layer (finding.go's
+// §8.2's own explicitly required test at the HTTP layer (finding.go's
 // own unit tests already prove the pure function; this proves the whole
 // posting path preserves it end to end): posting the SAME finding twice,
 // at two DIFFERENT line numbers, upserts the SAME review_findings row
@@ -247,7 +247,7 @@ func TestPostReviewVerdict_SentinelAutoFix_TriggersWhenToggleOn(t *testing.T) {
 }
 
 // TestPostReviewVerdict_SentinelAutoFix_NeverTriggersWhenToggleOff proves
-// Step 48's own explicitly required test: the admin toggle DEFAULTS OFF,
+// §8.2's own explicitly required test: the admin toggle DEFAULTS OFF,
 // and while off, a coverage finding never claims a sentinel_fixes row or
 // enqueues a trigger, even on a repo that otherwise qualifies.
 func TestPostReviewVerdict_SentinelAutoFix_NeverTriggersWhenToggleOff(t *testing.T) {
@@ -479,7 +479,7 @@ func TestApplySuggestion_Success_CommitsUsingActingMaintainerToken(t *testing.T)
 	}
 }
 
-// TestApplySuggestion_StalePatch_Conflict proves Step 48's own explicitly
+// TestApplySuggestion_StalePatch_Conflict proves §8.2's own explicitly
 // required test at the HTTP layer: a SuggestedFix that no longer applies
 // against the PR's CURRENT head is rejected with 409, and never commits
 // anything.

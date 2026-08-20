@@ -8,11 +8,11 @@
 // per-message half of §3.2's gen-fencing rule ("stale-gen inputs are
 // rejected and logged"), persists every recognized event (append-only),
 // always bumps liveness (last_seen_at = max of all signals), and fires
-// the state transitions this Step's plan row (and Step 22's, "snapshots &
+// the state transitions this Step's plan row (and §3.2's, "snapshots &
 // restore") scope: "ready"/Connecting, "heartbeat"-nil-phase/Booting
 // (both Step 18), "snapshot_ready"/Snapshotting (Step 22, design decision
 // 3 -- see handleSnapshotReadyEvent below), and now Suspect-recovery
-// (Step 24, "two-phase terminalization" -- see the section right below).
+// (§3.2, "two-phase terminalization" -- see the section right below).
 //
 // # Suspect-state recovery-during-grace (Step 24, "two-phase terminalization")
 //
@@ -223,7 +223,7 @@ func (a *Actor) armReadyWatchdogs(ctx context.Context, tx pgx.Tx, now time.Time)
 func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error {
 	var outcome SandboxEventOutcome
 	// pushAfterCommit is non-nil only when THIS event just completed a
-	// turn successfully (Step 21, "e2e happy path", pushpr.go) -- acted on
+	// turn successfully (§9.3, "e2e happy path", pushpr.go) -- acted on
 	// (a real SandboxCommander.SendCommand call) only AFTER this
 	// function's own transact below has committed, never inside it (see
 	// pushpr.go's own top comment for why).
@@ -271,7 +271,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 		}
 
 		// Persist ALWAYS, for every recognized event type -- this is the
-		// append-only per-session event log Step 19's client hub will
+		// append-only per-session event log §6.2's client hub will
 		// replay from, not limited to the 6 critical types. inserted (an
 		// audit-fix batch's own addition, finding M16) is reused a few
 		// lines down, in the cmd.Type == "tool_call" case, to gate the new
@@ -288,7 +288,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 		}
 		eventInserted = inserted
 
-		// Step 24 ("two-phase terminalization"): Suspect-recovery-during-
+		// §3.2 ("two-phase terminalization"): Suspect-recovery-during-
 		// grace -- see this file's own top comment for the full reasoning.
 		// row is reassigned to the freshly-recovered row on success, so
 		// every line below sees the NOW-RECOVERED status rather than the
@@ -429,7 +429,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 			}
 		}
 
-		// Step 21 ("e2e happy path")/Step 22 ("snapshots & restore"): per-
+		// §9.3 ("e2e happy path")/§3.2 ("snapshots & restore"): per-
 		// type post-persist handling. A tagged switch, not an if/else-if
 		// chain (staticcheck QF1003), since this is a genuine dispatch on
 		// cmd.Type's own value, not a chain of unrelated conditions.
@@ -591,7 +591,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 			a.logger.Warn("sessionactor: ensure-dispatched after sandbox event failed", "error", dispatchErr)
 		}
 
-		// Step 21 ("e2e happy path"): the two remaining best-effort side
+		// §9.3 ("e2e happy path"): the two remaining best-effort side
 		// effects this event may trigger, both deliberately run OUTSIDE
 		// (i.e. after) the transact above committed, never inside it --
 		// see pushpr.go's own top comment for why. Neither failure alters
@@ -630,7 +630,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 			a.createPRBestEffort(ctx, cmd.Raw)
 		}
 
-		// Step 29 ("gitstate in-sandbox"): reply to a just-committed
+		// §3.4 ("gitstate in-sandbox"): reply to a just-committed
 		// git_sync event with GitSyncComplete -- same "outside the
 		// transact, log-only on failure" shape as the two side effects
 		// just above.
@@ -643,7 +643,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 }
 
 // handleSnapshotReadyEvent implements design decision 3's own
-// snapshot_ready handling (Step 22, "snapshots & restore"): transitions
+// snapshot_ready handling (§3.2, "snapshots & restore"): transitions
 // Snapshotting -> Ready via sandbox.SnapshotCompleteTrigger() and persists
 // the sandbox's own reported snapshotId onto sandboxes.snapshot_id.
 // Called from INSIDE handleSandboxEvent's own transact, the SAME transact

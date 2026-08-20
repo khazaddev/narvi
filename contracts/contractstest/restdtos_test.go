@@ -271,7 +271,7 @@ func TestChatGPTLinkStatusRoundTrip_NeedsRelink(t *testing.T) {
 	})
 }
 
-// TestModelCatalogRoundTrip (Step 59's own "Catalog" deliverable) uses
+// TestModelCatalogRoundTrip (§8.8's own "Catalog" deliverable) uses
 // real, live-verified-against-the-pinned-OpenCode-1.17.15-binary values
 // (this Step's own research pass) for both an OpenAI reasoning model
 // (variants none/low/medium/high/xhigh, zero cost -- §29.10 risk 5:
@@ -319,7 +319,7 @@ func TestModelCatalogRoundTrip(t *testing.T) {
 	})
 }
 
-// TestShadowComparisonReportRoundTrip (Step 59's own "shadow-comparison
+// TestShadowComparisonReportRoundTrip (§8.8's own "shadow-comparison
 // tooling for review" deliverable) exercises one completed turn and one
 // still-processing turn (completedAt/durationSeconds null) side by side --
 // the two most common real shapes a comparison would actually see.

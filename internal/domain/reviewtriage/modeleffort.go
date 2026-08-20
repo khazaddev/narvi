@@ -13,7 +13,7 @@ const EffortHigh = "high"
 // ModelAndEffort resolves depth into the (modelID, effort) override pair
 // a review turn's own creation call threads onto turns.model_id/effort --
 // CreateTurnOptions.Effort/the modelID parameter every review-turn-creation
-// path already accepts, Step 59's own reasoning-effort threading, an
+// path already accepts, §8.8's own reasoning-effort threading, an
 // ALREADY-EXISTING, already-wired-end-to-end mechanism this Step reuses
 // rather than inventing a second one. "Dedicated review-model selection"
 // ITSELF is a separate claim -- §26.3 is explicit that no such mechanism

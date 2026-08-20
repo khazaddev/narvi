@@ -9,7 +9,7 @@ import (
 // when no live sandbox WS connection is currently registered for the given
 // session id -- a sentinel a caller can errors.Is against, mirroring
 // pgx.ErrNoRows-style sentinels already used throughout this codebase.
-// Design decision 3b (Step 21, "e2e happy path"): a caller that gets this
+// Design decision 3b (§9.3, "e2e happy path"): a caller that gets this
 // back MUST treat it as "the prompt genuinely never reached a live
 // connection". As of this Step's own review-driven fix
 // (internal/app/sessionactor/dispatch.go's own top comment has the full

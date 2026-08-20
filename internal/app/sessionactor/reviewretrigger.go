@@ -213,7 +213,7 @@ func (a *Actor) handleReviewRetriggerDebounceTimer(ctx context.Context) error {
 			// feature must never guess-and-dispatch. Without a live,
 			// provably-fresh head sha to anchor turns.review_head_sha to,
 			// enqueueing a turn here would produce a review that can
-			// never honestly be recorded in review_verdicts (Step 62's
+			// never honestly be recorded in review_verdicts (§21's
 			// NOT NULL head_sha column) -- downgrade to a plain no-op
 			// this cycle: clear pending_retrigger_head_sha (a fresh
 			// synchronize event will try again), delete the timer, spend
@@ -688,7 +688,7 @@ func (a *Actor) composeAutoRetriggerPrompt(ctx context.Context, repoFullName str
 // (the function CreateTurnForBot wraps) is unexported besides. This
 // inserts the turn directly via a.stores.turn.Create -- the SAME
 // store-level primitive createTurnLocked itself calls
-// (internal/adapters/inbound/httpapi/turn.go) -- mirroring Step 46's
+// (internal/adapters/inbound/httpapi/turn.go) -- mirroring §8.2's
 // manual path at the storage layer rather than calling through it.
 //
 // prompt is ALREADY the fully-composed, fully-rendered turn text

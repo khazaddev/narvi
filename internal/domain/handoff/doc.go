@@ -26,7 +26,7 @@
 // reconciliation -- a lifecycle this Step's own findings never enter (see
 // this package's own top-level design-call section below). Reusing
 // reviewpost.Finding's SHAPE and reviewpost.ComputeFindingIdentity's HASH
-// ALGORITHM (both imported here, per the plan's own "go through Step 48's
+// ALGORITHM (both imported here, per the plan's own "go through §8.2's
 // Finding type and its server-computed identity hash -- do not invent a
 // parallel finding shape or a second identity scheme") is not the same
 // thing as reusing reviewpost's own POSTING pipeline, which this Step

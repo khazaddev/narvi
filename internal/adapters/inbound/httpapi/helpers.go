@@ -59,7 +59,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // authenticatedUserID resolves platform.UserFromContext(r.Context()) into a
 // pgtype.UUID -- the real authenticated caller's id, now that every route
 // in this package is mounted behind internal/adapters/inbound/auth.
-// Middleware (Step 20, "auth v1"; see doc.go's own updated writeup). Writes
+// Middleware (§13.1, "auth v1"; see doc.go's own updated writeup). Writes
 // a 500 response (logging the failure server-side) and returns ok=false if
 // either the context lookup fails (should never happen for a request
 // routed behind that middleware, but defended against anyway rather than

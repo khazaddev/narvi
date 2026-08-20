@@ -411,7 +411,7 @@ func readOrphansReaped(ctx context.Context, t *testing.T, reader *sdkmetric.Manu
 //     NEVER be called for it.
 //   - "orphan-stale-epoch" is a ref provider.List returns with NO matching
 //     Postgres row at all -- exactly the stale-epoch-takeover scenario
-//     app/sessionactor/dispatch.go's own "Step 25's reconciler" comments
+//     app/sessionactor/dispatch.go's own "§5.3's reconciler" comments
 //     describe (the write that would have recorded it was rolled back
 //     entirely): StopSandbox must be called for it exactly once, once
 //     CONFIRMED (see below).

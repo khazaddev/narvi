@@ -9,7 +9,7 @@ import "github.com/khazaddev/narvi/internal/domain/review"
 // fields on internal/domain/review.Verdict -- for the EXACT reason
 // finding.go's own doc comment already establishes for Finding: review's
 // own doc.go pins Verdict at "exactly the seven named fields... and
-// nothing else" (design call #4), and this package is where Step 47's
+// nothing else" (design call #4), and this package is where §8.2's
 // posting-tool payload grows structure the closed review.Verdict type
 // itself never will (VerdictInput's own doc comment: "one level up, until
 // a later Step gives it a richer, structured home" -- this Step is that

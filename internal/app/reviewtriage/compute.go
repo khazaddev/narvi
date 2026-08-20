@@ -110,7 +110,7 @@ func decideWithSignals(prCtx review.PreFetchedContext, cfg reviewtriage.Config, 
 }
 
 // hasNeedsHumanLabel reports whether labels contains reviewpost.
-// LabelNeedsHuman (Step 47's own maintainer escape hatch) -- see
+// LabelNeedsHuman (§8.2's own maintainer escape hatch) -- see
 // internal/domain/reviewtriage/doc.go's own "v1 rules -- five, not
 // three" section for why this is one of Decide's triggers.
 func hasNeedsHumanLabel(labels []string) bool {

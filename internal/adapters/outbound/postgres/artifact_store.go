@@ -105,7 +105,7 @@ func (s *ArtifactStore) MarkUploadFailedIfPending(ctx context.Context, id, sessi
 }
 
 // GetPRArtifactByURL reports whether SOME session pushed and opened the
-// pull request at url (Step 60's own "authored by a platform session"
+// pull request at url (§16's own "authored by a platform session"
 // signal for ready_to_merge -- see GetPRArtifactByURL's own generated doc
 // comment). Returns pgx.ErrNoRows (via errors.Is) when no such artifact
 // exists -- callers must never treat that as an error, only as "not

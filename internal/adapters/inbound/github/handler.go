@@ -28,7 +28,7 @@ import (
 const maxWebhookBodyBytes = 1 << 20 // 1 MiB
 
 // githubDeliveryProvider is the "provider" value this adapter passes to
-// postgres.WebhookDeliveryStore.Claim -- Step 31's own doc comment names
+// postgres.WebhookDeliveryStore.Claim -- §5.1's own doc comment names
 // this exact literal for GitHub.
 const githubDeliveryProvider = "github"
 
@@ -113,7 +113,7 @@ type Config struct {
 	// coalescer.CreateOrJoin, so both the WINNER and REUSE branches get it
 	// identically without either needing its own copy of this logic. This
 	// SAME field also backs pullrequestevent.go's own
-	// githubMergeGateDataSource.diffFetcher (Step 48's sentinel-fix
+	// githubMergeGateDataSource.diffFetcher (§8.2's sentinel-fix
 	// merge-gate, a genuinely different consumer with a genuinely
 	// different need -- see prDiffFetcher's own doc comment,
 	// pullrequestevent.go) -- diffFetcher (below) is the union of both
@@ -551,7 +551,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		// un-enriched comment/label text -- captured BEFORE the pre-fetched
 		// diff/stack context below is folded into m.CommentBody, and passed
 		// through to coalescer.CreateOrJoin as its own, separate classifyText
-		// argument. Without this, Step 36's own intent classifier call
+		// argument. Without this, §8.3's own intent classifier call
 		// (coalesce.go, WINNER path) would classify the FULL diff-enriched
 		// turn prompt instead of just the human's own words the moment a
 		// diff fetcher is wired -- see CreateOrJoin's own doc comment on its

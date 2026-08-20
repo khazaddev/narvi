@@ -14,7 +14,7 @@ import (
 // gates the decision), plus a handful of event types/status pairs this
 // function deliberately does not map -- including a Suspect status,
 // proving sandboxTransitionTrigger ITSELF never speculatively fires a
-// recovery transition. Suspect-recovery (Step 24, "two-phase
+// recovery transition. Suspect-recovery (§3.2, "two-phase
 // terminalization") is real and wired, but lives entirely in
 // handleSandboxEvent's own dedicated branch (sandboxevent.go, see that
 // file's top comment), which runs BEFORE this function is ever called and

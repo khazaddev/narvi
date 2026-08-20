@@ -22,7 +22,7 @@
 // (remote < global < custom < project, later-wins) -- global and custom
 // (this file's own two injection points) sit BELOW project, so a
 // customer-authored config injected at either level can never override a
-// setting the project config (or Step 48's sentinel-fix write, which
+// setting the project config (or §8.2's sentinel-fix write, which
 // targets that SAME project slot -- opencode/sentinelfixagent.go's own
 // doc comment records having verified THAT write path live against the
 // real pinned 1.17.15 binary) already sets, confirming the security-
@@ -34,7 +34,7 @@
 // directories, inline config OPENCODE_CONFIG_CONTENT, managed files,
 // macOS preferences) are where OpenCode's own precedence stops helping --
 // a document injected THERE would sit ABOVE the project slot, capable of
-// overriding Step 48's own restriction. An EARLIER version of this
+// overriding §8.2's own restriction. An EARLIER version of this
 // codebase's own comment here claimed "no Narvi mechanism writes to any
 // of them" as though that settled the matter -- it did not: nothing
 // PREVENTED a maintainer-authored sandbox_secrets row literally named

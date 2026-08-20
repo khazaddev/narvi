@@ -55,7 +55,7 @@ type Actor struct {
 	broadcaster ports.EventBroadcaster
 
 	// commander is how a successfully-dispatched turn's prompt actually
-	// reaches a live sandbox connection (Step 21, "e2e happy path", design
+	// reaches a live sandbox connection (§9.3, "e2e happy path", design
 	// decision 4) -- implemented by internal/adapters/inbound/wshub's own
 	// SandboxRegistry, app depends on the port
 	// (internal/app/ports.SandboxCommander), never the adapter. May be nil
@@ -73,7 +73,7 @@ type Actor struct {
 	// publicBaseURL is this control plane's own externally-reachable
 	// http(s):// base URL (platform.Config.PublicBaseURL, e.g.
 	// "http://localhost:8080" in dev, a real "https://..." URL in
-	// production) -- the SAME value Step 20's OAuth wiring already uses
+	// production) -- the SAME value §13.1's OAuth wiring already uses
 	// for its own redirect URL. sessionconfig.go's own assembleSessionConfig
 	// derives SessionConfig.ControlPlaneWsUrl from it by swapping the
 	// scheme (http->ws, https->wss) rather than requiring a second,
@@ -118,13 +118,13 @@ type Actor struct {
 	// tokenEncryptionKey decrypts identities.access_token_encrypted (§13.1)
 	// to obtain the session creator's own plaintext GitHub OAuth access
 	// token -- the SAME key platform.Config.TokenEncryptionKey already
-	// supplies Step 20's OAuth callback and the scm-credentials endpoint
+	// supplies §13.1's OAuth callback and the scm-credentials endpoint
 	// (design decision 8); createPRBestEffort (pushpr.go) is this
 	// package's own use of it. Never logged. May be nil/empty (tests that
 	// never exercise the push/PR path).
 	tokenEncryptionKey []byte
 
-	// openCodeRuntimeVersion is Step 26's ("image builds") own addition:
+	// openCodeRuntimeVersion is §8.5's ("image builds") own addition:
 	// the pinned OpenCode runtime version (platform.Config.
 	// OpenCodeRuntimeVersion) fed into domain/imagebuild.Fingerprint
 	// alongside a spawn's own resolved repo SHAs (dispatch.go/
@@ -358,7 +358,7 @@ func (a *Actor) drainMailbox() {
 
 // appendRawEvent inserts a session event row inside tx, exactly like
 // timerfired.go's own appendEvent, but for a caller that already holds raw
-// wire bytes to persist verbatim (Step 18's sandboxevent.go) rather than a
+// wire bytes to persist verbatim (§3.2's sandboxevent.go) rather than a
 // map[string]any this package would otherwise have to marshal itself --
 // skipping that round-trip means the append-only event log holds precisely
 // what the sandbox sent, not a lossy re-encoding through an intermediate Go

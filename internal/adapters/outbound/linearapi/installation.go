@@ -4,7 +4,7 @@ import "context"
 
 // viewerAndOrganizationQuery fetches exactly the two ids the OAuth
 // install-callback needs to key/label a stored linear_installations row --
-// verified against Linear's real schema/docs during Step 34's own
+// verified against Linear's real schema/docs during §8.10's own
 // investigation: "Your app will have a unique ID for each workspace it is
 // installed within, you can find this ID with the following query...
 // query Me { viewer { id } }" (the organization id is fetched in the same

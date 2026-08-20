@@ -296,7 +296,7 @@ func TestFanOut_HonorsSandboxSettings(t *testing.T) {
 // comment for why this is surfaced via the dispatched turn's own prompt
 // text rather than the sandbox process's OS environment (no generic
 // per-automation/per-session env-injection mechanism into cmd.Env exists
-// anywhere in this codebase yet -- Step 53's own explicit scope).
+// anywhere in this codebase yet -- §25.1's own explicit scope).
 func TestFanOut_ThreadsEnvVarsIntoDispatchedPrompt(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()

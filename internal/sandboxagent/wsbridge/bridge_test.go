@@ -939,7 +939,7 @@ func TestHeartbeat_SetConversationIDTriggersImmediateHeartbeat(t *testing.T) {
 }
 
 // TestHeartbeat_SetConversationIDUnchanged_NoRepeatedImmediateHeartbeat
-// proves the OTHER half of Step 28's own requirement: SetConversationID
+// proves the OTHER half of §3.3's own requirement: SetConversationID
 // only triggers an immediate heartbeat when the value GENUINELY changes,
 // not on every call -- a second call carrying the SAME already-current id
 // (e.g. a later turn resuming the same conversation) must not trigger a

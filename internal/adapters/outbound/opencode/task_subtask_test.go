@@ -479,7 +479,7 @@ func TestTranslateSubTaskStart_LegacyPathNeverPopulatesSubAgentType(t *testing.T
 
 // TestTaskInputSubAgentType directly unit-tests the extraction helper
 // (matching taskInputDescription's own established indirect-test
-// precedent, but as its own direct test since this field is Step 71's
+// precedent, but as its own direct test since this field is §26.4's
 // own new addition worth pinning independently of the translation
 // function that consumes it).
 func TestTaskInputSubAgentType(t *testing.T) {

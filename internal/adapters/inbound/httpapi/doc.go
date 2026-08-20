@@ -31,12 +31,12 @@
 //     (platform.HashToken), and responds 200 with
 //     restdtos.WSTokenResponse{Token: <plaintext>, ExpiresAt}.
 //
-// # The auth gap -- resolved (Step 20, "auth v1")
+// # The auth gap -- resolved (§13.1, "auth v1")
 //
 // Every route above is now mounted behind internal/adapters/inbound/auth.
 // Middleware in cmd/control-plane/main.go: a request with no valid
 // narvi_auth_session cookie gets 401 before reaching any handler in this
-// package. Both of Step 19's own honest gaps are directly closed as a
+// package. Both of §6.2's own honest gaps are directly closed as a
 // result:
 //
 //   - CreateSession now inserts created_by with the REAL authenticated
@@ -45,7 +45,7 @@
 //   - MintWSToken now scopes ws_tokens.user_id to the REAL authenticated
 //     caller the same way, instead of always NULL.
 //
-// # Step 21 ("e2e happy path") updates
+// # §9.3 ("e2e happy path") updates
 //
 // CreateSession now actually PERSISTS req.Repos (design decision 1,
 // migrations/000018_session_repos.up.sql) and, when req.Prompt is
@@ -68,7 +68,7 @@
 //     side of the wire contract internal/sandboxagent/credentials.
 //     CPClient (Step 15) already built and tested the client side of.
 //
-// # Step 22 ("snapshots & restore") updates
+// # §3.2 ("snapshots & restore") updates
 //
 // A SEVENTH route is added, mounted the SAME way scm-credentials is
 // (outside /api/sessions and outside auth.Middleware entirely):
@@ -83,7 +83,7 @@
 //     then reports back over the WS bridge as a CRITICAL "snapshot_ready"
 //     event (design decision 2's own full round-trip reasoning).
 //
-// # Step 28 ("turn recovery") update
+// # §3.3 ("turn recovery") update
 //
 // An EIGHTH route is added, INSIDE the /api/sessions group (so it shares
 // that group's own auth.Middleware gate, unlike scm-credentials/snapshot
@@ -104,7 +104,7 @@
 // Wiring participants/presence (§8.11) is still untouched -- a distinct,
 // not-yet-scoped concern.
 //
-// # Step 31 ("webhook toolkit") update
+// # §5.1 ("webhook toolkit") update
 //
 // No new route is added by this Step -- it adds no concrete provider
 // wiring at all. CreateSession's own doc comment above (create.go) is
@@ -127,10 +127,10 @@
 // is left open by this Step -- see the Step 33 update immediately below
 // for how that question was actually resolved.
 //
-// # Step 33 ("Slack ingress") update
+// # §8.10 ("Slack ingress") update
 //
 // internal/adapters/inbound/slack (a separate package, mirroring
-// github/linear's own reserved package-per-surface shape) is Step 33's
+// github/linear's own reserved package-per-surface shape) is §8.10's
 // own new Slack webhook ingress adapter -- see that package's own doc.go.
 // It needs to reach createSessionCore from outside this package, so this
 // Step exports it (CreateSessionCore) and its error type (CreateSessionError,
@@ -209,7 +209,7 @@
 //     outer transaction commits -- never CreateSessionCore, which is only
 //     safe for a caller with no transaction of its own yet.
 //
-// # Step 32 ("GitHub ingress") update
+// # §8.2 ("GitHub ingress") update
 //
 // The real webhook handler lives in its own package,
 // internal/adapters/inbound/github (mounted at POST /webhooks/github,

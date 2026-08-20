@@ -127,7 +127,7 @@ type mention struct {
 }
 
 // parseMention dispatches on eventType and reports whether body is a
-// nonEmptyStringPtr returns nil for an empty s, &s otherwise -- Step 62's
+// nonEmptyStringPtr returns nil for an empty s, &s otherwise -- §21's
 // own small helper for mention.HeadSHA's own "nil means genuinely
 // unresolved, never an empty-string placeholder" convention (mirrors
 // HeadBranch's own identical *string discipline elsewhere in this
@@ -180,7 +180,7 @@ func parseMention(eventType string, body []byte, mentionRE *regexp.Regexp, reRev
 // PR's REAL head branch/repo, via one authenticated GitHub REST API call
 // (GET /repos/{owner}/{repo}/pulls/{number}), AFTER parseMention returns
 // and BEFORE the mention is turned into the session's own repo spec (H5
-// audit fix, batch fix/audit-github-pr-payload-correctness) -- Step 32's
+// audit fix, batch fix/audit-github-pr-payload-correctness) -- §8.2's
 // original version of this file left that resolution as a known,
 // honestly-documented limitation (no outbound GitHub API credential
 // existed in this codebase yet); internal/adapters/outbound/githubapi's

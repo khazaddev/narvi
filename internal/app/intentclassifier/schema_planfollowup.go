@@ -6,7 +6,7 @@ import (
 	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
 )
 
-// templateNamePlanFollowup is the prompt_templates.name key Step 64's own
+// templateNamePlanFollowup is the prompt_templates.name key §23's own
 // migration seeds (migrations/000074_plan_followup.up.sql) -- mirrors
 // templateNameSystem's own identical role for the review-vs-request/
 // plan-vs-build category (schema.go), one row per distinct classification

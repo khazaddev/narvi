@@ -29,7 +29,7 @@
 //   - Command (command.go): the mailbox's message type. TimerFired
 //     (delivered by the timer pump) was the only variant at first; the
 //     sandbox WS hub's own SandboxEvent (Step 18, one per inbound sandbox
-//     frame) and EnsureDispatched (Step 21, "please re-evaluate this
+//     frame) and EnsureDispatched (§9.3, "please re-evaluate this
 //     session's own spawn/dispatch state now") have since joined it.
 //   - The timer pump (timerpump.go): a single process-wide poll loop
 //     (§2: "A per-pod timer pump polls due timers (SELECT ... FOR UPDATE

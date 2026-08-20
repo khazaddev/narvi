@@ -12,7 +12,7 @@ import (
 // review.CounterReviewerAgentName, review.FactCheckAgentName -- the
 // primary reviewer's own orchestration is instructed (internal/domain/
 // review/context.go's own subAgentOrchestrationInstructions) to spawn via
-// the engine's own "task" tool, exactly mirroring Step 48's own
+// the engine's own "task" tool, exactly mirroring §8.2's own
 // "sentinel-fix" custom agent (sentinelfixagent.go, this file's own
 // direct precedent, generalized here from ONE agent to three).
 //

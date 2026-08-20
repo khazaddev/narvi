@@ -99,7 +99,7 @@ SELECT repo_full_name, pr_number, session_id, claimed_at, pending_retrigger_head
 WHERE session_id = $1
 `
 
-// The REVERSE lookup Step 35 ("outbox delivery") needs: given a
+// The REVERSE lookup §5.1 ("outbox delivery") needs: given a
 // session_id, which (repo_full_name, pr_number) PR does it back? Backed
 // by migrations/000032_github_pr_sessions_session_id_idx.up.sql's own new
 // index (this table had no session_id index before that Step, since Step

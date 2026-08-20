@@ -219,7 +219,7 @@ func baseVerdict() review.Verdict {
 }
 
 // TestRenderVerdictComment_DigestSummaryDistinctFromNarrativeSummary
-// proves Step 66's own central rendering property: Digest.Summary ("what
+// proves §26.1's own central rendering property: Digest.Summary ("what
 // this PR does") and the pre-existing free-text `summary` parameter (the
 // verdict's own narrative "why") are two INDEPENDENT pieces of rendered
 // text, never the same value rendered twice or one substituted for the
@@ -244,7 +244,7 @@ func TestRenderVerdictComment_DigestSummaryDistinctFromNarrativeSummary(t *testi
 		t.Fatalf("expected all three markers present, got %q", got)
 	}
 	// The narrative summary (header, unchanged) renders BEFORE "What this
-	// PR does" (Step 66's own new section), which in turn contains the
+	// PR does" (§26.1's own new section), which in turn contains the
 	// digest summary -- proving the two are ordered, distinct pieces of
 	// content, not a duplicate rendering of the same value.
 	if summaryIdx >= whatIdx || whatIdx >= digestIdx {

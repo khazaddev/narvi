@@ -357,7 +357,7 @@ func TestResolveStepForNewTurn_MultiRepoSession_FallsBackToGlobalBinding(t *test
 //
 // Exercises a CUSTOM (non-built-in) hitl_after step (seedCustomHITLAfterStep)
 // rather than the built-in plan workflow: migration
-// 000088_plan_builtin_passthrough (Step 56's own corrective follow-up)
+// 000088_plan_builtin_passthrough (§25.9's own corrective follow-up)
 // removed hitl_after from every built-in, so this is now the only way to
 // reach case 2 at all -- see seedCustomHITLAfterStep's own doc comment for
 // the full "why".

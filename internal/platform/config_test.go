@@ -11,11 +11,11 @@ import (
 )
 
 // setRequiredEnv sets NARVI_STAGE, NARVI_DATABASE_URL, the three
-// per-direction HMAC secret env vars (PR-06), Step 20's ("auth v1") own
+// per-direction HMAC secret env vars (PR-06), §13.1's ("auth v1") own
 // required vars (GitHub OAuth credentials, PublicBaseURL, a valid 32-byte
 // base64 token encryption key, and one allowlist mechanism), Step
 // 32's ("GitHub ingress") own required vars (the real GitHub webhook
-// secret and the bot mention handle), and Step 35's ("outbox delivery")
+// secret and the bot mention handle), and §5.1's ("outbox delivery")
 // own GitHub bot token to valid dummy values for the
 // duration of the calling (sub)test, via
 // t.Setenv. Tests that exercise one specific, unrelated env var
@@ -50,7 +50,7 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("NARVI_LINEAR_CLIENT_SECRET", "test-linear-client-secret")
 	t.Setenv("NARVI_LINEAR_DEFAULT_REPO_NAME", "narvi")
 	t.Setenv("NARVI_LINEAR_DEFAULT_REPO_URL", "https://github.com/khazaddev/narvi")
-	// Step 33 ("Slack ingress") own required vars -- SlackDefaultRepoName/
+	// §8.10 ("Slack ingress") own required vars -- SlackDefaultRepoName/
 	// URL are deliberately left unset here since they're optional (see
 	// internal/platform/config.go's own slackDefaultRepoNameEnvVarName doc
 	// comment).
@@ -525,7 +525,7 @@ func TestLoadGitHubOAuthConfig(t *testing.T) {
 
 // TestLoadModalConfig mirrors TestLoadGitHubOAuthConfig's own table shape:
 // NARVI_MODAL_BASE_URL/NARVI_MODAL_AUTH_TOKEN are each individually
-// required (Step 21, "e2e happy path" -- this Step is the SandboxProvider's
+// required (§9.3, "e2e happy path" -- this Step is the SandboxProvider's
 // first real production caller), NARVI_MODAL_EGRESS_PROXY_URL stays
 // optional.
 func TestLoadModalConfig(t *testing.T) {
@@ -630,7 +630,7 @@ func TestLoadGitHubWebhookConfig(t *testing.T) {
 	})
 }
 
-// TestLoadOpenCodeRuntimeVersion covers Step 26's ("image builds") own
+// TestLoadOpenCodeRuntimeVersion covers §8.5's ("image builds") own
 // optional NARVI_OPENCODE_RUNTIME_VERSION: unset defaults to
 // defaultOpenCodeRuntimeVersion (pinned equal to .github/workflows/ci.yml's
 // own opencode-ai pin at the time this Step was written -- see that

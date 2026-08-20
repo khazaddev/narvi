@@ -9,7 +9,7 @@
 // docs.slack.dev/reference/interaction-payloads/block_actions-payload) --
 // not invented from a summary, matching this codebase's own established
 // "verify against the real API" discipline (see client.go's own doc.go,
-// Step 33's ack.go).
+// §8.10's ack.go).
 //
 // # Button value encoding
 //

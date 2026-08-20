@@ -4,7 +4,7 @@
 // reviewCostBudgetServer/reviewCostBudgetHandler (reviewcostbudgetserver.go)
 // end to end: a REAL loopback listener, a REAL net/http.Get against it,
 // and the REAL internal/domain/reviewtriage.ShouldSkipOptionalPass
-// decision reflected in the response -- Step 70's own central mutation-
+// decision reflected in the response -- §26.5's own central mutation-
 // test target ("prove ShouldSkipOptionalPass is actually reached with a
 // real value, not a hardcoded stub").
 //

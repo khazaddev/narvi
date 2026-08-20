@@ -60,7 +60,7 @@ func (s *SandboxStore) UpdateStatusToSuspect(ctx context.Context, arg sqlcgen.Up
 
 // RecoverFromSuspect returns a Suspect sandbox to a previously-live state,
 // clearing pre_suspect_status back to NULL and bumping last_seen_at in the
-// same statement -- Step 24 ("two-phase terminalization"), see
+// same statement -- §3.2 ("two-phase terminalization"), see
 // RecoverSandboxFromSuspect's own generated doc comment.
 func (s *SandboxStore) RecoverFromSuspect(ctx context.Context, arg sqlcgen.RecoverSandboxFromSuspectParams) (sqlcgen.Sandbox, error) {
 	return s.q.RecoverSandboxFromSuspect(ctx, arg)
@@ -86,7 +86,7 @@ func (s *SandboxStore) UpdateCircuitBreaker(ctx context.Context, arg sqlcgen.Upd
 }
 
 // UpdateSnapshotID records a real, sandbox-confirmed snapshot id once a
-// "snapshot_ready" wire event arrives (Step 22, "snapshots & restore",
+// "snapshot_ready" wire event arrives (§3.2, "snapshots & restore",
 // design decision 3). Also clears pending_snapshot_message_id back to
 // NULL in the same statement -- see UpdateSandboxSnapshotID's own
 // generated doc comment.

@@ -77,7 +77,7 @@
 // bearer token, the credential cache, and now these secrets) is already
 // readable by the agent's own tools via /proc/<sandbox-agent-pid>/environ,
 // same-UID, regardless of which specific process a value was injected
-// into. OS-level isolation (a UID drop / user namespace) is Step 93's own
+// into. OS-level isolation (a UID drop / user namespace) is §30.5's own
 // scope, not this one's -- see that Step's own row in
 // docs/IMPLEMENTATION_PLAN.md for the named debt. The real boundaries
 // sandbox_secrets DOES hold today: encrypted at rest CP-side

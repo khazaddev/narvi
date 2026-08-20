@@ -39,7 +39,7 @@
 // completion.go's own doc comment on why this Step never auto-dispatches
 // one), complete the run, or escalate it to needs_review. A HITLAfter-gated
 // step never reaches NextStep at all here -- its attempt lands in
-// awaiting_decision and the run stays running, exactly where Step 56's own
+// awaiting_decision and the run stays running, exactly where §25.9's own
 // decide endpoint picks it up. As of migration
 // 000088_plan_builtin_passthrough (Step 56's own corrective follow-up,
 // §25.8/§25.9), no BUILT-IN workflow carries hitl_after any longer -- the

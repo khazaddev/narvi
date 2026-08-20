@@ -63,7 +63,7 @@
 // inconsistency between §26.3's own recap sentence and its fuller prose
 // is flagged in this Step's own PR description, not silently resolved.
 //
-// review:low-risk/review:medium-risk/review:high-risk (Step 47's own
+// review:low-risk/review:medium-risk/review:high-risk (§8.2's own
 // bot-synced risk labels, reviewpost.RiskLabel) are deliberately NOT
 // used as an independent sixth trigger here: they are themselves derived
 // from the SAME verdict history the fourth rule above already consults

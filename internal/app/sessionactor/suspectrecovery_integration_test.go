@@ -234,7 +234,7 @@ func TestHandleSandboxEvent_SuspectRecovery_RearmsLivenessAndInactivityWatchdogs
 // TestHandleSandboxEvent_SuspectRecovery_ReturnsToPreSuspectStatus above,
 // using a plain heartbeat. Using Ready HERE, combined with a REAL
 // execution_complete, would ALSO satisfy triggerSnapshotBestEffort's own
-// (Step 22, "snapshots & restore") independent "status == Ready" post-
+// (§3.2, "snapshots & restore") independent "status == Ready" post-
 // turn-snapshot precondition -- a real, correct, but entirely SEPARATE
 // feature this test is not about -- and its own asynchronous follow-up
 // writes to the same sandboxes row (fired from handleSandboxEvent's own
@@ -243,7 +243,7 @@ func TestHandleSandboxEvent_SuspectRecovery_RearmsLivenessAndInactivityWatchdogs
 // ordering) would then race this test's own post-send assertions on that
 // same row. Choosing a non-Ready pre-suspect status keeps
 // triggerSnapshotBestEffort's own guard a deterministic no-op regardless
-// of timing, isolating Step 24's own recovery+reconciliation behavior from
+// of timing, isolating §3.2's own recovery+reconciliation behavior from
 // Step 22's.
 func TestHandleSandboxEvent_LateExecutionComplete_RecoversSandboxTurnAndSession(t *testing.T) {
 	ctx := context.Background()

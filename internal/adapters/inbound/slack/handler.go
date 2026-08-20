@@ -253,7 +253,7 @@ type Deps struct {
 	// than building a third one.
 	IdentityLink identitylink.Deps
 	SlackClient  *slackapi.Client
-	// Timeouts is Step 39's own addition, read for its
+	// Timeouts is §13.2's own addition, read for its
 	// IdentityEmailFetch* fields only (identity.go) -- every OTHER
 	// timeout this package needs is still an existing discrete field
 	// below (TimestampWindow, AckTimeout), left untouched.
@@ -830,7 +830,7 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	}
 	// notice is no longer appended here -- see this function's own top
 	// doc comment for why it is now posted separately, ephemerally,
-	// scoped to ev.User (Step 39's own security-remediation addition).
+	// scoped to ev.User (§13.2's own security-remediation addition).
 	if err := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, ackText); err != nil {
 		logger.Warn("slack: post in-thread ack failed", "error", err)
 	}

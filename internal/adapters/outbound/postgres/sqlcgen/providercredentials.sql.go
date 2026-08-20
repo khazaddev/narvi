@@ -353,7 +353,7 @@ type ListProviderCredentialsForResolutionParams struct {
 // falling through to whatever OTHER scope might still resolve. A no-op
 // for every api_key row (oauth_needs_relink is NEVER true for kind <>
 // 'oauth', enforced by provider_credentials_kind_oauth_shape), so this
-// changes nothing for Step 53's own existing static-key resolution.
+// changes nothing for §25.1's own existing static-key resolution.
 func (q *Queries) ListProviderCredentialsForResolution(ctx context.Context, arg ListProviderCredentialsForResolutionParams) ([]ProviderCredential, error) {
 	rows, err := q.db.Query(ctx, listProviderCredentialsForResolution, arg.RepoFullNames, arg.EnvironmentID, arg.UserID)
 	if err != nil {

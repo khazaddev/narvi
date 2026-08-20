@@ -211,7 +211,7 @@ func (rs *automergeTestRig) seedEligiblePR(ctx context.Context, t *testing.T, re
 	return htmlURL
 }
 
-// TestPumpOnce_OffByDefault_NoMerge is Step 62's own explicitly-pinned
+// TestPumpOnce_OffByDefault_NoMerge is §21's own explicitly-pinned
 // mutation test: "auto-merge-off-by-default". A repo with a genuinely
 // eligible, auto-approved candidate PR on record, but NO repo_settings
 // row at all (the table's own established "absence means every flag

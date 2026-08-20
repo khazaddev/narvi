@@ -1,8 +1,8 @@
 // This file (githubtoken.go) holds decryptCreatorGitHubToken -- extracted
-// out of pushpr.go (Step 21, "e2e happy path", design decision 8) so it
+// out of pushpr.go (§9.3, "e2e happy path", design decision 8) so it
 // reads as a genuinely shared Actor-level helper rather than something
 // pushpr-specific: pushpr.go's own createPRBestEffort and dispatch.go's own
-// resolveAndSetImage (Step 26, "image builds") both need the SAME "decrypt
+// resolveAndSetImage (§8.5, "image builds") both need the SAME "decrypt
 // this session's creator's stored GitHub OAuth access token" logic, and
 // duplicating it verbatim in two places was never the right call once a
 // second caller existed. No behavior change from pushpr.go's own original

@@ -247,7 +247,7 @@ func TestValidateVerdictInput_FieldOrder(t *testing.T) {
 }
 
 // TestValidateVerdictInput_DigestSummaryCheckedLastAmongExisting proves
-// Step 66's own new Digest.Summary check runs AFTER every pre-existing
+// §26.1's own new Digest.Summary check runs AFTER every pre-existing
 // check (added at the end of the fixed order, never interleaved earlier,
 // per this function's own doc comment) -- a payload with BOTH an empty
 // top-level Summary AND an empty Digest.Summary must still report

@@ -1,7 +1,7 @@
 //go:build integration
 
 // Integration tests for the two small, EXPORTED bot-ingress wrappers in
-// bot.go (Step 32, "GitHub ingress") -- CreateSessionForBot and
+// bot.go (§8.2, "GitHub ingress") -- CreateSessionForBot and
 // CreateTurnForBot. Lives in package httpapi (not httpapi_test), mirroring
 // createcore_integration_test.go's own precedent, since it exercises
 // createSessionCore indirectly through CreateSessionForBot. Builds its
@@ -123,7 +123,7 @@ func TestCreateSessionForBot_ValidationFailureSurfacesAsError(t *testing.T) {
 // and that it does NOT apply CreateTurn's own hasOpenTurn 409 gate -- a
 // SECOND call while the first turn is still Pending must still succeed
 // (see bot.go's own doc comment for why: this is exactly the coalesced-
-// backlog behavior Step 32's own per-PR reuse needs).
+// backlog behavior §8.2's own per-PR reuse needs).
 func TestCreateTurnForBot_EnqueuesTurnOnExistingSession(t *testing.T) {
 	ctx := context.Background()
 	pool := newBotTestPool(t)

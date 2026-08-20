@@ -132,7 +132,7 @@
 // # Step 46 ("review sessions", §8.2): manual re-trigger via label, and
 // inline pre-fetched diff/stack context
 //
-// Step 32 above already delivers two of Step 46's own three named
+// §8.2 above already delivers two of §8.2's own three named
 // properties in full -- "per-PR reuse: a second mention on the same PR
 // joins the existing review session" IS the REUSE branch this file's own
 // coalescing design section already describes, and "atomic claim on
@@ -157,7 +157,7 @@
 //     @mention would); a label event on a PR that already has one becomes
 //     an ordinary REUSE, enqueuing a new turn. The manual re-review REST
 //     button (internal/adapters/inbound/httpapi's RetriggerReview) is
-//     Step 46's own THIRD re-trigger surface, targeting an already-known
+//     §8.2's own THIRD re-trigger surface, targeting an already-known
 //     session_id directly rather than routing through this per-PR claim at
 //     all (that handler's own doc comment explains why it doesn't need
 //     to). Every one of these three manual triggers is a STRUCTURED signal

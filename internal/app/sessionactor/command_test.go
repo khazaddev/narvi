@@ -43,7 +43,7 @@ func TestTimerFired_IsCommand(t *testing.T) {
 
 // TestEnsureDispatched_IsCommand proves EnsureDispatched satisfies the
 // Command interface -- a zero-payload signal, so there is nothing to
-// round-trip beyond the type assertion itself (Step 21, "e2e happy path").
+// round-trip beyond the type assertion itself (§9.3, "e2e happy path").
 func TestEnsureDispatched_IsCommand(t *testing.T) {
 	t.Parallel()
 

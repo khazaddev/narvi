@@ -130,7 +130,7 @@ func TestEventStore_ListForSession(t *testing.T) {
 // TestEventStore_ListRecentForSession proves ListRecentForSession's own
 // mirror-image pagination direction from ListForSession above: newest id
 // first, limit honored exactly, and scoped to sessionID alone -- the
-// mechanism sessionactor.planContentText (Step 38, "plan mode,
+// mechanism sessionactor.planContentText (§8.1, "plan mode,
 // cross-channel") relies on to find a plan-mode turn's own final token
 // event within a bounded window regardless of how much EARLIER history a
 // long-lived session has already accumulated.

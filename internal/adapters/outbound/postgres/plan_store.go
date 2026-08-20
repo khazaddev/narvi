@@ -98,7 +98,7 @@ func (s *PlanStore) Get(ctx context.Context, id pgtype.UUID) (sqlcgen.Plan, erro
 
 // SetSlackMessageRef persists the real Slack channel+message-timestamp a
 // successful chat.postMessage call for planID's own approval-request
-// message returned -- Step 38's own addition, called exactly once, by
+// message returned -- §8.1's own addition, called exactly once, by
 // internal/app/outboxworker's Slack plan-approval notifier, right after
 // that call succeeds. A later decision (from ANY entry point) reads this
 // back (via Get above) to know which Slack message to chat.update.
@@ -112,7 +112,7 @@ func (s *PlanStore) SetSlackMessageRef(ctx context.Context, id pgtype.UUID, chan
 
 // ListAwaitingApproval returns every plan still 'awaiting_approval',
 // system-wide, joined with each plan's own session for (created_by,
-// title) -- Step 60's own awaiting_approval row source (see
+// title) -- §16's own awaiting_approval row source (see
 // ListAwaitingApprovalPlans' own generated doc comment for the full
 // design).
 func (s *PlanStore) ListAwaitingApproval(ctx context.Context) ([]sqlcgen.ListAwaitingApprovalPlansRow, error) {
@@ -120,7 +120,7 @@ func (s *PlanStore) ListAwaitingApproval(ctx context.Context) ([]sqlcgen.ListAwa
 }
 
 // ListRecentlyDecided returns up to limit plans decided (approved or
-// rejected) at or after since -- Step 60's own decision-latency metric
+// rejected) at or after since -- §16's own decision-latency metric
 // input (see ListRecentlyDecidedPlans' own generated doc comment).
 func (s *PlanStore) ListRecentlyDecided(ctx context.Context, since pgtype.Timestamptz, limit int32) ([]sqlcgen.Plan, error) {
 	return s.q.ListRecentlyDecidedPlans(ctx, sqlcgen.ListRecentlyDecidedPlansParams{DecidedAt: since, Limit: limit})

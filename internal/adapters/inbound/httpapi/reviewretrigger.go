@@ -55,7 +55,7 @@ import (
 // internal/adapters/inbound/github's own labelRetriggerPromptText constant
 // exactly in kind (a plain, fixed string, never model-generated) -- worded
 // distinctly only so a maintainer reading turns.prompt later can tell
-// which of Step 46's three manual surfaces actually triggered a given
+// which of §8.2's three manual surfaces actually triggered a given
 // turn.
 const manualRetriggerPromptText = "Manual re-review requested via the web review button."
 

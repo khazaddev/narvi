@@ -40,7 +40,7 @@ var testTokenEncryptionKey = []byte("0123456789abcdef0123456789abcdef")
 // CreatePR call it receives and returning a caller-configured (ref, err)
 // pair.
 //
-// Step 26 ("image builds") extends this same fake with an identical
+// §8.5 ("image builds") extends this same fake with an identical
 // recording shape for ResolveBranchSHA (shaCalls/nextSHA/nextSHAErr, plus
 // an optional per-repo shaFor map so a test can return DIFFERENT SHAs for
 // different repos in one multi-repo session) rather than introducing a
@@ -48,7 +48,7 @@ var testTokenEncryptionKey = []byte("0123456789abcdef0123456789abcdef")
 // exact same CreatePR-call-recording precedent, just for the other
 // SourceControl method dispatch.go's resolveAndSetImage now calls.
 //
-// Step 27 ("mocking + contract drift") extends this SAME fake again, the
+// §14.3 ("mocking + contract drift") extends this SAME fake again, the
 // identical way, for ResolveContractsFingerprint (fingerprintCalls/
 // nextFingerprint/nextFingerprintExists/nextFingerprintErr, plus an
 // optional per-repo fingerprintFor map) -- this package's own

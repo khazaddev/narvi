@@ -131,7 +131,7 @@ type RecoverSandboxFromSuspectParams struct {
 	LastSeenAt pgtype.Timestamptz `json:"last_seen_at"`
 }
 
-// Step 24 ("two-phase terminalization"): the single write
+// §3.2 ("two-phase terminalization"): the single write
 // handleSandboxEvent's own recovery branch (sandboxevent.go) performs
 // when ANY recognized inbound sandbox event arrives for a Suspect sandbox
 // that still carries a pre_suspect_status -- i.e. "any liveness signal
@@ -312,7 +312,7 @@ type UpdateSandboxSnapshotIDParams struct {
 	SnapshotID *string     `json:"snapshot_id"`
 }
 
-// Step 22 ("snapshots & restore"), design decision 3: records a real,
+// §3.2 ("snapshots & restore"), design decision 3: records a real,
 // sandbox-confirmed snapshot id once a "snapshot_ready" wire event
 // arrives -- read back as SpawnState.SnapshotImageID (internal/domain/
 // sandbox.EvaluateSpawnDecision's own restore-eligibility input) on a
@@ -406,7 +406,7 @@ type UpdateSandboxStatusToSuspectParams struct {
 	PreSuspectStatus *SandboxStatus `json:"pre_suspect_status"`
 }
 
-// Step 24 ("two-phase terminalization"): the single write
+// §3.2 ("two-phase terminalization"): the single write
 // transitionSandboxToSuspect (internal/app/sessionactor/timerfired.go)
 // performs when a watchdog moves a sandbox into Suspect. Sets status =
 // 'suspect' as a hardcoded literal -- mirroring UpsertSandboxForSpawn's

@@ -273,7 +273,7 @@ func taskInputDescription(raw json.RawMessage) string {
 // OpenCode's own real dispatch parameter: the literal value the model
 // passes to invoke a specific named custom agent (e.g.
 // review.CounterReviewerAgentName's "counter-reviewer"), not freeform
-// text — which is exactly why Step 71's post-hoc corroboration
+// text — which is exactly why §26.4's post-hoc corroboration
 // (reviewverdict.CounterReviewCorroborated) keys off this field rather
 // than Label. Returns "" on absent/malformed input, never an error: this
 // only feeds a display/correlation field on the wire event, the same

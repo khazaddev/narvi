@@ -17,7 +17,7 @@
 // bearer-token verify side (HashSandboxToken + verifySandboxToken) against
 // sandboxes.token_hash (migrations/000015_sandbox_token_hash.up.sql).
 //
-// Outbound dispatch (Step 21, "e2e happy path"): commander.go's own
+// Outbound dispatch (§9.3, "e2e happy path"): commander.go's own
 // SandboxRegistry is the single-recipient (not fan-out) live-connection
 // registry that implements internal/app/ports.SandboxCommander --
 // NewSandboxHandler registers each connection with it right before
@@ -80,7 +80,7 @@
 //     real value -- no Step yet wires a real provider-assigned
 //     sandbox-instance id into the sandbox's own environment (matching
 //     internal/sandboxagent/wsbridge/doc.go's own identical gap on the
-//     client side, and Step 13's NARVI_IMAGE_DIGEST gap).
+//     client side, and §6.4's NARVI_IMAGE_DIGEST gap).
 //   - ErrSessionActorElsewhere (this process doesn't hold the session's
 //     advisory lock) maps to 503, not one of wsbridge's own 4 "fatal"
 //     statuses (401/403/404/410) -- deliberately, so the sandbox-agent's
@@ -90,7 +90,7 @@
 //     limitation, not a permanent solution -- not scoped to any specific
 //     later Step by the plan.
 //   - Sandbox token MINTING (generating a fresh token + writing its hash
-//     at spawn time) now exists (Step 21's own tryPlanSpawn,
+//     at spawn time) now exists (§9.3's own tryPlanSpawn,
 //     internal/app/sessionactor/dispatch.go, calling platform.
 //     GenerateToken + UpsertSandboxForSpawn) -- HashSandboxToken was
 //     exported specifically so that caller could reuse this package's own
@@ -118,7 +118,7 @@
 //     file's own top comment for the full mechanics. This package itself
 //     needed no change for that: it already let a Suspect reconnect
 //     through unmodified.
-//   - Real user auth/identity now exists (Step 20, "auth v1") -- REST
+//   - Real user auth/identity now exists (§13.1, "auth v1") -- REST
 //     ws-token minting (internal/adapters/inbound/httpapi's own
 //     MintWSToken) is gated behind internal/adapters/inbound/auth.
 //     Middleware and scopes ws_tokens.user_id to the real authenticated

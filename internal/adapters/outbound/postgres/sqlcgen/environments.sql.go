@@ -36,7 +36,7 @@ type CreateEnvironmentParams struct {
 // path_scope is the caller-supplied pathScope, already validated by
 // internal/domain/environment.ValidatePathScope BEFORE this is ever
 // called -- this query performs no validation of its own. mock_configured/
-// contracts_path (Step 27, "mocking + contract drift") are the caller's
+// contracts_path (§14.3, "mocking + contract drift") are the caller's
 // own resolved mockConfig presence/path -- mock_configured=false and
 // contracts_path=NULL (the ordinary, unscoped-mock case) when the
 // request's mockConfig key was absent; see httpapi.CreateSession's own

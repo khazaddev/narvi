@@ -61,7 +61,7 @@ func TestLaneFor(t *testing.T) {
 		{"review + plan (mode ignored for reviews)", intent.TargetReview, intent.ModePlan, workflow.LaneReview},
 		{"review + empty mode", intent.TargetReview, "", workflow.LaneReview},
 
-		// Step 50's release-vs-feature category: both values are review
+		// §15's release-vs-feature category: both values are review
 		// flavors (release PR review vs ordinary feature/fix PR review,
 		// intent/release.go) -- both map into the review lane, never out
 		// of it (§25.4 keeps Lane a closed 3-value enum).

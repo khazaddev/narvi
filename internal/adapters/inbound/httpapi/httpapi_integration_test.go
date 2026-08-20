@@ -18,7 +18,7 @@
 // control-plane/main.go's own real wiring -- every request below now goes
 // through a REAL session (createAuthenticatedUser constructs one directly
 // via the stores: users.Create + identities.Create + userSessions.Create +
-// attaching the resulting cookie, mirroring exactly how Step 19's own
+// attaching the resulting cookie, mirroring exactly how §6.2's own
 // createSession helper already bypasses REST for test setup) rather than
 // mocking auth away.
 package httpapi_test
@@ -125,11 +125,11 @@ type testRig struct {
 
 	// tokenEncryptionKey is a fixed, valid 32-byte AES-256-GCM key used by
 	// this rig's own scm-credentials tests (real EncryptToken/DecryptToken
-	// round trip, matching the SAME real flow Step 20's own OAuth callback
+	// round trip, matching the SAME real flow §13.1's own OAuth callback
 	// uses -- not a shortcut).
 	tokenEncryptionKey []byte
 
-	// provider is Step 22's ("snapshots & restore") own addition -- a
+	// provider is §3.2's ("snapshots & restore") own addition -- a
 	// *fakeSnapshotProvider (snapshotmint_integration_test.go), configured
 	// per-test via its own exported fields, backing this rig's own
 	// snapshot-mint route below.
@@ -518,7 +518,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// comment.
 	router.Post("/sessions/{sessionID}/scm-credentials",
 		httpapi.ScmCredentials(rig.sessions, rig.sandboxes, rig.identities, rig.users, rig.prSessions, rig.botToken, rig.tokenEncryptionKey, platform.DefaultTimeouts()))
-	// snapshot-mint (Step 22, "snapshots & restore") is mounted the SAME
+	// snapshot-mint (§3.2, "snapshots & restore") is mounted the SAME
 	// way -- see snapshotmint.go's own doc comment.
 	router.Post("/sessions/{sessionID}/snapshot",
 		httpapi.SnapshotMint(rig.sandboxes, rig.provider))
@@ -925,7 +925,7 @@ func (r testRig) doJSON(t *testing.T, method, path string, body []byte, v any, t
 
 // TestRoutes_RequireAuth proves every one of the 5 routes rejects a request
 // with NO narvi_auth_session cookie at all with 401 -- the concrete proof
-// Step 19's old open-access behavior is gone.
+// §6.2's old open-access behavior is gone.
 func TestRoutes_RequireAuth(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
@@ -993,7 +993,7 @@ func TestCreateSession_HappyPath(t *testing.T) {
 	if got.SpawnSource != restdtos.SessionSpawnSourceWeb {
 		t.Errorf("SpawnSource = %q, want %q", got.SpawnSource, restdtos.SessionSpawnSourceWeb)
 	}
-	// The concrete proof Step 19's own "created_by always NULL" gap is
+	// The concrete proof §6.2's own "created_by always NULL" gap is
 	// closed: it now matches the REAL authenticated caller's id.
 	if got.CreatedBy == nil {
 		t.Fatal("CreatedBy = nil, want the authenticated user's id")
@@ -1008,7 +1008,7 @@ func TestCreateSession_HappyPath(t *testing.T) {
 		t.Error("Archived = true, want false for a freshly created session")
 	}
 
-	// Step 21 ("e2e happy path"): repos is now actually persisted, and a
+	// §9.3 ("e2e happy path"): repos is now actually persisted, and a
 	// pending turn was created carrying the prompt/planMode -- the
 	// concrete proof create.go's own doc comment describes.
 	var sessionID pgtype.UUID
@@ -2294,7 +2294,7 @@ func TestMintWSToken_HappyPath(t *testing.T) {
 	}
 
 	// The stored row holds only the HASH, never the plaintext, is scoped
-	// to this session, and -- the concrete proof Step 19's own
+	// to this session, and -- the concrete proof §6.2's own
 	// "ws_tokens.user_id always NULL" gap is closed -- carries the REAL
 	// authenticated caller's id.
 	stored, err := rig.wsTokens.GetByHash(ctx, platform.HashToken(got.Token))

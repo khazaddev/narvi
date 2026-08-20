@@ -110,7 +110,7 @@ func TestComputeFormalReviewEvent(t *testing.T) {
 
 // TestComputeFormalReviewEvent_NeverApproves proves this function never
 // returns anything but COMMENT/REQUEST_CHANGES across a broad sweep of
-// inputs -- APPROVE must never be producible here (Step 58's own future
+// inputs -- APPROVE must never be producible here (§8.6's own future
 // eligibility engine is the dedicated, later home for approving a PR).
 func TestComputeFormalReviewEvent_NeverApproves(t *testing.T) {
 	shippables := []review.Shippable{review.ShippableAuto, review.ShippableNeedsHuman, review.ShippableBlock}

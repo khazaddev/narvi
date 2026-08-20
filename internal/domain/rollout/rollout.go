@@ -6,7 +6,7 @@
 // create, inside the same transaction that is about to insert the
 // session) and the dispatch-time re-check (internal/app/sessionactor's
 // own tryPlanSpawn, run fresh on every Spawn/Restore/Resume attempt for
-// the session's entire lifetime) -- mirroring Step 74's own identical
+// the session's entire lifetime) -- mirroring §27.5's own identical
 // "one pure function, two independent call sites" shape exactly
 // (internal/domain/environment.CheckSubstrateCapabilities is that Step's
 // own twin of this package).

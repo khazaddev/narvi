@@ -3,7 +3,7 @@
 // /sessions/{sessionID}/review/verdict. This is the ONLY sanctioned way a
 // review session's output reaches its pull request as a comment or formal
 // review -- internal/app/sessionactor/outboxenqueue.go's own github-origin
-// branch (Step 47's own RAW-COMMENT BLOCKING) no longer enqueues anything
+// branch (§8.2's own RAW-COMMENT BLOCKING) no longer enqueues anything
 // on its own, so a review session that never calls this endpoint simply
 // posts nothing.
 //
@@ -480,7 +480,7 @@ func PostReviewVerdict(
 		// §22.1.1's own content-anchored positioning: resolved ONCE, here,
 		// before RenderVerdictComment ever renders findings -- "no second
 		// pass, by construction" (every finding already present in this
-		// SAME payload, Step 45's structured-verdict invariant). Skipped
+		// SAME payload, §8.2's structured-verdict invariant). Skipped
 		// entirely (every finding stays at its own honest StartLine=0/
 		// EndLine=0 zero value, reviewpost.BuildFindings' own default) when
 		// there is nothing to anchor against at all: no findings, or no

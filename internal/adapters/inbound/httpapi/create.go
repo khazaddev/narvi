@@ -158,7 +158,7 @@ const defaultContractsPath = "contracts/api"
 // left completely unchanged -- sandbox-agent must never trust what it
 // receives, even from a layer that validates first.
 //
-// Step 21 ("e2e happy path") update: req.Repos is now actually PERSISTED
+// §9.3 ("e2e happy path") update: req.Repos is now actually PERSISTED
 // (marshaled to the sessions.repos JSONB column -- design decision 1,
 // migrations/000018_session_repos.up.sql). When req.Prompt is non-nil, a
 // Turn row is ALSO inserted, in the SAME Postgres transaction as the
@@ -236,7 +236,7 @@ const defaultContractsPath = "contracts/api"
 // themselves are UNCHANGED by this fix, so the bot-ingress callers above
 // keep passing their own genuine spawnSource exactly as before.
 //
-// Step 31 ("webhook toolkit") update: everything this func used to do
+// §5.1 ("webhook toolkit") update: everything this func used to do
 // AFTER decoding the request body is now CreateSessionCore below -- a
 // pure extraction, not a behavior change (every case this func's own doc
 // comment above describes, and every existing test in this package's own
@@ -247,7 +247,7 @@ const defaultContractsPath = "contracts/api"
 // CreateSessionCore directly with its own already-decoded request and a
 // NULL createdBy (no cookie, no human), never this func.
 //
-// Step 33 ("Slack ingress") update: CreateSessionCore (and
+// §8.10 ("Slack ingress") update: CreateSessionCore (and
 // CreateSessionError, alongside it) is now EXPORTED -- doc.go's own Step
 // 31 writeup left the unexported-vs-exported question deliberately open
 // for Steps 32-34 to decide ("Whether that turns out to be ... or Steps
@@ -271,7 +271,7 @@ const defaultContractsPath = "contracts/api"
 // it still calls CreateSessionCore exactly as before, and every existing
 // test in this package's own _test.go files passes unchanged. Likewise,
 // CreateSessionCore's own external signature/behavior -- the two things
-// Step 33's Slack ingress (above) actually depends on -- is unchanged by
+// §8.10's Slack ingress (above) actually depends on -- is unchanged by
 // this split: same params, same (sqlcgen.Session, *CreateSessionError)
 // return, same validate -> insert -> commit -> dispatch sequencing.
 // intentSvc is nil-safe (see recordExplicitIntentDecision's own doc

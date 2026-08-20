@@ -13,7 +13,7 @@ import (
 
 // SandboxRegistry is the in-process, session-keyed registry of live
 // sandbox WS connections that implements internal/app/ports.
-// SandboxCommander (Step 21, "e2e happy path", design decision 4) -- the
+// SandboxCommander (§9.3, "e2e happy path", design decision 4) -- the
 // outbound half of what sandbox.go's own doc comment named as
 // "actually dispatching outbound sandbox commands" as this Step's job.
 //

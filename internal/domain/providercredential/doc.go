@@ -90,7 +90,7 @@
 //     doc comment: "generic... specifically so this package never has to
 //     know or care whether the caller has already decrypted..."). Renaming
 //     this package is left as a possible future cleanup, not done here,
-//     to keep Step 72's diff to the addition it actually is.
+//     to keep §27.1's diff to the addition it actually is.
 //  2. ScopeUser (Step 59, provider_credentials only) and ScopeAutomation
 //     (Step 72, sandbox_secrets only) are two DIFFERENT tables' own most-
 //     specific level, sharing this one priority map purely for

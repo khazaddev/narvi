@@ -52,7 +52,7 @@ const fallbackReconnectGraceMultiplier = 2
 // package does NOT spawn or supervise the OpenCode process itself; that is
 // internal/sandboxagent/opencodeproc's job, using
 // internal/sandboxagent/supervisor — the same separation Modal's adapter
-// already establishes relative to Step 13's supervisor. Build one with New
+// already establishes relative to §6.4's supervisor. Build one with New
 // from a baseURL an opencodeproc.Spawn call already confirmed healthy.
 //
 // # Verified vs. schema-derived vs. best-effort
@@ -456,7 +456,7 @@ func (a *Adapter) disconnectedSince(t time.Time) bool {
 // finalizeCanceled instead of returning silently (Finding 5 — the three
 // gaps this promise used to have).
 //
-// Step 28 ("turn recovery") adds onConversationID: invoked immediately
+// §3.3 ("turn recovery") adds onConversationID: invoked immediately
 // after resolveSession succeeds below — BEFORE registerTurn/
 // postPromptAsync/waitForTurn, i.e. well before this call's own long
 // block for the rest of the turn — with the real, resolved sessionID.

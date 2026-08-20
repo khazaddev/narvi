@@ -18,7 +18,7 @@ import (
 // BootMode); the rest are this Step's own invented plumbing, since no
 // other SESSION_CONFIG delivery mechanism is pinned yet.
 //
-// SessionConfigEnvVar (NARVI_SESSION_CONFIG) is Step 15's own answer to
+// SessionConfigEnvVar (NARVI_SESSION_CONFIG) is §6.4's own answer to
 // that gap: an OPTIONAL env var carrying the full SESSION_CONFIG document
 // as JSON. Its absence remains a fully valid, correct state (see Config.
 // SessionConfig's own doc comment) -- dev/CI environments have no live

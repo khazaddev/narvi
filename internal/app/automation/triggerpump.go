@@ -52,7 +52,7 @@ func unmarshalCronTriggerConfig(raw []byte) (domainautomation.CronTriggerConfig,
 // CURRENT minute bucket (ClaimCronFire's CAS) and, on winning it, calls
 // CreateInvocation with a fresh snapshot of the automation's own current
 // repos as targets -- mirrors invocationenqueue.go's own doc comment:
-// "Step 52's own future trigger evaluator is expected to check this same
+// "§8.4's own future trigger evaluator is expected to check this same
 // status before ever calling CreateInvocation" -- ListActiveCronAutomations'
 // own "AND status = 'active'" filter is exactly that check, evaluated fresh
 // every tick (a paused automation simply stops appearing in this list, with

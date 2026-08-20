@@ -123,7 +123,7 @@ type PreFetchedContext struct {
 	// that SAME response -- server-side bookkeeping ONLY, mirroring
 	// HeadSHA's own "never rendered into the prompt text" contract: an
 	// agent has no legitimate use for these as instructions, they exist
-	// purely to feed internal/domain/reviewtriage.Decide (Step 68's own
+	// purely to feed internal/domain/reviewtriage.Decide (§26.3's own
 	// light/deep routing decision). All three are 0 for a failed
 	// GetPullRequest fetch, indistinguishable from a genuinely empty
 	// diff -- reviewtriage's own "any triage error fails open to light"
@@ -144,7 +144,7 @@ type PreFetchedContext struct {
 	// Labels (§26.3) is this PR's own current GitHub label set
 	// -- bookkeeping only, mirrors HeadSHA -- sourced from the SAME
 	// GetPullRequest call (githubapi.PullRequest.Labels, already
-	// resolved for Step 50's release detection) rather than a new fetch.
+	// resolved for §15's release detection) rather than a new fetch.
 	// Feeds reviewtriage's own "existing risk labels" signal
 	// (specifically, reviewpost.LabelNeedsHuman's presence).
 	Labels []string
@@ -413,7 +413,7 @@ const (
 // per-invocation to git itself, never persisted anywhere `gh` could
 // inherit it from), so `gh pr view` had no credential to run with on any
 // of this system's three real trigger lanes -- and two of those three
-// (a label retrigger, and Step 65's own automatic re-review) hand the
+// (a label retrigger, and §24's own automatic re-review) hand the
 // agent a FIXED prompt that does not even name the PR, leaving no way for
 // the agent to know what to fetch even with a working credential. The
 // floor this Step builds (review.AdequacyFloor) was consequently dead on
@@ -765,7 +765,7 @@ func twoDigits(n int) string {
 //     only thing to verdict over, never the cumulative stack diff.
 //
 // A FIFTH piece, unconditional and always last: verdictToolInstructions
-// (above), instructing the agent how to post its verdict via Step 47's
+// (above), instructing the agent how to post its verdict via §8.2's
 // own verdict-posting tool -- unconditional because all THREE of this
 // function's own real callers (internal/adapters/inbound/github's own
 // handler.go, internal/adapters/inbound/httpapi's own reviewretrigger.go,

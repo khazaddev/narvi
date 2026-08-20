@@ -43,7 +43,7 @@ const narviReservedPrefix = "NARVI_"
 // "OPENCODE_CONFIG_CONTENT", which applySandboxSecretEnv/opencodeproc.
 // Spawn would then thread into `opencode serve`'s own env, letting a
 // customer-authored value at OpenCode's HIGHEST-precedence slot override
-// Step 48's sentinel-fix capability-restriction write (which targets the
+// §8.2's sentinel-fix capability-restriction write (which targets the
 // LOWER-precedence project slot) -- exactly the "a customer-authored
 // config can never override the security-relevant agent restriction"
 // guarantee §27.2 claims, defeated by this Step's OWN sibling mechanism.

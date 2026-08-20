@@ -119,7 +119,7 @@ type GetIdentityByUserAndProviderParams struct {
 	Provider IdentityProvider `json:"provider"`
 }
 
-// Step 21 ("e2e happy path")'s own scm-credentials endpoint uses this to
+// §9.3 ("e2e happy path")'s own scm-credentials endpoint uses this to
 // find a session's created_by user's GitHub identity (to decrypt its
 // access_token_encrypted) -- the OAuth callback's own lookup above goes
 // the other direction (provider+external_id -> user).

@@ -1,5 +1,5 @@
 // This file (sessionconfig.go) implements real SessionConfig assembly
-// (Step 21, "e2e happy path", design decision 6) -- the FIRST real caller
+// (§9.3, "e2e happy path", design decision 6) -- the FIRST real caller
 // anywhere in the repo that constructs a sessionconfig.SessionConfig
 // struct literal (confirmed by a repo-wide grep before this Step started).
 
@@ -314,7 +314,7 @@ func reviewCredentialRepoFullNames(rawRepos []byte) ([]string, error) {
 //     (dispatch.go's planRestore, Step 22 "snapshots & restore", design
 //     decision 6b: "thread a boolean/enum parameter through
 //     assembleSessionConfig rather than hardcoding a second copy of this
-//     function"). Step 26 ("image builds") upgrades a Fresh value to
+//     function"). §8.5 ("image builds") upgrades a Fresh value to
 //     RepoImage AFTER this function returns (dispatch.go's own
 //     resolveAndSetImage, imageresolve.go), once -- and only once -- a
 //     real, ready, matching prebuilt image is actually found for that
@@ -339,7 +339,7 @@ func reviewCredentialRepoFullNames(rawRepos []byte) ([]string, error) {
 //     minted one -- SessionConfig.CorrelationId's own doc comment: "Null
 //     only when no upstream correlation id exists").
 //   - Gen: the sandbox row's own just-bumped gen.
-//   - PathScope: Step 29's own addition -- environmentSubstrate(ctx, tx,
+//   - PathScope: §3.4's own addition -- environmentSubstrate(ctx, tx,
 //     sessionRow.EnvironmentID), above; nil (absent from the wire document
 //     entirely, via its own omitempty) for the overwhelming common,
 //     unscoped case.

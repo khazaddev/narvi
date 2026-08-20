@@ -52,7 +52,7 @@
 // expiry (see failDispatchedTurn's own doc comment for exactly why that
 // specific existing edge, not a different one, is reused here).
 //
-// The resume branch (Step 23, "resume") originally needed a genuinely
+// The resume branch (§3.2, "resume") originally needed a genuinely
 // different shape from spawn/restore above: sandbox.TriggerResume used to
 // go STRAIGHT from Stopped/Stale to Connecting, with no interim
 // "Spawning"-like state to write before calling the provider the way
@@ -141,7 +141,7 @@ import (
 // miss -- never block a session") -- renamed from Step 21's own
 // placeholderBaseImage (its doc comment: "the CreateSpec.Image value used
 // until Step 26 ... makes real per-session image construction a thing")
-// now that Step 26 ("image builds") is genuinely that thing: this is no
+// now that §8.5 ("image builds") is genuinely that thing: this is no
 // longer merely a placeholder pending a later Step, it is the REQUIRED,
 // permanent fallback value dispatch.go/imageresolve.go's resolveAndSetImage
 // leaves untouched on any miss. Also doubles as ports.ImageSpec.Base for
@@ -164,7 +164,7 @@ import (
 const defaultBaseImage = "narvi/sandbox-agent:placeholder"
 
 // scmCommitName/scmCommitEmail are the currently-unused-anywhere-in-git
-// placeholder git author identity values Step 17's own gap already
+// placeholder git author identity values §7's own gap already
 // documented (cmd/sandbox-agent's commandHandler never actually invokes
 // git commit itself -- OpenCode's own tooling does, configured with
 // whatever scmName/scmEmail this Prompt carries). Real per-user git
@@ -199,7 +199,7 @@ func hashSandboxToken(token string) string {
 // happens OUTSIDE that transact, in executeSpawn/executeRestore/
 // executeResume, using exactly this plan.
 //
-// Step 23's own concurrency fix folds resume into this SAME type (see the
+// §3.2's own concurrency fix folds resume into this SAME type (see the
 // resume/providerObjectID fields below) rather than keeping the separate
 // resumePlan type this Step originally introduced: now that
 // sandbox.TriggerResume's own first-step target is Spawning (state.go),
@@ -232,7 +232,7 @@ type spawnPlan struct {
 
 	// resume is true when this plan is a Stopped/Stale -> Spawning
 	// interim claim for a persistent RESUME of an existing provider
-	// sandbox object (Step 23, "resume") -- reusing the SAME two-step
+	// sandbox object (§3.2, "resume") -- reusing the SAME two-step
 	// shape restore/spawn already have, now that TriggerResume's own
 	// target is Spawning rather than a special one-step jump straight to
 	// Connecting. handleEnsureDispatched dispatches resume==true to
@@ -248,7 +248,7 @@ type spawnPlan struct {
 	// takes no CreateSpec at all.
 	providerObjectID string
 
-	// createdBy is sessionRow.CreatedBy (Step 26, "image builds") --
+	// createdBy is sessionRow.CreatedBy (§8.5, "image builds") --
 	// populated only on a fresh-spawn or restore plan (planFreshSpawn/
 	// planRestore both already have sessionRow in scope); left at its zero
 	// value on a resume plan, which never needs it (resolveAndSetImage,
@@ -259,7 +259,7 @@ type spawnPlan struct {
 	// returned.
 	createdBy pgtype.UUID
 
-	// environmentID is sessionRow.EnvironmentID (Step 27, "mocking +
+	// environmentID is sessionRow.EnvironmentID (§14.3, "mocking +
 	// contract drift") -- populated in BOTH planFreshSpawn and planRestore,
 	// mirroring createdBy's own identical population exactly (same
 	// reasoning: both already have sessionRow in scope; a resume plan does
@@ -288,7 +288,7 @@ type dispatchPlan struct {
 	// transact -- threaded through here, rather than re-queried a second
 	// time, mirroring spawnPlan's own createdBy/environmentID precedent
 	// (its own doc comment: "Threaded through here rather than re-fetching
-	// sessionRow a second time"). Step 76's own turn-dispatch-time rollout
+	// sessionRow a second time"). §10's own turn-dispatch-time rollout
 	// re-check (executeDispatch, below) is why this field exists: it needs
 	// sessionRow.Repos to resolve admission, and it runs OUTSIDE any
 	// transaction, after this plan's own transact has already committed
@@ -304,7 +304,7 @@ type dispatchPlan struct {
 // the SAME spawnPlan type (its own doc comment above explains why) and
 // are mutually exclusive by construction.
 //
-// Step 26 ("image builds") adds resolveAndSetImage on the spawn/restore
+// §8.5 ("image builds") adds resolveAndSetImage on the spawn/restore
 // branches ONLY (never resume, which has no CreateSpec at all -- see
 // planResume's own doc comment) -- called here, AFTER planDispatch's own
 // transact has already committed and returned, exactly like executeSpawn/
@@ -566,13 +566,13 @@ func (a *Actor) planReenqueueOrRespawn(
 	return sp, nil, err
 }
 
-// tryPlanReenqueue implements Step 28's ("turn recovery") own re-enqueue
+// tryPlanReenqueue implements §3.3's ("turn recovery") own re-enqueue
 // write: re-sends target's prompt to sandboxRow (the CURRENT, live
 // sandbox incarnation), WITHOUT calling turn.Transition at all -- unlike
 // tryPlanDispatch, this must NOT re-transition the turn: it is already,
 // validly, Processing, and from the turn's OWN domain perspective its
 // execution never stopped -- only its underlying sandbox did (mirroring
-// Step 24's own "late-success reconciliation needed no new domain-turn
+// §3.2's own "late-success reconciliation needed no new domain-turn
 // edge" precedent, per this Step's own brief -- see internal/domain/
 // turn/state.go's own top comment for that precedent's full writeup).
 //
@@ -607,7 +607,7 @@ func (a *Actor) tryPlanReenqueue(
 	dispatchedGen := sandboxRow.Gen
 	// The events-log high-water mark, read inside this SAME transaction so
 	// it cannot straddle a concurrent insert: every event this turn's own
-	// (re)dispatch goes on to produce lands strictly above it. Step 71's
+	// (re)dispatch goes on to produce lands strictly above it. §26.4's
 	// corroboration queries use it as their lower bound, replacing a
 	// created_at >= dispatched_at comparison that straddled the Postgres
 	// and application clocks -- see
@@ -653,7 +653,7 @@ func (a *Actor) tryPlanReenqueue(
 // tryPlanSpawn implements design decision 3a's own circuit-breaker-then-
 // spawn-decision sequence, and -- on SpawnActionSpawn/SpawnActionRestore/
 // SpawnActionResume -- performs the token-mint/upsert/arm-timer write, all
-// still inside the caller's own transact (Step 23's own concurrency fix:
+// still inside the caller's own transact (§3.2's own concurrency fix:
 // resume now writes its own interim Spawning claim here too, exactly like
 // spawn/restore already did -- see this file's own top comment for why
 // that write is what closes the concurrent-double-ResumeSandbox-call race
@@ -717,7 +717,7 @@ func (a *Actor) tryPlanSpawn(
 			CreatedAt:        pgTimeOrZero(sandboxRow.CreatedAt),
 			ProviderObjectID: stringOrEmpty(sandboxRow.ProviderID),
 			// SnapshotImageID is read back from the sandbox row's own real
-			// snapshot_id column (Step 22, "snapshots & restore", design
+			// snapshot_id column (§3.2, "snapshots & restore", design
 			// decision 6) -- "" (no snapshot machinery reached it yet, or
 			// this sandbox was never snapshotted) unless a real
 			// "snapshot_ready" event has previously persisted one (see
@@ -1265,7 +1265,7 @@ func (a *Actor) planRestore(
 	}, nil
 }
 
-// planResume implements Step 23's own resume-specific write -- the FIRST
+// planResume implements §3.2's own resume-specific write -- the FIRST
 // step of the two-step shape sandbox.TriggerResume now has (state.go's
 // own doc comment): an interim "claimed, in flight" write into Spawning,
 // committed inside the caller's own transact, exactly like planFreshSpawn/
@@ -1365,7 +1365,7 @@ func (a *Actor) planResume(
 // a SECOND, fresh transact -- design decision 3a's own required
 // sequencing.
 //
-// This was a known, documented limitation pending Step 25's reconciler
+// This was a known, documented limitation pending §5.3's reconciler
 // (docs/IMPLEMENTATION_PLAN.md row 25, "reconciler + GC ... orphan
 // reaping"), which now exists (internal/app/reconciler): if CreateSandbox
 // above genuinely succeeds (createErr == nil, a real cloud resource now
@@ -1406,7 +1406,7 @@ func (a *Actor) executeSpawn(ctx context.Context, plan *spawnPlan) error {
 	return err
 }
 
-// executeRestore mirrors executeSpawn exactly (Step 22, "snapshots &
+// executeRestore mirrors executeSpawn exactly (§3.2, "snapshots &
 // restore", design decision 6), except it calls RestoreFromSnapshot
 // instead of CreateSandbox -- see recordProviderOutcome (below) for the
 // second-transact outcome-recording half both now share, including the
@@ -1441,7 +1441,7 @@ func (a *Actor) executeRestore(ctx context.Context, plan *spawnPlan) error {
 // second-transact outcome-recording step (Step 22, design decision 6:
 // "sharing whatever helper logic is genuinely common between the two...
 // rather than duplicating it blindly") -- the exact same transact body
-// Step 21's own executeSpawn used to run inline, unchanged in behavior:
+// §9.3's own executeSpawn used to run inline, unchanged in behavior:
 // given the plan's own gen and the just-returned (ref, providerErr) from
 // the real provider call, either records success (provider_id + the SAME
 // Spawning->Connecting transition both a fresh spawn and a restore land
@@ -1535,7 +1535,7 @@ func (a *Actor) recordSpawnFailure(ctx context.Context, tx pgx.Tx, sandboxRow sq
 	return a.deleteTimer(ctx, tx, TimerConnectingDeadline)
 }
 
-// executeResume (Step 23, "resume") performs the actual (possibly slow,
+// executeResume (§3.2, "resume") performs the actual (possibly slow,
 // network-bound) SandboxProvider.ResumeSandbox call OUTSIDE any
 // transaction, exactly like executeSpawn/executeRestore's own network
 // call -- and, following this fix, the REST of its own shape now
@@ -1699,7 +1699,7 @@ func (a *Actor) tryPlanDispatch(
 	if err != nil {
 		return nil, fmt.Errorf("sessionactor: turn transition pending->dispatched: %w", err)
 	}
-	// dispatched_sandbox_gen (Step 28, "turn recovery") is stamped here,
+	// dispatched_sandbox_gen (§3.3, "turn recovery") is stamped here,
 	// alongside dispatched_at, with the sandbox's CURRENT gen -- the
 	// fencing value planDispatch's own new re-enqueue gate later compares
 	// against the sandbox row's live gen to tell "already correctly
@@ -1709,7 +1709,7 @@ func (a *Actor) tryPlanDispatch(
 	dispatchedGen := sandboxRow.Gen
 	// Stamped alongside dispatched_at/dispatched_sandbox_gen, in the SAME
 	// write and the SAME transaction: the events-log high-water mark at
-	// this instant. Step 71's corroboration queries use it as a clock-free
+	// this instant. §26.4's corroboration queries use it as a clock-free
 	// lower bound for "this turn's own dispatch", replacing a created_at >=
 	// dispatched_at comparison that straddled the Postgres and application
 	// clocks -- see migrations/000089_turns_dispatched_event_id.up.sql.
@@ -1880,7 +1880,7 @@ func (a *Actor) rolloutRefusalForDispatch(ctx context.Context, sessionRow sqlcge
 //
 // Two callers reach this, both from executeDispatch: a genuine
 // SandboxCommander.SendCommand failure (this function's ORIGINAL, Step 21
-// reason for existing), and Step 76's own turn-dispatch-time rollout
+// reason for existing), and §10's own turn-dispatch-time rollout
 // refusal (rolloutRefusalForDispatch, above) -- deliberately the SAME
 // terminal path for both, not two parallel ones: from the turn's own
 // perspective, "the actor decided this prompt will never reach a

@@ -174,7 +174,7 @@ func TestPutAutoMergeToggle_PreservesEligibilityConfig_ReadModifyWrite(t *testin
 }
 
 // TestGetRepoSettings_ContradictionRate_NotYetComputed_DistinctFromZero
-// is Step 62's own explicitly-pinned mutation test: "the not-yet-computed
+// is §21's own explicitly-pinned mutation test: "the not-yet-computed
 // sentinel vs a real zero", applied here to the contradiction-rate
 // calibration read model's own wire rendering.
 func TestGetRepoSettings_ContradictionRate_NotYetComputed_DistinctFromZero(t *testing.T) {

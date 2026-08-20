@@ -68,7 +68,7 @@ func (s *SlackThreadSessionStore) Get(ctx context.Context, channelID, threadTS s
 	})
 }
 
-// GetBySessionID is the REVERSE lookup Step 35 ("outbox delivery") needs:
+// GetBySessionID is the REVERSE lookup §5.1 ("outbox delivery") needs:
 // given a session_id, which (channel_id, thread_ts) thread does it back?
 // Returns pgx.ErrNoRows (unwrapped) when sessionID was never created via a
 // Slack thread.

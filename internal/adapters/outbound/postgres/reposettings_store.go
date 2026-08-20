@@ -223,7 +223,7 @@ func (s *RepoSettingsStore) ListAutoMergeEnabled(ctx context.Context) ([]sqlcgen
 // endpointTemplate/orgSlug as the new, full current values for those THREE
 // columns only, leaving block_on_high_risk/sentinel_autofix_enabled
 // completely untouched (UpsertRWXPreviewSettings' own generated doc
-// comment). No admin-facing REST route calls this yet (Step 57's own
+// comment). No admin-facing REST route calls this yet (§4.1's own
 // scope is the dispatch/notifier mechanism, not a settings UI) -- today's
 // one real caller is this package's own integration tests, exercising the
 // exact write path a future settings endpoint would use.

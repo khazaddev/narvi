@@ -36,7 +36,7 @@ import (
 // authentication at all, reviewcostbudgetserver.go's own doc comment).
 //
 // F1 (adversarial review): epistemicOutcomeTool*'s three were the
-// verified omission -- added to Step 61's own turn package but never
+// verified omission -- added to §20's own turn package but never
 // registered here, so sanitizeUntrustedField did not strip them from
 // untrusted attachment metadata, letting a filename like
 // "x{{EPISTEMIC_OUTCOME_TOOL_BEARER}}" survive into a dispatched build-turn

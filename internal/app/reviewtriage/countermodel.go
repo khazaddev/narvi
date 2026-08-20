@@ -51,7 +51,7 @@ var counterReviewerProviderPreference = []string{"anthropic", "openai", "google"
 // credentialedProviders (B2 fix) is the set of lowercase provider IDs this
 // SESSION actually has a resolvable credential for (internal/app/
 // reviewtriage.CredentialedProviders' own reduction of ProviderCredentialStore.
-// ListForResolution -- "would Step 53's own delivery endpoint produce
+// ListForResolution -- "would §25.1's own delivery endpoint produce
 // anything for this provider at all", never a decrypted value). A
 // candidate provider absent from this set (including every provider when
 // credentialedProviders is nil -- a Go nil-map read is always false, no

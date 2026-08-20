@@ -143,7 +143,7 @@ func seedRepoSetting(ctx context.Context, deps Deps, s seedmanifest.RepoSetting,
 // seedRWXPreview reconciles ONE rwxPreview manifest entry against
 // repo_settings.rwx_preview_* (reconcile-to-declared, always all 3
 // fields together -- see doc.go's own "integrations" scope writeup for
-// why this table is this tool's answer to Step 75's "integrations"
+// why this table is this tool's answer to §10's "integrations"
 // checklist item).
 func seedRWXPreview(ctx context.Context, deps Deps, e seedmanifest.RWXPreview, dryRun bool) Item {
 	key := e.RepoFullName

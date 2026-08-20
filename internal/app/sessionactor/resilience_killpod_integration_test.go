@@ -16,7 +16,7 @@
 // codebase's own already-established testcontainers-Postgres pattern
 // (matching every prior Step's own *_integration_test.go convention
 // exactly) -- it does NOT build reusable resilience-harness
-// infrastructure, which is explicitly Step 30's own job
+// infrastructure, which is explicitly §9.3's own job
 // (test/resilience/README.md, left completely untouched by this Step).
 package sessionactor
 

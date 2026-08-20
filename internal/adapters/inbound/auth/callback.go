@@ -273,7 +273,7 @@ func NewCallbackHandler(
 		// redirectTarget is "/" (there is no SPA to land on yet -- Phase 6
 		// is what makes "/" a meaningful landing page; an intentional,
 		// forward-compatible interim behavior, not a bug) UNLESS a caller
-		// arrived via a real ?next= redirect (Step 39's own addition,
+		// arrived via a real ?next= redirect (§13.2's own addition,
 		// this func's own top -- e.g. internal/adapters/inbound/
 		// identitylink's magic-link consume handler sending a signed-out
 		// visitor through this same flow).

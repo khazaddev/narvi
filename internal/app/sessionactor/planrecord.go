@@ -3,7 +3,7 @@
 // transaction pushpr.go's own completeProcessingTurn already writes a
 // turn's terminal state in (recordPlanIfNeeded is called right after that
 // write, alongside enqueueOutboxNotification -- see completeProcessingTurn
-// itself) -- mirroring Step 35's outboxenqueue.go and Step 36's
+// itself) -- mirroring §5.1's outboxenqueue.go and §8.3's
 // intent-decision-recording precedent exactly: a real side effect of a
 // turn's completion, recorded in the SAME Postgres transaction as the
 // state change that triggered it (§5.1).

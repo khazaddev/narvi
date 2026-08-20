@@ -30,7 +30,7 @@
 // signal that actually distinguishes a fresh advance from a re-fire,
 // regardless of which direction either edge happens to point.
 //
-// # Auto-dispatch closes Step 55's own documented gap
+// # Auto-dispatch closes §25.6's own documented gap
 //
 // Step 55's OnTurnCompleted shipped with NextAdvance creating the next
 // attempt's bookkeeping row but never dispatching a turn for it ("ready for

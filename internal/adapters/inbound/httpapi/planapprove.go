@@ -3,7 +3,7 @@
 // /api/sessions/:id/plans/:planId/approve and its reject twin. Both
 // follow CreateTurn's own exact pattern (turn.go) -- open a tx, lock the
 // session row, run canActOnPlan (planauthz.go), then hand off to
-// DecidePlanOnTx (decideplan.go, Step 38's own "plan mode, cross-channel"
+// DecidePlanOnTx (decideplan.go, §8.1's own "plan mode, cross-channel"
 // extraction) for the shared guarded-UPDATE-then-(approve-only)-turn-
 // insert-then-cross-channel-notify sequencing every entry point (this
 // REST pair, Slack's block_actions handler, Linear's text-verdict parsing)

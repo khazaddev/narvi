@@ -106,7 +106,7 @@ func (f *fakeSourceControl) CheckRepoAccess(context.Context, ports.CheckRepoAcce
 	return false, errors.New("fakeSourceControl: CheckRepoAccess not implemented")
 }
 
-// GetFileContent/UpdateFileContent/RegisterPRStack (Step 48, "sentinels +
+// GetFileContent/UpdateFileContent/RegisterPRStack (§8.2, "sentinels +
 // suggestions") are never reached from this package -- same "not
 // implemented" precedent as CheckRepoAccess above.
 func (f *fakeSourceControl) GetFileContent(context.Context, ports.GetFileContentSpec) (string, string, bool, error) {

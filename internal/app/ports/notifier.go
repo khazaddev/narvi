@@ -43,7 +43,7 @@ const (
 	// itself.
 	NotificationKindSlackPlanApproval NotificationKind = "slack_plan_approval"
 
-	// NotificationKindSlackPlanDecided is Step 38's own addition -- routes
+	// NotificationKindSlackPlanDecided is §8.1's own addition -- routes
 	// to the SAME Slack plan-approval notifier, but calls chat.update
 	// (never chat.postMessage) against an EXISTING message (channel+ts
 	// already known, carried in the payload itself -- see slackapi.
@@ -256,7 +256,7 @@ const (
 	// happen (DescriptionAutofixPayload's own doc comment).
 	NotificationKindGitHubDescriptionAutofix NotificationKind = "github_description_autofix"
 
-	// NotificationKindLinearDigest is Step 62's own Linear sibling of
+	// NotificationKindLinearDigest is §21's own Linear sibling of
 	// NotificationKindSlackDigest above. UNLIKE every other Linear
 	// notification this codebase sends, this one has no existing
 	// AgentSession to post an AgentActivity into -- a digest is not a

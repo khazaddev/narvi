@@ -113,7 +113,7 @@ func NewEngine(
 // (never a bare `go` statement, §11; a zero-value Group, NOT
 // errgroup.WithContext, so one loop's own ctx.Err() return can never
 // cancel-race the others -- mirrors app/imagebuild.Builder.Run's own
-// identical two-loop fan-out, scaled to four here: Step 51's original
+// identical two-loop fan-out, scaled to four here: §3.5's original
 // three, plus Step 52's own cron trigger pump). Each tick's own error is
 // logged, never propagated, so one bad tick never kills the other loops.
 // The caller starts this via its own errgroup.Go exactly once per process

@@ -21,7 +21,7 @@
 //     entirely (sandboxsecrets.go's own top doc comment: "this file
 //     trusts [CRUD-time validation] and performs no re-validation"), this
 //     binary's OWN injection mechanism (sandboxSecretSpawnEnv) has no
-//     OTHER way to reach the workspace opencode.json file Step 48's
+//     OTHER way to reach the workspace opencode.json file §8.2's
 //     sentinel-fix write targets -- it only ever builds process-env
 //     "NAME=VALUE" entries, never a file write, so a resolved
 //     sandbox_secrets map (however it got there) cannot alter that file's
@@ -88,7 +88,7 @@ func TestCapabilityRestrictedProjectConfig_NeverTouchedBySandboxSecretInjection(
 		t.Fatalf("read opencode.json after injection: %v", err)
 	}
 	if string(before) != string(after) {
-		t.Errorf("workspace opencode.json (the project slot Step 48's sentinel-fix restriction targets) changed after sandboxSecretSpawnEnv ran -- before:\n%s\nafter:\n%s", before, after)
+		t.Errorf("workspace opencode.json (the project slot §8.2's sentinel-fix restriction targets) changed after sandboxSecretSpawnEnv ran -- before:\n%s\nafter:\n%s", before, after)
 	}
 
 	// sandboxSecretSpawnEnv itself produced ONLY env-var entries -- proof

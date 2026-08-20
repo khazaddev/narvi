@@ -8,7 +8,7 @@
 // Linear-origin session's own agent session ever got was a SINGLE
 // terminal one, enqueued by outboxenqueue.go's own enqueueOutboxNotification
 // at turn completion (success/fail/cancel) -- never mid-turn. Between the
-// synchronous CreateThoughtActivity ack Step 34's ingress handler posts at
+// synchronous CreateThoughtActivity ack §8.10's ingress handler posts at
 // session creation (linearapi/activity.go, doc.go) and that one terminal
 // notification, a Linear user watching the session's own native
 // AgentActivity feed saw nothing at all, no matter how long the turn ran.

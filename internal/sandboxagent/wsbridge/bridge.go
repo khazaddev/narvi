@@ -98,7 +98,7 @@ type Bridge struct {
 }
 
 // New builds a Bridge for one session, from its full SessionConfig (dial
-// URL = sc.ControlPlaneWsUrl VERBATIM -- unlike Step 15's scm-credentials
+// URL = sc.ControlPlaneWsUrl VERBATIM -- unlike §6.4's scm-credentials
 // derivation, this field IS already the real WS connect target, no URL
 // surgery needed) and a CommandHandler for the 5 business commands.
 // sandboxID is this Step's own invented, HONEST-GAP value for the
@@ -172,7 +172,7 @@ func (b *Bridge) MarkBootComplete() {
 // accepts it for the same reason SendBootProgress/heartbeat's own
 // LastBootPhase is nilable).
 //
-// Step 28 ("turn recovery") extends this: when id is a genuinely NEW,
+// §3.3 ("turn recovery") extends this: when id is a genuinely NEW,
 // non-nil value (different from whatever was recorded before -- a nil id,
 // or a different string), this ALSO triggers an immediate, out-of-band
 // heartbeat send via forceHeartbeat, rather than leaving the new

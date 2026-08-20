@@ -220,7 +220,7 @@ const (
 // the full reasoning), never a real third-party provider signature.
 // GitHubWebhookSecret is the REAL secret GitHub itself signs
 // "X-Hub-Signature-256" with, configured on GitHub's own webhook settings
-// screen. gitHubBotHandleEnvVarName is the bot/app username Step 32's own
+// screen. gitHubBotHandleEnvVarName is the bot/app username §8.2's own
 // mention-detection matches comment bodies against (a plain "@handle"
 // substring check, internal/adapters/inbound/github). Both required in
 // every stage -- never defaulted, matching every other secret/credential
@@ -330,7 +330,7 @@ const gitHubImageBuildTokenEnvVarName = "NARVI_GITHUB_IMAGE_BUILD_TOKEN"
 // the only comparable precedent, IntentClassifierModel above, configures
 // the CLASSIFIER's own internal LLM call, an unrelated concern) -- so
 // this is the ONE new config knob this Step adds. Deliberately OPTIONAL,
-// unlike IntentClassifierModel (Step 36's own load-bearing, required
+// unlike IntentClassifierModel (§8.3's own load-bearing, required
 // feature): reviewtriage.ModelAndEffort's own doc comment (internal/
 // domain/reviewtriage/modeleffort.go) explains why leaving this unset
 // still forces high effort unconditionally on the deep path (safe on any
@@ -465,7 +465,7 @@ func (e *EmptyAllowlistError) Error() string {
 // modalBaseURLEnvVarName, modalAuthTokenEnvVarName, and
 // modalEgressProxyURLEnvVarName configure the real
 // internal/adapters/outbound/modal.Provider construction in cmd/
-// control-plane/main.go (Step 21, "e2e happy path" -- this Step is the
+// control-plane/main.go (§9.3, "e2e happy path" -- this Step is the
 // SandboxProvider's first real production caller). BaseURL/AuthToken are
 // required in every stage, matching every other "never a baked-in
 // default" secret this file already reads (the 3 HMAC secrets, the GitHub
@@ -995,7 +995,7 @@ type Config struct {
 	// NARVI_HMAC_WEBHOOK_SECRET respectively. All three are required in
 	// every stage, including development — never defaulted.
 	//
-	// HMACWebhookSecret note (Step 31, "webhook toolkit"): this secret
+	// HMACWebhookSecret note (§5.1, "webhook toolkit"): this secret
 	// pairs with platform.Sign/Verify's own internal "{timestamp}.
 	// {signature}" bearer format (hmacauth.go) -- it is NOT the secret
 	// GitHub/Slack/Linear ingress adapters (Steps 32-34) use to verify
@@ -1060,7 +1060,7 @@ type Config struct {
 	// OPTIONAL and how it differs from GitHubBotToken. Never logged.
 	GitHubImageBuildToken string
 
-	// ReviewModelDeep is Step 68's own optional deep-path model override,
+	// ReviewModelDeep is §26.3's own optional deep-path model override,
 	// read from NARVI_REVIEW_MODEL_DEEP -- empty string means "not
 	// configured" (see reviewModelDeepEnvVarName's own doc comment for
 	// the full "why this is optional and how the deep path degrades when
@@ -1124,13 +1124,13 @@ type Config struct {
 
 	// ModalBaseURL and ModalAuthToken configure the real
 	// internal/adapters/outbound/modal.Provider cmd/control-plane/main.go
-	// constructs (Step 21, "e2e happy path"), read from
+	// constructs (§9.3, "e2e happy path"), read from
 	// NARVI_MODAL_BASE_URL / NARVI_MODAL_AUTH_TOKEN. Both required in
 	// every stage — never defaulted (there is no real Modal account
 	// reachable from this codebase's own tests/CI, see
 	// internal/adapters/outbound/modal/doc.go; a real value must be
 	// supplied by whoever deploys this binary against an actual Modal
-	// account, or a mock standing in for one, e.g. Step 27's own future
+	// account, or a mock standing in for one, e.g. §14.3's own future
 	// Prism-based mock server).
 	ModalBaseURL   string
 	ModalAuthToken string
@@ -1146,7 +1146,7 @@ type Config struct {
 	// doc comment above for why this is optional, unlike ModalAuthToken.
 	RWXAccessToken string
 
-	// OpenCodeRuntimeVersion is Step 26's ("image builds") own
+	// OpenCodeRuntimeVersion is §8.5's ("image builds") own
 	// RuntimeVersion fingerprint input, read from
 	// NARVI_OPENCODE_RUNTIME_VERSION. Optional: defaults to
 	// defaultOpenCodeRuntimeVersion (see that constant's own doc comment
@@ -1172,7 +1172,7 @@ type Config struct {
 	LinearDefaultRepoName string
 	LinearDefaultRepoURL  string
 
-	// SlackSigningSecret and SlackBotToken configure Step 33's ("Slack
+	// SlackSigningSecret and SlackBotToken configure §8.10's ("Slack
 	// ingress") real Slack Events API adapter, read from
 	// NARVI_SLACK_SIGNING_SECRET / NARVI_SLACK_BOT_TOKEN. Both required in
 	// every stage -- never defaulted (see slackSigningSecretEnvVarName's

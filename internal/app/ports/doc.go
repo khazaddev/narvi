@@ -33,7 +33,7 @@
 // adapter should reuse rather than reimplement).
 //
 // SandboxCommander (sandboxcommander.go) and SourceControl (sourcecontrol.go)
-// are the THIRD and FOURTH ports, both added at Step 21 ("e2e happy
+// are the THIRD and FOURTH ports, both added at §9.3 ("e2e happy
 // path"): SandboxCommander lets app/sessionactor push an outbound command
 // to a session's live sandbox WS connection (internal/adapters/inbound/
 // wshub's own SandboxRegistry is the implementation) without importing

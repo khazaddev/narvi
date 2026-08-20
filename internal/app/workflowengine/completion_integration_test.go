@@ -112,7 +112,7 @@ func TestOnTurnCompleted_SingleStepLane_FailTrigger_EscalatesRun(t *testing.T) {
 // proves §25.9's HITL gate: OnTurnCompleted never calls workflow.NextStep
 // at all here -- the step-run lands in awaiting_decision (not completed),
 // and the RUN's own status is completely untouched (still running), exactly
-// where Step 56's own decide endpoint is meant to pick it up.
+// where §25.9's own decide endpoint is meant to pick it up.
 //
 // Exercises a CUSTOM (non-built-in) hitl_after step (seedCustomHITLAfterStep,
 // dispatch_integration_test.go), not the built-in plan workflow: migration

@@ -459,7 +459,7 @@ func buildPROpenItem(ctx context.Context, deps Deps, pr ports.OpenPR, repoFullNa
 		// unresolved finding is a fact the verdict's own Shippable value
 		// could be silently inconsistent with (a model reporting
 		// RiskLevel=low while ALSO reporting a real, unresolved finding
-		// via the SEPARATE findings array). Step 60's own interim engine
+		// via the SEPARATE findings array). §16's own interim engine
 		// already treated this as a hard exclusion; keeping it here,
 		// exactly like HasChangesRequested, preserves that safety
 		// property without stretching §21.2's own literal criteria list

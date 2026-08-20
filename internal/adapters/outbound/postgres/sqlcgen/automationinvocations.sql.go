@@ -160,7 +160,7 @@ FOR UPDATE OF ai SKIP LOCKED
 // un-fanned-out -- still visible to this same query on a LATER tick, once
 // either the automation is resumed (Step 52/76's own future surface) or
 // never, if it stays paused -- rather than dispatching real sessions for
-// an automation the engine itself just decided to stop trusting. Step 52's
+// an automation the engine itself just decided to stop trusting. §8.4's
 // own future trigger evaluator is expected to check this same status
 // before ever calling CreateInvocation in the first place; this is the
 // SECOND, independent layer, for an invocation already queued before that

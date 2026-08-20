@@ -164,7 +164,7 @@ type reviewCostBudgetResponse struct {
 // (formatUSD(ctx.ReviewCostBudgetUSD), context.go) -- a literal, already-
 // deterministic number the control plane computed, never scraped from
 // free English prose (this codebase's own "typed field, never a marker
-// parsed from markdown" discipline, Step 45's invariant, applied here to
+// parsed from markdown" discipline, §8.2's invariant, applied here to
 // a query parameter rather than a JSON field only because a GET request
 // has no natural body slot of its own).
 //

@@ -49,7 +49,7 @@
 // supervisor spawns every child into its own process group and so nothing
 // else will ever signal it) BEFORE the WS bridge starts accepting
 // commands -- a "prompt" command can arrive as soon as the bridge connects,
-// concurrently with the boot/clone sequence (Step 16's own design), so the
+// concurrently with the boot/clone sequence (§6.1's own design), so the
 // adapter must already exist by then. commandHandler.HandlePrompt now
 // launches the actual turn (adapter.StartTurn) on its own goroutine (via
 // this Step's own new commandHandler.group field, an errgroup.Group --
@@ -69,7 +69,7 @@
 // per docs/IMPLEMENTATION_PLAN.md's own Phase 2 row assignment; leave it
 // exactly as it is.
 //
-// Step 21 ("e2e happy path") gives push its own real behavior:
+// §9.3 ("e2e happy path") gives push its own real behavior:
 // commandHandler.HandlePush now runs a real `git push` (via the SAME
 // Supervisor every other supervised process already uses, configured with
 // the SAME per-invocation credential-helper convention CloneAll already
@@ -77,7 +77,7 @@
 // PushComplete (with the resulting HEAD sha per repo) or PushError over
 // the WS bridge.
 //
-// Step 22 ("snapshots & restore") gives snapshot its own real behavior:
+// §3.2 ("snapshots & restore") gives snapshot its own real behavior:
 // commandHandler.HandleSnapshot now calls the control plane's new
 // snapshot-mint endpoint (internal/sandboxagent/snapshotclient, design
 // decision 2) to obtain a real, sandbox-confirmed snapshotId, then reports
@@ -277,7 +277,7 @@ func runCredentialHelper(args []string) error {
 // later Step's job, confirmed against docs/IMPLEMENTATION_PLAN.md rather
 // than guessed).
 //
-// A *commandHandler (pointer receiver, unlike Step 16's value-receiver
+// A *commandHandler (pointer receiver, unlike §6.1's value-receiver
 // empty struct) because adapter/bridge are populated in TWO phases: run()
 // constructs a *commandHandler with adapter already set, passes it to
 // wsbridge.New as the CommandHandler interface value, THEN sets .bridge on
@@ -304,7 +304,7 @@ type commandHandler struct {
 	// WS reconnect, not be aborted by one).
 	runCtx context.Context
 
-	// cfg/timeouts/sup are Step 21's ("e2e happy path") own additions,
+	// cfg/timeouts/sup are §9.3's ("e2e happy path") own additions,
 	// needed by HandlePush: cfg.WorkspaceDir/SessionConfig.Repos locate
 	// each repo and its original clone URL (to determine which host to
 	// mint a git credential for); timeouts bounds the push/rev-parse
@@ -430,11 +430,11 @@ func (h *commandHandler) HandleStop(_ context.Context, cmd sandboxws.Stop) {
 	}
 }
 
-// HandlePush implements the real `push` command (Step 21, "e2e happy
+// HandlePush implements the real `push` command (§9.3, "e2e happy
 // path", design decision 7): for each repo named in cmd.Repos, runs a
 // plain `git push <remote> <branch>` (this Step's own happy-path scope --
 // no pre-existing dirty-tree reconciliation; internal/domain/gitstate's
-// stash/checkout/pop machinery is explicitly Step 29's own job, not
+// stash/checkout/pop machinery is explicitly §3.4's own job, not
 // touched here), configured with the SAME per-invocation, never-
 // persisted `-c credential.helper=!'<this binary>' credential-helper`
 // convention internal/sandboxagent/gitclone.CloneAll already uses for
@@ -865,7 +865,7 @@ func fetchProviderCredentials(ctx context.Context, cfg boot.Config, timeout time
 // providerCredentialSpawnEnv maps every "api"-kind entry in resolved onto
 // its own OpenCode env-var name(s) (internal/domain/providercredential.
 // EnvVarNames), building the "NAME=VALUE" entries opencodeproc.Spawn's own
-// providerCredentialEnv parameter expects -- Step 53's own original
+// providerCredentialEnv parameter expects -- §25.1's own original
 // behavior, unchanged, now just fed from the shared fetch above rather
 // than fetching for itself. An "oauth"-kind entry contributes NOTHING
 // here (§29.6: an oauth credential is delivered via PUT /auth/{providerID}
@@ -1002,7 +1002,7 @@ func run() error {
 	// precedent from every prior sandbox-agent Step. Spawned BEFORE the WS
 	// bridge starts accepting commands (below): a "prompt" command can
 	// arrive as soon as the bridge connects, concurrently with the boot/
-	// clone sequence (Step 16's own design), so the adapter must already
+	// clone sequence (§6.1's own design), so the adapter must already
 	// exist by then -- see this file's own package doc comment for the
 	// full reasoning.
 	var agentRuntime *opencode.Adapter
@@ -1428,7 +1428,7 @@ func run() error {
 	// what a direct `<-ctx.Done()` would, just launched through the group
 	// so both cases converge identically below.
 	var group errgroup.Group
-	// budgetSrvGroup is Step 70's own SEPARATE errgroup for
+	// budgetSrvGroup is §26.5's own SEPARATE errgroup for
 	// budgetServer.Serve() -- see the "Step 70" comment below (right where
 	// budgetSrvGroup.Go is actually called) for why this must NOT be the
 	// SAME group as the one immediately above.
@@ -1441,7 +1441,7 @@ func run() error {
 	// its OWN separate errgroup AND its OWN explicitly-canceled derived
 	// context -- deliberately NOT a member of "group" immediately above,
 	// for the SAME class of reason budgetSrvGroup is kept separate from
-	// bridge.Run/the ctx-wait stand-in (Step 70's own comment just below):
+	// bridge.Run/the ctx-wait stand-in (§26.5's own comment just below):
 	// bridge.Run(ctx) can return via a *wsbridge.FatalConnectError WITHOUT
 	// ever canceling ctx itself (wsbridge/run.go's own documented
 	// contract), and runCloudIdentityRefreshLoop's own loop has NO other

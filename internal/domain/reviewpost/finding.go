@@ -22,7 +22,7 @@ import (
 // from a sibling package, the established precedent this package's own
 // VerdictInput/BuildVerdict already set) would silently break an invariant
 // its own maintainers documented on purpose. review.Verdict itself
-// (verdict.go) stays exactly Step 45's seven-field shape, untouched.
+// (verdict.go) stays exactly §8.2's seven-field shape, untouched.
 
 // SentinelKind names which sentinel produced a Finding -- "coverage" or
 // "docs_drift" (the only two sentinels §17.1 says can ever trigger the

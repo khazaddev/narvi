@@ -143,7 +143,7 @@ func TestRenderAutofixBody_SecondReviewNewProposalPreservesRealOriginal(t *testi
 }
 
 // TestRenderAutofixBody_TripleRenderStaysIdempotent extends the double-
-// render property across a THIRD round (mirroring Step 65's own "up to
+// render property across a THIRD round (mirroring §24's own "up to
 // 10 automatic re-reviews" reality -- this is never bounded at exactly
 // two rounds in production) -- proves the fix converges, rather than
 // merely surviving one extra round before some other compounding

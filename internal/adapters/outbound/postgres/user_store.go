@@ -14,7 +14,7 @@ import (
 // queries (§13.2 identity graph anchor, §13.3 RBAC role,
 // migrations/000002_users.up.sql). No caching, no retries, no business
 // rules -- allowlist evaluation and initial-admin assignment are
-// internal/adapters/inbound/auth's job (Step 20, "auth v1"); this store
+// internal/adapters/inbound/auth's job (§13.1, "auth v1"); this store
 // only ever persists what it's given.
 type UserStore struct {
 	q *sqlcgen.Queries
@@ -37,7 +37,7 @@ func (s *UserStore) WithTx(tx pgx.Tx) *UserStore {
 // Create inserts a new user row and returns it. Called exactly once per
 // user, at first-sign-in time -- no Update/List exists yet because nothing
 // changes a user's own row after creation in this Step (role/disabled
-// editing is Step 39's "members API" job).
+// editing is §13.2's "members API" job).
 func (s *UserStore) Create(ctx context.Context, arg sqlcgen.CreateUserParams) (sqlcgen.User, error) {
 	return s.q.CreateUser(ctx, arg)
 }

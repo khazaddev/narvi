@@ -80,7 +80,7 @@ func (f *whiteboxFakeSourceControl) CheckRepoAccess(context.Context, ports.Check
 	return false, errors.New("whiteboxFakeSourceControl: CheckRepoAccess not implemented")
 }
 
-// GetFileContent/UpdateFileContent/RegisterPRStack (Step 48, "sentinels +
+// GetFileContent/UpdateFileContent/RegisterPRStack (§8.2, "sentinels +
 // suggestions") are never reached from this package either -- same
 // "not implemented" precedent as CheckRepoAccess above.
 func (f *whiteboxFakeSourceControl) GetFileContent(context.Context, ports.GetFileContentSpec) (string, string, bool, error) {

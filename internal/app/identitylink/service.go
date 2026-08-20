@@ -421,7 +421,7 @@ var (
 // separately-documented residual.)
 //
 // # Investigated and NOT done: narrowing Consume to the ambiguous
-// candidate set (Step 39's own SECOND fix-pass re-review)
+// candidate set (§13.2's own SECOND fix-pass re-review)
 //
 // One sub-case of createOrReuseLinkPrompt's own "zero or multiple
 // matches -> never guess" branch (identitylink.Decide) is narrower than

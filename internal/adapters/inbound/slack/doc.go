@@ -147,7 +147,7 @@
 //
 // internal/app/ports has no Notifier port yet, and the outbox table
 // (migrations/000010_outbox.up.sql) has no delivery-worker consumer --
-// both are explicitly Step 35's ("outbox delivery") own job, confirmed
+// both are explicitly §5.1's ("outbox delivery") own job, confirmed
 // against IMPLEMENTATION_PLAN.md before this Step started. Building
 // either here would be scope creep into that Step's own territory. An
 // in-thread ack is also a latency-sensitive UX signal ("a mention was
@@ -157,7 +157,7 @@
 // makes the smallest possible direct call instead: ackClient (ack.go) is
 // a tiny, unexported chat.postMessage client, used for exactly one
 // message per processed event -- never a queued, retried, or
-// dead-lettered delivery the way Step 35's real Notifier will be. A
+// dead-lettered delivery the way §5.1's real Notifier will be. A
 // failure here is logged and swallowed (see step 8 above), never
 // escalated into a redelivery.
 package slack

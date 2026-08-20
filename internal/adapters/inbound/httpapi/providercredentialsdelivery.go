@@ -37,7 +37,7 @@
 //     doc comment for the full shape, and for why it structurally cannot
 //     carry a refresh token) -- resolved via internal/domain/
 //     providercredential.Resolve over every candidate row (across all 4
-//     scopes, including Step 59's own ScopeUser) that could apply to this
+//     scopes, including §8.8's own ScopeUser) that could apply to this
 //     session's own repo(s)/environment/creator, decrypted server-side
 //     (the ONLY layer that ever holds cfg.TokenEncryptionKey). A provider
 //     with nothing configured at any scope is simply ABSENT from the map

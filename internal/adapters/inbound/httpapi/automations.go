@@ -5,7 +5,7 @@
 // engine") shipped the fan-out/reconcile/sweep engine ENGINE-ONLY, with no
 // HTTP surface at all (verified directly: no automations.go existed in
 // this package before this Step) -- invocationenqueue.go's own doc comment
-// already anticipated this: "Step 52's own future trigger evaluator is
+// already anticipated this: "§8.4's own future trigger evaluator is
 // expected to call [CreateInvocation] unchanged once it exists."
 //
 // Seven routes, all mounted behind auth.Middleware (cmd/control-plane/

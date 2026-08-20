@@ -187,7 +187,7 @@ type SessionCoalescer struct {
 	RepoSettings *postgres.RepoSettingsStore
 }
 
-// CreateOrJoin is Step 32's own per-PR coalescing entry point -- see
+// CreateOrJoin is §8.2's own per-PR coalescing entry point -- see
 // doc.go's own "Per-PR coalescing design" section for the full two-step
 // atomic-claim sequencing this implements. isNewSession reports which
 // branch was taken (true: req was used to create a brand-new review
@@ -243,7 +243,7 @@ type SessionCoalescer struct {
 // The REUSE branch below is reached by TWO structurally different
 // triggers landing on an already-tracked PR: an ordinary second @mention
 // (just prompting the existing review session -- "what did you mean by
-// X") and Step 46's own manual re-trigger-via-LABEL lane (payload.go's
+// X") and §8.2's own manual re-trigger-via-LABEL lane (payload.go's
 // parsePullRequestLabeled). Both used to render the identical
 // authz.ActionPromptSession verdict (member allowed on own/joined), which
 // let a member re-trigger a review on any session they created/joined --
@@ -302,12 +302,12 @@ type SessionCoalescer struct {
 // label event creating a brand-new session is still a create, never a
 // re-trigger of an existing review).
 //
-// classifyText is the text Step 36's own intent classifier call (WINNER
+// classifyText is the text §8.3's own intent classifier call (WINNER
 // path only, further down) classifies -- the mention's own ORIGINAL,
 // un-enriched comment/command text (handler.go captures this BEFORE
 // folding the pre-fetched diff/stack context into req.Prompt via
 // review.RenderTurnPrompt). Audit fix: this used to be *req.Prompt
-// directly, which by the time CreateOrJoin ran already had Step 46's own
+// directly, which by the time CreateOrJoin ran already had §8.2's own
 // inline pre-fetched diff (up to several MB) appended -- feeding the
 // classifier's LLM call the entire PR diff instead of just the triggering
 // comment/label text, inflating cost/latency by orders of magnitude and
@@ -324,7 +324,7 @@ type SessionCoalescer struct {
 // that call's own `prompt` local is built from req.Prompt too, so without
 // this it would classify the SAME diff-enriched text against the
 // plan_followup category (ClassifyPlanFollowup, gated on an
-// awaiting-approval plan) that Step 36's classifier was already fixed to
+// awaiting-approval plan) that §8.3's classifier was already fixed to
 // avoid. Reused verbatim, never recaptured: both categories classify the
 // EXACT same raw mention text.
 //

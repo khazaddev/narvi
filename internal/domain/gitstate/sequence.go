@@ -5,7 +5,7 @@ package gitstate
 // sequence needs (§3.4) -- doc.go's own words for exactly this gap:
 // "actually running git and feeding the outcomes back into this machine is
 // a later Step's concern (sandbox-agent...), not this one's". That later
-// Step (Step 29, "gitstate in-sandbox") is this one; internal/sandboxagent/
+// Step (§3.4, "gitstate in-sandbox") is this one; internal/sandboxagent/
 // gitclone.SyncAll is the real caller, running actual git subprocesses and
 // feeding each one's outcome through the function here that names it,
 // then through Transition itself.

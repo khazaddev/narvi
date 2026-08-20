@@ -174,7 +174,7 @@ func NewSandboxHandler(registry *sessionactor.Registry, sandboxes *postgres.Sand
 		// Register this connection as sessionID's own live sandbox
 		// connection BEFORE entering readLoop, so a SandboxCommander.
 		// SendCommand call from app/sessionactor can reach it the instant
-		// the handshake completes (Step 21, "e2e happy path", design
+		// the handshake completes (§9.3, "e2e happy path", design
 		// decision 4). unregister runs on this same goroutine's own
 		// return, guaranteeing the registry never holds a dead connection
 		// past this handler's own lifetime.

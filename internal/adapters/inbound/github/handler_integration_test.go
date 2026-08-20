@@ -369,7 +369,7 @@ func (f *fakeReviewContextFetcher) GetPullRequestDiff(context.Context, string, s
 // the NEW label-retrigger lane: N concurrent triggers on the SAME brand-new
 // PR, split evenly between the EXISTING @mention (comment) trigger and the
 // NEW label-retrigger trigger, must still coalesce onto exactly ONE
-// session -- proving the label lane genuinely reuses Step 32's own atomic
+// session -- proving the label lane genuinely reuses §8.2's own atomic
 // claim (github_pr_sessions' EnsureRow+LockForUpdate, coalesce.go) rather
 // than a second, independent mechanism that could race it. Mirrors
 // TestGitHubIntegration_ConcurrentMentionsCoalesceToOneSessionManyTurns'
@@ -904,7 +904,7 @@ func TestGitHubIntegration_FailedFirstAttemptReleasesClaimForRedelivery(t *testi
 // is this Step's own headline concurrency proof: N concurrent, distinctly
 // -delivered @mentions on the SAME PR must result in exactly ONE session
 // and N turns -- never N sessions. Driven with real concurrent HTTP
-// requests against the real handler/real Postgres, matching Step 31's
+// requests against the real handler/real Postgres, matching §5.1's
 // own ClaimWebhookDelivery concurrency-test style (real goroutines, not
 // sequential calls).
 func TestGitHubIntegration_ConcurrentMentionsCoalesceToOneSessionManyTurns(t *testing.T) {

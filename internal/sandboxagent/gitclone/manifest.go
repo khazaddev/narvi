@@ -35,7 +35,7 @@ const agentsManifestFilename = "AGENTS.md"
 // says so plainly, rather than leaving the agent to silently misbehave as
 // if a normally-injected mechanism simply never existed. nil/empty (the
 // overwhelming common case: every boot-time fetch succeeded, or this
-// session has none of Step 72's own fetches to begin with) omits this
+// session has none of §27.1's own fetches to begin with) omits this
 // section entirely -- this is an ADDITIVE section, never a replacement
 // for the repo table above.
 func WriteAgentsManifest(workspaceDir string, results []CloneResult, degradeNotes []string) error {

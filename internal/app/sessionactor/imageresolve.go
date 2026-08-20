@@ -40,7 +40,7 @@
 // that exact claim-time SHA resolution, and the new platform-level GitHub
 // credential it needs (the freshness pump/background builder has no
 // session/creator context to borrow a token from, unlike this spawn-time
-// call site), to Step 42, not this one. Step 41's own resolved design
+// call site), to §19.2, not this one. §19.1's own resolved design
 // decision, still exactly as implemented in THIS file: a cache MISS here
 // creates a best-effort, URL-only pending row (repo_urls, no
 // built_repo_shas yet) and does NOTHING further -- this spawn-path call
@@ -88,7 +88,7 @@
 
 // # Repo-access gate (audit fix, "warm-boot image access control", HIGH)
 //
-// Step 41's own rewrite above (deliberately) dropped every creator/token
+// §19.1's own rewrite above (deliberately) dropped every creator/token
 // dependency this function used to have -- which also, as an unintended
 // side effect, dropped the ONLY thing that had ever gated which repos a
 // given user's sandbox could contain: before Step 41, a warm hit required

@@ -62,7 +62,7 @@ func expectPgErrCode(t *testing.T, err error, code, constraint string) {
 // 000088_plan_builtin_passthrough (Step 56's own corrective follow-up):
 // review/request/plan are now IDENTICALLY shaped single passthrough
 // steps (ModelID nil so turns.model_id/sessions.build_model_id inherit
-// exactly as today -- Step 55's zero-config proof), no HITL, no edges.
+// exactly as today -- §25.6's zero-config proof), no HITL, no edges.
 //
 // Migration 000057 originally seeded plan as a 2-step approve/build
 // shape with HITL after step 1 and a needs_fix self-loop edge; an audit

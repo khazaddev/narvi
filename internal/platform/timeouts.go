@@ -334,7 +334,7 @@ type Timeouts struct {
 	// not a large data transfer") -- this call resolves and decrypts at
 	// most 3 rows server-side, comparably lightweight. Deliberately its
 	// own field, not a reuse of CredentialFetchTimeout: the two calls hit
-	// different CP endpoints for a different secret class, and Step 53's
+	// different CP endpoints for a different secret class, and §25.1's
 	// own "in-memory-only fetch, no disk cache" design (unlike the SCM
 	// credential-helper's own flock'd disk cache) means this timeout has
 	// no CredentialExpiryBuffer-shaped sibling of its own -- a failed
@@ -847,7 +847,7 @@ type Timeouts struct {
 	// body-level webhookTimestamp field may drift from now before this
 	// Step's webhook handler rejects it as a possible replay -- a
 	// DELIBERATELY DISTINCT field from WebhookTimestampFreshnessWindow
-	// above (Step 31's generic 5-minute default, "matching Slack's own
+	// above (§5.1's generic 5-minute default, "matching Slack's own
 	// commonly recommended replay window") even though both guard the same
 	// general class of check, because Linear's own real, current developer
 	// docs (confirmed during this Step's investigation) recommend a much
@@ -1108,7 +1108,7 @@ type Timeouts struct {
 	// ever needs to comfortably outlast a SINGLE OutboxDeliveryTimeout-
 	// bounded attempt, which Validate() below enforces as a new,
 	// independent pairwise check (OutboxClaimDuration > OutboxDeliveryTimeout,
-	// mirroring Step 25's own ReconcilerInterval > ReconcilerOrphanConfirmationPeriod
+	// mirroring §5.3's own ReconcilerInterval > ReconcilerOrphanConfirmationPeriod
 	// precedent of a single, narrow link added outside either named chain).
 
 	// OutboxClaimDuration protects a just-claimed (or just-renewed) outbox
@@ -2814,7 +2814,7 @@ func (t Timeouts) Validate() error {
 // SecondsToDuration converts a raw whole-seconds count -- e.g. an OAuth
 // response's own interval/expires_in field (chatgptoauth), or a stored
 // *_seconds database column (chatgpt_link_attempts.interval_seconds) --
-// into a time.Duration. Step 59 ("models: Codex via ChatGPT-account OAuth")
+// into a time.Duration. §8.8 ("models: Codex via ChatGPT-account OAuth")
 // introduces the first callers that need to turn a plain wire/storage
 // integer into a Duration outside this package; this helper exists so
 // those callers never spell out time.Second themselves, which

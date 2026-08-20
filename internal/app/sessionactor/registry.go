@@ -17,7 +17,7 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// meterName is this package's own OTel meter name (Step 27, "mocking +
+// meterName is this package's own OTel meter name (§14.3, "mocking +
 // contract drift" -- the contract_drift_detected counter, below, is the
 // first metric this package registers) -- mirrors app/reconciler's and
 // app/imagebuild's own "narvi/<package>" convention exactly.
@@ -35,7 +35,7 @@ type storeBundle struct {
 	timer   *postgres.TimerStore
 	event   *postgres.EventStore
 
-	// identity and artifact are Step 21's ("e2e happy path") own additions
+	// identity and artifact are §9.3's ("e2e happy path") own additions
 	// -- both used only by pushpr.go's createPRBestEffort: identity to
 	// decrypt the session's own creator's GitHub OAuth access token,
 	// artifact to record a successfully created PR as an artifact row (the
@@ -56,7 +56,7 @@ type storeBundle struct {
 	// non-viewer, which Authorize's own create-time check cannot.
 	user *postgres.UserStore
 
-	// imageBuild is Step 26's ("image builds") own addition -- used by
+	// imageBuild is §8.5's ("image builds") own addition -- used by
 	// dispatch.go/imageresolve.go's resolveAndSetImage to look up an
 	// already-built image by fingerprint, and to best-effort upsert a
 	// pending tracking row on any miss (internal/app/imagebuild's own
@@ -65,7 +65,7 @@ type storeBundle struct {
 	// cmd/control-plane/main.go).
 	imageBuild *postgres.ImageBuildStore
 
-	// environment and contractDrift are Step 27's ("mocking + contract
+	// environment and contractDrift are §14.3's ("mocking + contract
 	// drift") own additions, mirroring imageBuild's own addition for Step
 	// 26 exactly: environment is used by dispatch.go/contractdrift.go's
 	// checkContractDrift to read a spawn/restore plan's own Environment
@@ -229,7 +229,7 @@ type Registry struct {
 	// one) -- Actor.broadcastPending already guards against that.
 	broadcaster ports.EventBroadcaster
 
-	// commander, provider, and publicBaseURL are Step 21's ("e2e happy
+	// commander, provider, and publicBaseURL are §9.3's ("e2e happy
 	// path") own additions, threaded through to every Actor this Registry
 	// hydrates exactly the same way broadcaster already is -- see Actor's
 	// own field doc comments (actor.go) for what each is used for. All
@@ -239,7 +239,7 @@ type Registry struct {
 	provider      ports.SandboxProvider
 	publicBaseURL string
 
-	// sourceControl and tokenEncryptionKey are Step 21's ("e2e happy
+	// sourceControl and tokenEncryptionKey are §9.3's ("e2e happy
 	// path") own remaining additions, threaded through to every Actor this
 	// Registry hydrates exactly the same way commander/provider already
 	// are: sourceControl is the ports.SourceControl every Actor's
@@ -252,7 +252,7 @@ type Registry struct {
 	sourceControl      ports.SourceControl
 	tokenEncryptionKey []byte
 
-	// openCodeRuntimeVersion is Step 26's ("image builds") own remaining
+	// openCodeRuntimeVersion is §8.5's ("image builds") own remaining
 	// addition, threaded through to every Actor this Registry hydrates
 	// exactly like sourceControl/tokenEncryptionKey already are: the
 	// RuntimeVersion input to domain/imagebuild.Fingerprint (dispatch.go/
@@ -319,7 +319,7 @@ type Registry struct {
 	// panic.
 	reviewDiffFetcher reviewcontext.Fetcher
 
-	// githubBotHandle is Step 65's own further addition -- the SAME
+	// githubBotHandle is §24's own further addition -- the SAME
 	// configured bot/app username internal/adapters/inbound/github's own
 	// mention-pattern compiler already matches comment bodies against
 	// (platform.Config.GitHubBotHandle) --
@@ -416,7 +416,7 @@ type Registry struct {
 // nil, in which case every Actor simply never broadcasts (see
 // Actor.broadcastPending).
 //
-// commander/provider/publicBaseURL are Step 21's ("e2e happy path") own
+// commander/provider/publicBaseURL are §9.3's ("e2e happy path") own
 // additions (design decisions 3/4/6): commander is the
 // ports.SandboxCommander every Actor's handleEnsureDispatched uses to push
 // a dispatched turn's prompt to a live sandbox connection; provider is the
@@ -428,7 +428,7 @@ type Registry struct {
 // decision 9): sourceControl is the ports.SourceControl every Actor's
 // createPRBestEffort (pushpr.go) calls CreatePR on; tokenEncryptionKey
 // decrypts the session creator's own stored GitHub OAuth access token for
-// that same call. openCodeRuntimeVersion is Step 26's ("image builds") own
+// that same call. openCodeRuntimeVersion is §8.5's ("image builds") own
 // addition: the RuntimeVersion input to every Actor's own image-fingerprint
 // computation (dispatch.go/imageresolve.go). diffFetcher is Step 49's
 // ("handoff-readiness sentinel", §14.4) own addition: the narrow
@@ -438,7 +438,7 @@ type Registry struct {
 // image-resolution/handoff-sentinel path (e.g. the resilience test,
 // design decision 12) can safely omit them.
 //
-// Step 27 ("mocking + contract drift") adds the contract_drift_detected
+// §14.3 ("mocking + contract drift") adds the contract_drift_detected
 // OTel counter's construction here -- exactly once per Registry, mirroring
 // app/reconciler.NewReconciler's/app/imagebuild.NewBuilder's own identical
 // precedent (see each of their own doc comments) -- which is why NewRegistry
@@ -447,7 +447,7 @@ type Registry struct {
 // propagated up through whatever already handles Reconciler/Builder
 // construction errors today (cmd/control-plane/main.go).
 //
-// opts is a trailing variadic of RegistryOptions (Step 48's own
+// opts is a trailing variadic of RegistryOptions (§8.2's own
 // githubBotToken started this "one small options struct, not more
 // positional parameters" pattern as a bare `...string`; Step 65 widens it
 // into a real struct since it needs to add two further optional fields
@@ -535,10 +535,10 @@ type RegistryOptions struct {
 	// to open a sentinel-auto-fix child session's own fix PR. May be
 	// empty (tests that never exercise the sentinel-fix PR path).
 	GitHubBotToken string
-	// GitHubBotHandle is Step 65's own addition -- see Registry.
+	// GitHubBotHandle is §24's own addition -- see Registry.
 	// githubBotHandle's own doc comment.
 	GitHubBotHandle string
-	// ReviewDiffFetcher is Step 65's own addition -- see Registry.
+	// ReviewDiffFetcher is §24's own addition -- see Registry.
 	// reviewDiffFetcher's own doc comment.
 	ReviewDiffFetcher reviewcontext.Fetcher
 	// ReviewModelDeep is Step 68's own addition (§26.3): platform.Config.

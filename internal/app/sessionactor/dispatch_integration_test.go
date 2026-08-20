@@ -27,14 +27,14 @@ import (
 // (ref, err) pair -- this package's own EnsureDispatched decision-tree
 // tests never talk to a real cloud provider.
 //
-// Step 22 ("snapshots & restore") extends this same fake with an identical
+// §3.2 ("snapshots & restore") extends this same fake with an identical
 // recording shape for RestoreFromSnapshot (restoreCalls/nextRestoreRef/
 // nextRestoreErr) rather than introducing a second, parallel fake -- the
 // restore-path tests below need the exact same CreateSandbox-call-recording
 // precedent, just for the other provider method dispatch.go's executeRestore
 // now calls.
 //
-// Step 23 ("resume") extends this same fake again with the identical
+// §3.2 ("resume") extends this same fake again with the identical
 // recording shape for ResumeSandbox (resumeCalls/nextResumeErr -- no
 // "nextResumeRef" counterpart, since ports.SandboxProvider.ResumeSandbox
 // returns only an error, no SandboxRef: it resumes the SAME provider
@@ -44,7 +44,7 @@ import (
 // already hardcoded before this Step, so every pre-existing test's
 // behavior is unchanged).
 //
-// Step 23's own concurrency-fix follow-up adds resumeBlock: an optional,
+// §3.2's own concurrency-fix follow-up adds resumeBlock: an optional,
 // test-supplied channel that, when non-nil, ResumeSandbox blocks on
 // (after recording the call) until the test closes it or ctx is done --
 // this is what lets TestResilience_ConcurrentResumeAcrossActors_
@@ -56,7 +56,7 @@ import (
 // nil (the zero value) for every OTHER test in this file, so
 // ResumeSandbox returns immediately for all of them, unchanged.
 //
-// Step 26 ("image builds") extends this same fake once more with the
+// §8.5 ("image builds") extends this same fake once more with the
 // identical recording shape for BuildImage (buildCalls/nextBuildRef/
 // nextBuildErr) -- imagebuild_integration_test.go's own end-to-end test
 // (dispatch -> pending image_builds row -> internal/app/imagebuild.
@@ -94,7 +94,7 @@ type fakeSpawnProvider struct {
 	nextResumeErr   error
 	resumeBlock     chan struct{}
 
-	// buildCalls/nextBuildRef/nextBuildErr are Step 26's ("image builds")
+	// buildCalls/nextBuildRef/nextBuildErr are §8.5's ("image builds")
 	// own extension to this same fake, mirroring the restore/resume
 	// extensions above exactly: a mutex-guarded recorded-calls slice plus
 	// a caller-configured (ref, err) pair, narrowed to the one additional
@@ -799,7 +799,7 @@ func TestExecuteSpawn_StaleEpochOnRecord_PropagatesErrStaleEpoch(t *testing.T) {
 	}
 }
 
-// --- Step 22 ("snapshots & restore"), design decision 6: executeRestore's
+// --- §3.2 ("snapshots & restore"), design decision 6: executeRestore's
 // own decision-tree coverage, mirroring this file's own existing
 // spawn-path tests exactly (same rig helpers, same fakeSpawnProvider, same
 // waitUntil/fixed-sleep conventions) for the parallel Restore path
@@ -965,7 +965,7 @@ func TestExecuteRestore_PermanentProviderError_IncrementsCircuitBreaker(t *testi
 
 // TestHandleEnsureDispatched_RestoreCircuitBreakerOpen_DoesNotRestore mirrors
 // TestHandleEnsureDispatched_CircuitBreakerOpen_DoesNotSpawn exactly (same
-// seeded-3-failures-then-a-4th-is-blocked proof Step 21's own spawn circuit
+// seeded-3-failures-then-a-4th-is-blocked proof §9.3's own spawn circuit
 // breaker test already established), but on a Stopped+snapshot_id sandbox --
 // proving the circuit breaker gate in tryPlanSpawn runs BEFORE
 // EvaluateSpawnDecision is ever consulted, so it blocks a would-be Restore
@@ -2359,7 +2359,7 @@ func TestResilience_ConcurrentPlainSpawnAcrossActors_CreateSandboxCalledAtMostOn
 	close(providerA.createBlock)
 }
 
-// --- Step 28 ("turn recovery") own tests -----------------------------------
+// --- §3.3 ("turn recovery") own tests -----------------------------------
 
 // TestHandleEnsureDispatched_ProcessingOnCurrentGenSandbox_NeverReDispatched
 // is THIS Step's own single most safety-critical regression test (per its
@@ -2567,7 +2567,7 @@ func TestHandleEnsureDispatched_ProcessingOnStaleGenReadySandbox_Reenqueues(t *t
 // at all, but there IS an in-flight (Processing) turn whose sandbox is
 // definitively dead (Failed) -- a real spawn attempt must still fire
 // (reusing tryPlanSpawn unchanged), even though NextToDispatch itself
-// reports nothing dispatchable. Before Step 28's own fix, planDispatch's
+// reports nothing dispatchable. Before §3.3's own fix, planDispatch's
 // old early-return bailed out here with no action at all -- exactly the
 // gap that left handleTerminalGraceTimer's own already-present
 // handleEnsureDispatched call a silent no-op.

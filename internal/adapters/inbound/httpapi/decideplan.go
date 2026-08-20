@@ -36,7 +36,7 @@
 // planapprove.go's own REST handlers (authorizePlanAction -> canActOnPlan,
 // planauthz.go) always have.
 //
-// # Step 39 ("identities + full RBAC") correction: Slack/Linear verdicts
+// # §13.2 ("identities + full RBAC") correction: Slack/Linear verdicts
 // NOW go through the same matrix too
 //
 // An EARLIER version of this doc comment claimed Slack/Linear verdicts
@@ -47,7 +47,7 @@
 // security review caught the contradiction: Slack's interactive.go
 // (decideAndUpdateMessage) and Linear's webhook.go (handlePlanVerdict)
 // were both already resolving a REAL, auto-linked decidedBy by this point
-// in Step 39's own work, yet neither called Authorize on it before
+// in §13.2's own work, yet neither called Authorize on it before
 // reaching this function -- letting a linked `viewer` (or an unowned
 // `member`) decide a plan via Slack/Linear when the identical REST call
 // would have been rejected, directly contradicting §13.3's own

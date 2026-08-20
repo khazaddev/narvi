@@ -86,7 +86,7 @@ SELECT agent_session_id, session_id, organization_id, created_at FROM linear_age
 WHERE session_id = $1
 `
 
-// The REVERSE lookup Step 35 ("outbox delivery") needs: given a
+// The REVERSE lookup §5.1 ("outbox delivery") needs: given a
 // session_id, which agent_session_id/organization_id does it back? Backed
 // by migrations/000030_linear_agent_sessions.up.sql's own already-existing
 // linear_agent_sessions_session_id_idx (Step 34 added this index up

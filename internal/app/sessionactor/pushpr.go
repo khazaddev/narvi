@@ -1,4 +1,4 @@
-// This file (pushpr.go) implements the two remaining halves of Step 21's
+// This file (pushpr.go) implements the two remaining halves of §9.3's
 // ("e2e happy path") own end-to-end wiring that design decisions 3/6/7/8/9
 // alone do not connect: (1) completing whichever turn is currently
 // Processing when a REAL execution_complete event arrives from the
@@ -41,7 +41,7 @@
 // fuller stop/cancel-driven UX beyond "the turn correctly reaches
 // Cancelled" is not this Step's own job.
 //
-// This file never touches internal/domain/gitstate (Step 29's own job:
+// This file never touches internal/domain/gitstate (§3.4's own job:
 // stash/checkout/pop, dirty-tree reconciliation) -- sendPushBestEffort's
 // own push is a plain push of whatever branch the session's own repos
 // config already named at spawn time, matching design decision 7's own
@@ -266,7 +266,7 @@ func (a *Actor) completeProcessingTurn(ctx context.Context, tx pgx.Tx, sandboxRo
 	// this SAME transaction -- see planrecord.go's own doc comment.
 	// recordPlanIfNeeded itself is a no-op (nil, nil) for every other case
 	// (plan_mode false, or trig != TriggerComplete). Deliberately called
-	// BEFORE enqueueOutboxNotification below (Step 38, "plan mode,
+	// BEFORE enqueueOutboxNotification below (§8.1, "plan mode,
 	// cross-channel", reordering this Step's own predecessor): that call
 	// needs to know whether a plan was just recorded (and its own id/
 	// version) to route this turn's completion to the plan-approval-

@@ -15,7 +15,7 @@
 // already has everything needed in hand (sessionRow.ProvenanceTag, the
 // creator's already-decrypted OAuth token, owner/repoName, and the just-
 // created PR's own number) with NO further plumbing. This deliberately
-// does NOT run via a GitHub `pull_request` webhook lane (the way Step 48's
+// does NOT run via a GitHub `pull_request` webhook lane (the way §8.2's
 // merge-gating half does, internal/adapters/inbound/github/
 // pullrequestevent.go): a scoped session creates its OWN PR (pushpr.go),
 // it is never a human pushing a branch and opening one by hand, so the
@@ -92,7 +92,7 @@ type PRDiffFetcher interface {
 // decrypted a second time); owner/repoName describe the repo this PR was
 // just opened for; configuredBranch is that repo's own CONFIGURED base
 // branch (nil means "the repo's real default branch") -- the SAME value
-// Step 27's checkContractDriftForRepo reads, and deliberately NEVER the
+// §14.3's checkContractDriftForRepo reads, and deliberately NEVER the
 // session's own pushed branch (see checkHandoffContractDrift's own doc
 // comment for why that distinction is load-bearing). prNumber is the
 // just-created PR's own number. Every early return here is a plain,
@@ -163,7 +163,7 @@ func (a *Actor) runHandoffSentinelBestEffort(
 	}
 }
 
-// checkHandoffContractDrift reuses Step 27's own contract-drift machinery
+// checkHandoffContractDrift reuses §14.3's own contract-drift machinery
 // verbatim (internal/domain/contractdrift.HasDrifted, the SAME
 // contractDrift store checkContractDrift/contractdrift.go already reads)
 // -- never a second endpoint scanner (internal/domain/handoff/doc.go's

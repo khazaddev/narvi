@@ -101,7 +101,7 @@ func (s *OutboxStore) CountPending(ctx context.Context) (int64, error) {
 }
 
 // ListDeadLetter returns up to limit 'dead_letter' outbox rows, most-
-// recently-created first -- Step 60's own needs_attention row source (see
+// recently-created first -- §16's own needs_attention row source (see
 // ListDeadLetterOutboxEntries' own generated doc comment for the full
 // design, including why this orders by created_at rather than a "became
 // dead-lettered at" instant this table does not carry).

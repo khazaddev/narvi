@@ -266,7 +266,7 @@ type commitResponse struct {
 // mirrors CreatePRError exactly (a plain, structured error; see
 // ports.SourceControl's own doc comment for why neither method invents a
 // transient/permanent classification). Originally named
-// ResolveBranchSHAError (Step 26, "image builds") back when ResolveBranchSHA
+// ResolveBranchSHAError (§8.5, "image builds") back when ResolveBranchSHA
 // was doGet's only caller; generalized here (Step 27, "mocking + contract
 // drift") once ResolveContractsFingerprint became doGet's second caller --
 // a small, mechanical, internal-only rename (this type is never part of any
@@ -384,7 +384,7 @@ func (a *Adapter) doGet(ctx context.Context, path, token string) ([]byte, error)
 	return body, nil
 }
 
-// ResolveBranchSHA implements ports.SourceControl (Step 26, "image
+// ResolveBranchSHA implements ports.SourceControl (§8.5, "image
 // builds"): resolves spec.Branch's current commit SHA via a real GET
 // https://api.github.com/repos/{owner}/{repo}/commits/{branch} call. When
 // spec.Branch is empty ("the repo's own default branch" -- ports.

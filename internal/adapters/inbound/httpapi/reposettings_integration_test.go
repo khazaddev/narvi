@@ -29,7 +29,7 @@ func TestGetRepoSettings_MemberDenied(t *testing.T) {
 	}
 }
 
-// TestGetRepoSettings_MaintainerAllowed_ButPutStillAdminOnly is Step 62's
+// TestGetRepoSettings_MaintainerAllowed_ButPutStillAdminOnly is §21's
 // own update to what was TestGetRepoSettings_MaintainerDenied: a
 // maintainer is now ALLOWED to read settings (they hold
 // authz.ActionConfigureAutoApprove, §13.3 row 5, and GetRepoSettings'

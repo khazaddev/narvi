@@ -200,7 +200,7 @@ type viewSubmissionPayload struct {
 	} `json:"view"`
 	// User is Slack's own real top-level "the user who submitted this
 	// modal" field, present on every view_submission payload (verified
-	// against Slack's current reference docs) -- Step 39's own auto-
+	// against Slack's current reference docs) -- §13.2's own auto-
 	// linking wiring: the Slack user id handleViewSubmission resolves
 	// against.
 	User struct {
@@ -717,10 +717,10 @@ type viewSubmissionErrorResponse struct {
 // re-checked here -- creating a plan_mode=true "request changes" turn is
 // unconditionally safe regardless of the named plan's current status,
 // exactly matching how the existing POST .../turns endpoint already
-// behaves for every other "request changes" submission, Step 37's own
+// behaves for every other "request changes" submission, §8.1's own
 // design).
 //
-// w is Step 39's own addition: every early-return path below still writes
+// w is §13.2's own addition: every early-return path below still writes
 // a bare 200 itself now (this function owns its own response entirely,
 // NewInteractivityHandler's own switch no longer writes one on this
 // branch) so the ONLY path that writes something other than a plain 200

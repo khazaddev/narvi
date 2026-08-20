@@ -5,12 +5,12 @@
 // the new POST /sessions/{id}/cloud-identity-config delivery endpoint,
 // internal/sandboxagent/credentials/cloudidentityconfig.go), minting a
 // short-lived token per binding (POST /sessions/{id}/cloud-identity-token,
-// Step 73a's own endpoint, credentials/cloudidentitytoken.go), writing
+// §27.3a's own endpoint, credentials/cloudidentitytoken.go), writing
 // each to its own file under cloudIdentityDir, and returning the standard,
 // cloud-SDK-documented env vars (internal/domain/cloudidentity.
 // ReservedEnvVarNames' own exact names) ready to thread into every
 // spawned process -- Spawn/RunBoot/RunHooks' own secretEnv/sandboxSecretEnv
-// parameters (Step 72's threading mechanism, extended here, never a new,
+// parameters (§27.1's threading mechanism, extended here, never a new,
 // parallel one -- see sandboxsecrets.go's own top doc comment for the
 // full "why threading, never os.Setenv" reasoning, which applies to every
 // value this file builds identically).
@@ -67,10 +67,10 @@
 // fresh/repo_image boot, a restored sandbox's own disk can already
 // contain token files (and a kubeconfig, kubeconfig.go) from whatever
 // boot last wrote them, potentially minutes, hours, or days stale. Unlike
-// Step 72's own OpenCode-config precedent (opencodeconfig.go's own
+// §27.1's own OpenCode-config precedent (opencodeconfig.go's own
 // applyOpenCodeConfig, which keeps the last-known-good document on a
 // FAILED fetch -- a deliberate, reasoned choice for a config document,
-// documented on that function), Step 72's own precedent does NOT apply
+// documented on that function), §27.1's own precedent does NOT apply
 // here unmodified: a config document degrades gracefully when stale (it
 // is still SOME working configuration); a stale cloud-identity token is
 // SHARPER, per this Step's own brief -- it is short-lived, security-

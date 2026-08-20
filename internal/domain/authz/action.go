@@ -44,7 +44,7 @@ const (
 	// ActionApprovePlan"): admin/maintainer on any run, member only on a
 	// session they created or joined. No caller exists yet — the decide
 	// endpoint (POST /api/workflow-runs/:runId/steps/:stepRunId/decide)
-	// is Step 56's; reserved here so that Step's call site needs no
+	// is §25.9's; reserved here so that Step's call site needs no
 	// shape change, exactly like every other reserved Action below.
 	ActionDecideWorkflowStep Action = "decide_workflow_step"
 	// ActionUploadToSession is minting/confirming a file upload against an
@@ -113,7 +113,7 @@ const (
 	// ActionResumeSession resumes a stopped session. Same "no caller yet"
 	// note as ActionStopSession.
 	ActionResumeSession Action = "resume_session"
-	// ActionViewShadowComparison covers Step 59's own "shadow-comparison
+	// ActionViewShadowComparison covers §8.8's own "shadow-comparison
 	// tooling for review" deliverable (GET /api/admin/shadow-compare,
 	// shadowcompare.go) -- reads across ANY two turns/sessions, never
 	// scoped to ones the caller created or joined, so this sits in THIS
@@ -178,7 +178,7 @@ const (
 	// one Environment's own deployment target, not a platform-wide
 	// security posture -- never the admin-only row a real credential
 	// value would sit at (the static rung's own uploaded kubeconfig is
-	// itself stored through Step 72's sandbox_secrets, gated by
+	// itself stored through §27.1's sandbox_secrets, gated by
 	// ActionManageEnvSecrets/ActionManageGlobalSecrets at ITS OWN write
 	// path, not this one). A separate Action from
 	// ActionManageCloudIdentityBindings (not a reuse) because the two

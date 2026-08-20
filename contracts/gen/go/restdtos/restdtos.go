@@ -695,7 +695,7 @@ type CloudIdentityBinding struct {
 
 	// The EXACT `sub` claim string (narvi:environment:<environment_id>) a customer
 	// must paste into their cloud-side trust policy for this binding to take effect
-	// -- Step 73a's own gap-4 resolution: the management API surfaces this directly
+	// -- §27.3a's own gap-4 resolution: the management API surfaces this directly
 	// rather than making the customer construct the string format themselves.
 	// Non-null only for scope=environment (a single, fixed, well-defined
 	// Environment); null for scope=global, since a global-scope binding's own token
@@ -778,7 +778,7 @@ func (j *CloudIdentityBindingScope) UnmarshalJSON(value []byte) error {
 
 // The EXACT `sub` claim string (narvi:environment:<environment_id>) a customer
 // must paste into their cloud-side trust policy for this binding to take effect --
-// Step 73a's own gap-4 resolution: the management API surfaces this directly
+// §27.3a's own gap-4 resolution: the management API surfaces this directly
 // rather than making the customer construct the string format themselves. Non-null
 // only for scope=environment (a single, fixed, well-defined Environment); null for
 // scope=global, since a global-scope binding's own token carries a DIFFERENT sub
@@ -4486,7 +4486,7 @@ func (j *PostReviewVerdictRequest) UnmarshalJSON(value []byte) error {
 // authoritative results the caller cannot itself derive, so a review agent can
 // log/confirm what actually happened.
 type PostReviewVerdictResponse struct {
-	// Step 48's own additive extension: the server-computed identityHash for each
+	// §8.2's own additive extension: the server-computed identityHash for each
 	// posted finding, in the SAME order as the request's own findings array -- so a
 	// caller can log/correlate them. Absent/empty when the request posted no
 	// findings.
@@ -5472,7 +5472,7 @@ type ReviewAnalytics struct {
 	FindingOutcomes *ReviewAnalyticsFindingOutcomes `json:"findingOutcomes" yaml:"findingOutcomes" mapstructure:"findingOutcomes"`
 
 	// False iff no review_findings row exists for this repo within the window --
-	// reads a DIFFERENT table than the two rollups above (review_findings, Step 48's
+	// reads a DIFFERENT table than the two rollups above (review_findings, §8.2's
 	// mutable per-finding status history, never review_verdicts' own append-only rows
 	// -- internal/domain/reviewverdict.FindingOutcomes' own doc comment).
 	FindingOutcomesComputed bool `json:"findingOutcomesComputed" yaml:"findingOutcomesComputed" mapstructure:"findingOutcomesComputed"`
@@ -7463,7 +7463,7 @@ func (j *WorkflowRun) UnmarshalJSON(value []byte) error {
 // UpdateMemberRoleRequest.role shape.
 type WorkflowStepDecideRequest struct {
 	// The human's instruction. Required non-empty for verdict 'revise' (enforced at
-	// the application layer by Step 56's handler, which owns the specific 400
+	// the application layer by §25.9's handler, which owns the specific 400
 	// message); optional context for 'reject'; ignored for 'approve'.
 	Text WorkflowStepDecideRequestText `json:"text" yaml:"text" mapstructure:"text"`
 
@@ -7476,7 +7476,7 @@ type WorkflowStepDecideRequest struct {
 }
 
 // The human's instruction. Required non-empty for verdict 'revise' (enforced at
-// the application layer by Step 56's handler, which owns the specific 400
+// the application layer by §25.9's handler, which owns the specific 400
 // message); optional context for 'reject'; ignored for 'approve'.
 type WorkflowStepDecideRequestText *string
 
@@ -7945,7 +7945,7 @@ type WorkflowStepRun struct {
 	OutcomeSummary WorkflowStepRunOutcomeSummary `json:"outcomeSummary" yaml:"outcomeSummary" mapstructure:"outcomeSummary"`
 
 	// Matches Postgres workflow_step_run_status exactly. Same dark-vocabulary note as
-	// WorkflowRun.status: the owning transition table is Step 55's.
+	// WorkflowRun.status: the owning transition table is §25.6's.
 	Status WorkflowStepRunStatus `json:"status" yaml:"status" mapstructure:"status"`
 
 	// StepDefinitionId corresponds to the JSON schema field "stepDefinitionId".

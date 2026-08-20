@@ -40,7 +40,7 @@ type createReviewRequest struct {
 }
 
 // CreateReview submits a formal pull request review on repo owner/repo's
-// PR prNumber (Step 47's own "formal-review gate"), authenticated with
+// PR prNumber (§8.2's own "formal-review gate"), authenticated with
 // token as a Bearer token. event is one of internal/domain/reviewpost.
 // FormalReviewEventComment/FormalReviewEventRequestChanges (the caller's
 // own reviewpost.ComputeFormalReviewEvent result) -- this method itself

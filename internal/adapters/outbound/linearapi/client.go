@@ -11,7 +11,7 @@ import (
 )
 
 // defaultAPIBaseURL is Linear's own real GraphQL/REST API base -- verified
-// live against Linear's own developer documentation during Step 34's
+// live against Linear's own developer documentation during §8.10's
 // investigation ("Linear's GraphQL endpoint is https://api.linear.app/
 // graphql"). The ONLY place this literal appears in this package;
 // production wiring (cmd/control-plane/main.go) passes it explicitly,

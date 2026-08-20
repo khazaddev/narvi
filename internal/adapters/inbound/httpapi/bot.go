@@ -20,7 +20,7 @@ import (
 // "a future webhook ingress handler (Steps 32-34) calls createSessionCore
 // directly with its own already-decoded request and a NULL createdBy --
 // never [CreateSession]." That anticipated caller living in the SAME
-// package (since createSessionCore stays unexported). Step 32 ("GitHub
+// package (since createSessionCore stays unexported). §8.2 ("GitHub
 // ingress") instead places its handler in its own package,
 // internal/adapters/inbound/github, mirroring
 // internal/adapters/inbound/httpapi/doc.go's own alternative it left
@@ -77,7 +77,7 @@ func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *post
 // -- it is not a general domain invariant. domain/turn.NextToDispatch
 // already supports an arbitrary backlog of Pending turns on one session,
 // dispatching the oldest one only once nothing is Dispatched/Processing --
-// exactly the backlog Step 32's own per-PR @mention coalescing is meant to
+// exactly the backlog §8.2's own per-PR @mention coalescing is meant to
 // produce when N concurrent mentions land on a PR that already has a
 // review session (internal/adapters/inbound/github/coalesce.go is this
 // function's own caller for that case).

@@ -56,7 +56,7 @@ const (
 	watchdogLivenessCheck      watchdogKind = "liveness_check"
 )
 
-// opsMetrics bundles Step 77's five new OTel instruments, constructed
+// opsMetrics bundles §5.3's five new OTel instruments, constructed
 // exactly once per Registry (newOpsMetrics, called from NewRegistry) --
 // mirroring internal/app/imagebuild's own buildTelemetry bundling
 // precedent (telemetry.go) for a package that, like this one, already has
