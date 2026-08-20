@@ -76,8 +76,8 @@ func TestMetrics_PositivePath(t *testing.T) {
 }
 
 // TestMetrics_WindowBoundary proves a decided plan OUTSIDE
-// DecisionInboxLatencyWindow is excluded from the median (Step 60 review
-// finding T7's own "cover the window boundary"): two decided plans are
+// DecisionInboxLatencyWindow is excluded from the median (covering the
+// window boundary): two decided plans are
 // seeded, one just inside the window and one well outside it (raw SQL
 // backdating -- ApproveIfAwaitingApproval itself can only ever set
 // decided_at to the real, current now()).

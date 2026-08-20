@@ -104,7 +104,7 @@
 // signature (§4.1) has no CreateSpec/SESSION_CONFIG delivery channel, so
 // there is still no way for the control plane to actually deliver this
 // freshly minted token/gen to the already-running provider instance today
-// -- left for Step 48 (RWX) to resolve for real.
+// -- left for a future RWX-based mechanism to resolve for real.
 
 package sessionactor
 

@@ -24,8 +24,8 @@ type FindingStatusCount struct {
 // fix_open/fix_merged/fix_applied) rather than a collapsed
 // accepted/rebutted/dismissed 3-tier label: that collapsing is a
 // PRESENTATION decision (mockups.html's own "Review finding outcomes"
-// tile), left to whichever Step actually builds that UI (Step 84, out of
-// this Step's own scope) rather than guessed at here.
+// tile), left to whichever future work actually builds that UI (§14.4, out
+// of this file's own scope) rather than guessed at here.
 //
 // Sorted by Count descending, tie-broken alphabetically by Status, the
 // SAME deterministic-ordering discipline TopRiskDrivers already

@@ -10,7 +10,7 @@ import (
 	"github.com/khazaddev/narvi/internal/domain/review"
 )
 
-// This file implements Step 48's own resolution of the tension named at
+// This file implements §8.2's own resolution of the tension named at
 // internal/domain/review/doc.go's design call #4: that package deliberately
 // ships NO Finding type ("a Finding type is left for whichever Step actually
 // needs it"). Finding lives HERE, in reviewpost -- a sibling package, never

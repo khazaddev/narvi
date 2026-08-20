@@ -18,8 +18,8 @@ import "testing"
 // PATH and no RWX_ACCESS_TOKEN is configured anywhere reachable from this
 // repo's own tests or CI (verified directly during this Step's own
 // implementation: `which rwx` finds nothing, no RWX_* env var exists).
-// This is a deliberate, named, user-approved scope decision for Step 57,
-// not a defect — see this Step's own landing PR description for the full
+// This is a deliberate, named, user-approved scope decision,
+// not a defect — see this feature's own landing PR description for the full
 // "what's built vs. what's deferred" accounting.
 //
 // Every OTHER test in this package (provider_test.go, errors_test.go,

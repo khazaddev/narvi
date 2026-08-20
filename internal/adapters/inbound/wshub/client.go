@@ -797,9 +797,9 @@ const hubConnBufferSize = 64
 //
 // Cross-pod broadcast fan-out is explicitly NOT solved here: a Hub only
 // ever reaches connections registered in THIS process, the same class of
-// honest, documented gap as Step 18's ErrSessionActorElsewhere/503
+// honest, documented gap as §3.2's ErrSessionActorElsewhere/503
 // stopgap (see this package's own doc.go) -- not a Postgres LISTEN/NOTIFY
-// or message-bus solution, genuinely out of scope for this Step.
+// or message-bus solution, genuinely out of scope here.
 type Hub struct {
 	mu    sync.Mutex
 	conns map[string]map[*websocket.Conn]chan []byte

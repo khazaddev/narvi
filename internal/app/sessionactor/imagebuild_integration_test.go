@@ -274,7 +274,7 @@ func TestResolveAndSetImage_WarmHit_UsesReadyImageZeroNetworkCalls(t *testing.T)
 // build leaves behind -- used by tests that need a warm-HIT row to
 // already exist without depending on app/imagebuild.Builder actually
 // being able to produce one for a repo-bearing fingerprint (which it
-// cannot yet, in Step 41 -- see this file's own top comment).
+// cannot yet do -- see this file's own top comment).
 func seedReadyImageBuild(ctx context.Context, t *testing.T, store *narvipg.ImageBuildStore, fingerprint, imageRef string) {
 	t.Helper()
 

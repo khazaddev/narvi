@@ -181,7 +181,7 @@ func (a *Actor) handleInactivityTimer(ctx context.Context) error {
 			// §3.2's two-phase design: the watchdog's only job is moving
 			// the sandbox to Suspect and arming terminal_grace -- NOT
 			// calling a provider to actually snapshot/stop it (that's
-			// Step 12+'s SandboxProvider, out of scope here).
+			// the SandboxProvider's own job, out of scope here).
 			// action.ShouldSnapshot is deliberately never consulted.
 			//
 			// gap: EvaluateInactivityTimeout's own InactivityAction

@@ -51,11 +51,11 @@
 // yet (Phase 3, IMPLEMENTATION_PLAN.md row 35). This package's own log
 // line + OTel counter is the full extent of "alert" this Step delivers,
 // named honestly rather than half-built, matching this project's own
-// established discipline (e.g. Step 22/25's own precedent of naming
-// deferred items explicitly).
+// established discipline (naming
+// deferred items explicitly elsewhere too).
 //
 // Deliberately, permanently out of scope for this package (do not revisit
-// without a new Step): it never calls DeleteImage. Step 42's own in-place
+// without a deliberate decision to do so): it never calls DeleteImage. §19.2's own in-place
 // refresh (below) DOES now relax part of the earlier "no rebuild-of-an-
 // already-ready-fingerprint, ever" invariant -- deliberately, and ONLY for
 // that in-place refresh path -- but image GC itself remains unbuilt: a
@@ -72,7 +72,7 @@
 // 'building' rows -- see that query's own doc comment). A future Step
 // could add a staleness sweep (a 'building' row whose own last_attempt_at
 // is older than some bound gets reset to 'failed' with a fresh backoff),
-// mirroring Step 24's own two-phase terminalization precedent -- not built
+// mirroring §3.2's own two-phase terminalization precedent -- not built
 // here.
 //
 // The analogous crash window on the REFRESH path (between ClaimForRefresh

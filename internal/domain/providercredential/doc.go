@@ -36,7 +36,7 @@
 //     table with scope chips and per-target resolution display (order:
 //     automation -> environment -> repo -> global, "this value wins")."
 //   - internal/domain/automation/doc.go's own "per-automation secrets:
-//     deferred to Step 53" section: "...alongside the repo/environment/
+//     deferred to §25.1" section: "...alongside the repo/environment/
 //     global scopes mockups.html's own Settings view already shows
 //     resolving in that order ("automation -> environment -> repo ->
 //     global, this value wins")."

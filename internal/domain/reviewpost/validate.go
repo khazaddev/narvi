@@ -400,7 +400,7 @@ func ValidateVerdictInput(in VerdictInput) error {
 	// that computation instead of being rejected up front. REQUIRED on
 	// EVERY review, light and deep alike -- unlike ArchDecisions/
 	// StackRisks/UnverifiedLimits below, this was never deferred behind
-	// the light/deep distinction Step 68 later added.
+	// the light/deep distinction §26.3 draws.
 	switch in.Digest.DescriptionAdequacy {
 	case review.DescriptionAdequacyOK, review.DescriptionAdequacyDrift, review.DescriptionAdequacyMisleading:
 	default:

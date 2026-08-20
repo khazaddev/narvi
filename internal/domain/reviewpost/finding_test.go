@@ -19,7 +19,7 @@ func docsDriftKind() *reviewpost.SentinelKind {
 
 func intPtr(n int) *int { return &n }
 
-// TestComputeFindingIdentity_SurvivesLineShift is Step 48's own explicitly
+// TestComputeFindingIdentity_SurvivesLineShift is §8.2's own explicitly
 // required test: a finding re-reported at a SHIFTED line number must hash
 // identically -- Line is deliberately excluded from identity (finding.go's
 // own doc comment).

@@ -349,9 +349,9 @@ func createUserAndIdentity(ctx context.Context, pool *pgxpool.Pool, users *postg
 	// identity_linked_via enum values for "no real linking algorithm ran,
 	// this identity was simply created": auto_email specifically means
 	// "matched an ALREADY-existing user's OTHER identity by email" (§13.2's
-	// own auto-linking algorithm, Step 39's job, not built yet); prompt
-	// means a human was asked to confirm a link (also Step 39). This is a
-	// deliberate, documented Step 39 hand-off note, not a silent choice.
+	// own auto-linking algorithm, not built yet); prompt
+	// means a human was asked to confirm a link (the same job). This is a
+	// deliberate, documented hand-off note, not a silent choice.
 	if _, err := identities.WithTx(tx).Create(ctx, sqlcgen.CreateIdentityParams{
 		UserID:               createdUser.ID,
 		Provider:             sqlcgen.IdentityProviderGithub,

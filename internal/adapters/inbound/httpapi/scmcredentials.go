@@ -1,9 +1,9 @@
 // This file (scmcredentials.go) implements POST /sessions/{sessionID}/
 // scm-credentials (§9.3, "e2e happy path", design decision 8) -- the
 // control-plane side of the wire contract internal/sandboxagent/
-// credentials.CPClient (Step 15) already built and tested the CLIENT side
+// credentials.CPClient (§6.4) already built and tested the CLIENT side
 // of. See that package's own cpclient.go doc comment: "THE CP ENDPOINT
-// THIS TALKS TO DOES NOT EXIST YET... whoever implements Step 21
+// THIS TALKS TO DOES NOT EXIST YET... whoever builds the real endpoint
 // reconciles the two sides then." This file is that reconciliation --
 // every field name/shape below matches CPClient's own
 // scmCredentialsRequest/scmCredentialsResponse exactly, deliberately, not

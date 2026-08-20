@@ -37,7 +37,7 @@
 // are entirely disjoint from control-plane's own, and platform/config.go
 // itself is out of scope for this Step.
 //
-// Step 16 adds one further optional env var: NARVI_SANDBOX_ID (default
+// One further optional env var: NARVI_SANDBOX_ID (default
 // "", an HONEST GAP -- see Config.SandboxID's own doc comment), consumed
 // by the sibling internal/sandboxagent/wsbridge package as the sandbox WS
 // connection's X-Sandbox-ID header value. Nothing else in this package

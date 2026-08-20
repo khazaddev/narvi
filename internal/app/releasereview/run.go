@@ -197,7 +197,7 @@ func Run(ctx context.Context, logger *slog.Logger, deps Deps, in Input) {
 // HighRiskFlagged is derived here (never inside domain/review itself,
 // which cannot import reviewpost -- see that package's own doc comment)
 // by checking m.Labels against reviewpost.LabelHighRisk, the SAME
-// review:*-risk label vocabulary Step 47's verdict-posting tool already
+// review:*-risk label vocabulary §8.2's verdict-posting tool already
 // syncs onto every reviewed PR.
 func toDomainMergedPR(m ports.MergedPR) review.MergedPR {
 	var revertedAfterSeconds *int64

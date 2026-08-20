@@ -43,7 +43,7 @@ type envelope struct {
 // This function's own job is strictly inbound: reading frames off conn and
 // acking them. Actually SENDING prompt/stop/push/snapshot/shutdown/
 // git_sync_complete to a live sandbox connection from the control-plane
-// side is commander.go's own SandboxRegistry.SendCommand (Step 21, "e2e
+// side is commander.go's own SandboxRegistry.SendCommand (§9.3, "e2e
 // happy path") -- registered against this SAME conn by NewSandboxHandler
 // right before entering this loop (sandbox.go), not built in this
 // function.

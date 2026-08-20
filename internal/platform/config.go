@@ -596,7 +596,7 @@ const (
 
 // slackDefaultRepoNameEnvVarName and slackDefaultRepoURLEnvVarName name the
 // single repo a brand-new Slack-spawned session's CreateSessionRequest
-// carries (Step 33, "Slack ingress"). Deliberately OPTIONAL, unlike the two
+// carries (§8.10, "Slack ingress"). Deliberately OPTIONAL, unlike the two
 // vars above: the technical plan has no per-channel/per-workspace repo
 // routing design yet (that is a genuinely open gap, left to a future
 // automations/routing Step), so this Step's own honest, minimal stand-in is

@@ -278,7 +278,7 @@ type AutomationCreatedBy *string
 // env vars') -- plain, non-secret configuration only
 // (internal/domain/automation.EnvVar). See internal/domain/automation/doc.go's own
 // writeup for why per-automation SECRETS are a deliberately different, unbuilt
-// thing (deferred to Step 53).
+// thing (deferred to §25.1).
 type AutomationEnvVarElem struct {
 	// A POSIX shell/environment-variable-legal identifier
 	// (internal/domain/automation.ValidateEnvVars) -- letters/digits/underscore, not

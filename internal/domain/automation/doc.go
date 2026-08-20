@@ -174,10 +174,10 @@
 //     column exists in the UI but the backend never fills it") without
 //     inventing that larger mechanism here.
 //
-// # Per-automation secrets: deferred to Step 53, deliberately not built here
+// # Per-automation secrets: deferred to §25.1, deliberately not built here
 //
-// §8.4 also lists "per-automation secrets" -- NOT implemented in this
-// Step, by direct, explicit decision, and named here rather than silently
+// §8.4 also lists "per-automation secrets" -- NOT implemented here,
+// by direct, explicit decision, and named here rather than silently
 // dropped (mirroring this codebase's own established discipline of
 // documenting an accepted gap explicitly, e.g. app/imagebuild/doc.go's own
 // claimed-but-unbuilt sweep, and this package's sibling app/automation/
@@ -185,15 +185,15 @@
 // directly, twice, before writing this: no `CREATE TABLE ... secret`
 // anywhere under migrations/, and no `SecretStore` type anywhere under
 // internal/ -- generic secret storage does not exist ANYWHERE in this
-// codebase yet. docs/IMPLEMENTATION_PLAN.md's own Step 53 row ("provider
-// credential injection", §25.1/§25.3) is explicit that Step 53 is "the
-// first Step that actually builds" secret storage, scoped initially to
+// codebase yet. §25.1/§25.3 ("provider credential injection") is explicit
+// that this is the first work that actually builds secret storage, scoped
+// initially to
 // provider API keys mapped provider->env-var name. Building an ad-hoc,
 // one-off secrets mechanism here -- before that generic design lands --
 // would either conflict with it or be thrown away once it does. EnvVar
 // (envvar.go, immediately above) is the deliberate, honest contrast: PLAIN,
 // non-confidential per-automation configuration, which carries no such
-// risk and is fully implemented in this Step. Once Step 53 lands generic
+// risk and is fully implemented here. Once §25.1 lands generic
 // secret storage, a small, focused follow-up is expected to extend it to
 // automations, alongside the repo/environment/global scopes mockups.html's
 // own Settings view already shows resolving in that order ("automation →

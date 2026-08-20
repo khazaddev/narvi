@@ -62,7 +62,7 @@ import (
 //     until conn.Read errors or ctx is done.
 func NewSandboxHandler(registry *sessionactor.Registry, sandboxes *postgres.SandboxStore, commander *SandboxRegistry, timeouts platform.Timeouts) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// (1) ?type=sandbox -- the client-hub type is Step 19's own job,
+		// (1) ?type=sandbox -- the client-hub type is §6.2's own job,
 		// not yet implemented; this route only serves the sandbox half.
 		if r.URL.Query().Get("type") != "sandbox" {
 			http.Error(w, "unsupported or missing ws type", http.StatusBadRequest)
