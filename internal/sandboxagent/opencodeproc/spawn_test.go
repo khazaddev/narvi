@@ -220,7 +220,7 @@ func TestSpawn_ProviderCredentialEnvAppended(t *testing.T) {
 // TestSpawn_NilProviderCredentialEnv_UnchangedBehavior proves nil (the
 // overwhelming common case -- no provider credential configured for this
 // session at any scope) behaves EXACTLY like this function did before
-// Step 53: PATH/HOME still present, NARVI_SESSION_CONFIG still absent --
+// §25.1: PATH/HOME still present, NARVI_SESSION_CONFIG still absent --
 // this parameter's own absence changes nothing.
 func TestSpawn_NilProviderCredentialEnv_UnchangedBehavior(t *testing.T) {
 	// Not t.Parallel(): t.Setenv forbids combining the two.

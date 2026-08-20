@@ -139,3 +139,19 @@ func CheckStepRefs(root string, scanDirs []string) ([]StepRef, error) {
 	})
 	return out, nil
 }
+
+//
+// # The colon form is this check's real blind spot, with evidence
+//
+// Narrative comments number their own local procedure -- "// Step 1: the
+// timer fires", "// --- Step 3: kill pod A" -- and a plan citation can wear
+// the same colon: "// Step 48: is the sentinel-auto-fix flow even a
+// CANDIDATE". Excluding the colon form keeps the narrative ones quiet at the
+// cost of missing citations shaped like them, and three genuine ones survived
+// the sweep that way (Step 48 in httpapi/reviewverdict.go, Step 59 in
+// domain/authz/authorize.go, Step 53 in opencodeproc/spawn_test.go -- all
+// verified against the plan's own rows and rewritten to §17.6, §29 and §25.1).
+// Separating the two needs the citation's TOPIC, not its shape, which is
+// semantics and outside what this check can decide -- the same boundary
+// docs/guides/README.md draws for its siblings. Stated here so the next reader
+// knows the check is a floor, not a proof.

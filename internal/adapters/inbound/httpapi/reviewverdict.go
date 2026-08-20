@@ -542,7 +542,7 @@ func PostReviewVerdict(
 			correlationID = &id
 		}
 
-		// Step 48: is the sentinel-auto-fix flow even a CANDIDATE for this
+		// §17.6: is the sentinel-auto-fix flow even a CANDIDATE for this
 		// verdict at all -- the toggle is on AND at least one posted
 		// finding names a sentinel kind? Computed BEFORE opening the
 		// transaction below (a pure, in-memory check) so the "fetch the

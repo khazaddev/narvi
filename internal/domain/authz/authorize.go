@@ -134,7 +134,7 @@ var matrix = map[Action]actionRule{
 	// own/joined escape hatch (see action.go's own doc comment on why).
 	ActionStopSession:   {allow: roles(RoleAdmin, RoleMaintainer)},
 	ActionResumeSession: {allow: roles(RoleAdmin, RoleMaintainer)},
-	// Step 59: shadow-comparison tooling reads across ANY two turns --
+	// §29: shadow-comparison tooling reads across ANY two turns --
 	// same row as stop/resume, same reasoning (action.go's own doc
 	// comment).
 	ActionViewShadowComparison: {allow: roles(RoleAdmin, RoleMaintainer)},
