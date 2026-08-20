@@ -974,8 +974,13 @@ func canonicalCloudIdentityIssuerURL(raw string) (string, error) {
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return "", &InvalidCloudIdentityIssuerURLError{Value: raw, Reason: "scheme must be http or https"}
 	}
-	if parsed.Host == "" {
-		return "", &InvalidCloudIdentityIssuerURLError{Value: raw, Reason: "must include a host"}
+	// Hostname(), not Host -- see canonicalOTLPEndpointURL's own comment on
+	// the same check: a port-only authority has a non-empty Host and an
+	// empty Hostname(). An issuer URL naming no host is worse here than
+	// there: it is published in the discovery document and becomes the
+	// `iss` claim customer clouds match on.
+	if parsed.Hostname() == "" {
+		return "", &InvalidCloudIdentityIssuerURLError{Value: raw, Reason: "must include a host (a port-only value names no host)"}
 	}
 	if parsed.Path != "" {
 		return "", &InvalidCloudIdentityIssuerURLError{Value: raw, Reason: "must not carry a path, including a bare trailing slash -- the discovery/JWKS handlers append their own fixed /.well-known/... suffix by plain string concatenation, so a trailing slash here would double up against it"}
@@ -1012,11 +1017,26 @@ func canonicalOTLPEndpointURL(raw string) (string, error) {
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return "", &InvalidOTLPEndpointError{Value: raw, Reason: "scheme must be http or https"}
 	}
-	if parsed.Host == "" {
-		return "", &InvalidOTLPEndpointError{Value: raw, Reason: "must include a host"}
+	// Hostname(), not Host: url.Parse("http://:4318") yields Host==":4318"
+	// with an EMPTY Hostname(), so a port-only authority satisfies a
+	// non-empty-Host check while naming no host at all. WithEndpointURL then
+	// hands ":4318" to the exporter as its endpoint and Go's transport
+	// resolves the empty host to the local machine -- a value that passes
+	// boot validation and silently exports to localhost instead of the
+	// operator's collector, which is exactly the silently-never-exporting
+	// process this validation exists to prevent.
+	if parsed.Hostname() == "" {
+		return "", &InvalidOTLPEndpointError{Value: raw, Reason: "must include a host (a port-only value like \"http://:4318\" names no host and would export to the local machine)"}
 	}
 	if parsed.Path != "" {
-		return "", &InvalidOTLPEndpointError{Value: raw, Reason: "must not carry a path, including a bare trailing slash -- each OTLP exporter appends its own fixed /v1/traces or /v1/metrics suffix by concatenation, so a trailing slash here would double up against it"}
+		// The exporters do NOT concatenate: internal/oconf's own cleanPath
+		// REPLACES the signal path, using its default (/v1/traces,
+		// /v1/metrics) only when none was supplied. So a path here does not
+		// double up -- it silently overrides the signal route and sends
+		// telemetry somewhere the collector is not listening. Rejecting it
+		// is still right; the reason an operator reads must describe the
+		// mechanism that actually applies.
+		return "", &InvalidOTLPEndpointError{Value: raw, Reason: "must not carry a path, including a bare trailing slash -- each OTLP exporter uses its own fixed /v1/traces or /v1/metrics route, and a path supplied here REPLACES that route rather than being appended to it"}
 	}
 	if parsed.RawQuery != "" || parsed.Fragment != "" {
 		return "", &InvalidOTLPEndpointError{Value: raw, Reason: "must not carry a query string or fragment"}

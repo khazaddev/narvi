@@ -1398,6 +1398,11 @@ func TestLoadCloudIdentityIssuerURL(t *testing.T) {
 		{"missing scheme", "issuer.narvi.example.test"},
 		{"non-http(s) scheme", "ftp://issuer.narvi.example.test"},
 		{"missing host", "https:///.well-known"},
+		// Same port-only hole as the OTLP endpoint's own table below, and
+		// sharper here: an issuer naming no host is published in the
+		// discovery document and becomes the `iss` claim customer clouds
+		// match on.
+		{"port-only authority names no host", "https://:8443"},
 		{"carries a path", "https://issuer.narvi.example.test/tenant-a"},
 		{"carries a query string", "https://issuer.narvi.example.test?x=1"},
 		{"carries a fragment", "https://issuer.narvi.example.test#frag"},
@@ -1478,6 +1483,13 @@ func TestLoadOTLPEndpoint(t *testing.T) {
 		{"missing scheme", "otel-collector.narvi.example.test:4318"},
 		{"non-http(s) scheme", "grpc://otel-collector.narvi.example.test:4317"},
 		{"missing host", "https:///v1/traces"},
+		// A port-only authority: url.Parse gives Host==":4318" with an EMPTY
+		// Hostname(), so the old parsed.Host=="" check accepted it, and
+		// WithEndpointURL then exported to the LOCAL machine rather than any
+		// collector -- verified by binding a listener and watching both the
+		// trace and metric streams arrive there. Pins the Hostname() fix:
+		// restoring parsed.Host=="" makes this subtest fail.
+		{"port-only authority names no host", "http://:4318"},
 		{"carries a path", "https://otel-collector.narvi.example.test/custom-prefix"},
 		{"carries a query string", "https://otel-collector.narvi.example.test?x=1"},
 		{"carries a fragment", "https://otel-collector.narvi.example.test#frag"},
