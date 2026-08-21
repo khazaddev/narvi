@@ -368,7 +368,7 @@ The zero-trace evaluation capability: egress-mode flag + fail-toward-suppress re
 *Exit: a dedicated evaluation deployment (`NARVI_SHADOW_MODE=1`, GitHub-only webhooks, credential-starved per §30.4) attached to a live customer repository completes real sessions end-to-end with zero customer-visible egress — reads only on the customer's audit surface — and the suppression ledger accounts for every would-have-been effect; per-repo Activate graduates a repo to live with §30.8's promotion fence applied.*
 
 **Phase 9 — Per-repository knowledge, two modes (Steps 104-109; see §31)**
-The two-mode knowledge capability: approved-plan durability; the per-repository entitlement predicate + `sessions.repos` authorization; the mode A prior-arch-decisions block with its path-scoped selector, mode buffer, injected-ids record, and merge-outcome capture; the mode B index and hybrid retrieval (`Embeddings` port, `real[]` + `tsvector` schema, `RepoScope` isolation layers, RRF fusion, cold-corpus fallback) with its quarantine/provenance/self-reinforcement guards; `kb_search`; the OKF read-only export. Appended numerically after Phase 8; in execution order it needs only Phase 5's milestone (the review chain and its §26.5 instrument) plus Phase 8's Steps 95/95 for the epoch stamps its in-query exclusions ride — Step 107's engagement additionally waits on Step 106's own baseline readout (§31.6).
+The two-mode knowledge capability: approved-plan durability; the per-repository entitlement predicate + `sessions.repos` authorization; the mode A prior-arch-decisions block with its path-scoped selector, mode buffer, injected-ids record, and merge-outcome capture; the mode B index and hybrid retrieval (`Embeddings` port, `real[]` + `tsvector` schema, `RepoScope` isolation layers, RRF fusion, cold-corpus fallback) with its quarantine/provenance/self-reinforcement guards; `kb_search`; the OKF read-only export. Appended numerically after Phase 8; in execution order it needs only Phase 5's milestone (the review chain and its §26.5 instrument) plus Phase 8's Steps 95/97 for the epoch stamps its in-query exclusions ride — Step 107's engagement additionally waits on Step 106's own baseline readout (§31.6).
 *Exit: mode A's block live on all three review seams with the contestation-×-injection KPI reporting per mode stamp, plus EITHER a repository flipped to mode B serving retrieved context with the cold-corpus fallback verified and the two-repository isolation suite green OR a recorded kill decision (§31.9) citing Step 106's own baseline readout in place of Step 107's build; contested and shadow-epoch content demonstrably excluded from live retrieval in the SQL whenever mode B exists at all.*
 
 ## 11. Working conventions for the implementing agent
@@ -4383,7 +4383,7 @@ implicitly assumed a human-bounded source, and that bound is structural (RBAC + 
 paragraph; recorded here so the consumer list is exhaustive and the rejection is part of it.
 
 **6. The OKF read-only export — decided yes, as a small late read-only Step, after Steps 105 and
-102** (100 for the entitlement gate; 102 because this renders from that Step's own corpus tables —
+107** (105 for the entitlement gate; 107 because this renders from that Step's own corpus tables —
 Step 109's own Content already requires it, and §31.10's phasing is corrected to match). An
 authenticated, entitlement-gated endpoint rendering a repository's active concepts — `arch-decision`,
 the only type Phase 9's corpus admits, §31.3 — on demand (§31.3's residence argument). Never a
@@ -4603,14 +4603,14 @@ rather than belonging to mode A alone.)
 
 ### 31.10 Phasing
 
-Phase 9, Steps 104–104 (implementation plan). The minimal subset delivering the owner's decision
-is Steps 104 + 101 (durability, and the mode A pipeline with its buffer and measurement); Step 106
+Phase 9, Steps 104–109 (implementation plan). The minimal subset delivering the owner's decision
+is Steps 104 + 106 (durability, and the mode A pipeline with its buffer and measurement); Step 106
 alone is already production-useful — mode A gains its cross-PR memory. **Step 107 is conditional,
 not minimal**: it ships — the mode B index/retrieval whose *ranker* swaps into Step 106's proven
 pipeline, behind the candidate gate Step 106 built and both modes keep (§31.6) —
 only if Step 106's own baseline readout (§31.6, §31.9) engages the embeddings leg; if that readout
 kills engagement, Step 107's entire deliverable is a recorded kill decision, and Phase 9 closes on
-mode A alone. Step 105 (entitlement) runs in parallel and gates Steps 108 (`kb_search`) and 104
+mode A alone. Step 105 (entitlement) runs in parallel and gates Steps 108 (`kb_search`) and 109
 (export); both additionally wait on Step 107 actually shipping — they render/query Step 107's own
 corpus tables, so neither exists at all under a kill decision. Two prerequisites are in flight as
 independent changes and are dependencies, not Steps: the four-handler repository-authorization fix
