@@ -312,6 +312,111 @@ func (j *AutomationEnvVarElem) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// One automation_invocations row's own REST wire shape
+// (migrations/000052_automation_invocations.up.sql, §3.5/§8.4), WITH its own runs
+// nested (see AutomationRun above) -- returned by GET
+// /api/automations/{automationID}/invocations, newest first, bounded
+// (ListInvocationsForAutomation's own LIMIT, mirroring ListPlansResponse's own 'a
+// session's own plan history is expected to stay small' precedent one level up: an
+// automation's own MOST RECENT invocation history, not an unbounded full archive).
+type AutomationInvocation struct {
+	// AutomationId corresponds to the JSON schema field "automationId".
+	AutomationId string `json:"automationId" yaml:"automationId" mapstructure:"automationId"`
+
+	// Null while status is 'pending' (still waiting on one or more runs).
+	ClosedAt AutomationInvocationClosedAt `json:"closedAt" yaml:"closedAt" mapstructure:"closedAt"`
+
+	// CreatedAt corresponds to the JSON schema field "createdAt".
+	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
+
+	// Id corresponds to the JSON schema field "id".
+	Id string `json:"id" yaml:"id" mapstructure:"id"`
+
+	// Every automation_runs row fanned out for this invocation (≤
+	// automation.MaxFanOutTargets, i.e. ≤10), oldest first.
+	Runs []AutomationRun `json:"runs" yaml:"runs" mapstructure:"runs"`
+
+	// Matches Postgres automation_invocation_status exactly.
+	Status AutomationInvocationStatus `json:"status" yaml:"status" mapstructure:"status"`
+
+	// len(targets) at fan-out time -- automation_invocations.total_runs.
+	TotalRuns int `json:"totalRuns" yaml:"totalRuns" mapstructure:"totalRuns"`
+}
+
+// Null while status is 'pending' (still waiting on one or more runs).
+type AutomationInvocationClosedAt *time.Time
+
+type AutomationInvocationStatus string
+
+const AutomationInvocationStatusFailed AutomationInvocationStatus = "failed"
+const AutomationInvocationStatusPending AutomationInvocationStatus = "pending"
+const AutomationInvocationStatusSucceeded AutomationInvocationStatus = "succeeded"
+
+var enumValues_AutomationInvocationStatus = []interface{}{
+	"pending",
+	"succeeded",
+	"failed",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AutomationInvocationStatus) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_AutomationInvocationStatus {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AutomationInvocationStatus, v)
+	}
+	*j = AutomationInvocationStatus(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AutomationInvocation) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["automationId"]; raw != nil && !ok {
+		return fmt.Errorf("field automationId in AutomationInvocation: required")
+	}
+	if _, ok := raw["closedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field closedAt in AutomationInvocation: required")
+	}
+	if _, ok := raw["createdAt"]; raw != nil && !ok {
+		return fmt.Errorf("field createdAt in AutomationInvocation: required")
+	}
+	if _, ok := raw["id"]; raw != nil && !ok {
+		return fmt.Errorf("field id in AutomationInvocation: required")
+	}
+	if _, ok := raw["runs"]; raw != nil && !ok {
+		return fmt.Errorf("field runs in AutomationInvocation: required")
+	}
+	if _, ok := raw["status"]; raw != nil && !ok {
+		return fmt.Errorf("field status in AutomationInvocation: required")
+	}
+	if _, ok := raw["totalRuns"]; raw != nil && !ok {
+		return fmt.Errorf("field totalRuns in AutomationInvocation: required")
+	}
+	type Plain AutomationInvocation
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 1 > plain.TotalRuns {
+		return fmt.Errorf("field %s: must be >= %v", "totalRuns", 1)
+	}
+	*j = AutomationInvocation(plain)
+	return nil
+}
+
 // Null until this automation's first invocation ever closes.
 type AutomationLastRunAt *time.Time
 
@@ -393,6 +498,140 @@ func (j *AutomationReposElem) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = AutomationReposElem(plain)
+	return nil
+}
+
+// One automation_runs row's own REST wire shape
+// (migrations/000053_automation_runs.up.sql, §3.5/§8.4). Returned nested under
+// AutomationInvocation.runs by GET /api/automations/{automationID}/invocations
+// (the automations UI, §12.2 item 4, mockups.html's own Automations view:
+// 'expandable invocation → runs rows'). target is a snapshot of
+// automation_invocations.targets' own per-run element, taken at invocation-fan-out
+// time (never re-derived from the parent automation's own, possibly since-changed,
+// repos list). Deliberately carries no failure-reason/artifact-summary text of its
+// own -- automation_runs has no such column (only automations.artifact_summary
+// does, one per CLOSED INVOCATION, already on the Automation DTO above); sessionId
+// is this row's own honest path to the real story (the linked session's
+// timeline/review view already renders it), never a fabricated one-line narrative.
+type AutomationRun struct {
+	// AutomationId corresponds to the JSON schema field "automationId".
+	AutomationId string `json:"automationId" yaml:"automationId" mapstructure:"automationId"`
+
+	// Null while status is starting/running.
+	CompletedAt AutomationRunCompletedAt `json:"completedAt" yaml:"completedAt" mapstructure:"completedAt"`
+
+	// Id corresponds to the JSON schema field "id".
+	Id string `json:"id" yaml:"id" mapstructure:"id"`
+
+	// InvocationId corresponds to the JSON schema field "invocationId".
+	InvocationId string `json:"invocationId" yaml:"invocationId" mapstructure:"invocationId"`
+
+	// Null until this run's own linked turn first reaches Processing
+	// (automation.RunTriggerProcessing).
+	RunningAt AutomationRunRunningAt `json:"runningAt" yaml:"runningAt" mapstructure:"runningAt"`
+
+	// Null when this run failed before a session could even be created for its target
+	// (automation_runs.session_id, ON DELETE SET NULL). Non-null is this row's own
+	// real link to "what actually happened" -- the linked session's own
+	// timeline/review view.
+	SessionId AutomationRunSessionId `json:"sessionId" yaml:"sessionId" mapstructure:"sessionId"`
+
+	// StartedAt corresponds to the JSON schema field "startedAt".
+	StartedAt time.Time `json:"startedAt" yaml:"startedAt" mapstructure:"startedAt"`
+
+	// Matches Postgres automation_run_status exactly.
+	Status AutomationRunStatus `json:"status" yaml:"status" mapstructure:"status"`
+
+	// Target corresponds to the JSON schema field "target".
+	Target AutomationReposElem `json:"target" yaml:"target" mapstructure:"target"`
+}
+
+// Null while status is starting/running.
+type AutomationRunCompletedAt *time.Time
+
+// Null until this run's own linked turn first reaches Processing
+// (automation.RunTriggerProcessing).
+type AutomationRunRunningAt *time.Time
+
+// Null when this run failed before a session could even be created for its target
+// (automation_runs.session_id, ON DELETE SET NULL). Non-null is this row's own
+// real link to "what actually happened" -- the linked session's own
+// timeline/review view.
+type AutomationRunSessionId *string
+
+type AutomationRunStatus string
+
+const AutomationRunStatusFailed AutomationRunStatus = "failed"
+const AutomationRunStatusRunning AutomationRunStatus = "running"
+const AutomationRunStatusStarting AutomationRunStatus = "starting"
+const AutomationRunStatusSucceeded AutomationRunStatus = "succeeded"
+
+var enumValues_AutomationRunStatus = []interface{}{
+	"starting",
+	"running",
+	"succeeded",
+	"failed",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AutomationRunStatus) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_AutomationRunStatus {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AutomationRunStatus, v)
+	}
+	*j = AutomationRunStatus(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AutomationRun) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["automationId"]; raw != nil && !ok {
+		return fmt.Errorf("field automationId in AutomationRun: required")
+	}
+	if _, ok := raw["completedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field completedAt in AutomationRun: required")
+	}
+	if _, ok := raw["id"]; raw != nil && !ok {
+		return fmt.Errorf("field id in AutomationRun: required")
+	}
+	if _, ok := raw["invocationId"]; raw != nil && !ok {
+		return fmt.Errorf("field invocationId in AutomationRun: required")
+	}
+	if _, ok := raw["runningAt"]; raw != nil && !ok {
+		return fmt.Errorf("field runningAt in AutomationRun: required")
+	}
+	if _, ok := raw["sessionId"]; raw != nil && !ok {
+		return fmt.Errorf("field sessionId in AutomationRun: required")
+	}
+	if _, ok := raw["startedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field startedAt in AutomationRun: required")
+	}
+	if _, ok := raw["status"]; raw != nil && !ok {
+		return fmt.Errorf("field status in AutomationRun: required")
+	}
+	if _, ok := raw["target"]; raw != nil && !ok {
+		return fmt.Errorf("field target in AutomationRun: required")
+	}
+	type Plain AutomationRun
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = AutomationRun(plain)
 	return nil
 }
 
@@ -2825,6 +3064,32 @@ func (j *ListAuditLogResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// GET /api/automations/{automationID}/invocations's own response body (the
+// automations UI, §12.2 item 4) -- see AutomationInvocation's own doc comment
+// above for why this is bounded/newest-first rather than a full unbounded history.
+type ListAutomationInvocationsResponse struct {
+	// Invocations corresponds to the JSON schema field "invocations".
+	Invocations []AutomationInvocation `json:"invocations" yaml:"invocations" mapstructure:"invocations"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ListAutomationInvocationsResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["invocations"]; raw != nil && !ok {
+		return fmt.Errorf("field invocations in ListAutomationInvocationsResponse: required")
+	}
+	type Plain ListAutomationInvocationsResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ListAutomationInvocationsResponse(plain)
+	return nil
+}
+
 // GET /api/automations's own response body (§8.4's own 'creator/status filters',
 // applied as ?createdBy=<uuid|me>&status=<active|paused> query params). Unbounded
 // (no pagination), matching ListMembersResponse's own identical precedent.
@@ -3784,14 +4049,38 @@ func (j *PendingLinkPrompt) UnmarshalJSON(value []byte) error {
 // (audit finding M3, completeness: §8.1 shipped approve/reject with no way for a
 // web client to ever discover a planId to approve). Deliberately omits turnId and
 // slack_channel_id/slack_message_ts, both present on the underlying plans row:
-// turnId is an internal linkage to the producing turn's own event stream (where
-// the plan's actual text/steps live, per that migration's own doc comment), not
-// needed for a client whose job here is discovering/approving a planId;
-// slack_channel_id/slack_message_ts
+// turnId is an internal linkage to the producing turn's own event stream, never
+// itself surfaced (the plan-mode UI needs what that stream CONTAINS -- content
+// below -- never the linkage id itself); slack_channel_id/slack_message_ts
 // (migrations/000035_plan_mode_cross_channel.up.sql) are Slack
 // cross-channel-notify plumbing that should never leak into a REST response,
-// mirroring PlanActionResponse's own equally minimal shape below.
+// mirroring PlanActionResponse's own equally minimal shape below. content (the
+// plan-mode UI, §12.2 item 3) closes the gap this description used to name as out
+// of scope ("not needed for a client whose job here is discovering/approving a
+// planId") now that a client's job here also includes RENDERING the plan: the
+// producing turn's own final streamed assistant text, best-effort recovered
+// server-side by the SAME bounded event-log scan
+// internal/domain/plan.ExtractContent already provides for the Slack/Linear
+// cross-channel notifiers (internal/app/sessionactor/planapprovalcontent.go), just
+// windowed per plan VERSION here (bounded above by the NEXT turn dispatched in
+// this session, if any, so an already-decided plan's content is never contaminated
+// by a later turn's own streamed text) rather than only ever the just-completed
+// turn. There is deliberately no structured steps/fileRefs/scopeEstimate shape:
+// internal/app/sessionactor/planapprovalcontent.go's own doc comment is explicit
+// that no such schema exists anywhere in this codebase -- content is the model's
+// own freeform prose, verbatim, rendered as plain text by the client (never
+// markdown-parsed), exactly like every other model-authored field this schema
+// already carries (finding.description, digest.summary).
 type Plan struct {
+	// Best-effort, server-extracted plan text (see this DTO's own top doc comment) --
+	// never empty: falls back to a fixed, honest placeholder
+	// (internal/domain/plan.ContentFallbackText) when no token event could be
+	// recovered for this version's own window, mirroring planContentFallbackText's
+	// pre-existing identical fallback for the Slack/Linear notifiers. Model-authored
+	// freeform prose -- render as plain text only, never markdown-parsed, matching
+	// every other model-authored string this schema carries.
+	Content string `json:"content" yaml:"content" mapstructure:"content"`
+
 	// CreatedAt corresponds to the JSON schema field "createdAt".
 	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
 
@@ -3969,6 +4258,9 @@ func (j *Plan) UnmarshalJSON(value []byte) error {
 	var raw map[string]interface{}
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
+	}
+	if _, ok := raw["content"]; raw != nil && !ok {
+		return fmt.Errorf("field content in Plan: required")
 	}
 	if _, ok := raw["createdAt"]; raw != nil && !ok {
 		return fmt.Errorf("field createdAt in Plan: required")
@@ -7311,10 +7603,34 @@ func (j *SandboxSecret) UnmarshalJSON(value []byte) error {
 // status/failureReason/spawnSource enums match
 // session_status/session_failure_reason/session_spawn_source exactly.
 // repos/sandboxStatus (§12.2 item 1's own GET /api/sessions list endpoint) are two
-// additions to a DTO that otherwise predates them.
+// additions to a DTO that otherwise predates them. buildModelId/buildEffort (§12.2
+// item 3, the plan-mode UI) are a THIRD, read-only addition:
+// sessions.build_model_id/build_effort (migrations/000034_plan_mode.up.sql,
+// 000063_turn_session_effort.up.sql) were write-only via CreateSessionRequest
+// before this -- set once at session-creation time (meaningful only when planMode
+// was true) and never surfaced back on any GET response, which left the plan-mode
+// view (§12.2 item 3's own "plan-model vs build-model split visible in header")
+// with no way to ever read back what CreateSessionRequest.buildModelId/buildEffort
+// had written. This is the exact same shape as createdBy/repos above: an addition
+// to a DTO that predates it, sourced from a column that already existed.
 type Session struct {
 	// Archived corresponds to the JSON schema field "archived".
 	Archived bool `json:"archived" yaml:"archived" mapstructure:"archived"`
+
+	// The reasoning effort the approval-dispatched IMPLEMENTATION turn uses (or
+	// used), mirroring buildModelId immediately above and
+	// CreateSessionRequest.buildEffort's own doc comment.
+	BuildEffort SessionBuildEffort `json:"buildEffort" yaml:"buildEffort" mapstructure:"buildEffort"`
+
+	// The model the approval-dispatched IMPLEMENTATION turn uses (or used), mirroring
+	// CreateSessionRequest.buildModelId's own doc comment exactly -- set once at
+	// session-creation time, meaningful only when this session was created with
+	// planMode true. Null means either 'use the default model catalog entry' or 'this
+	// session was never created under plan mode' -- the two are indistinguishable
+	// from this column alone, exactly like modelId's own existing null-means-default
+	// convention offers no way to distinguish 'explicit default' from 'never set'
+	// either.
+	BuildModelId SessionBuildModelId `json:"buildModelId" yaml:"buildModelId" mapstructure:"buildModelId"`
 
 	// CreatedAt corresponds to the JSON schema field "createdAt".
 	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
@@ -7357,6 +7673,21 @@ type Session struct {
 	// UpdatedAt corresponds to the JSON schema field "updatedAt".
 	UpdatedAt time.Time `json:"updatedAt" yaml:"updatedAt" mapstructure:"updatedAt"`
 }
+
+// The reasoning effort the approval-dispatched IMPLEMENTATION turn uses (or used),
+// mirroring buildModelId immediately above and CreateSessionRequest.buildEffort's
+// own doc comment.
+type SessionBuildEffort *string
+
+// The model the approval-dispatched IMPLEMENTATION turn uses (or used), mirroring
+// CreateSessionRequest.buildModelId's own doc comment exactly -- set once at
+// session-creation time, meaningful only when this session was created with
+// planMode true. Null means either 'use the default model catalog entry' or 'this
+// session was never created under plan mode' -- the two are indistinguishable from
+// this column alone, exactly like modelId's own existing null-means-default
+// convention offers no way to distinguish 'explicit default' from 'never set'
+// either.
+type SessionBuildModelId *string
 
 // Null for bot/automation-created sessions with no direct human user.
 type SessionCreatedBy *string
@@ -7525,6 +7856,12 @@ func (j *Session) UnmarshalJSON(value []byte) error {
 	}
 	if _, ok := raw["archived"]; raw != nil && !ok {
 		return fmt.Errorf("field archived in Session: required")
+	}
+	if _, ok := raw["buildEffort"]; raw != nil && !ok {
+		return fmt.Errorf("field buildEffort in Session: required")
+	}
+	if _, ok := raw["buildModelId"]; raw != nil && !ok {
+		return fmt.Errorf("field buildModelId in Session: required")
 	}
 	if _, ok := raw["createdAt"]; raw != nil && !ok {
 		return fmt.Errorf("field createdAt in Session: required")
@@ -9277,18 +9614,6 @@ type WorkflowStepRunOutcomeSummary *string
 type WorkflowStepRunStatus string
 
 const WorkflowStepRunStatusAwaitingDecision WorkflowStepRunStatus = "awaiting_decision"
-const WorkflowStepRunStatusCancelled WorkflowStepRunStatus = "cancelled"
-const WorkflowStepRunStatusCompleted WorkflowStepRunStatus = "completed"
-const WorkflowStepRunStatusFailed WorkflowStepRunStatus = "failed"
-const WorkflowStepRunStatusRunning WorkflowStepRunStatus = "running"
-
-var enumValues_WorkflowStepRunStatus = []interface{}{
-	"awaiting_decision",
-	"running",
-	"completed",
-	"failed",
-	"cancelled",
-}
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (j *WorkflowStepRunStatus) UnmarshalJSON(value []byte) error {
@@ -9310,12 +9635,25 @@ func (j *WorkflowStepRunStatus) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+type ReviewReadoutLatestVerdict_0 = ReviewReadoutVerdict
+
+const WorkflowStepRunStatusCancelled WorkflowStepRunStatus = "cancelled"
+const WorkflowStepRunStatusCompleted WorkflowStepRunStatus = "completed"
+const WorkflowStepRunStatusFailed WorkflowStepRunStatus = "failed"
+const WorkflowStepRunStatusRunning WorkflowStepRunStatus = "running"
+
+var enumValues_WorkflowStepRunStatus = []interface{}{
+	"awaiting_decision",
+	"running",
+	"completed",
+	"failed",
+	"cancelled",
+}
+
 // The ordinary turn this attempt dispatched as (§25.6: 'every step is an ordinary
 // sequential turn'). Null while an awaiting_decision (hitlBefore-gated) attempt
 // exists before any turn does.
 type WorkflowStepRunTurnId *string
-
-type ReviewReadoutLatestVerdict_0 = ReviewReadoutVerdict
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (j *WorkflowStepRun) UnmarshalJSON(value []byte) error {
