@@ -17,8 +17,8 @@
 // platform.Sign+Verify's own bearer format is Narvi's OWN webhook-shaped
 // scheme, for a call that has no third-party provider signature to
 // match at all. The most concrete, already-planned consumer of exactly
-// that shape is IMPLEMENTATION_PLAN.md's own §8.2 ("automations:
-// triggers & extras"), which lists a generic user-configured "webhook"
+// that shape is §8.4 ("automations: triggers & extras"), which lists a
+// generic user-configured "webhook"
 // trigger condition alongside GitHub/Linear/cron ones -- unlike
 // GitHub/Slack/Linear's own fixed, provider-defined signature formats, a
 // generic/custom automation-triggering webhook has nothing to verify

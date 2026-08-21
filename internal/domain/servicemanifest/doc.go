@@ -22,7 +22,7 @@
 //
 //   - Readiness.Health's shape. §14.2's own YAML example only ever shows
 //     `readiness: { port: 3000 }` -- it never shows a worked health-check
-//     example, even though IMPLEMENTATION_PLAN.md's row summary says
+//     example, even though the plan's own summary of this work says
 //     "readiness (port/health)". This package defines Health as a single,
 //     self-contained absolute URL (e.g. "http://127.0.0.1:4000/health")
 //     the caller GETs directly, rather than (for instance) a bare path

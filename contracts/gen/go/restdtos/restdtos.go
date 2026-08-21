@@ -3861,26 +3861,25 @@ func (j *MintUploadResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Response body for GET /api/models -- §8.8's own 'Catalog' deliverable
-// (IMPLEMENTATION_PLAN.md row; §8 item 8; §29; §25.2). STRUCTURAL DECISION, named
-// here since §29 leaves it open: sourced from a control-plane-embedded snapshot of
-// OpenCode's own GET /provider catalog (live-verified against the pinned OpenCode
-// 1.17.15 binary during this Step's own implementation), NOT a live per-sandbox
-// proxy -- the control-plane image does not ship the OpenCode binary (§29.9's own
-// identical reasoning for why the ChatGPT device-flow client is a direct CP-side
-// adapter rather than brokered through a spawned sandbox), so there is no running
-// OpenCode server this endpoint could query live even if it wanted to. This is the
-// SAME 'pinned known-good set' convention §7 already established for the
-// sandbox-side per-turn fallback (the opencode adapter's own
-// resolveProviderModel/fallbackModel), applied here as the control plane's ONLY
-// source rather than a fallback of last resort -- refreshed by hand whenever the
-// pinned OpenCode version bumps, exactly like that fallback constant already is.
-// Scope: the 3 providers §25.1 already wires credential injection for
-// (google/anthropic/openai) -- every model id is the exact catalog id OpenCode
-// itself recognizes, usable verbatim as the '<providerId>/<modelId>' string
-// modelId/buildModelId/effort/buildEffort already accept end to end today (§25.1's
-// own 'no Narvi-side allowlist' passthrough, unchanged by this catalog's existence
-// -- it is a discovery aid, never a validating allowlist).
+// Response body for GET /api/models -- §8.8's own 'Catalog' deliverable (§8 item
+// 8; §29; §25.2). STRUCTURAL DECISION, named here since §29 leaves it open:
+// sourced from a control-plane-embedded snapshot of OpenCode's own GET /provider
+// catalog (live-verified against the pinned OpenCode 1.17.15 binary during this
+// Step's own implementation), NOT a live per-sandbox proxy -- the control-plane
+// image does not ship the OpenCode binary (§29.9's own identical reasoning for why
+// the ChatGPT device-flow client is a direct CP-side adapter rather than brokered
+// through a spawned sandbox), so there is no running OpenCode server this endpoint
+// could query live even if it wanted to. This is the SAME 'pinned known-good set'
+// convention §7 already established for the sandbox-side per-turn fallback (the
+// opencode adapter's own resolveProviderModel/fallbackModel), applied here as the
+// control plane's ONLY source rather than a fallback of last resort -- refreshed
+// by hand whenever the pinned OpenCode version bumps, exactly like that fallback
+// constant already is. Scope: the 3 providers §25.1 already wires credential
+// injection for (google/anthropic/openai) -- every model id is the exact catalog
+// id OpenCode itself recognizes, usable verbatim as the '<providerId>/<modelId>'
+// string modelId/buildModelId/effort/buildEffort already accept end to end today
+// (§25.1's own 'no Narvi-side allowlist' passthrough, unchanged by this catalog's
+// existence -- it is a discovery aid, never a validating allowlist).
 type ModelCatalog struct {
 	// Providers corresponds to the JSON schema field "providers".
 	Providers []ModelCatalogProvider `json:"providers" yaml:"providers" mapstructure:"providers"`
@@ -8268,21 +8267,20 @@ func (j *Session) UnmarshalJSON(value []byte) error {
 }
 
 // Response body for GET /api/admin/shadow-compare ('s own 'shadow-comparison
-// tooling for review' deliverable, IMPLEMENTATION_PLAN.md row, reusing
-// §9.4/§18.5's shadow-mode discipline: 'the same mechanism is used again for every
-// future model swap'). §29 has no dedicated design subsection for this piece --
-// this is a deliberately minimal, from-scratch interpretation, named as such: a
-// READ-ONLY, side-effect-free comparison of two ALREADY-COMPLETED turns (e.g. the
-// same PR/prompt dispatched once on the active model and once on a
-// shadow/candidate model or effort, or a session's own two differently-configured
-// re-runs), never a re-execution orchestrator -- 'shadow' here means 'never
-// affects either compared turn or its session', the same never-act-only-observe
-// posture §18.5 requires stay permanent, applied to model/effort evaluation rather
-// than classifier routing. Cost is deliberately NOT included: no per-turn cost
-// column exists anywhere in this schema today (§7.1's own named, unclosed debt --
-// 'per-model cost attribution ... is not designed here'), and inventing one for
-// this endpoint alone would be exactly the kind of shape invention this Step's own
-// hard constraints forbid.
+// tooling for review' deliverable, reusing §9.4/§18.5's shadow-mode discipline:
+// 'the same mechanism is used again for every future model swap'). §29 has no
+// dedicated design subsection for this piece -- this is a deliberately minimal,
+// from-scratch interpretation, named as such: a READ-ONLY, side-effect-free
+// comparison of two ALREADY-COMPLETED turns (e.g. the same PR/prompt dispatched
+// once on the active model and once on a shadow/candidate model or effort, or a
+// session's own two differently-configured re-runs), never a re-execution
+// orchestrator -- 'shadow' here means 'never affects either compared turn or its
+// session', the same never-act-only-observe posture §18.5 requires stay permanent,
+// applied to model/effort evaluation rather than classifier routing. Cost is
+// deliberately NOT included: no per-turn cost column exists anywhere in this
+// schema today (§7.1's own named, unclosed debt -- 'per-model cost attribution ...
+// is not designed here'), and inventing one for this endpoint alone would be
+// exactly the kind of shape invention this Step's own hard constraints forbid.
 type ShadowComparisonReport struct {
 	// TurnA corresponds to the JSON schema field "turnA".
 	TurnA ShadowComparisonTurn `json:"turnA" yaml:"turnA" mapstructure:"turnA"`

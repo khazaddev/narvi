@@ -1,7 +1,6 @@
 //go:build integration
 
-// Resilience test #2 (§9.3, docs/IMPLEMENTATION_PLAN.md row 28, "turn
-// recovery"): "Kill the sandbox mid-turn -> suspect -> grace ->
+// Resilience test #2 (§9.3, "turn recovery"): "Kill the sandbox mid-turn -> suspect -> grace ->
 // respawn+resume with same conversation id." This is the resilience
 // scenario this whole Step's own re-enqueue/conversation-id work exists to
 // make real -- see dispatch.go's own planReenqueueOrRespawn/

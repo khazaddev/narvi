@@ -1,7 +1,6 @@
 //go:build integration
 
-// Resilience test #1 (§9.3, docs/IMPLEMENTATION_PLAN.md row 21, design
-// decision 12): "Kill the CP pod mid-turn -> actor rehydrates, turn
+// Resilience test #1 (§9.3, design decision 12): "Kill the CP pod mid-turn -> actor rehydrates, turn
 // resumes or fails-with-reason; no stuck processing." This Step's own
 // resilience test targets the "fails-with-reason" branch ONLY -- real
 // turn RESUME (continuing a Processing turn on a fresh actor without

@@ -71,8 +71,8 @@
 //   - Every other Action below (automations, environments, secrets,
 //     review verdicts, integrations, sentinel auto-fix) has NO caller
 //     yet — those features don't exist as of this Step (Phase 3 ingress
-//     work only; automations/reviews/sentinel land in later Phase 3.5/6
-//     Steps per docs/IMPLEMENTATION_PLAN.md) — they are defined here now
+//     work only; automations (§8.4), reviews (§8.2) and sentinel
+//     auto-fix (§17) are all built later) — they are defined here now
 //     so this package's own shape never has to change out from under
 //     them: a future Step calls Authorize with the right
 //     Action constant and gets the exact matrix row §13.3 already

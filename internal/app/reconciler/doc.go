@@ -1,5 +1,5 @@
 // Package reconciler is the process-wide provider-reconciliation and
-// orphan-GC loop (§5.3; IMPLEMENTATION_PLAN.md row 25, "reconciler + GC":
+// orphan-GC loop (§5.3, "reconciler + GC":
 // "60s loop against the provider API, orphan reaping, orphans_reaped
 // metric") -- a sibling of app/sessionactor, not folded into it
 // (TECHNICAL_PLAN.md's own repo-layout comment: "reconciler/ # provider

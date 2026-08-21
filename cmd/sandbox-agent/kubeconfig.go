@@ -73,8 +73,8 @@
 // identical to a §27.3 cloud_identity_bindings token: a file under
 // cloudIdentityDir that sandbox-agent refreshes and the consumer (here,
 // client-go, via kubeconfig's own tokenFile field) re-reads on its own.
-// docs/TECHNICAL_PLAN.md §27.4 rung 2 and docs/IMPLEMENTATION_PLAN.md's
-// §27.3 row are corrected in the SAME commit as this fix, for the same
+// docs/TECHNICAL_PLAN.md §27.4 rung 2 and §27.3 are corrected in the
+// SAME commit as this fix, for the same
 // "a future reader must not re-derive the broken design from a stale
 // spec" reason cloudidentity.go's own gap-1/gap-2 write-ups exist.
 //

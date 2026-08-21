@@ -48,7 +48,7 @@
 //
 // Real alert DELIVERY (Slack/email/notification) for the streak alert is
 // explicitly OUT of scope -- no outbox/notification infrastructure exists
-// yet (Phase 3, IMPLEMENTATION_PLAN.md row 35). This package's own log
+// yet (§5.3's own observability work). This package's own log
 // line + OTel counter is the full extent of "alert" this Step delivers,
 // named honestly rather than half-built, matching this project's own
 // established discipline (naming

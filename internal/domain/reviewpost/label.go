@@ -15,8 +15,8 @@ const (
 	LabelHighRisk   = "review:high-risk"
 
 	// LabelNeedsHuman is §21.2's own escape hatch -- the OLD "review: low
-	// risk" auto-approval-trigger label INVERTED (IMPLEMENTATION_PLAN.md's
-	// §8.2 row): a MAINTAINER applies this label, by hand, to force a
+	// risk" auto-approval-trigger label INVERTED (§8.2): a MAINTAINER
+	// applies this label, by hand, to force a
 	// specific PR out of auto-approval regardless of what criteria say
 	// (§21.2, §8.6's own eligibility engine). ComputeLabelSync below
 	// NEVER adds or removes this label -- it is deliberately excluded from

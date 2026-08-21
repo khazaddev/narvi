@@ -235,7 +235,7 @@ func metricsRequestContainsIntSum(req *colmetricpb.ExportMetricsServiceRequest, 
 }
 
 // TestSetupOTel_OTLPEndpoint_MetricsArriveAtReceiver is §33's own exit
-// criterion (IMPLEMENTATION_PLAN.md row 108): "an integration test against
+// criterion (§33's own): "an integration test against
 // a fake OTLP receiver observes the control plane's metrics". Deliberately
 // NOT a test that otlpmetrichttp.New/SetupOTel constructed without error --
 // the fake collector below decodes the REAL protobuf body a REAL export

@@ -31,7 +31,7 @@
 // of those PRs, or anywhere else: a repo-wide audit at that Step turned up
 // zero registered instruments for any of the three. All three (plus a
 // watchdog-false-alarm counter and a false-turn-failure counter §5.3
-// itself doesn't name but IMPLEMENTATION_PLAN.md row 77 does) now live in
+// itself doesn't name but its own "false failures" item does) now live in
 // internal/app/sessionactor's own opsmetrics.go, exactly where spawn
 // latency was always meant to (this comment's own "app/adapter layer"
 // call, above) -- see that file's own top comment for the full gap

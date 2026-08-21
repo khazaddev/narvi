@@ -669,8 +669,8 @@ type Timeouts struct {
 	// ReconcilerInterval is how often the process-wide reconciler
 	// (internal/app/reconciler, §5.3) ticks: one ports.SandboxProvider.List
 	// call compared against Postgres's own expected-alive set, reaping any
-	// orphaned provider-side sandbox instance found. IMPLEMENTATION_PLAN.md
-	// row 25 gives this explicitly: "60s loop against the provider API".
+	// orphaned provider-side sandbox instance found. §5.3 gives this
+	// explicitly: "60s loop against the provider API".
 	ReconcilerInterval time.Duration
 
 	// --- §5.3 fix (reconciler orphan-GC debounce): a real,
@@ -2538,7 +2538,7 @@ func DefaultTimeouts() Timeouts {
 
 		SnapshotMintTimeout: 60 * time.Second, // not specified; chosen (a real provider TakeSnapshot round trip, more generous than CredentialFetchTimeout)
 
-		ReconcilerInterval: 60 * time.Second, // IMPLEMENTATION_PLAN.md row 25, explicit ("60s loop")
+		ReconcilerInterval: 60 * time.Second, // §5.3, explicit ("60s loop")
 
 		ReconcilerOrphanConfirmationPeriod: 30 * time.Second, // not specified; chosen, comfortably above the realistic sub-second spawn-commit race window; exactly MinTimeoutMargin below ReconcilerInterval (the minimum Validate allows, zero slack beyond it) so the two-tick guarantee holds under the shipped default
 

@@ -78,8 +78,8 @@
 // readable by the agent's own tools via /proc/<sandbox-agent-pid>/environ,
 // same-UID, regardless of which specific process a value was injected
 // into. OS-level isolation (a UID drop / user namespace) is §30.5's own
-// scope, not this one's -- see that Step's own row in
-// docs/IMPLEMENTATION_PLAN.md for the named debt. The real boundaries
+// scope, not this one's -- see §27.1 for the named debt. The real
+// boundaries
 // sandbox_secrets DOES hold today: encrypted at rest CP-side
 // (platform.EncryptToken, mirroring provider_credentials'
 // value_encrypted exactly), never delivered through the sandbox
