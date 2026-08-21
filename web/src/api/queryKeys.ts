@@ -72,3 +72,67 @@ export const automationQueryKeys = {
   detail: (automationId: string) => ['automations', automationId, 'detail'] as const,
   invocations: (automationId: string) => ['automations', automationId, 'invocations'] as const,
 }
+
+// settingsQueryKeys (§12.2 item 5, Step 86) -- the Settings/Analytics
+// views' own data sources: members & audit log (§13.2/§13.3),
+// environments (§14.1), prompt templates (§18.6), the 3 secret-scope
+// resources (§27.1/§25.1), cloud identity (§27.3/§27.4), OpenCode config
+// (§27.2), per-repo review analytics (§21.1) and digest scope (§21.3).
+// Secret-scope keys are namespaced by a plain, serializable tuple (never
+// the SecretScope union directly, which TanStack Query would need to
+// deep-compare structurally anyway) so two different scopes never collide
+// on the same cache entry.
+function scopeKeyParts(scope: { kind: string; owner?: string; repo?: string; environmentId?: string }): readonly [string, string | null, string | null] {
+  if (scope.kind === 'repo') return ['repo', scope.owner ?? null, scope.repo ?? null] as const
+  if (scope.kind === 'environment') return ['environment', scope.environmentId ?? null, null] as const
+  return ['global', null, null] as const
+}
+
+export const memberQueryKeys = {
+  list: () => ['members', 'list'] as const,
+}
+
+export const auditLogQueryKeys = {
+  // The page bounds are part of the key: two different pages of the audit
+  // log are two different cached results, not one that silently overwrites
+  // the other. list() stays as the prefix every page shares, so a mutation
+  // that writes an audit row can invalidate all of them at once.
+  list: () => ['audit-log', 'list'] as const,
+  page: (limit: number, offset: number) => ['audit-log', 'list', { limit, offset }] as const,
+}
+
+export const environmentQueryKeys = {
+  list: () => ['environments', 'list'] as const,
+}
+
+export const promptTemplateQueryKeys = {
+  list: () => ['prompt-templates', 'list'] as const,
+}
+
+export const repoDigestScopeQueryKeys = {
+  detail: (repoFullName: string) => ['repo-digest-scope', repoFullName] as const,
+}
+
+export const repoAnalyticsQueryKeys = {
+  reviewAnalytics: (repoFullName: string) => ['repo-review-analytics', repoFullName] as const,
+}
+
+export const sandboxSecretQueryKeys = {
+  list: (scope: Parameters<typeof scopeKeyParts>[0]) => ['sandbox-secrets', ...scopeKeyParts(scope)] as const,
+}
+
+export const providerCredentialQueryKeys = {
+  list: (scope: Parameters<typeof scopeKeyParts>[0]) => ['provider-credentials', ...scopeKeyParts(scope)] as const,
+}
+
+export const cloudIdentityBindingQueryKeys = {
+  list: (scope: Parameters<typeof scopeKeyParts>[0]) => ['cloud-identity-bindings', ...scopeKeyParts(scope)] as const,
+}
+
+export const clusterBindingQueryKeys = {
+  detail: (environmentId: string) => ['cluster-binding', environmentId] as const,
+}
+
+export const openCodeConfigQueryKeys = {
+  detail: (scope: Parameters<typeof scopeKeyParts>[0]) => ['opencode-config', ...scopeKeyParts(scope)] as const,
+}

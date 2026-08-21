@@ -4,13 +4,15 @@
 // existed, fully implemented, since §8.3 ("intent classifier", §18.6)
 // -- but until this file, NOTHING in the entire codebase ever called it,
 // and there was no way for an admin to see what a draft template
-// assembles to before saving it either. This file adds exactly those two
-// capabilities: a stateless PREVIEW (assembles a draft template's text
-// against real variable values, without ever touching Postgres) and an
-// UPSERT (validates, then persists via the already-existing store
-// method).
+// assembles to before saving it either. This file originally added
+// exactly those two capabilities: a stateless PREVIEW (assembles a draft
+// template's text against real variable values, without ever touching
+// Postgres) and an UPSERT (validates, then persists via the
+// already-existing store method). The settings screen (§12.2 item 5)
+// then needed to show WHICH templates exist before either can be used
+// meaningfully, so a third, read-only LIST was added alongside them.
 //
-// Both endpoints are gated by authz.ActionActivatePromptTemplate --
+// All three endpoints are gated by authz.ActionActivatePromptTemplate --
 // domain/authz's own §13.3 row-6 action ("prompt-template activation",
 // admin only), which likewise existed with its own passing RBAC-matrix
 // tests (authorize_test.go) but had ZERO callers anywhere in the HTTP
@@ -58,6 +60,13 @@
 //
 //   - POST /api/intent-templates/preview -- PreviewIntentTemplate
 //   - POST /api/intent-templates          -- UpsertIntentTemplate
+//   - GET  /api/intent-templates          -- ListPromptTemplates
+//
+// All three carry the SAME admin-only gate
+// (authz.ActionActivatePromptTemplate). The GET matters to name here even
+// though it only reads: it returns every prompt template's full body, so
+// anyone auditing which routes expose template text has to see it in this
+// list -- main.go's own route comment sends them here to find it.
 
 package httpapi
 
@@ -69,6 +78,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/app/auditlog"
 	"github.com/khazaddev/narvi/internal/domain/authz"
@@ -324,5 +334,46 @@ func UpsertIntentTemplate(pool *pgxpool.Pool, templates *postgres.PromptTemplate
 			Template:  row.Template,
 			UpdatedAt: row.UpdatedAt.Time,
 		})
+	}
+}
+
+// ListPromptTemplates backs GET /api/intent-templates (§12.2 item 5): the
+// Settings -> Prompt templates screen's own list data source, closing the
+// same "the write side had no way to be discovered" gap
+// PreviewIntentTemplate/UpsertIntentTemplate above already exist for the
+// write side of this table. Admin-only (authz.
+// ActionActivatePromptTemplate), the SAME action Preview/Upsert already
+// use -- one action gates every endpoint of this table's own small
+// management surface. Unlike UpsertIntentTemplate's own hand-written
+// intentTemplateDTO response shape (this file's own top doc comment: "no
+// /contracts codegen migration this batch"), this NEW endpoint returns
+// the /contracts-generated restdtos.PromptTemplate -- structurally
+// identical (name/template/updatedAt), so both endpoints stay
+// wire-compatible with the SAME frontend type despite one predating the
+// other's schema entry.
+func ListPromptTemplates(templates *postgres.PromptTemplateStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authz.ActionActivatePromptTemplate, authz.Resource{}) {
+			return
+		}
+		ctx := r.Context()
+		logger := platform.Logger(ctx)
+
+		rows, err := templates.List(ctx)
+		if err != nil {
+			logger.Error("httpapi: list prompt templates failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		wire := make([]restdtos.PromptTemplate, len(rows))
+		for i, row := range rows {
+			wire[i] = restdtos.PromptTemplate{
+				Name:      row.Name,
+				Template:  row.Template,
+				UpdatedAt: row.UpdatedAt.Time,
+			}
+		}
+		writeJSON(w, http.StatusOK, restdtos.ListPromptTemplatesResponse{PromptTemplates: wire})
 	}
 }

@@ -123,6 +123,11 @@ type testRig struct {
 	// postgres.PromptTemplateStore's own Upsert method.
 	promptTemplates *narvipg.PromptTemplateStore
 
+	// digestChannels backs GET /api/repos/{owner}/{repo}/digest-scope
+	// below ("ui settings + analytics", §12.2 item 5, §21.3) -- see
+	// httpapi/digestscope.go's own doc comment.
+	digestChannels *narvipg.DigestChannelStore
+
 	// tokenEncryptionKey is a fixed, valid 32-byte AES-256-GCM key used by
 	// this rig's own scm-credentials tests (real EncryptToken/DecryptToken
 	// round trip, matching the SAME real flow §13.1's own OAuth callback
@@ -368,6 +373,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		auditLog:              narvipg.NewAuditLogStore(pool),
 		linkPrompts:           narvipg.NewIdentityLinkPromptStore(pool),
 		promptTemplates:       narvipg.NewPromptTemplateStore(pool),
+		digestChannels:        narvipg.NewDigestChannelStore(pool),
 		prSessions:            narvipg.NewGitHubPRSessionStore(pool),
 		repoSettings:          narvipg.NewRepoSettingsStore(pool),
 		botHandle:             "narvi-test-bot",
@@ -524,6 +530,14 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
 		r.Post("/preview", httpapi.PreviewIntentTemplate())
 		r.Post("/", httpapi.UpsertIntentTemplate(rig.pool, rig.promptTemplates, rig.auditLog))
+		r.Get("/", httpapi.ListPromptTemplates(rig.promptTemplates))
+	})
+	// /api/environments ("ui settings + analytics", §12.2 item 5) --
+	// mounted exactly like cmd/control-plane/main.go's own wiring (see
+	// environments.go's own doc comment).
+	router.Route("/api/environments", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Get("/", httpapi.ListEnvironments(rig.environments))
 	})
 	// scm-credentials is deliberately mounted OUTSIDE /api/sessions and
 	// outside auth.Middleware entirely -- see scmcredentials.go's own doc
@@ -655,6 +669,14 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	router.Route("/api/repos/{owner}/{repo}/review-analytics", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
 		r.Get("/", httpapi.GetReviewAnalytics(reviewVerdictDeps, rig.prSessions))
+	})
+	// /api/repos/{owner}/{repo}/digest-scope ("ui settings +
+	// analytics", §12.2 item 5, §21.3) -- mounted exactly like
+	// cmd/control-plane/main.go's own wiring (see digestscope.go's own
+	// doc comment).
+	router.Route("/api/repos/{owner}/{repo}/digest-scope", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Get("/", httpapi.GetRepoDigestScope(rig.digestChannels, rig.prSessions, platform.DefaultTimeouts()))
 	})
 	// /api/repos/{owner}/{repo}/provider-credentials,
 	// /api/environments/{environmentID}/provider-credentials,

@@ -2771,6 +2771,133 @@ func (j *Digest) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// One environments row's own REST wire shape (§14.1,
+// migrations/000021_environments.up.sql + 000025/000095). Returned by GET
+// /api/environments (§12.2 item 5) -- the first standalone read surface over this
+// table; environments.up.sql's own scope note is explicit that create/update stay
+// inline-at-session-creation-time only (httpapi.CreateSession), so this DTO
+// carries no name/repos/image-build fields -- none exist on this row. id is the
+// only stable handle a caller has for reusing this Environment's own scoped
+// sub-resources (sandbox-secrets, opencode-config, cloud-identity-bindings,
+// cluster-binding), all already keyed by environments.id.
+type Environment struct {
+	// §14.3's own contract-drift fingerprint path; null when mockConfigured is false.
+	ContractsPath EnvironmentContractsPath `json:"contractsPath" yaml:"contractsPath" mapstructure:"contractsPath"`
+
+	// CreatedAt corresponds to the JSON schema field "createdAt".
+	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
+
+	// §27.5's per-Environment Docker-in-sandbox flag.
+	DockerRequired bool `json:"dockerRequired" yaml:"dockerRequired" mapstructure:"dockerRequired"`
+
+	// The customer's own configured allowlist ONLY (§27.6) -- the non-negotiable
+	// floor (CP host + git hosts) is appended server-side at SessionConfig assembly
+	// time, never persisted here. Non-null only when egressPolicyMode is 'allowlist'.
+	EgressPolicyAllowlist *EnvironmentEgressPolicyAllowlist `json:"egressPolicyAllowlist" yaml:"egressPolicyAllowlist" mapstructure:"egressPolicyAllowlist"`
+
+	// §27.6's per-Environment enforced-egress mode. Null means no policy attached
+	// (unrestricted, today's unchanged behavior).
+	EgressPolicyMode *EnvironmentEgressPolicyMode `json:"egressPolicyMode" yaml:"egressPolicyMode" mapstructure:"egressPolicyMode"`
+
+	// Id corresponds to the JSON schema field "id".
+	Id string `json:"id" yaml:"id" mapstructure:"id"`
+
+	// MockConfigured corresponds to the JSON schema field "mockConfigured".
+	MockConfigured bool `json:"mockConfigured" yaml:"mockConfigured" mapstructure:"mockConfigured"`
+
+	// Sparse-checkout glob patterns (§14.1). Null/absent means full access -- the
+	// ordinary, unscoped case.
+	PathScope *EnvironmentPathScope `json:"pathScope" yaml:"pathScope" mapstructure:"pathScope"`
+}
+
+// §14.3's own contract-drift fingerprint path; null when mockConfigured is false.
+type EnvironmentContractsPath *string
+
+// The customer's own configured allowlist ONLY (§27.6) -- the non-negotiable floor
+// (CP host + git hosts) is appended server-side at SessionConfig assembly time,
+// never persisted here. Non-null only when egressPolicyMode is 'allowlist'.
+type EnvironmentEgressPolicyAllowlist []string
+
+type EnvironmentEgressPolicyMode struct {
+	Value interface{}
+}
+
+// MarshalJSON implements json.Marshaler.
+func (j *EnvironmentEgressPolicyMode) MarshalJSON() ([]byte, error) {
+	return json.Marshal(j.Value)
+}
+
+var enumValues_EnvironmentEgressPolicyMode = []interface{}{
+	"open",
+	"allowlist",
+	nil,
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *EnvironmentEgressPolicyMode) UnmarshalJSON(value []byte) error {
+	var v struct {
+		Value interface{}
+	}
+	if err := json.Unmarshal(value, &v.Value); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_EnvironmentEgressPolicyMode {
+		if reflect.DeepEqual(v.Value, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_EnvironmentEgressPolicyMode, v.Value)
+	}
+	*j = EnvironmentEgressPolicyMode(v)
+	return nil
+}
+
+// Sparse-checkout glob patterns (§14.1). Null/absent means full access -- the
+// ordinary, unscoped case.
+type EnvironmentPathScope []string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *Environment) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["contractsPath"]; raw != nil && !ok {
+		return fmt.Errorf("field contractsPath in Environment: required")
+	}
+	if _, ok := raw["createdAt"]; raw != nil && !ok {
+		return fmt.Errorf("field createdAt in Environment: required")
+	}
+	if _, ok := raw["dockerRequired"]; raw != nil && !ok {
+		return fmt.Errorf("field dockerRequired in Environment: required")
+	}
+	if _, ok := raw["egressPolicyAllowlist"]; raw != nil && !ok {
+		return fmt.Errorf("field egressPolicyAllowlist in Environment: required")
+	}
+	if _, ok := raw["egressPolicyMode"]; raw != nil && !ok {
+		return fmt.Errorf("field egressPolicyMode in Environment: required")
+	}
+	if _, ok := raw["id"]; raw != nil && !ok {
+		return fmt.Errorf("field id in Environment: required")
+	}
+	if _, ok := raw["mockConfigured"]; raw != nil && !ok {
+		return fmt.Errorf("field mockConfigured in Environment: required")
+	}
+	if _, ok := raw["pathScope"]; raw != nil && !ok {
+		return fmt.Errorf("field pathScope in Environment: required")
+	}
+	type Plain Environment
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = Environment(plain)
+	return nil
+}
+
 // GET /api/sessions/:id/events (§6.3). Mirrors client-ws/v1's own
 // FetchHistoryResponse shape exactly, for the same reason that schema gives: the
 // full event-payload shape is assembled by later PRs, and REST/WS should not
@@ -3240,6 +3367,34 @@ func (j *ListDecisionInboxResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// GET /api/environments's own response body (§12.2 item 5) -- every environments
+// row that exists, newest-first. Unbounded (no pagination), matching
+// ListAutomationsResponse's own identical precedent -- environments rows are
+// created only when a session or automation supplies a
+// pathScope/mockConfig/docker/egressPolicy, so volume stays small in practice.
+type ListEnvironmentsResponse struct {
+	// Environments corresponds to the JSON schema field "environments".
+	Environments []Environment `json:"environments" yaml:"environments" mapstructure:"environments"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ListEnvironmentsResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["environments"]; raw != nil && !ok {
+		return fmt.Errorf("field environments in ListEnvironmentsResponse: required")
+	}
+	type Plain ListEnvironmentsResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ListEnvironmentsResponse(plain)
+	return nil
+}
+
 // GET /api/repos/{owner}/{repo}/false-positive-patterns's own response body
 // (§22.4's own audit view) -- EVERY pattern for this repo, active or retired,
 // newest-first.
@@ -3326,6 +3481,33 @@ func (j *ListPlansResponse) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = ListPlansResponse(plain)
+	return nil
+}
+
+// GET /api/intent-templates's own response body (§12.2 item 5) -- every
+// prompt_templates row, ordered by name. Unbounded (no pagination) -- bounded in
+// practice to however many distinct template names this deployment has ever
+// upserted.
+type ListPromptTemplatesResponse struct {
+	// PromptTemplates corresponds to the JSON schema field "promptTemplates".
+	PromptTemplates []PromptTemplate `json:"promptTemplates" yaml:"promptTemplates" mapstructure:"promptTemplates"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ListPromptTemplatesResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["promptTemplates"]; raw != nil && !ok {
+		return fmt.Errorf("field promptTemplates in ListPromptTemplatesResponse: required")
+	}
+	type Plain ListPromptTemplatesResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ListPromptTemplatesResponse(plain)
 	return nil
 }
 
@@ -5142,6 +5324,123 @@ func (j *PostedFinding) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// POST /api/intent-templates/preview's own request body -- mirrors
+// classifiertemplates.go's own hand-written intentTemplatePreviewRequest
+// field-for-field (name/template/vars).
+type PreviewIntentTemplateRequest struct {
+	// Name corresponds to the JSON schema field "name".
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+
+	// Template corresponds to the JSON schema field "template".
+	Template string `json:"template" yaml:"template" mapstructure:"template"`
+
+	// Preview-time placeholder substitution values -- never persisted, never
+	// validated against any allow-list server-side (see classifiertemplates.go's own
+	// doc comment).
+	Vars PreviewIntentTemplateRequestVars `json:"vars" yaml:"vars" mapstructure:"vars"`
+}
+
+// Preview-time placeholder substitution values -- never persisted, never validated
+// against any allow-list server-side (see classifiertemplates.go's own doc
+// comment).
+type PreviewIntentTemplateRequestVars map[string]string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PreviewIntentTemplateRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in PreviewIntentTemplateRequest: required")
+	}
+	if _, ok := raw["template"]; raw != nil && !ok {
+		return fmt.Errorf("field template in PreviewIntentTemplateRequest: required")
+	}
+	if _, ok := raw["vars"]; raw != nil && !ok {
+		return fmt.Errorf("field vars in PreviewIntentTemplateRequest: required")
+	}
+	type Plain PreviewIntentTemplateRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = PreviewIntentTemplateRequest(plain)
+	return nil
+}
+
+// POST /api/intent-templates/preview's own success response -- mirrors
+// classifiertemplates.go's own hand-written intentTemplatePreviewResponse
+// field-for-field (assembled).
+type PreviewIntentTemplateResponse struct {
+	// Assembled corresponds to the JSON schema field "assembled".
+	Assembled string `json:"assembled" yaml:"assembled" mapstructure:"assembled"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PreviewIntentTemplateResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["assembled"]; raw != nil && !ok {
+		return fmt.Errorf("field assembled in PreviewIntentTemplateResponse: required")
+	}
+	type Plain PreviewIntentTemplateResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = PreviewIntentTemplateResponse(plain)
+	return nil
+}
+
+// One prompt_templates row's own REST wire shape (§18.6,
+// migrations/000033_intent_classifier.up.sql). Mirrors classifiertemplates.go's
+// own hand-written intentTemplateDTO field-for-field (name/template/updatedAt) --
+// that handler's own JSON output is unchanged by this schema addition; this
+// definition exists so the NEW list endpoint (§12.2 item 5) and the web client's
+// typed calls against the existing upsert/preview endpoints all share one
+// generated shape instead of the frontend hand-rolling one. No
+// version/active-shadow/divergence/editedBy fields -- §18.6's own explicit scope
+// note is that prompt_templates has no such columns yet (see
+// prompttemplate_store.go's own doc comment); the Settings → Prompt templates view
+// renders that honestly rather than inventing them.
+type PromptTemplate struct {
+	// Name corresponds to the JSON schema field "name".
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+
+	// Template corresponds to the JSON schema field "template".
+	Template string `json:"template" yaml:"template" mapstructure:"template"`
+
+	// UpdatedAt corresponds to the JSON schema field "updatedAt".
+	UpdatedAt time.Time `json:"updatedAt" yaml:"updatedAt" mapstructure:"updatedAt"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PromptTemplate) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in PromptTemplate: required")
+	}
+	if _, ok := raw["template"]; raw != nil && !ok {
+		return fmt.Errorf("field template in PromptTemplate: required")
+	}
+	if _, ok := raw["updatedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field updatedAt in PromptTemplate: required")
+	}
+	type Plain PromptTemplate
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = PromptTemplate(plain)
+	return nil
+}
+
 // One provider_credentials row's own REST wire shape (§25.1/§25.3,
 // migrations/000056_provider_credentials.up.sql). Returned by the create/get/list
 // routes mounted at /api/repos/{owner}/{repo}/provider-credentials,
@@ -5763,6 +6062,72 @@ func (j *ReleaseManifestReadout) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = ReleaseManifestReadout(plain)
+	return nil
+}
+
+// GET /api/repos/{owner}/{repo}/digest-scope's own response body (§12.2 item 5,
+// §21.3). §21.3's own design is explicit that a repo's daily digest is entirely
+// deterministic and its scope auto-derived, fresh, from recent review-session
+// thread history (slack_thread_sessions/linear_agent_sessions joined through
+// github_pr_sessions) -- there is no cadence/scope SETTING to persist or edit;
+// this read-only endpoint surfaces exactly the same derivation
+// internal/app/digest's own pump uses
+// (postgres.DigestChannelStore.ListSlackChannels/ListLinearOrganizations, windowed
+// by platform.Timeouts.DigestChannelDiscoveryLookback), so Settings can show which
+// channels are IN SCOPE for this repo's digest without inventing a second,
+// editable copy of what is otherwise a computed fact. In scope, not guaranteed
+// delivery: the pump enumerates recently active repos under a capped, unordered
+// LIMIT before it ever reaches this per-repo derivation, so on a deployment with
+// more active repos than that cap a repo can be in scope here and still receive
+// nothing on a given tick (httpapi/digestscope.go's own doc comment).
+type RepoDigestScope struct {
+	// Every distinct Linear organization_id this repo's own review sessions have
+	// threaded through within the lookback window -- same fan-out rule as
+	// slackChannelIds.
+	LinearOrganizationIds []string `json:"linearOrganizationIds" yaml:"linearOrganizationIds" mapstructure:"linearOrganizationIds"`
+
+	// The window (in whole days) this derivation was computed over --
+	// platform.Timeouts.DigestChannelDiscoveryLookback, the SAME window
+	// internal/app/digest's own real pump uses, surfaced so the UI never states a
+	// number it did not actually use.
+	LookbackDays int `json:"lookbackDays" yaml:"lookbackDays" mapstructure:"lookbackDays"`
+
+	// RepoFullName corresponds to the JSON schema field "repoFullName".
+	RepoFullName string `json:"repoFullName" yaml:"repoFullName" mapstructure:"repoFullName"`
+
+	// Every distinct Slack channel_id this repo's own review sessions have threaded
+	// through within the lookback window -- each receives this repo's own daily
+	// digest fan-out (§21.3).
+	SlackChannelIds []string `json:"slackChannelIds" yaml:"slackChannelIds" mapstructure:"slackChannelIds"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *RepoDigestScope) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["linearOrganizationIds"]; raw != nil && !ok {
+		return fmt.Errorf("field linearOrganizationIds in RepoDigestScope: required")
+	}
+	if _, ok := raw["lookbackDays"]; raw != nil && !ok {
+		return fmt.Errorf("field lookbackDays in RepoDigestScope: required")
+	}
+	if _, ok := raw["repoFullName"]; raw != nil && !ok {
+		return fmt.Errorf("field repoFullName in RepoDigestScope: required")
+	}
+	if _, ok := raw["slackChannelIds"]; raw != nil && !ok {
+		return fmt.Errorf("field slackChannelIds in RepoDigestScope: required")
+	}
+	type Plain RepoDigestScope
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 0 > plain.LookbackDays {
+		return fmt.Errorf("field %s: must be >= %v", "lookbackDays", 0)
+	}
+	*j = RepoDigestScope(plain)
 	return nil
 }
 
@@ -8529,6 +8894,39 @@ func (j *UpdateSandboxSecretRequest) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// POST /api/intent-templates's own request body -- mirrors
+// classifiertemplates.go's own hand-written intentTemplateUpsertRequest
+// field-for-field (name/template); that handler decodes its own identically-shaped
+// struct, so this generated type is wire-compatible without any Go handler change.
+type UpsertIntentTemplateRequest struct {
+	// Name corresponds to the JSON schema field "name".
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+
+	// Template corresponds to the JSON schema field "template".
+	Template string `json:"template" yaml:"template" mapstructure:"template"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *UpsertIntentTemplateRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in UpsertIntentTemplateRequest: required")
+	}
+	if _, ok := raw["template"]; raw != nil && !ok {
+		return fmt.Errorf("field template in UpsertIntentTemplateRequest: required")
+	}
+	type Plain UpsertIntentTemplateRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = UpsertIntentTemplateRequest(plain)
+	return nil
+}
+
 // §6.2: per-participant, hashed at rest, 24h TTL, minted via POST
 // /api/sessions/:id/ws-token.
 type WSTokenResponse struct {
@@ -9614,6 +10012,21 @@ type WorkflowStepRunOutcomeSummary *string
 type WorkflowStepRunStatus string
 
 const WorkflowStepRunStatusAwaitingDecision WorkflowStepRunStatus = "awaiting_decision"
+const WorkflowStepRunStatusCancelled WorkflowStepRunStatus = "cancelled"
+const WorkflowStepRunStatusCompleted WorkflowStepRunStatus = "completed"
+const WorkflowStepRunStatusRunning WorkflowStepRunStatus = "running"
+
+type ReviewReadoutLatestVerdict_0 = ReviewReadoutVerdict
+
+const WorkflowStepRunStatusFailed WorkflowStepRunStatus = "failed"
+
+var enumValues_WorkflowStepRunStatus = []interface{}{
+	"awaiting_decision",
+	"running",
+	"completed",
+	"failed",
+	"cancelled",
+}
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (j *WorkflowStepRunStatus) UnmarshalJSON(value []byte) error {
@@ -9633,21 +10046,6 @@ func (j *WorkflowStepRunStatus) UnmarshalJSON(value []byte) error {
 	}
 	*j = WorkflowStepRunStatus(v)
 	return nil
-}
-
-type ReviewReadoutLatestVerdict_0 = ReviewReadoutVerdict
-
-const WorkflowStepRunStatusCancelled WorkflowStepRunStatus = "cancelled"
-const WorkflowStepRunStatusCompleted WorkflowStepRunStatus = "completed"
-const WorkflowStepRunStatusFailed WorkflowStepRunStatus = "failed"
-const WorkflowStepRunStatusRunning WorkflowStepRunStatus = "running"
-
-var enumValues_WorkflowStepRunStatus = []interface{}{
-	"awaiting_decision",
-	"running",
-	"completed",
-	"failed",
-	"cancelled",
 }
 
 // The ordinary turn this attempt dispatched as (§25.6: 'every step is an ordinary

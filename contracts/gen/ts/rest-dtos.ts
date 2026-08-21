@@ -2268,3 +2268,119 @@ export interface PutClusterBindingRequest {
 export interface ListSessionsResponse {
   sessions: Session[];
 }
+/**
+ * One environments row's own REST wire shape (§14.1, migrations/000021_environments.up.sql + 000025/000095). Returned by GET /api/environments (§12.2 item 5) -- the first standalone read surface over this table; environments.up.sql's own scope note is explicit that create/update stay inline-at-session-creation-time only (httpapi.CreateSession), so this DTO carries no name/repos/image-build fields -- none exist on this row. id is the only stable handle a caller has for reusing this Environment's own scoped sub-resources (sandbox-secrets, opencode-config, cloud-identity-bindings, cluster-binding), all already keyed by environments.id.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "Environment".
+ */
+export interface Environment {
+  id: string;
+  /**
+   * Sparse-checkout glob patterns (§14.1). Null/absent means full access -- the ordinary, unscoped case.
+   */
+  pathScope: string[] | null;
+  mockConfigured: boolean;
+  /**
+   * §14.3's own contract-drift fingerprint path; null when mockConfigured is false.
+   */
+  contractsPath: string | null;
+  /**
+   * §27.5's per-Environment Docker-in-sandbox flag.
+   */
+  dockerRequired: boolean;
+  /**
+   * §27.6's per-Environment enforced-egress mode. Null means no policy attached (unrestricted, today's unchanged behavior).
+   */
+  egressPolicyMode: 'open' | 'allowlist' | null;
+  /**
+   * The customer's own configured allowlist ONLY (§27.6) -- the non-negotiable floor (CP host + git hosts) is appended server-side at SessionConfig assembly time, never persisted here. Non-null only when egressPolicyMode is 'allowlist'.
+   */
+  egressPolicyAllowlist: string[] | null;
+  createdAt: string;
+}
+/**
+ * GET /api/environments's own response body (§12.2 item 5) -- every environments row that exists, newest-first. Unbounded (no pagination), matching ListAutomationsResponse's own identical precedent -- environments rows are created only when a session or automation supplies a pathScope/mockConfig/docker/egressPolicy, so volume stays small in practice.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ListEnvironmentsResponse".
+ */
+export interface ListEnvironmentsResponse {
+  environments: Environment[];
+}
+/**
+ * One prompt_templates row's own REST wire shape (§18.6, migrations/000033_intent_classifier.up.sql). Mirrors classifiertemplates.go's own hand-written intentTemplateDTO field-for-field (name/template/updatedAt) -- that handler's own JSON output is unchanged by this schema addition; this definition exists so the NEW list endpoint (§12.2 item 5) and the web client's typed calls against the existing upsert/preview endpoints all share one generated shape instead of the frontend hand-rolling one. No version/active-shadow/divergence/editedBy fields -- §18.6's own explicit scope note is that prompt_templates has no such columns yet (see prompttemplate_store.go's own doc comment); the Settings → Prompt templates view renders that honestly rather than inventing them.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "PromptTemplate".
+ */
+export interface PromptTemplate {
+  name: string;
+  template: string;
+  updatedAt: string;
+}
+/**
+ * GET /api/intent-templates's own response body (§12.2 item 5) -- every prompt_templates row, ordered by name. Unbounded (no pagination) -- bounded in practice to however many distinct template names this deployment has ever upserted.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ListPromptTemplatesResponse".
+ */
+export interface ListPromptTemplatesResponse {
+  promptTemplates: PromptTemplate[];
+}
+/**
+ * POST /api/intent-templates's own request body -- mirrors classifiertemplates.go's own hand-written intentTemplateUpsertRequest field-for-field (name/template); that handler decodes its own identically-shaped struct, so this generated type is wire-compatible without any Go handler change.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "UpsertIntentTemplateRequest".
+ */
+export interface UpsertIntentTemplateRequest {
+  name: string;
+  template: string;
+}
+/**
+ * POST /api/intent-templates/preview's own request body -- mirrors classifiertemplates.go's own hand-written intentTemplatePreviewRequest field-for-field (name/template/vars).
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "PreviewIntentTemplateRequest".
+ */
+export interface PreviewIntentTemplateRequest {
+  name: string;
+  template: string;
+  /**
+   * Preview-time placeholder substitution values -- never persisted, never validated against any allow-list server-side (see classifiertemplates.go's own doc comment).
+   */
+  vars: {
+    [k: string]: string;
+  };
+}
+/**
+ * POST /api/intent-templates/preview's own success response -- mirrors classifiertemplates.go's own hand-written intentTemplatePreviewResponse field-for-field (assembled).
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "PreviewIntentTemplateResponse".
+ */
+export interface PreviewIntentTemplateResponse {
+  assembled: string;
+}
+/**
+ * GET /api/repos/{owner}/{repo}/digest-scope's own response body (§12.2 item 5, §21.3). §21.3's own design is explicit that a repo's daily digest is entirely deterministic and its scope auto-derived, fresh, from recent review-session thread history (slack_thread_sessions/linear_agent_sessions joined through github_pr_sessions) -- there is no cadence/scope SETTING to persist or edit; this read-only endpoint surfaces exactly the same derivation internal/app/digest's own pump uses (postgres.DigestChannelStore.ListSlackChannels/ListLinearOrganizations, windowed by platform.Timeouts.DigestChannelDiscoveryLookback), so Settings can show which channels are IN SCOPE for this repo's digest without inventing a second, editable copy of what is otherwise a computed fact. In scope, not guaranteed delivery: the pump enumerates recently active repos under a capped, unordered LIMIT before it ever reaches this per-repo derivation, so on a deployment with more active repos than that cap a repo can be in scope here and still receive nothing on a given tick (httpapi/digestscope.go's own doc comment).
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "RepoDigestScope".
+ */
+export interface RepoDigestScope {
+  repoFullName: string;
+  /**
+   * Every distinct Slack channel_id this repo's own review sessions have threaded through within the lookback window -- each receives this repo's own daily digest fan-out (§21.3).
+   */
+  slackChannelIds: string[];
+  /**
+   * Every distinct Linear organization_id this repo's own review sessions have threaded through within the lookback window -- same fan-out rule as slackChannelIds.
+   */
+  linearOrganizationIds: string[];
+  /**
+   * The window (in whole days) this derivation was computed over -- platform.Timeouts.DigestChannelDiscoveryLookback, the SAME window internal/app/digest's own real pump uses, surfaced so the UI never states a number it did not actually use.
+   */
+  lookbackDays: number;
+}

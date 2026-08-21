@@ -27,3 +27,11 @@ VALUES ($1, $2)
 ON CONFLICT (name) DO UPDATE
 SET template = EXCLUDED.template, updated_at = now()
 RETURNING *;
+
+-- name: ListPromptTemplates :many
+-- §12.2 item 5: the first standalone READ over every
+-- prompt_templates row, ordered by name -- the Settings -> Prompt
+-- templates screen's own list data source. Adds no write path; Upsert
+-- above is unchanged.
+SELECT * FROM prompt_templates
+ORDER BY name;

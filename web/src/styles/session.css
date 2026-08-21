@@ -1221,3 +1221,432 @@
   font-size: var(--text-xs);
   color: var(--warn);
 }
+
+/* Settings + Analytics (§12.2 item 5, Step 86) -- ported from
+   docs/design/mockups.html's own "settings" and "analytics" comment
+   blocks, adapted to this file's own token scale (tokens.css) rather than
+   the mockup's raw literals, mirroring .atable's own precedent above.
+   overflow-wrap: anywhere is added to every cell that can render a
+   third-party/model-authored string (environment/secret/repo/template
+   names, audit-log entries) -- this Step's own defining adversarial-
+   content discipline, matching textSafety.ts's own established rule. */
+.settings {
+  display: grid;
+  grid-template-columns: 208px 1fr;
+  min-height: 500px;
+  background: var(--ground);
+}
+@media (max-width: 980px) {
+  .settings {
+    grid-template-columns: 1fr;
+  }
+  .setnav {
+    display: none;
+  }
+}
+.setnav {
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+  padding: var(--space-7) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.setnav button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: var(--text-base);
+  font-weight: 600;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+.setnav button:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+.setnav button.on {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.setbody {
+  padding: var(--space-9);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-7);
+  overflow-y: auto;
+}
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-7) var(--space-8);
+}
+.panel > h4 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.panel > .ph {
+  color: var(--faint);
+  font-size: var(--text-sm-alt);
+  margin: 0 0 var(--space-6);
+  font-family: var(--mono);
+}
+.mk {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+}
+.envcard {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-5) var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.envcard + .envcard {
+  margin-top: var(--space-5);
+}
+.envcard .eh {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.envcard .eh b {
+  font-size: var(--text-base);
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+.repolist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.imgline {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  color: var(--faint);
+  border-top: 1px dashed var(--line);
+  padding-top: var(--space-4);
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
+}
+.sectable {
+  width: 100%;
+  border-collapse: collapse;
+}
+.sectable th {
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
+  text-align: left;
+  padding: var(--space-2) var(--space-5) var(--space-3);
+  border-bottom: 1px solid var(--line);
+}
+.sectable td {
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--text-base-sm);
+  vertical-align: middle;
+  overflow-wrap: anywhere;
+}
+.sectable tr:last-child td {
+  border-bottom: none;
+}
+.sectable td:first-child {
+  font-family: var(--mono);
+  font-size: var(--text-sm-alt);
+  font-weight: 600;
+}
+.masked {
+  font-family: var(--mono);
+  color: var(--faint);
+  letter-spacing: 0.12em;
+}
+.idchip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-4);
+  border-radius: 999px;
+  font-size: var(--text-sm);
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.idchip.ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.idchip.pend {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.tplrow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-5) var(--space-1);
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.tplrow:last-child {
+  border-bottom: none;
+}
+.tplrow b {
+  font-size: var(--text-base);
+  overflow-wrap: anywhere;
+}
+.tplrow .meta {
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  color: var(--faint);
+}
+.notavailable {
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-6) var(--space-7);
+  color: var(--muted);
+  font-size: var(--text-base-sm);
+  background: var(--surface-2);
+}
+.notavailable b {
+  color: var(--ink);
+}
+.formrow {
+  display: flex;
+  gap: var(--space-4);
+  align-items: center;
+  flex-wrap: wrap;
+  padding: var(--space-4) 0;
+}
+.formrow input,
+.formrow select {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-base-sm);
+  color: var(--ink);
+  font-family: inherit;
+}
+.confirmbox {
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-sm);
+  padding: var(--space-6) var(--space-7);
+  background: var(--warn-soft);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.overlapwindow {
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border-top: 1px dashed var(--line);
+  padding-top: var(--space-4);
+}
+
+/* analytics */
+.anav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-6) var(--space-9);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  flex-wrap: wrap;
+}
+.abody {
+  padding: var(--space-9);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-7);
+  background: var(--ground);
+}
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-6);
+}
+.tile {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-6) var(--space-7);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.tile .tl {
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.tile .big {
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.tile .delta {
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.tile .delta.up {
+  color: var(--ok);
+}
+.tile .delta.bad {
+  color: var(--crit);
+}
+.charts2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-6);
+}
+@media (max-width: 980px) {
+  .charts2 {
+    grid-template-columns: 1fr;
+  }
+}
+.chart {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-7) var(--space-8);
+}
+.chart h4 {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+.chart .ch {
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  color: var(--faint);
+  margin: 0 0 var(--space-6);
+}
+.legend {
+  display: flex;
+  gap: var(--space-7);
+  margin: 0 0 var(--space-5);
+  flex-wrap: wrap;
+}
+.legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+.legend i {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  flex: none;
+}
+.outcomebar {
+  display: flex;
+  height: 16px;
+  gap: 2px;
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+  margin: var(--space-4) 0 var(--space-3);
+}
+.outcomebar i {
+  height: 100%;
+}
+.olabels {
+  display: flex;
+  gap: var(--space-7);
+  flex-wrap: wrap;
+}
+.olabels span {
+  font-size: var(--text-sm);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.olabels i {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+}
+.ftable {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: var(--space-2);
+}
+.ftable td {
+  padding: var(--space-3) var(--space-2);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--text-base-sm);
+  overflow-wrap: anywhere;
+}
+.ftable tr:last-child td {
+  border-bottom: none;
+}
+.ftable td:first-child {
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  color: var(--crit);
+}
+.ftable td:last-child {
+  text-align: right;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+/*
+ * .rolefail is the inline notice beside a member's role select when the
+ * server refuses the change (most often 409 "cannot demote the last
+ * remaining admin"). It sits in a table cell next to the control that
+ * failed, so it is a compact inline block rather than the boxed
+ * .notavailable treatment used for whole-panel states.
+ */
+.rolefail {
+  display: block;
+  margin-top: var(--space-2);
+  color: var(--crit);
+  font-size: var(--text-2xs);
+  max-width: 22ch;
+}

@@ -58,3 +58,9 @@ func (s *PromptTemplateStore) Upsert(ctx context.Context, name, template string)
 		Template: template,
 	})
 }
+
+// List returns every prompt_templates row, ordered by name (§12.2 item 5)
+// -- the Settings -> Prompt templates screen's own list data source.
+func (s *PromptTemplateStore) List(ctx context.Context) ([]sqlcgen.PromptTemplate, error) {
+	return s.q.ListPromptTemplates(ctx)
+}

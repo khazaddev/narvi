@@ -56,3 +56,12 @@ func (s *EnvironmentStore) Create(ctx context.Context, arg sqlcgen.CreateEnviron
 func (s *EnvironmentStore) Get(ctx context.Context, id pgtype.UUID) (sqlcgen.Environment, error) {
 	return s.q.GetEnvironment(ctx, id)
 }
+
+// List returns every environments row, newest-first (§12.2 item 5) -- the
+// Settings -> Environments screen's own list data source, and the only way
+// a caller discovers a valid environments.id to reuse against any of the
+// environment-scoped §27 sub-resources (sandbox-secrets, opencode-config,
+// cloud-identity-bindings, cluster-binding).
+func (s *EnvironmentStore) List(ctx context.Context) ([]sqlcgen.Environment, error) {
+	return s.q.ListEnvironments(ctx)
+}

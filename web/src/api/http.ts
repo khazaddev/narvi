@@ -33,7 +33,10 @@ export class ApiError extends Error {
 }
 
 interface RequestOptions {
-  method?: 'GET' | 'POST' | 'PUT' | 'DELETE'
+  // PATCH added by Step 86 (§12.2 item 5): PATCH /api/members/:userId/role
+  // (members.go) is this codebase's first caller needing it -- every
+  // other mutating route to date used PUT/POST/DELETE only.
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   body?: unknown
   /** AbortSignal for caller-driven cancellation (e.g. TanStack Query's own queryFn signal). */
   signal?: AbortSignal
