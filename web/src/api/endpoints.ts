@@ -38,6 +38,7 @@ import type {
   ListAutomationInvocationsResponse,
   ListAutomationsResponse,
   ListCloudIdentityBindingsResponse,
+  ListDecisionInboxResponse,
   ListEnvironmentsResponse,
   ListFalsePositivePatternsResponse,
   ListMembersResponse,
@@ -47,6 +48,8 @@ import type {
   ListSandboxSecretsResponse,
   ListSessionsResponse,
   Member,
+  MergePullRequestRequest,
+  MergePullRequestResponse,
   MintUploadRequest,
   MintUploadResponse,
   ModelCatalog,
@@ -75,6 +78,29 @@ import type {
 } from '@narvi/contracts/rest-dtos'
 
 import { request } from './http'
+
+// -- decision inbox / home view (§16.2/§16.3, decisions 32-34). --
+
+/** listDecisionInbox calls GET /api/decision-inbox -- the home view's own read model: every pending decision addressed to the signed-in caller (ready_to_merge/needs_review/awaiting_approval, plus needs_attention for an admin caller -- enforced server-side, decisioninbox.Build itself, never a client-side filter), already ranked by decision cost then age (§16.1) -- a caller renders this order as-is, never re-sorts. */
+export function listDecisionInbox(signal?: AbortSignal): Promise<ListDecisionInboxResponse> {
+  return request<ListDecisionInboxResponse>('/api/decision-inbox', { signal })
+}
+
+/**
+ * mergePullRequest calls POST /api/decision-inbox/merge (§16.2's own Merge
+ * endpoint, mockups.html decision 33: "Auto-approved still means
+ * human-merged... re-validates CI, approval state, and RBAC server-side at
+ * click time"). Sent unconditionally, regardless of the calling
+ * component's own role/eligibility check -- RevalidateForMerge
+ * (decisioninbox.go) re-checks CI/approval-state/Authorize against live
+ * SCM data at click time; the rendered queue this request's own body was
+ * built from is never trusted as authority. A 403/409 the server returns
+ * surfaces as a genuine ApiError carrying the server's own message,
+ * never a generic failure a caller could misattribute.
+ */
+export function mergePullRequest(body: MergePullRequestRequest, signal?: AbortSignal): Promise<MergePullRequestResponse> {
+  return request<MergePullRequestResponse>('/api/decision-inbox/merge', { method: 'POST', body, signal })
+}
 
 export function createSession(body: CreateSessionRequest, signal?: AbortSignal): Promise<Session> {
   return request<Session>('/api/sessions', { method: 'POST', body, signal })

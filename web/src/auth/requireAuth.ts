@@ -2,8 +2,8 @@
 // link should land somewhere sensible rather than a blank shell") is a
 // `beforeLoad` guard any route can attach to require a valid session --
 // see routes/index.tsx for this codebase's first real use of it (gating
-// the boot-screen placeholder route "/", the one deep link that exists
-// today).
+// the decision-inbox home view at "/", §16 -- every route this guard is
+// attached to since has followed the same precedent).
 //
 // Deliberately does NOT gate on a client-side role check (there is no
 // role check here at all, only "is there a valid session"): §13.3's own

@@ -1,33 +1,22 @@
 import { createFileRoute } from '@tanstack/react-router'
 
 import { requireAuth } from '../auth/requireAuth'
+import { DecisionInboxView } from '../session/DecisionInboxView'
+import '../styles/session.css'
 
-// Placeholder boot screen -- proves the SPA actually boots (routing, theme,
-// embed) with none of the nine real views (§12.2) built yet. Replaced by
-// the decision-inbox home view later, not extended in place.
+// The decision-inbox home view (§16, decisions 32-34) -- the placeholder
+// BootScreen this file used to render is replaced outright, per that
+// placeholder's own doc comment ("Replaced by the decision-inbox home
+// view later, not extended in place"), rather than grown into this. The
+// sessions list -- previously reachable only via a session's own sidebar
+// -- moves to its own top-level route (routes/sessions.tsx,
+// docs/IMPLEMENTATION_PLAN.md row 87).
 //
-// beforeLoad: requireAuth (§13.1) -- "/" is this app's only real deep
-// link today, and the decision-inbox home view (§16) that eventually
-// replaces this placeholder is unambiguously an authenticated-only
-// screen, so gating it now (rather than leaving it open until whoever
-// builds that remembers to) is the safe default: an unauthenticated visitor hitting
-// "/" lands on /sign-in?next=%2F instead of this shell, and a signed-in
-// one sees the placeholder exactly as before.
+// beforeLoad: requireAuth (§13.1) -- unchanged from the placeholder: "/"
+// is an authenticated-only screen (the inbox is inherently "YOUR pending
+// decisions", §16.1), so an unauthenticated visitor still lands on
+// /sign-in?next=%2F instead of this view.
 export const Route = createFileRoute('/')({
   beforeLoad: requireAuth,
-  component: BootScreen,
+  component: DecisionInboxView,
 })
-
-function BootScreen() {
-  return (
-    <div className="boot-screen">
-      <p className="eyebrow">ui bootstrap</p>
-      <h1>Narvi control plane</h1>
-      <p className="body">
-        This is the application shell: Vite + React + TanStack Query/Router, built as a static
-        bundle and served by the control-plane binary on the same port as its API and WebSocket
-        traffic. The full set of views ships next.
-      </p>
-    </div>
-  )
-}

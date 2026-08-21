@@ -1650,3 +1650,90 @@
   font-size: var(--text-2xs);
   max-width: 22ch;
 }
+
+/*
+ * decision inbox (§16, decisions 32-34, mockups.html's own `v-inbox`) --
+ * every selector AND value below is copied from mockups.html's own
+ * `.inbox`/`.qhead`/`.qcount`/`.qrows`/`.qrow`/`.qkind`/`.qt`/`.qage`/
+ * `.qwhy` rules, px values mapped onto this file's own --space-N scale
+ * (mirrors this file's own top comment's "copied verbatim" convention for
+ * every other ported section: 8px -> --space-4, 10px -> --space-5, etc.).
+ * min-height:600px (the mockup's own static-demo sizing) is dropped, same
+ * as .app's own doc comment already does for an analogous fixed height --
+ * this view fills the real app-shell's <main>, not a fixed preview frame.
+ */
+.inbox {
+  padding: var(--space-9);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-9);
+  background: var(--ground);
+}
+.qhead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-5);
+  flex-wrap: wrap;
+}
+.qhead h4 {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.qcount {
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  color: var(--faint);
+}
+.qrows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+.qrow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-5) var(--space-7);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  flex-wrap: wrap;
+}
+.qkind {
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  min-width: 68px;
+  flex: none;
+}
+.qt {
+  font-weight: 600;
+  font-size: var(--text-base-sm);
+}
+.qage {
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  color: var(--muted);
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.qage.stale {
+  color: var(--warn);
+}
+.qwhy {
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  flex-basis: 100%;
+  padding-left: 78px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
