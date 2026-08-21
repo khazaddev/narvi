@@ -207,9 +207,10 @@ function DigestScopeSection({ owner, repo }: { owner: string; repo: string }) {
     <div className="chart">
       <h4>Digest scope</h4>
       <p className="ch">
-        cadence: daily, fixed · scope: auto-derived from recent review threads ({lookbackDaysLabel(data.lookbackDays)}), not configurable -- §21.3
+        Sent daily on a fixed schedule. The recipients below are derived from which channels threaded a review session for this repository in the last {lookbackDaysLabel(data.lookbackDays)}; they are not configurable
+        (§21.3).
       </p>
-      {data.slackChannelIds.length === 0 && data.linearOrganizationIds.length === 0 && <p style={{ color: 'var(--faint)', fontSize: 'var(--text-sm)' }}>No Slack channel or Linear organization has threaded a review session for this repo recently -- no digest would be sent.</p>}
+      {data.slackChannelIds.length === 0 && data.linearOrganizationIds.length === 0 && <p style={{ color: 'var(--faint)', fontSize: 'var(--text-sm)' }}>No Slack channel or Linear organization has threaded a review session for this repository recently, so nothing is in scope to receive its digest.</p>}
       {data.slackChannelIds.length > 0 && (
         <p>
           <b>Slack:</b> {data.slackChannelIds.map((id, i) => (
@@ -242,10 +243,18 @@ export function AnalyticsView() {
     <div className="app one">
       <section className="main">
         <div className="anav">
-          <span className="sel">My sessions ▾</span>
-          <span className="sel">Last 7 days ▾</span>
+          {/*
+            These read as dropdowns in the mockup and were rendered as such
+            here, wired to nothing -- and "Last 7 days" additionally named a
+            window the page does not use: every section below is fixed at 30
+            days (ReviewVerdictAnalyticsWindow, DigestChannelDiscoveryLookback).
+            An inert control that states the wrong number is worse than no
+            control, so this states the window the data actually covers and
+            claims no filtering that does not exist.
+          */}
+          <span className="ph">Last 30 days · all sessions</span>
           <span style={{ flex: 1 }} />
-          <span className="cost">platform-wide KPIs below: not available yet (no read model designed for them, see this file's own top doc comment)</span>
+          <span className="cost">Platform-wide KPIs are not available yet — nothing computes them.</span>
         </div>
 
         <div className="abody">
@@ -259,7 +268,7 @@ export function AnalyticsView() {
 
           <div className="panel">
             <h4>Review-risk analytics &amp; digest scope</h4>
-            <p className="ph">real data, per repo -- §21.1/§21.3, Step 62's own read model</p>
+            <p className="ph">Live per-repository figures (§21.1, §21.3).</p>
             <div className="formrow">
               <input placeholder="owner" value={owner} onChange={(e) => setOwner(e.target.value)} />
               <input placeholder="repo" value={repo} onChange={(e) => setRepo(e.target.value)} />

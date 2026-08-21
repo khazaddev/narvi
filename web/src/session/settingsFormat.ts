@@ -76,3 +76,67 @@ export function formatDateTime(iso: string): string {
 export function lookbackDaysLabel(days: number): string {
   return `last ${days} day${days === 1 ? '' : 's'}`
 }
+
+/**
+ * identityLinkProof describes how a §13.2 identity came to be attached to its
+ * member, in the terms the screen has to answer: was this link PROVEN by the
+ * person, or asserted on their behalf?
+ *
+ * §13.2 gives three linked_via values and only two answers:
+ *   - auto_email: matched against exactly one VERIFIED email address.
+ *   - prompt:     the person followed the short-lived magic link sent to that
+ *                 provider account, which proves they control it.
+ *   - admin:      an admin force-linked it (§13.2 step 5). Nothing was proven
+ *                 by the person; someone with the power to do so asserted it.
+ *
+ * The first two are proof by different mechanisms and read the same. The third
+ * must NOT: rendering it with the same check mark as a verified link erases the
+ * one distinction this column exists to show. linked_via is a closed Postgres
+ * enum, so an unknown value can only mean the enum grew -- report it as
+ * unproven rather than quietly granting it a check mark.
+ */
+export function identityLinkProof(linkedVia: string): { tone: 'ok' | 'pend'; mark: string; title: string } {
+  switch (linkedVia) {
+    case 'auto_email':
+      return { tone: 'ok', mark: '✓', title: 'Verified: matched a verified email address' }
+    case 'prompt':
+      return { tone: 'ok', mark: '✓', title: 'Verified: the member followed the link sent to this account' }
+    case 'admin':
+      return { tone: 'pend', mark: '!', title: 'Force-linked by an admin — not verified by the member' }
+    default:
+      return { tone: 'pend', mark: '!', title: `Unrecognised link method (${linkedVia}) — treated as unverified` }
+  }
+}
+
+/**
+ * cloudIdentityParamFields lists the params a cloud-identity binding of each
+ * kind MUST carry to be usable, mirroring internal/domain/cloudidentity's own
+ * ValidateParams (§27.3) key for key.
+ *
+ * These are not optional extras. sandbox-agent runs ValidateParams before it
+ * trusts a delivered binding, and a binding that fails it is skipped with a
+ * log line and nothing else — no error reaches the control plane, and none
+ * reaches this screen. The create form used to send no params at all, so
+ * every binding it produced was accepted with 201, listed as configured, and
+ * then silently ignored at every boot. Collecting the required keys here is
+ * what makes the row that appears in the table the row that actually works.
+ *
+ * params themselves are identifiers, never secrets (§27.3), which is why they
+ * are plain text inputs and render in full in the table.
+ */
+export const cloudIdentityParamFields: Record<string, { key: string; label: string; placeholder: string }[]> = {
+  aws: [{ key: 'roleArn', label: 'Role ARN', placeholder: 'arn:aws:iam::123456789012:role/narvi' }],
+  gcp: [{ key: 'workloadIdentityProvider', label: 'Workload identity provider', placeholder: 'projects/1/locations/global/workloadIdentityPools/p/providers/v' }],
+  azure: [
+    { key: 'clientId', label: 'Client id', placeholder: '00000000-0000-0000-0000-000000000000' },
+    { key: 'tenantId', label: 'Tenant id', placeholder: '00000000-0000-0000-0000-000000000000' },
+  ],
+  generic: [{ key: 'envVar', label: 'Env var', placeholder: 'CLOUD_IDENTITY_TOKEN_FILE' }],
+}
+
+/** cloudIdentityParamsComplete reports whether every field cloudIdentityParamFields requires for kind has a non-blank value -- the same condition ValidateParams applies server-side, checked here so the form cannot submit a binding that would be skipped at boot. */
+export function cloudIdentityParamsComplete(kind: string, params: Record<string, string>): boolean {
+  const fields = cloudIdentityParamFields[kind]
+  if (!fields) return false
+  return fields.every((f) => (params[f.key] ?? '').trim().length > 0)
+}

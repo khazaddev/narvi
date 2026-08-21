@@ -81,3 +81,32 @@ describe('AuditLogRow rendering -- adversarial action/resource/detail stays text
     expect(html).toContain('—')
   })
 })
+
+// The identity column's whole job is to answer "how was this link proven?".
+// It previously rendered a hard-coded green check on every row, so an
+// admin force-link (linked_via=admin, nothing proven by the member, §13.2
+// step 5) was indistinguishable from a verified one. These pin the
+// distinction so it cannot silently collapse back into a constant.
+describe('MemberRow identity proof marks', () => {
+  it('marks an email-verified link as verified', () => {
+    const html = withQueryClient(<MemberRow member={baseMember()} canManage={false} onShowAudit={() => {}} />)
+    expect(html).toContain('idchip ok')
+    expect(html).toContain('github ✓')
+    expect(html).not.toContain('idchip pend')
+  })
+
+  it('marks a magic-link-confirmed link as verified', () => {
+    const member = baseMember({ identities: [{ id: 'id1', provider: 'slack', externalId: 'U1', linkedVia: 'prompt', createdAt: '2026-08-20T02:00:00Z' }] })
+    const html = withQueryClient(<MemberRow member={member} canManage={false} onShowAudit={() => {}} />)
+    expect(html).toContain('idchip ok')
+    expect(html).toContain('slack ✓')
+  })
+
+  it('does NOT mark an admin force-link as verified', () => {
+    const member = baseMember({ identities: [{ id: 'id1', provider: 'github', externalId: 'sarahk', linkedVia: 'admin', createdAt: '2026-08-20T02:00:00Z' }] })
+    const html = withQueryClient(<MemberRow member={member} canManage={false} onShowAudit={() => {}} />)
+    expect(html).toContain('idchip pend')
+    expect(html).not.toContain('github ✓')
+    expect(html).toContain('Force-linked by an admin')
+  })
+})

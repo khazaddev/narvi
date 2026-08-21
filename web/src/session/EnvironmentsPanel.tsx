@@ -24,10 +24,14 @@
 // # Every place a secret could have been rendered here, and what happens
 // # instead
 //
-// This panel touches THREE §27 sub-resources scoped by environment id:
+// This panel touches TWO §27 sub-resources scoped by environment id:
 // OpenCode config (§27.2, plaintext by design -- never secret, rendered
-// in full), cloud-identity bindings (§27.3, params are identifiers never
-// secrets, rendered in full), and cluster bindings (§27.4, same). NONE of
+// in full) and cloud-identity bindings (§27.3, params are identifiers
+// never secrets, rendered in full). Cluster bindings (§27.4) are NOT
+// among them -- EnvironmentDetail's own doc comment below records why
+// they were declined here, and this paragraph used to count them anyway,
+// so a reader was told the panel already surfaced something it never
+// imports a single call for. NONE of
 // sandbox_secrets/provider_credentials (the actual secret-shaped tables)
 // render here at all -- those live on SecretsPanel.tsx, which never
 // renders a value either (see that file's own doc comment). The ONE
@@ -53,7 +57,7 @@ import {
 import { ApiError } from '../api/http'
 import { cloudIdentityBindingQueryKeys, environmentQueryKeys, openCodeConfigQueryKeys } from '../api/queryKeys'
 import { meQueryOptions } from '../auth/session'
-import { environmentSummaryLine, formatDateTime } from './settingsFormat'
+import { cloudIdentityParamFields, cloudIdentityParamsComplete, environmentSummaryLine, formatDateTime } from './settingsFormat'
 import { truncateForDisplay } from './textSafety'
 
 const MAX_FIELD_CHARS = 2000
@@ -142,15 +146,26 @@ function CloudIdentityBindingsList({ scope, canManage }: { scope: { kind: 'envir
   const queryClient = useQueryClient()
   const [kind, setKind] = useState<'aws' | 'gcp' | 'azure' | 'generic'>('aws')
   const [audience, setAudience] = useState('')
+  // Keyed by param name, shared across kinds: switching kind changes which
+  // keys are read, never what has been typed, so flipping aws -> gcp -> aws
+  // does not silently discard a role ARN.
+  const [params, setParams] = useState<Record<string, string>>({})
   const query = useQuery({
     queryKey: cloudIdentityBindingQueryKeys.list(scope),
     queryFn: ({ signal }) => listCloudIdentityBindings(scope, signal),
     retry: false,
   })
   const createMutation = useMutation({
-    mutationFn: () => createCloudIdentityBinding(scope, { kind, audience }),
+    mutationFn: () => {
+      // Only the keys this kind actually requires: sending a stale roleArn
+      // alongside a gcp binding would store a param its consumer never reads.
+      const required = cloudIdentityParamFields[kind] ?? []
+      const payload = Object.fromEntries(required.map((f) => [f.key, (params[f.key] ?? '').trim()]))
+      return createCloudIdentityBinding(scope, { kind, audience, params: payload })
+    },
     onSuccess: () => {
       setAudience('')
+      setParams({})
       void queryClient.invalidateQueries({ queryKey: cloudIdentityBindingQueryKeys.list(scope) })
     },
   })
@@ -176,12 +191,31 @@ function CloudIdentityBindingsList({ scope, canManage }: { scope: { kind: 'envir
             <option value="generic">generic</option>
           </select>
           <input placeholder="audience (e.g. sts.amazonaws.com)" value={audience} onChange={(e) => setAudience(e.target.value)} />
-          <button type="button" className="btn primary" disabled={audience.trim().length === 0 || createMutation.isPending} onClick={() => createMutation.mutate()}>
+          {(cloudIdentityParamFields[kind] ?? []).map((field) => (
+            <input
+              key={field.key}
+              placeholder={`${field.label} (${field.placeholder})`}
+              value={params[field.key] ?? ''}
+              onChange={(e) => setParams({ ...params, [field.key]: e.target.value })}
+            />
+          ))}
+          <button
+            type="button"
+            className="btn primary"
+            disabled={audience.trim().length === 0 || !cloudIdentityParamsComplete(kind, params) || createMutation.isPending}
+            onClick={() => createMutation.mutate()}
+          >
             {createMutation.isPending ? 'Adding…' : 'Add binding'}
           </button>
         </div>
       )}
-      {createMutation.isError && <p className="sidebar-notice">Couldn't create binding (a duplicate kind at this scope rotates via edit, not a second create).</p>}
+      {createMutation.isError && (
+        <p className="sidebar-notice">
+          {createMutation.error instanceof ApiError && createMutation.error.status === 403
+            ? "Your role can't manage cloud-identity bindings here."
+            : "Couldn't create binding (a duplicate kind at this scope rotates via edit, not a second create)."}
+        </p>
+      )}
       <table className="sectable">
       <thead>
         <tr>
@@ -366,9 +400,9 @@ export function EnvironmentsPanel() {
     <>
       <div className="panel">
         <h4>Environments</h4>
-        <p className="ph">path scope · docker/egress · no name, no repo list, no image-build status -- see this file's own top doc comment for why</p>
+        <p className="ph">Each environment is defined by the path scope, tooling and egress policy a session runs under. Environments have no name of their own yet, so they are identified here by id.</p>
 
-        {forbidden && <p className="notavailable">Environments are visible to maintainer+ only. Your role cannot view this panel -- this is enforced server-side (authz.ActionManageEnvironments), not merely hidden here.</p>}
+        {forbidden && <p className="notavailable">Environments are visible to maintainers and admins. Your role cannot view this panel. The server enforces this, so the data is withheld rather than merely hidden here.</p>}
         {!forbidden && listQuery.isPending && <p className="rail-empty">Loading environments…</p>}
         {!forbidden && listQuery.isError && <p className="rail-empty">Couldn't load environments.</p>}
         {!forbidden && listQuery.isSuccess && listQuery.data.environments.length === 0 && <p style={{ color: 'var(--faint)', fontSize: 'var(--text-sm)' }}>No environments exist yet -- one is created automatically the first time a session or automation supplies a path scope, mock config, Docker requirement, or egress policy.</p>}

@@ -1463,9 +1463,11 @@ func serve() error {
 
 	// /api/repos/{owner}/{repo}/digest-scope ("ui settings +
 	// analytics", §12.2 item 5, §21.3): read-only derived view of which
-	// Slack channels/Linear organizations would receive this repo's own
-	// next daily digest -- see httpapi/digestscope.go's own doc comment
-	// for why this is read-only (§21.3's scope is computed, never stored).
+	// Slack channels/Linear organizations are in scope for this repo's own
+	// daily digest -- "in scope for", not "will receive": see
+	// httpapi/digestscope.go's own doc comment both for why this is
+	// read-only (§21.3's scope is computed, never stored) and for the
+	// pump's repo-enumeration cap that sits in front of this derivation.
 	// Gated by the SAME authz.ActionViewAnalytics as review-analytics
 	// immediately above.
 	router.Route("/api/repos/{owner}/{repo}/digest-scope", func(r chi.Router) {

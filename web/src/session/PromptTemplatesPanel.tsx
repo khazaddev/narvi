@@ -129,8 +129,8 @@ export function PromptTemplatesPanel() {
   return (
     <div className="panel">
       <h4>Prompt templates</h4>
-      <p className="ph">editable in production · name/template/updatedAt only -- no version counter, shadow mode, or edit attribution exists yet (see this file's own top doc comment)</p>
-      {forbidden && <p className="notavailable">Prompt templates are admin-only. Your role cannot view this panel -- enforced server-side (authz.ActionActivatePromptTemplate), not merely hidden here.</p>}
+      <p className="ph">Editing a template takes effect immediately, on every session. There is no version history, staged rollout, or record of who last edited a template, so change these deliberately.</p>
+      {forbidden && <p className="notavailable">Prompt templates are admin-only. Your role cannot view this panel. The server enforces this, so the data is withheld rather than merely hidden here.</p>}
       {!forbidden && listQuery.isPending && <p className="rail-empty">Loading templates…</p>}
       {!forbidden && listQuery.isError && <p className="rail-empty">Couldn't load prompt templates.</p>}
       {!forbidden && listQuery.isSuccess && listQuery.data.promptTemplates.length === 0 && <p style={{ color: 'var(--faint)', fontSize: 'var(--text-sm)' }}>No templates exist yet.</p>}

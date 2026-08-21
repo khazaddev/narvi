@@ -93,7 +93,12 @@ export const memberQueryKeys = {
 }
 
 export const auditLogQueryKeys = {
+  // The page bounds are part of the key: two different pages of the audit
+  // log are two different cached results, not one that silently overwrites
+  // the other. list() stays as the prefix every page shares, so a mutation
+  // that writes an audit row can invalidate all of them at once.
   list: () => ['audit-log', 'list'] as const,
+  page: (limit: number, offset: number) => ['audit-log', 'list', { limit, offset }] as const,
 }
 
 export const environmentQueryKeys = {

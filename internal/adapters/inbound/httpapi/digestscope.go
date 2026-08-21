@@ -1,7 +1,20 @@
 // This file (digestscope.go) implements GET
 // /api/repos/{owner}/{repo}/digest-scope (§12.2 item 5, §21.3): a
-// read-only view of which Slack channels/Linear organizations would
-// receive repoFullName's own next daily digest.
+// read-only view of which Slack channels/Linear organizations are in
+// scope for repoFullName's own daily digest.
+//
+// "In scope for", NOT "will receive". The distinction is real and this
+// comment used to erase it. The pump reaches a repo's per-repo channel
+// derivation only for repos returned by
+// ListDistinctReposWithRecentSessions (internal/app/digest/channels.go),
+// which is a LIMIT maxReposPerDiscoveryTick slice with no ORDER BY. On a
+// deployment with more repos than that recently active, a repo can fall
+// outside the slice on a given tick and receive nothing, while this
+// endpoint still reports its channels -- because this endpoint answers
+// the per-repo question and the enumeration cap is applied in front of
+// it, where this handler never runs. Claiming delivery would therefore
+// be a guarantee this code cannot make; claiming scope is exactly what
+// it computes.
 //
 // §21.3's own design is explicit that the digest is "entirely
 // deterministic" and its scope "per-repo/per-channel from day one, built
@@ -11,12 +24,14 @@
 // (the pump runs on a fixed daily tick, internal/app/digest/pump.go) and
 // no scope knob (scope is derived, never stored) for an admin to ever
 // configure -- so this handler is deliberately READ-ONLY: it reuses the
-// EXACT SAME derivation internal/app/digest's own real pump runs
+// EXACT SAME per-repo derivation internal/app/digest's own real pump runs
 // (postgres.DigestChannelStore.ListSlackChannels/ListLinearOrganizations,
 // windowed by platform.Timeouts.DigestChannelDiscoveryLookback), rather
 // than inventing a second, editable copy of a computed fact that would
 // drift from what the pump actually does the moment either one changed
-// independently.
+// independently. The pump's repo-enumeration step in front of that
+// derivation is deliberately NOT reproduced here -- see this file's own
+// scope-vs-delivery note above.
 //
 // Gated by the existing authz.ActionViewAnalytics (§13.3 row 1: every
 // role, including viewer, may read analytics) -- the SAME gate

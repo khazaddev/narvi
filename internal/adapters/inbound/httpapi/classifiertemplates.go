@@ -4,13 +4,15 @@
 // existed, fully implemented, since §8.3 ("intent classifier", §18.6)
 // -- but until this file, NOTHING in the entire codebase ever called it,
 // and there was no way for an admin to see what a draft template
-// assembles to before saving it either. This file adds exactly those two
-// capabilities: a stateless PREVIEW (assembles a draft template's text
-// against real variable values, without ever touching Postgres) and an
-// UPSERT (validates, then persists via the already-existing store
-// method).
+// assembles to before saving it either. This file originally added
+// exactly those two capabilities: a stateless PREVIEW (assembles a draft
+// template's text against real variable values, without ever touching
+// Postgres) and an UPSERT (validates, then persists via the
+// already-existing store method). The settings screen (§12.2 item 5)
+// then needed to show WHICH templates exist before either can be used
+// meaningfully, so a third, read-only LIST was added alongside them.
 //
-// Both endpoints are gated by authz.ActionActivatePromptTemplate --
+// All three endpoints are gated by authz.ActionActivatePromptTemplate --
 // domain/authz's own §13.3 row-6 action ("prompt-template activation",
 // admin only), which likewise existed with its own passing RBAC-matrix
 // tests (authorize_test.go) but had ZERO callers anywhere in the HTTP
@@ -58,6 +60,13 @@
 //
 //   - POST /api/intent-templates/preview -- PreviewIntentTemplate
 //   - POST /api/intent-templates          -- UpsertIntentTemplate
+//   - GET  /api/intent-templates          -- ListPromptTemplates
+//
+// All three carry the SAME admin-only gate
+// (authz.ActionActivatePromptTemplate). The GET matters to name here even
+// though it only reads: it returns every prompt template's full body, so
+// anyone auditing which routes expose template text has to see it in this
+// list -- main.go's own route comment sends them here to find it.
 
 package httpapi
 

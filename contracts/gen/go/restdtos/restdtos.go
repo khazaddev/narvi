@@ -6074,8 +6074,12 @@ func (j *ReleaseManifestReadout) UnmarshalJSON(value []byte) error {
 // internal/app/digest's own pump uses
 // (postgres.DigestChannelStore.ListSlackChannels/ListLinearOrganizations, windowed
 // by platform.Timeouts.DigestChannelDiscoveryLookback), so Settings can show which
-// channels would receive today's digest without inventing a second, editable copy
-// of what is otherwise a computed fact.
+// channels are IN SCOPE for this repo's digest without inventing a second,
+// editable copy of what is otherwise a computed fact. In scope, not guaranteed
+// delivery: the pump enumerates recently active repos under a capped, unordered
+// LIMIT before it ever reaches this per-repo derivation, so on a deployment with
+// more active repos than that cap a repo can be in scope here and still receive
+// nothing on a given tick (httpapi/digestscope.go's own doc comment).
 type RepoDigestScope struct {
 	// Every distinct Linear organization_id this repo's own review sessions have
 	// threaded through within the lookback window -- same fan-out rule as

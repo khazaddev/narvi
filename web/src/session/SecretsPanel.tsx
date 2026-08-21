@@ -38,11 +38,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import type { ProviderCredential, SandboxSecret } from '@narvi/contracts/rest-dtos'
 
-import { createProviderCredential, createSandboxSecret, deleteProviderCredential, deleteSandboxSecret, listProviderCredentials, listSandboxSecrets, type SecretScope } from '../api/endpoints'
+import { createProviderCredential, createSandboxSecret, deleteProviderCredential, deleteSandboxSecret, listEnvironments, listProviderCredentials, listSandboxSecrets, type SecretScope } from '../api/endpoints'
 import { ApiError } from '../api/http'
-import { providerCredentialQueryKeys, sandboxSecretQueryKeys } from '../api/queryKeys'
+import { environmentQueryKeys, providerCredentialQueryKeys, sandboxSecretQueryKeys } from '../api/queryKeys'
 import { meQueryOptions } from '../auth/session'
-import { secretScopeLabel, secretScopeTone } from './settingsFormat'
+import { environmentSummaryLine, secretScopeLabel, secretScopeTone } from './settingsFormat'
 import { truncateForDisplay } from './textSafety'
 
 const MAX_FIELD_CHARS = 500
@@ -55,10 +55,56 @@ function isMaintainerPlus(role: string | undefined): boolean {
   return role === 'admin' || role === 'maintainer'
 }
 
+/**
+ * canManageScope mirrors the server's own split, which is NOT uniform across
+ * the scope selector on this screen:
+ *   - global scope  -> authz.ActionManageGlobalSecrets, admin only
+ *   - repo / environment scope -> ActionManageRepoSecrets, admin + maintainer
+ *
+ * This panel used to apply maintainer+ to every scope, so a maintainer landing
+ * on the default (global) tab was shown a live "Add secret" form directly above
+ * "You're not authorized to view secrets at this scope" -- an affordance the
+ * role model says can never succeed. The server fails closed either way; what
+ * was wrong was the offer.
+ */
+function canManageScope(role: string | undefined, scope: SecretScope): boolean {
+  if (scope.kind === 'global') return role === 'admin'
+  return isMaintainerPlus(role)
+}
+
+/**
+ * createFailureMessage keeps an authorization refusal from being reported as a
+ * data problem. The fixed copy on these forms names a reserved prefix or a
+ * duplicate at this scope; a 403 is neither, and telling an operator to "rotate
+ * via delete + re-create" for rows they cannot even list sends them after a
+ * remedy that cannot work.
+ */
+function createFailureMessage(error: unknown, conflictHint: string): string {
+  if (error instanceof ApiError && error.status === 403) {
+    return "Your role can't manage secrets at this scope."
+  }
+  return conflictHint
+}
+
 function ScopePicker({ scope, onChange }: { scope: SecretScope; onChange: (s: SecretScope) => void }) {
   const [owner, setOwner] = useState('')
   const [repo, setRepo] = useState('')
   const [environmentId, setEnvironmentId] = useState('')
+
+  // The environment scope used to be a free-text id box. Nothing rejected a
+  // wrong one: the create endpoint stores whatever target it is handed, so a
+  // typo produced a secret attached to an environment that does not exist --
+  // invisible at every real scope, delivered to nothing, and reported as
+  // success. Anyone allowed to manage secrets is also allowed to list
+  // environments (both are maintainer+), so the real set is always available
+  // here; offering it as a choice is what makes the wrong value unreachable
+  // rather than merely discouraged.
+  const environmentsQuery = useQuery({
+    queryKey: environmentQueryKeys.list(),
+    queryFn: ({ signal }) => listEnvironments(signal),
+    retry: false,
+  })
+  const environments = environmentsQuery.data?.environments
 
   return (
     <div className="formrow">
@@ -76,16 +122,37 @@ function ScopePicker({ scope, onChange }: { scope: SecretScope; onChange: (s: Se
         <option value="environment">environment</option>
         <option value="repo">repo</option>
       </select>
-      {scope.kind === 'environment' && (
-        <input
-          placeholder="environment id"
-          value={environmentId}
-          onChange={(e) => {
-            setEnvironmentId(e.target.value)
-            onChange({ kind: 'environment', environmentId: e.target.value })
-          }}
-        />
-      )}
+      {scope.kind === 'environment' &&
+        (environments ? (
+          <select
+            className="sel-select"
+            value={environmentId}
+            onChange={(e) => {
+              setEnvironmentId(e.target.value)
+              onChange({ kind: 'environment', environmentId: e.target.value })
+            }}
+          >
+            <option value="">select an environment…</option>
+            {environments.map((env) => (
+              <option key={env.id} value={env.id}>
+                {environmentSummaryLine(env)}
+              </option>
+            ))}
+          </select>
+        ) : (
+          // Only when the list genuinely could not be read -- never as the
+          // default. Typing an id here can still miss, so say so rather than
+          // letting it look equivalent to picking one.
+          <input
+            placeholder="environment id"
+            title="The environment list could not be loaded, so this id is not checked against it."
+            value={environmentId}
+            onChange={(e) => {
+              setEnvironmentId(e.target.value)
+              onChange({ kind: 'environment', environmentId: e.target.value })
+            }}
+          />
+        ))}
       {scope.kind === 'repo' && (
         <>
           <input
@@ -180,7 +247,14 @@ function SandboxSecretsTable({ scope, canManage }: { scope: SecretScope; canMana
           </button>
         </div>
       )}
-      {createMutation.isError && <p className="sidebar-notice">Couldn't save (a reserved NARVI_*/OPENCODE_* name, a name providercredential already owns, or a duplicate at this scope -- rotate via delete + re-create instead).</p>}
+      {createMutation.isError && (
+        <p className="sidebar-notice">
+          {createFailureMessage(
+            createMutation.error,
+            "Couldn't save (a reserved NARVI_*/OPENCODE_* name, a name providercredential already owns, or a duplicate at this scope -- rotate via delete + re-create instead).",
+          )}
+        </p>
+      )}
       {forbidden && <p className="notavailable">You're not authorized to view secrets at this scope.</p>}
       {!forbidden && query.isPending && <p className="rail-empty">Loading…</p>}
       {!forbidden && query.isError && <p className="rail-empty">Couldn't load sandbox secrets.</p>}
@@ -277,7 +351,9 @@ function ProviderCredentialsTable({ scope, canManage }: { scope: SecretScope; ca
           </button>
         </div>
       )}
-      {createMutation.isError && <p className="sidebar-notice">Couldn't save (a duplicate provider at this scope -- rotate via delete + re-create instead).</p>}
+      {createMutation.isError && (
+        <p className="sidebar-notice">{createFailureMessage(createMutation.error, "Couldn't save (a duplicate provider at this scope -- rotate via delete + re-create instead).")}</p>
+      )}
       {forbidden && <p className="notavailable">You're not authorized to view credentials at this scope.</p>}
       {!forbidden && query.isPending && <p className="rail-empty">Loading…</p>}
       {!forbidden && query.isError && <p className="rail-empty">Couldn't load provider credentials.</p>}
@@ -311,13 +387,18 @@ function ProviderCredentialsTable({ scope, canManage }: { scope: SecretScope; ca
 
 export function SecretsPanel() {
   const meQuery = useQuery(meQueryOptions)
-  const canManage = isMaintainerPlus(meQuery.data?.role)
   const [scope, setScope] = useState<SecretScope>({ kind: 'global' })
+  // Scope-aware, not role-alone: global secrets are admin-only while
+  // repo/environment secrets are maintainer+ (canManageScope's own comment).
+  const canManage = canManageScope(meQuery.data?.role, scope)
 
   return (
     <div className="panel">
       <h4>Secrets</h4>
-      <p className="ph">resolution order: automation → environment → repo → global, most specific wins -- computed server-side at boot (sandbox-agent's own delivery round trip); this table shows every configured row, not a resolved winner for any one target</p>
+      <p className="ph">
+        A sandbox resolves secrets most-specific-first: automation, then environment, then repository, then global. This table lists every configured row at the selected scope, not the one that would win for a
+        particular sandbox. Global secrets are admin-only; repository and environment secrets can also be managed by maintainers.
+      </p>
       <ScopePicker scope={scope} onChange={setScope} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginTop: 8 }}>
         <div>

@@ -283,9 +283,22 @@ export function unlinkMemberIdentity(userId: string, identityId: string, signal?
   return request<Member>(`/api/members/${encodeURIComponent(userId)}/identities/${encodeURIComponent(identityId)}`, { method: 'DELETE', signal })
 }
 
-/** listAuditLog calls GET /api/audit-log -- every audit_log row (members.go's own ListAuditLog). */
-export function listAuditLog(signal?: AbortSignal): Promise<ListAuditLogResponse> {
-  return request<ListAuditLogResponse>('/api/audit-log', { signal })
+/**
+ * listAuditLog calls GET /api/audit-log -- ONE PAGE of audit_log rows,
+ * newest first, never the whole log (members.go's own ListAuditLog:
+ * defaultAuditLogPageSize 50, maxAuditLogPageSize 200, plus ?offset=).
+ *
+ * The page size is passed explicitly rather than defaulted so the caller
+ * cannot mistake the response for the complete table: this comment used to
+ * say "every audit_log row", and the members screen was built on that
+ * reading -- filtering a 50-row page client-side and then rendering "No
+ * entries." as though it were a statement about a member's entire history.
+ * On an audit surface that is the worst possible thing to get wrong, so the
+ * shape of this signature now makes the paging impossible to overlook.
+ */
+export function listAuditLog(params: { limit: number; offset: number }, signal?: AbortSignal): Promise<ListAuditLogResponse> {
+  const query = new URLSearchParams({ limit: String(params.limit), offset: String(params.offset) })
+  return request<ListAuditLogResponse>(`/api/audit-log?${query.toString()}`, { signal })
 }
 
 // -- environments (§14.1, Step 86) --

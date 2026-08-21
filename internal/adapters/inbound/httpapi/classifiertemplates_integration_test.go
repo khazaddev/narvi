@@ -328,14 +328,33 @@ func TestListPromptTemplates_MemberDenied(t *testing.T) {
 
 // TestListPromptTemplates_AdminAllowed_RendersSeededRow proves an admin
 // sees the migration-seeded "intent_classifier_system" row back through
-// the NEW /contracts-generated restdtos.PromptTemplate shape -- proving
-// this list endpoint and the pre-existing hand-written upsert response
-// (intentTemplateDTOForTest above) describe the SAME wire shape, even
-// though only one of the two is contracts-generated.
+// the contracts-generated restdtos.PromptTemplate shape, and that this
+// list endpoint and the pre-existing hand-written upsert response
+// (intentTemplateDTOForTest above) really do describe the SAME wire
+// shape, even though only one of the two is contracts-generated.
+//
+// The second half of that claim is the load-bearing one, and it is
+// asserted here rather than assumed: an earlier version of this comment
+// said the test proved it while the body only checked that the seeded
+// name came back non-empty -- never calling the upsert endpoint, never
+// decoding into the hand-written struct, and never comparing the two. A
+// json-tag divergence between them (updatedAt being the obvious
+// candidate, since it is the one field neither half of the old test read)
+// would have gone straight through. So the test now round-trips the SAME
+// template through BOTH endpoints and compares all three fields.
 func TestListPromptTemplates_AdminAllowed_RendersSeededRow(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
+
+	// Write through the hand-written-DTO endpoint first, so the row this
+	// test compares is one both shapes have actually carried.
+	var upserted intentTemplateDTOForTest
+	upsertBody := []byte(`{"name":"` + seededTemplateName + `","template":"wire-shape parity probe {{.Request}}"}`)
+	upsertStatus := rig.doJSON(t, http.MethodPost, "/api/intent-templates", upsertBody, &upserted, token)
+	if upsertStatus != http.StatusOK {
+		t.Fatalf("upsert status = %d, want %d", upsertStatus, http.StatusOK)
+	}
 
 	var resp restdtos.ListPromptTemplatesResponse
 	status := rig.doJSON(t, http.MethodGet, "/api/intent-templates", nil, &resp, token)
@@ -351,6 +370,25 @@ func TestListPromptTemplates_AdminAllowed_RendersSeededRow(t *testing.T) {
 		found = true
 		if tpl.Template == "" {
 			t.Errorf("Template is empty for seeded row %q", seededTemplateName)
+		}
+		// The parity assertions: every field the hand-written struct
+		// declares must arrive, under the same json tag, carrying the same
+		// value, through the generated one.
+		if tpl.Name != upserted.Name {
+			t.Errorf("Name: list = %q, upsert = %q -- the two DTOs disagree on this field's wire name or value", tpl.Name, upserted.Name)
+		}
+		if tpl.Template != upserted.Template {
+			t.Errorf("Template: list = %q, upsert = %q -- the two DTOs disagree on this field's wire name or value", tpl.Template, upserted.Template)
+		}
+		// updatedAt is the field the old test never read at all, and the
+		// one where a json-tag divergence had the best chance of hiding.
+		// Compare instants, not encodings: both sides decode to time.Time
+		// but only an identical wire tag gets a non-zero value into both.
+		if tpl.UpdatedAt.IsZero() {
+			t.Errorf("UpdatedAt is zero on the list endpoint's row -- the generated DTO did not receive the field the upsert DTO calls %q", "updatedAt")
+		}
+		if !tpl.UpdatedAt.Equal(upserted.UpdatedAt) {
+			t.Errorf("UpdatedAt: list = %s, upsert = %s -- the two DTOs disagree on this field's wire name or value", tpl.UpdatedAt, upserted.UpdatedAt)
 		}
 	}
 	if !found {

@@ -1635,3 +1635,18 @@
   font-variant-numeric: tabular-nums;
   color: var(--muted);
 }
+
+/*
+ * .rolefail is the inline notice beside a member's role select when the
+ * server refuses the change (most often 409 "cannot demote the last
+ * remaining admin"). It sits in a table cell next to the control that
+ * failed, so it is a compact inline block rather than the boxed
+ * .notavailable treatment used for whole-panel states.
+ */
+.rolefail {
+  display: block;
+  margin-top: var(--space-2);
+  color: var(--crit);
+  font-size: var(--text-2xs);
+  max-width: 22ch;
+}
