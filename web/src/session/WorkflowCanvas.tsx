@@ -158,6 +158,14 @@ export function WorkflowCanvas({ steps, selectedStepId, readOnly, onSelectStep, 
         nodesConnectable={false}
         edgesReconnectable={false}
         nodesDraggable={!readOnly}
+        // ONE deletion path, and it is the rail's own "Delete step" button.
+        // React Flow deletes on Backspace by default, which removed a node
+        // from the canvas without going through the document at all -- on a
+        // read-only definition too, where there is no save to reconcile it
+        // and the operator watches the graph change with nothing to undo it.
+        // A second way to mutate the graph that skips the first one's guards
+        // is not an affordance, it is a hole.
+        deleteKeyCode={null}
         elementsSelectable
         fitView
         minZoom={0.25}

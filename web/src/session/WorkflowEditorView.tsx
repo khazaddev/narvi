@@ -37,21 +37,24 @@
 //
 // §25.10/§25.11 name three reasons PUT/DELETE on a definition are refused,
 // unconditionally, even for an admin: built-in, bound (referenced by any
-// workflow_bindings row), or has run history. The first two are visible
-// client-side from data this screen already fetches (WorkflowDefinition.
-// isBuiltIn; a join over the bindings list, workflowFormat.ts's own
-// structuralRefusalFor) and are shown BEFORE any edit is attempted -- the
-// form renders read-only immediately, with the specific reason and a
-// one-click Duplicate action, never a generic "can't edit" or a wasted
-// round trip. The THIRD (has run history) has no such signal anywhere on
-// the wire -- WorkflowDefinition carries no such flag, and no endpoint
-// answers "has this ever run" other than attempting the write. That
-// refusal is only ever learned reactively, from the exact 409 message
-// PutWorkflowDefinition returns (workflowdefinitions.go's own
-// refusalReasonForMutation) -- surfaced verbatim, never reworded, and the
-// screen locks into the same read-only presentation the other two get once
-// it arrives. This is a deliberate, spec-consistent gap: the DTO surface
-// simply does not carry a "has run history" flag to check ahead of time.
+// workflow_bindings row), or has run history. All three arrive as ONE
+// server-computed verdict, WorkflowDefinition.editRefusal, produced by the
+// same function the write path enforces -- so this screen renders a decision
+// and never re-derives the rules. structuralRefusalFor (workflowFormat.ts)
+// maps that verdict to copy; the rule lives on the server, the wording lives
+// here, and each reason keeps its own remedy because duplicating and
+// unbinding are different actions.
+//
+// An earlier cut of this file derived the first two itself (isBuiltIn plus a
+// join over the bindings list) and could not know the third at all, so a
+// definition frozen by run history was only discovered by letting the
+// operator finish and then failing the save. Do not reintroduce either half:
+// a second copy of the rules drifts from the one that decides, and a reason
+// that is only learned reactively wastes the operator's work.
+//
+// The 409 path still exists as a fallback -- a definition can become bound
+// between this screen's read and its save -- and its message is surfaced
+// verbatim, never reworded.
 //
 // # RBAC
 //
@@ -243,6 +246,12 @@ function WorkflowBindingsSection({ lane, bindings, definitions, selectedDefiniti
     mutationFn: (repoFullName: string | null) => putWorkflowBinding({ lane: lane as WorkflowBinding['lane'], repoFullName, workflowDefinitionId: selectedDefinitionId }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: workflowBindingQueryKeys.list() })
+      // Binding a definition makes it uneditable: editRefusal flips to
+      // "bound" on the definition itself, not just on the bindings list.
+      // Without this the screen would go on presenting a now-bound
+      // definition as editable until something else refetched, and the
+      // operator would learn otherwise by having a save refused.
+      void queryClient.invalidateQueries({ queryKey: workflowDefinitionQueryKeys.list() })
       setRepoInput('')
     },
   })
@@ -467,7 +476,7 @@ export function WorkflowEditorView() {
       <div className="app one">
         <section className="main">
           <div className="panel" style={{ margin: 18 }}>
-            <p className="notavailable">Workflow definitions are maintainer+ only. Your role cannot view this screen -- enforced server-side (authz.ActionManageWorkflowDefinitions), not merely hidden here.</p>
+            <p className="notavailable">Workflow definitions are visible to maintainers and admins. Your role cannot view this screen. The server enforces this, so the data is withheld rather than merely hidden here.</p>
           </div>
         </section>
       </div>

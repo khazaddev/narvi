@@ -140,27 +140,38 @@ describe('DefinitionRow -- adversarial definition name stays text', () => {
   // Each of the three refusals must be visibly its own: an operator reading
   // "read-only" without knowing WHY cannot pick between duplicating and
   // unbinding, which are different actions (§25.10).
-  it('shows all three refusals as read-only with three DISTINCT labels', () => {
-    const render = (refusal: 'built_in' | 'bound' | 'has_runs') =>
-      withQueryClient(
+  it('shows all three refusals as read-only with three DISTINCT chip labels', () => {
+    // The VISIBLE chip text only. An earlier cut of this test compared whole
+    // rendered strings, which was vacuous: two rows collapsed to one label
+    // still differed by the fixture id and by the title attribute (which
+    // carries the full, still-correct message), so the set had three members
+    // no matter what the chip said. Everything that varies for a reason other
+    // than the label has to be out of the comparison for it to mean anything
+    // -- hence one shared id, and the chip's own text extracted.
+    const chipLabel = (refusal: 'built_in' | 'bound' | 'has_runs') => {
+      const html = withQueryClient(
         <DefinitionRow
-          definition={baseDefinition({ id: `d-${refusal}`, isBuiltIn: refusal === 'built_in', editRefusal: refusal })}
+          definition={baseDefinition({ id: 'd-same', isBuiltIn: refusal === 'built_in', editRefusal: refusal })}
           bindings={[]}
           isSelected={false}
           onSelect={() => {}}
           onDuplicateClick={() => {}}
         />,
       )
+      const match = /<span class="chip [^"]*"[^>]*>(?:<span class="dot"><\/span>)?([^<]*)<\/span>/.exec(html)
+      expect(match, `${refusal} must render a refusal chip`).not.toBeNull()
+      return (match?.[1] ?? '').trim().toLowerCase()
+    }
 
-    const builtIn = render('built_in')
-    const bound = render('bound')
-    const hasRuns = render('has_runs')
+    const builtIn = chipLabel('built_in')
+    const bound = chipLabel('bound')
+    const hasRuns = chipLabel('has_runs')
 
-    expect(builtIn.toLowerCase()).toContain('built-in')
-    expect(bound.toLowerCase()).toContain('bound')
-    expect(hasRuns.toLowerCase()).toMatch(/run/)
+    expect(builtIn).toContain('built-in')
+    expect(bound).toBe('bound')
+    expect(hasRuns).toMatch(/run/)
 
-    // and they are not the same rendering with a different word swapped in
+    // and they are not one label wearing three names
     expect(new Set([builtIn, bound, hasRuns]).size).toBe(3)
   })
 
