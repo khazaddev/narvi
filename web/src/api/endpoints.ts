@@ -63,15 +63,23 @@ import type {
   RebutFindingRequest,
   ReleaseManifestReadout,
   RepoDigestScope,
+  RepoSettings,
   ReviewAnalytics,
   ReviewFinding,
   ReviewReadout,
   RotateCloudIdentitySigningKeyResponse,
   SandboxSecret,
   Session,
+  UpdateAutoApprovalSettingsRequest,
+  UpdateAutoMergeToggleRequest,
+  UpdateAutoRetriggerReviewToggleRequest,
   UpdateCloudIdentityBindingRequest,
+  UpdateDescriptionAutofixToggleRequest,
   UpdateMemberRoleRequest,
   UpdateProviderCredentialRequest,
+  UpdateReviewCostBudgetRequest,
+  UpdateReviewDepthConfigRequest,
+  UpdateRepoSettingsRequest,
   UpdateSandboxSecretRequest,
   UpsertIntentTemplateRequest,
   WSTokenResponse,
@@ -361,6 +369,62 @@ export function getRepoDigestScope(owner: string, repo: string, signal?: AbortSi
 /** getReviewAnalytics calls GET /api/repos/:owner/:repo/review-analytics -- the review-risk analytics section's own read model (§21.1), each rollup carrying its own independent "not yet computed" sentinel. Every role including viewer. */
 export function getReviewAnalytics(owner: string, repo: string, signal?: AbortSignal): Promise<ReviewAnalytics> {
   return request<ReviewAnalytics>(`/api/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/review-analytics`, { signal })
+}
+
+// -- per-repository settings (§21, §26.7, §26.8, §4.1.2): the per-repo
+// policy-flag surface RepoSettingsView.tsx owns. EIGHT routes, not one --
+// see httpapi/reposettings.go's own doc comments for why each PUT below is
+// its own separately-gated endpoint rather than one combined write: a
+// maintainer authorized only for the auto-approval-config row (§13.3 row
+// 5) must never be forced through an admin-only gate (row 6) just to save
+// the one field they ARE authorized for. Every PUT here carries the
+// COMPLETE desired state for the fields it owns (never a partial patch,
+// UpdateRepoSettingsRequest's own doc comment) -- callers load the current
+// RepoSettings first, edit, then send the whole group back.
+
+function repoSettingsPath(owner: string, repo: string, suffix?: string): string {
+  const base = `/api/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/settings`
+  return suffix ? `/api/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${suffix}` : base
+}
+
+/** getRepoSettings calls GET /api/repos/:owner/:repo/settings -- every repo_settings column this screen renders, plus the §21.2 stage-2 contradiction-rate calibration read model. Readable by a maintainer authorized for ANY one of the several narrower PUT routes below, not admin-only alone (GetRepoSettings' own authorizeAny, httpapi/reposettings.go). A 404 ApiError means this deployment does not know the repo yet (resolveKnownRepo's own gate -- mirrors getRepoDigestScope's identical contract). */
+export function getRepoSettings(owner: string, repo: string, signal?: AbortSignal): Promise<RepoSettings> {
+  return request<RepoSettings>(repoSettingsPath(owner, repo), { signal })
+}
+
+/** putRepoSettings calls PUT /api/repos/:owner/:repo/settings -- blockOnHighRisk + sentinelAutofixEnabled ONLY. Admin-only server-side (BOTH authz.ActionConfigureBlockOnHighRisk AND authz.ActionToggleSentinelAutoFix). Deliberately excludes every §21.2 stage-1 field (maxAutoApproveFilesChanged/sensitiveBlastRadiusTags) -- see putAutoApprovalSettings below, which owns those under its own maintainer-level gate. */
+export function putRepoSettings(owner: string, repo: string, body: UpdateRepoSettingsRequest, signal?: AbortSignal): Promise<RepoSettings> {
+  return request<RepoSettings>(repoSettingsPath(owner, repo), { method: 'PUT', body, signal })
+}
+
+/** putAutoApprovalSettings calls PUT /api/repos/:owner/:repo/auto-approval-settings -- maxAutoApproveFilesChanged + sensitiveBlastRadiusTags. Maintainer+ server-side (authz.ActionConfigureAutoApprove, §13.3 row 5) -- the one write route on this screen a maintainer, not just an admin, is authorized for. */
+export function putAutoApprovalSettings(owner: string, repo: string, body: UpdateAutoApprovalSettingsRequest, signal?: AbortSignal): Promise<RepoSettings> {
+  return request<RepoSettings>(repoSettingsPath(owner, repo, 'auto-approval-settings'), { method: 'PUT', body, signal })
+}
+
+/** putAutoMergeToggle calls PUT /api/repos/:owner/:repo/auto-merge -- arms/disarms unattended merge of an auto-approved PR. Admin-only server-side (authz.ActionToggleAutoMerge). */
+export function putAutoMergeToggle(owner: string, repo: string, body: UpdateAutoMergeToggleRequest, signal?: AbortSignal): Promise<RepoSettings> {
+  return request<RepoSettings>(repoSettingsPath(owner, repo, 'auto-merge'), { method: 'PUT', body, signal })
+}
+
+/** putAutoRetriggerReviewToggle calls PUT /api/repos/:owner/:repo/auto-retrigger-review -- arms/disarms automatic re-review on new commits (§24.5). Admin-only server-side (authz.ActionToggleAutoRetriggerReview). */
+export function putAutoRetriggerReviewToggle(owner: string, repo: string, body: UpdateAutoRetriggerReviewToggleRequest, signal?: AbortSignal): Promise<RepoSettings> {
+  return request<RepoSettings>(repoSettingsPath(owner, repo, 'auto-retrigger-review'), { method: 'PUT', body, signal })
+}
+
+/** putDescriptionAutofixToggle calls PUT /api/repos/:owner/:repo/description-autofix -- arms/disarms automatic PR-description rewriting for Narvi-authored PRs (§26.2). Admin-only server-side (authz.ActionToggleDescriptionAutofix). */
+export function putDescriptionAutofixToggle(owner: string, repo: string, body: UpdateDescriptionAutofixToggleRequest, signal?: AbortSignal): Promise<RepoSettings> {
+  return request<RepoSettings>(repoSettingsPath(owner, repo, 'description-autofix'), { method: 'PUT', body, signal })
+}
+
+/** putReviewDepthConfig calls PUT /api/repos/:owner/:repo/review-depth -- reviewDepthMode + reviewDepthDeepPaths (§26.3/§26.8). Admin-only server-side (authz.ActionConfigureReviewDepth). */
+export function putReviewDepthConfig(owner: string, repo: string, body: UpdateReviewDepthConfigRequest, signal?: AbortSignal): Promise<RepoSettings> {
+  return request<RepoSettings>(repoSettingsPath(owner, repo, 'review-depth'), { method: 'PUT', body, signal })
+}
+
+/** putReviewCostBudget calls PUT /api/repos/:owner/:repo/review-cost-budget -- reviewCostBudgetLightUsd + reviewCostBudgetDeepUsd (§26.7). Admin-only server-side (authz.ActionConfigureReviewCostBudget). Zero/negative values are rejected 400 server-side (they would collide with the "unconfigured" sentinel and silently mean unlimited spend) -- callers validate this client-side too (repoSettingsFormat.ts's own parseOptionalPositiveUsd) so the refusal is never the caller's first hint. */
+export function putReviewCostBudget(owner: string, repo: string, body: UpdateReviewCostBudgetRequest, signal?: AbortSignal): Promise<RepoSettings> {
+  return request<RepoSettings>(repoSettingsPath(owner, repo, 'review-cost-budget'), { method: 'PUT', body, signal })
 }
 
 // -- secrets scope resolution (§27.1/§25.1, §12.2 item 5). --
