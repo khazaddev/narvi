@@ -1314,7 +1314,7 @@ func serve() error {
 		// plans/{planId}/approve|reject above was always missing -- a web
 		// client had no way to ever discover a planId to approve. See
 		// httpapi/plans.go's own doc comment.
-		r.Get("/{sessionID}/plans", httpapi.ListPlans(sessionStore, planStore))
+		r.Get("/{sessionID}/plans", httpapi.ListPlans(sessionStore, planStore, turnStore, eventStore))
 		// review/retrigger ("review sessions", §8.2's own manual
 		// re-trigger-via-BUTTON surface, §12.2 item 2's "re-run action") --
 		// see httpapi/reviewretrigger.go's own doc comment. githubPRSessionStore/
@@ -1627,6 +1627,13 @@ func serve() error {
 		r.Post("/", httpapi.CreateAutomation(automationStore))
 		r.Get("/", httpapi.ListAutomations(automationStore))
 		r.Get("/{automationID}", httpapi.GetAutomation(automationStore))
+		// invocations ("automations health/runs table", §12.2 item 4): the
+		// expandable invocation -> runs read model automations.go's own
+		// automation-level lastRunAt/lastRunStatus/artifactSummary fields
+		// could not close by themselves -- see httpapi/automationinvocations.go's
+		// own doc comment. Same "no extra RBAC beyond logged in" gate as
+		// Get/List immediately above.
+		r.Get("/{automationID}/invocations", httpapi.ListAutomationInvocations(automationStore, automationInvocationStore, automationRunStore))
 		r.Post("/{automationID}/pause", httpapi.PauseAutomation(automationStore))
 		r.Post("/{automationID}/resume", httpapi.ResumeAutomation(automationStore))
 		r.Post("/{automationID}/webhook-token", httpapi.RotateAutomationWebhookToken(automationStore))

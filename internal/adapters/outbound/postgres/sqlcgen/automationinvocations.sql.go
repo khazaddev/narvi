@@ -195,6 +195,57 @@ func (q *Queries) ListDueForFanOut(ctx context.Context, limit int32) ([]Automati
 	return items, nil
 }
 
+const listInvocationsForAutomation = `-- name: ListInvocationsForAutomation :many
+SELECT id, automation_id, status, targets, total_runs, fanned_out_at, failure_counted_at, closed_at, created_at FROM automation_invocations
+WHERE automation_id = $1
+ORDER BY created_at DESC
+LIMIT $2
+`
+
+type ListInvocationsForAutomationParams struct {
+	AutomationID pgtype.UUID `json:"automation_id"`
+	Limit        int32       `json:"limit"`
+}
+
+// Backs GET /api/automations/{automationID}/invocations (the automations UI,
+// mockups.html's own "expandable invocation -> runs rows"), sourced from
+// the automation_invocations_automation_id_idx index this table's own
+// migration comment already named as backing "the future ... read model
+// the mockups' own '12/12 ok' / 'n/3 strikes' health column will need".
+// Newest first, bounded by $2 -- mirrors ListPlansForSession's own "a
+// session's own plan history is expected to stay small" precedent one
+// level up: this is an automation's own MOST RECENT invocation history for
+// the UI's own expandable table, never an unbounded full archive.
+func (q *Queries) ListInvocationsForAutomation(ctx context.Context, arg ListInvocationsForAutomationParams) ([]AutomationInvocation, error) {
+	rows, err := q.db.Query(ctx, listInvocationsForAutomation, arg.AutomationID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AutomationInvocation
+	for rows.Next() {
+		var i AutomationInvocation
+		if err := rows.Scan(
+			&i.ID,
+			&i.AutomationID,
+			&i.Status,
+			&i.Targets,
+			&i.TotalRuns,
+			&i.FannedOutAt,
+			&i.FailureCountedAt,
+			&i.ClosedAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markAutomationInvocationFailureCounted = `-- name: MarkAutomationInvocationFailureCounted :one
 UPDATE automation_invocations
 SET failure_counted_at = now()

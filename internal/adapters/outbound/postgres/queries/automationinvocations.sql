@@ -68,6 +68,21 @@ SET status = $2,
 WHERE id = $1 AND status = 'pending'
 RETURNING *;
 
+-- name: ListInvocationsForAutomation :many
+-- Backs GET /api/automations/{automationID}/invocations (the automations UI,
+-- mockups.html's own "expandable invocation -> runs rows"), sourced from
+-- the automation_invocations_automation_id_idx index this table's own
+-- migration comment already named as backing "the future ... read model
+-- the mockups' own '12/12 ok' / 'n/3 strikes' health column will need".
+-- Newest first, bounded by $2 -- mirrors ListPlansForSession's own "a
+-- session's own plan history is expected to stay small" precedent one
+-- level up: this is an automation's own MOST RECENT invocation history for
+-- the UI's own expandable table, never an unbounded full archive.
+SELECT * FROM automation_invocations
+WHERE automation_id = $1
+ORDER BY created_at DESC
+LIMIT $2;
+
 -- name: MarkAutomationInvocationFailureCounted :one
 -- §3.5's own literal CAS idiom: "UPDATE ... WHERE failure_counted_at IS
 -- NULL" -- called only for an invocation CloseAutomationInvocation just

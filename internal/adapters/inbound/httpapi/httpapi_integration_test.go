@@ -223,6 +223,11 @@ type testRig struct {
 	// assert against AutomationStore.GetByWebhookTokenHash directly.
 	automationInvocations *narvipg.AutomationInvocationStore
 
+	// automationRuns backs this rig's own GET /api/automations/
+	// {automationID}/invocations route (the automations UI, automationinvocations_
+	// integration_test.go) -- the nested runs half of that read model.
+	automationRuns *narvipg.AutomationRunStore
+
 	// providerCredentials ("provider credential injection",
 	// §25.1/§25.3) backs this rig's own 3 scoped provider-credentials CRUD
 	// route groups (providercredentials_integration_test.go) and the
@@ -373,6 +378,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		reviewVerdicts:        narvipg.NewReviewVerdictStore(pool),
 		automations:           narvipg.NewAutomationStore(pool),
 		automationInvocations: narvipg.NewAutomationInvocationStore(pool),
+		automationRuns:        narvipg.NewAutomationRunStore(pool),
 		providerCredentials:   narvipg.NewProviderCredentialStore(pool),
 		sandboxSecrets:        narvipg.NewSandboxSecretStore(pool),
 		openCodeConfigs:       narvipg.NewOpenCodeConfigStore(pool),
@@ -432,7 +438,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Post("/{sessionID}/plans/{planId}/reject", httpapi.RejectPlan(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.outbox, rig.linearAgentSessions, rig.auditLog, false))
 		// Audit-fix batch (completeness/discoverability, M3) -- see
 		// httpapi/plans.go's own doc comment.
-		r.Get("/{sessionID}/plans", httpapi.ListPlans(rig.sessions, rig.plans))
+		r.Get("/{sessionID}/plans", httpapi.ListPlans(rig.sessions, rig.plans, rig.turns, rig.events))
 		// review/retrigger ("review sessions", §8.2's own manual
 		// re-trigger-via-BUTTON surface) -- see reviewretrigger.go's own doc
 		// comment. rig.diffFetcher/rig.botToken default nil/"" -- see this
@@ -778,6 +784,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Post("/", httpapi.CreateAutomation(rig.automations))
 		r.Get("/", httpapi.ListAutomations(rig.automations))
 		r.Get("/{automationID}", httpapi.GetAutomation(rig.automations))
+		r.Get("/{automationID}/invocations", httpapi.ListAutomationInvocations(rig.automations, rig.automationInvocations, rig.automationRuns))
 		r.Post("/{automationID}/pause", httpapi.PauseAutomation(rig.automations))
 		r.Post("/{automationID}/resume", httpapi.ResumeAutomation(rig.automations))
 		r.Post("/{automationID}/webhook-token", httpapi.RotateAutomationWebhookToken(rig.automations))

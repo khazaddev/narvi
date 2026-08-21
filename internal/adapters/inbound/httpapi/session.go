@@ -63,6 +63,14 @@ func sessionRowToDTO(s sqlcgen.Session, sandboxStatus *sqlcgen.SandboxStatus) re
 		UpdatedAt:     s.UpdatedAt.Time,
 		Repos:         decodeSessionRepos(s.Repos),
 		SandboxStatus: sandboxStatusDTO,
+		// BuildModelId/BuildEffort (the plan-mode UI, §12.2 item 3): sessions.
+		// build_model_id/build_effort were write-only via CreateSessionRequest
+		// before this -- see restdtos.Session.buildModelId's own schema doc
+		// comment for why this is a plain, direct passthrough exactly like
+		// createdBy/repos above (a read-only addition to a DTO that predates
+		// it, sourced from a column that already existed).
+		BuildModelId: restdtos.SessionBuildModelId(s.BuildModelID),
+		BuildEffort:  restdtos.SessionBuildEffort(s.BuildEffort),
 	}
 }
 

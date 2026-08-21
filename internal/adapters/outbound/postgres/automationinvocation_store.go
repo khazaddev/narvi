@@ -83,3 +83,11 @@ func (s *AutomationInvocationStore) Close(ctx context.Context, arg sqlcgen.Close
 func (s *AutomationInvocationStore) MarkFailureCounted(ctx context.Context, id pgtype.UUID) (sqlcgen.AutomationInvocation, error) {
 	return s.q.MarkAutomationInvocationFailureCounted(ctx, id)
 }
+
+// ListForAutomation returns up to limit of automationID's own most recent
+// invocations, newest first -- the automations UI's own addition (§12.2
+// item 4, §8.4), backing GET /api/automations/{automationID}/invocations
+// (internal/adapters/inbound/httpapi/automationinvocations.go).
+func (s *AutomationInvocationStore) ListForAutomation(ctx context.Context, automationID pgtype.UUID, limit int32) ([]sqlcgen.AutomationInvocation, error) {
+	return s.q.ListInvocationsForAutomation(ctx, sqlcgen.ListInvocationsForAutomationParams{AutomationID: automationID, Limit: limit})
+}

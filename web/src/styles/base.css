@@ -96,6 +96,22 @@ body {
   font-size: var(--text-lg);
 }
 
+/* header-nav-link (Step 85): the shell's own minimal, honest placeholder
+   nav entry (see __root.tsx's own comment on why this is not a finished
+   nav bar yet) -- pushed toward the trailing edge via margin-left: auto
+   so it sits directly beside ThemeToggle rather than centered by
+   .app-header's own justify-content: space-between. */
+.app-header .header-nav-link {
+  margin-left: auto;
+  margin-right: var(--space-7);
+  color: var(--muted);
+  font-size: var(--text-base);
+  text-decoration: none;
+}
+.app-header .header-nav-link:hover {
+  color: var(--ink);
+}
+
 .app-main {
   flex: 1;
 }

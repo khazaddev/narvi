@@ -1,5 +1,5 @@
 import type { QueryClient } from '@tanstack/react-query'
-import { createRootRouteWithContext, Outlet } from '@tanstack/react-router'
+import { createRootRouteWithContext, Link, Outlet } from '@tanstack/react-router'
 
 import { ThemeToggle } from '../components/ThemeToggle'
 
@@ -26,6 +26,17 @@ function RootLayout() {
     <div className="app-shell">
       <header className="app-header">
         <span className="wordmark">Narvi</span>
+        {/* Automations (§12.2 item 4): the only real top-level nav
+            entry point this shell has today -- unlike every other view
+            shipped so far (session-scoped, reached from SessionRail),
+            automations belong to no single session, so there is nowhere
+            else in the app to link from yet. A fuller top nav (sessions,
+            decision inbox, settings) lands with the decision-inbox home
+            view (§16); this is a minimal, honest placeholder, not a
+            finished nav bar. */}
+        <Link to="/automations" className="header-nav-link">
+          Automations
+        </Link>
         <ThemeToggle />
       </header>
       <main className="app-main">

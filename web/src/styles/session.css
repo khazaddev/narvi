@@ -1142,3 +1142,82 @@
 .fp-pattern-row.retired {
   opacity: 0.55;
 }
+
+/* ---- plan mode (§12.2 item 3, Step 85) ---- */
+
+/* plan-content: NOT the mockup's own .planlist (a numbered <ol>/<li>
+   structure) -- the real plan document is freeform, model-authored prose
+   with no structured steps schema anywhere in this codebase (Plan.content's
+   own schema doc comment, PlanModeView.tsx's own top comment), so it is
+   never parsed into semantic list markup. This mirrors .stream p's own
+   "must not break the layout" treatment (a very long line, or one very
+   long unbroken word/token, must still wrap inside the card) rather than
+   inventing a second convention for the same underlying risk. */
+.plan-content {
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-md);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.approvalbar {
+  position: sticky;
+  bottom: 0;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  padding: var(--space-6) var(--space-9);
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.channels {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  color: var(--faint);
+}
+
+/* ---- automations (§12.2 item 4, Step 85) ---- */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-6) var(--space-9);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.runrow {
+  background: var(--ground);
+}
+.runrow td {
+  padding: var(--space-6) var(--space-7) var(--space-7);
+}
+.runs {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.run {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  font-size: var(--text-sm-alt);
+}
+.run .target {
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  color: var(--muted);
+  min-width: 180px;
+}
+.run .sum {
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.strike {
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  color: var(--warn);
+}

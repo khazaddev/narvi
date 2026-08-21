@@ -5,16 +5,28 @@
 // request notifications (outboxenqueue.go).
 //
 // There is no structured plan schema anywhere in this codebase (§12.2 item
-// 3's own "numbered steps with file refs, scope estimate" is the WEB UI's
-// own future rendering of a plan turn's freeform assistant text -- no
-// Step, including this one, has built a frontend yet, this Step's own
-// explicit out-of-scope note). So this does not attempt to parse steps out
-// of the model's own prose into any structured shape -- it extracts the
-// producing turn's own final streamed assistant text VERBATIM (the plan
-// document's own actual content, whatever shape the model rendered it in,
-// almost always already a numbered list given how plan-mode turns are
-// prompted) and lets the caller (Slack Block Kit / Linear activity text)
-// truncate/render it as plain text.
+// 3's own "numbered steps with file refs, scope estimate" is rendered from
+// a plan turn's freeform assistant text, never parsed into a structured
+// shape -- see internal/domain/plan/content.go's own top doc comment, which
+// this function now delegates its actual scan to). So this does not
+// attempt to parse steps out of the model's own prose into any structured
+// shape -- it extracts the producing turn's own final streamed assistant
+// text VERBATIM (the plan document's own actual content, whatever shape
+// the model rendered it in, almost always already a numbered list given
+// how plan-mode turns are prompted) and lets the caller (Slack Block Kit /
+// Linear activity text, or -- the web UI's own GET .../plans,
+// internal/adapters/inbound/httpapi/plans.go) truncate/render it as plain
+// text.
+//
+// The plan-mode UI (§12.2 item 3) generalized the actual scan below
+// into plandomain.ExtractContent, reusable by a SECOND caller that needs it
+// for MORE than just the single most-recently-dispatched turn (a session's
+// full plan v1->v2 history) -- see that function's own doc comment for why
+// an upper bound was needed for that case and not this one. This method
+// keeps its own exact prior behavior (upperBoundEventID always nil: this
+// caller only ever runs synchronously right when the plan-mode turn itself
+// completes, when it IS -- by construction -- the most recently dispatched
+// turn in the session) by degenerating to that same single-bound call.
 
 package sessionactor
 
@@ -23,12 +35,16 @@ import (
 	"encoding/json"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	plandomain "github.com/khazaddev/narvi/internal/domain/plan"
 )
 
-// planContentFallbackText is what planContentText returns when no
-// assistant text could be recovered at all (an empty/failed events list) --
-// never leaves a notification with literally nothing describing the plan.
-const planContentFallbackText = "(plan content unavailable -- see the session's own event log)"
+// planContentFallbackText is a local alias for plandomain.ContentFallbackText
+// -- kept as its own name here (rather than every call site in this
+// package spelling out the qualified name) purely for this file's own
+// pre-existing readability; the two are byte-identical by construction
+// (plandomain.go's own doc comment: "shared by every caller ... so neither
+// can drift to a DIFFERENT wording").
+const planContentFallbackText = plandomain.ContentFallbackText
 
 // planContentEventFetchLimit bounds how many of the session's own MOST
 // RECENT events this reads back (a.stores.event.ListRecentForSession,
@@ -56,23 +72,27 @@ type tokenEventPayload struct {
 }
 
 // planContentText best-effort recovers processing's own final streamed
-// assistant text -- the plan document's own actual content -- by scanning
+// assistant text -- the plan document's own actual content -- by fetching
 // the session's own event log, NEWEST FIRST (a.stores.event.
 // ListRecentForSession, pool-based per EventStore's own doc comment, so
 // this is always a plain read of already-committed rows, safe to call from
-// inside completeProcessingTurn's own transact), for "token" events whose
-// own ID falls above processing's own DispatchedEventID. Since the
-// scan is newest-first, the FIRST such token event found is already the
-// LAST one by arrival order (§6.1: token text is cumulative per messageId,
-// so that one event's own Text is already the full, final rendered text) --
-// no need to keep scanning for a "latest so far" the way an oldest-first
-// scan would. The scan also stops as soon as it reaches an event at or
-// below processing's own DispatchedEventID: everything from there on
-// (lower ids, in this descending walk) belongs to an EARLIER turn's own
-// streamed output,
-// not this plan-mode turn's own (events carries no turn_id column, see
-// migrations/000008_events.up.sql's own doc comment) -- there is nothing
-// left to find. Never fails the caller: any read/decode error, or finding
+// inside completeProcessingTurn's own transact), converting it to
+// plandomain.ContentEvent (decoding each "token" event's own raw payload;
+// every other event type carries no Text this scan needs), and delegating
+// the actual scan to plandomain.ExtractContent -- bounded below by
+// processing's own DispatchedEventID (the monotonic events.id watermark
+// stamped at dispatch, NOT a created_at/dispatched_at timestamp comparison:
+// the latter straddles the Postgres server clock and the application
+// clock, so a few ms of ordinary skew between them could truncate the scan
+// early or run it past this turn's own boundary into an earlier turn's
+// output -- see migrations/000089_turns_dispatched_event_id.up.sql), and
+// UNBOUNDED above (upperBoundEventID nil): this method only ever runs
+// synchronously right when processing itself completes, when it IS -- by
+// construction -- the most recently dispatched turn in the session, so no
+// LATER turn's own token events exist yet to contaminate an unbounded-above
+// scan (see plandomain.ExtractContent's own doc comment for the case where
+// that assumption does NOT hold, and why that caller supplies a real upper
+// bound instead). Never fails the caller: any read error, or finding
 // nothing at all, returns planContentFallbackText rather than propagating
 // an error -- a best-effort notification enrichment must never block or
 // fail the turn-completion transaction it runs inside.
@@ -83,31 +103,30 @@ func (a *Actor) planContentText(ctx context.Context, processing sqlcgen.Turn) st
 		return planContentFallbackText
 	}
 
-	for _, e := range events {
-		// Bounded by the monotonic events.id watermark stamped at dispatch
-		// (turns.dispatched_event_id), NOT by a created_at/dispatched_at
-		// timestamp comparison: the latter straddled the Postgres server
-		// clock (events.created_at) and the application clock
-		// (turns.dispatched_at), so a few ms of ordinary skew between them
-		// could truncate this scan early -- silently returning
-		// planContentFallbackText in place of a real, fully-streamed plan --
-		// or run it past this turn's own boundary into an earlier turn's
-		// output. See migrations/000089_turns_dispatched_event_id.up.sql.
-		if processing.DispatchedEventID != nil && e.ID <= *processing.DispatchedEventID {
-			break
-		}
-		if e.Type != "token" {
-			continue
-		}
+	return plandomain.ExtractContent(ToContentEvents(events), processing.DispatchedEventID, nil)
+}
 
-		var tok tokenEventPayload
-		if err := json.Unmarshal(e.Payload, &tok); err != nil {
-			continue
+// ToContentEvents converts a []sqlcgen.Event (newest-first, as
+// ListRecentForSession returns) into plandomain.ExtractContent's own
+// adapter-independent input shape -- the ONE conversion point the plan-mode
+// UI's own second caller (internal/adapters/inbound/httpapi/plans.go) also reuses,
+// so the sqlcgen.Event -> plandomain.ContentEvent boundary conversion
+// itself never drifts between the two call sites either. A "token" event
+// whose payload fails to decode degrades to an empty Text (silently
+// skipped by ExtractContent, exactly like this function's own prior
+// inline `continue` on a decode error), never propagated as an error --
+// matching this file's own "never fails the caller" discipline.
+func ToContentEvents(events []sqlcgen.Event) []plandomain.ContentEvent {
+	out := make([]plandomain.ContentEvent, len(events))
+	for i, e := range events {
+		ce := plandomain.ContentEvent{ID: e.ID, Type: e.Type}
+		if e.Type == "token" {
+			var tok tokenEventPayload
+			if err := json.Unmarshal(e.Payload, &tok); err == nil {
+				ce.Text = tok.Text
+			}
 		}
-		if tok.Text != "" {
-			return tok.Text
-		}
+		out[i] = ce
 	}
-
-	return planContentFallbackText
+	return out
 }
