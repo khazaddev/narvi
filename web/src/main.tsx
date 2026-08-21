@@ -5,6 +5,7 @@ import { RouterProvider, createRouter } from '@tanstack/react-router'
 
 import { initTheme } from './lib/theme'
 import { installUnauthorizedHandler } from './auth/session'
+import { RouteErrorFallback, RouteNotFoundFallback } from './components/shell/RouteFallbacks'
 import { routeTree } from './routeTree.gen'
 import './styles/tokens.css'
 import './styles/base.css'
@@ -26,7 +27,18 @@ const queryClient = new QueryClient()
 // once, rather than per-component.
 installUnauthorizedHandler(queryClient)
 
-const router = createRouter({ routeTree, context: { queryClient } })
+// defaultErrorComponent/defaultNotFoundComponent are wired here rather than
+// per-route: they are the shell's own terminal states, and leaving them unset
+// is what left the app rendering TanStack's bare defaults -- an unstyled
+// exception dump on any backend hiccup, and a corner-of-the-page "Not Found".
+// See components/shell/RouteFallbacks.tsx for why the error one never renders
+// the underlying message.
+const router = createRouter({
+  routeTree,
+  context: { queryClient },
+  defaultErrorComponent: RouteErrorFallback,
+  defaultNotFoundComponent: RouteNotFoundFallback,
+})
 
 // Registers `router`'s own route/param types with TanStack Router's global
 // type registry, exactly as its own setup docs require -- without this,
