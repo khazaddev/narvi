@@ -30,8 +30,8 @@ import type { EventEnvelope } from './types'
 // This is a representative, not exhaustive, mapping -- it exists to prove
 // the mechanism (a named event type drives a specific, narrow set of
 // invalidations, not a blanket "invalidate everything" on every event);
-// Steps 81+ extend this table as each view's own queries are added, the
-// same way api/endpoints.ts's own route coverage grows.
+// Each view extends this table as its own queries are added, the same
+// way api/endpoints.ts's own route coverage grows.
 type InvalidationRule = (sessionId: string) => QueryKey[]
 
 const EVENT_TYPE_INVALIDATION: Record<string, InvalidationRule> = {

@@ -396,8 +396,8 @@ export function buildTimelineModel(events: readonly EventEnvelope[]): TimelineMo
     // Every other recognized/unrecognized type (ready, heartbeat,
     // boot_progress, git_sync, boot_timing, push_complete, push_error,
     // snapshot_ready, or a genuinely unknown future type) is not part of
-    // this timeline model -- session-workspace-wide status (the rail,
-    // Step 83) or simply out of this Step's own rendering scope. Never a
+    // this timeline model -- session-workspace-wide status (the rail) or
+    // simply out of this file's own rendering scope. Never a
     // crash either way: an unrecognized type is a documented no-op, not
     // a thrown error.
   }

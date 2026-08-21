@@ -33,7 +33,7 @@ export class ApiError extends Error {
 }
 
 interface RequestOptions {
-  // PATCH added by Step 86 (§12.2 item 5): PATCH /api/members/:userId/role
+  // PATCH exists for §12.2 item 5: PATCH /api/members/:userId/role
   // (members.go) is this codebase's first caller needing it -- every
   // other mutating route to date used PUT/POST/DELETE only.
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
@@ -42,7 +42,7 @@ interface RequestOptions {
   signal?: AbortSignal
 }
 
-// onUnauthorized (Step 81, §13.1's own "expired session" state) -- a
+// onUnauthorized (§13.1's own "expired session" state) -- a
 // module-level hook, default no-op, so THIS generic layer can announce
 // "a request just came back 401" without importing TanStack Query (or
 // anything else app-specific) into it. web/src/auth/session.ts's own

@@ -1,4 +1,4 @@
-// reviewRendering.test.tsx -- Step 84's own defining risk, proven at the
+// reviewRendering.test.tsx -- the review views' own defining risk, proven at the
 // RENDER boundary: every field the code-review/release-review views draw
 // (digest summary, architecture-decision prose, stack-risk text, a
 // finding's own description/filePath/suggestedFix/rebuttalText, a

@@ -1,4 +1,4 @@
-// SecretsPanel.tsx -- Settings -> Secrets (§27.1/§25.1, Step 86): the two
+// SecretsPanel.tsx -- Settings -> Secrets (§27.1/§25.1): the two
 // secret-shaped tables (sandbox_secrets, provider_credentials), each
 // partitioned repo/environment/global.
 //

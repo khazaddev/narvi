@@ -1,5 +1,5 @@
 // settingsFormat.ts -- pure, testable formatting/derivation helpers for
-// the Settings + Analytics views (§12.2 item 5, Step 86). Mirrors this
+// the Settings + Analytics views (§12.2 item 5). Mirrors this
 // codebase's own established split (automationFormat.ts, planFormat.ts,
 // reviewFormat.ts): render logic that does not need React lives here, so
 // it can be unit-tested without rendering anything.

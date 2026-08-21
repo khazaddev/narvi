@@ -1,4 +1,4 @@
-// AnalyticsView.tsx -- §12.2 items 5-6's own Analytics screen (Step 86).
+// AnalyticsView.tsx -- §12.2 items 5-6's own Analytics screen.
 //
 // # What renders as real data, and what renders "not available yet"
 //

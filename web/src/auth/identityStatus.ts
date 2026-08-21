@@ -1,4 +1,4 @@
-// identityStatus.ts (Step 81, §12.2 item 7) is components/auth/
+// identityStatus.ts (§12.2 item 7) is components/auth/
 // IdentityStatusPanel.tsx's own pure, render-independent logic, split
 // into its own module (rather than co-located in that component file) so
 // the component file exports components only -- oxlint's own

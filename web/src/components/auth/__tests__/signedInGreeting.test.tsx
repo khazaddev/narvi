@@ -1,7 +1,7 @@
 // Proves SignedInGreeting renders a hostile, third-party-controlled
 // display name (a GitHub profile's own free-text `name` field) as TEXT,
 // never as markup -- "a third-party display name containing markup
-// renders as text" (Step 81's own verification list). Uses
+// renders as text" -- §13.1's own requirement. Uses
 // react-dom/server's renderToStaticMarkup (a real render through React's
 // own escaping, not a hand-rolled string check) -- no jsdom, no
 // @testing-library/react needed for a static-markup proof.

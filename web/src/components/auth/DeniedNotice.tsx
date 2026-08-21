@@ -1,4 +1,4 @@
-// DeniedNotice (Step 81, "honest allowlist/denial states") renders the
+// DeniedNotice (§13.1's own honest allowlist/denial states) renders the
 // ONE thing an allowlist-rejected visitor is told: they are not
 // permitted, full stop. It takes NO props at all, by design -- the
 // classic failure mode this component exists to make structurally

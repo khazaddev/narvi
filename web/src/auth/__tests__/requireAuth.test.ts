@@ -1,6 +1,6 @@
 // Proves auth/requireAuth.ts's own beforeLoad guard: the "an
 // unauthenticated visitor hitting a deep link should land somewhere
-// sensible" behavior (Step 81), and that a GENUINE failure (not a 401)
+// sensible" behavior (§13.1), and that a GENUINE failure (not a 401)
 // is never silently folded into "not signed in".
 import { describe, expect, it, vi } from 'vitest'
 import { isRedirect } from '@tanstack/react-router'
