@@ -1337,6 +1337,25 @@ snapshotting each step's own content onto its `workflow_step_run` so the ledger 
 schema change with a real migration behind it, and is not taken here; if per-run editing history is
 ever wanted, that is the design to reach for, not a weakening of this refusal.
 
+**The refusals need a READ-side surface, and this section originally forgot
+one.** All three are enforced on write, which is what makes them structural —
+but an editor has to know before it lets someone work. Two of the three were
+derivable from the definition shape and the bindings list, so the first editor
+built re-derived them, carrying a second copy of the rules and of their wording
+beside the authoritative one. The third, run history, was derivable from
+nothing at all: the screen could only discover a frozen definition by letting
+the operator finish and then failing the save.
+
+`WorkflowDefinition.editRefusal` closes that: a nullable
+`built_in | bound | has_runs`, computed by the same function the write path
+enforces, so the rule has one home and a client renders a verdict. The list
+endpoint carries it as two `EXISTS` columns on its own query — a per-definition
+round trip would be the N+1 this avoids. What stays client-side is the WORDING,
+which is where wording belongs; what must never be client-side again is the
+rule. Each reason keeps its own remedy: duplicating and unbinding are different
+actions, and a single "read-only" label that omits which one applies sends an
+operator after the wrong fix.
+
 **Runs are read-only and always carry their step runs.** `workflow_step_runs` has no list read
 today, so a run view has no way to show a step sequence at all. `GET /api/workflow-runs/{runId}`
 returns the run and its ordered step runs together, because a run without its steps answers no
@@ -1388,6 +1407,25 @@ validate/constrain what a user can draw against the engine's closed model — or
 save time, not silently accepting it. Inline progress display of a running workflow in the session
 view is a SMALL extension of the already-planned sub-task-lane rendering (§7.1, Steps 82/83) — not
 a separate Step.
+
+**Decisions the editor had to make that this section did not settle.** It is
+three sentences long and describes the largest screen in the phase, so these
+are recorded rather than left to be re-litigated:
+
+- **Edges are authored through closed pickers, not drag-to-connect.** An edge's
+  status comes from the three-value enum and its target from this definition's
+  own steps, so an edge the engine could not execute is unrepresentable rather
+  than merely refused. "React Flow-style" above names the canvas, not a
+  particular gesture; if drag-to-connect is later wanted, it must land with the
+  same two constraints, not instead of them.
+- **A step has no name on the wire**, so nodes are labelled by order plus the
+  first line of their prompt template. The mockup's node titles ("Draft spec",
+  "Scaffold") are not backed by any field, and inventing one client-side would
+  have been a fabricated label rather than a rendering of data.
+- **The circuit-breaker attempt ceiling and a version history are not built.**
+  `loopguard`'s configuration is on no DTO, and `version` is explicitly not a
+  retrievable pin (§25.11) — there is no older version to show. Both appear in
+  the mockup; neither has data behind it.
 
 ### 25.13 Risks and open questions
 
