@@ -101,3 +101,38 @@ export function parseOptionalPositiveUsd(raw: string): number | null | 'invalid'
   if (!Number.isFinite(n) || n <= 0) return 'invalid'
   return n
 }
+
+/**
+ * ServerBackedFieldState is one editable field's state: what the operator sees
+ * (`value`), the server value it was last reconciled against (`server`), and
+ * whether the operator has touched it since (`dirty`).
+ */
+export interface ServerBackedFieldState<T> {
+  value: T
+  server: T
+  dirty: boolean
+}
+
+/** serverBackedValuesEqual compares by serialised content, so array-valued fields (tags, deep paths) compare by what they contain rather than by identity. */
+export function serverBackedValuesEqual<T>(a: T, b: T): boolean {
+  return JSON.stringify(a) === JSON.stringify(b)
+}
+
+/**
+ * reconcileServerBackedField decides what an editable field should show when a
+ * fresh server value arrives underneath it. Three cases, and getting any of
+ * them wrong is a real defect this screen has already had:
+ *
+ *  - UNTOUCHED field: adopt the new server value. Without this, a card seeded
+ *    at mount kept showing the old value while the summary above it updated,
+ *    and pressing Save wrote the stale value back over someone else's change.
+ *  - TOUCHED field, server moved elsewhere: keep the operator's edit and stay
+ *    dirty. An unrelated card's Save must never wipe in-progress typing.
+ *  - TOUCHED field, server caught up to exactly what they typed: adopt it and
+ *    go clean, so the NEXT external change is adopted normally. This is the
+ *    ordinary post-save path.
+ */
+export function reconcileServerBackedField<T>(prev: ServerBackedFieldState<T>, serverValue: T): ServerBackedFieldState<T> {
+  const keepEdit = prev.dirty && !serverBackedValuesEqual(prev.value, serverValue)
+  return { value: keepEdit ? prev.value : serverValue, server: serverValue, dirty: keepEdit }
+}

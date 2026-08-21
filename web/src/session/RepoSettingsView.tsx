@@ -108,6 +108,9 @@ import {
   parseDeepPathsInput,
   parseOptionalPositiveInt,
   parseOptionalPositiveUsd,
+  reconcileServerBackedField,
+  serverBackedValuesEqual,
+  type ServerBackedFieldState,
   REVIEW_DEPTH_MODES,
   reviewDepthModeLabel,
 } from './repoSettingsFormat'
@@ -211,15 +214,15 @@ export function RepoSettingsSummary({ settings }: { settings: RepoSettings }) {
 
 function RiskPolicyCard({ owner, repo, settings, canEdit }: { owner: string; repo: string; settings: RepoSettings; canEdit: boolean }) {
   const queryClient = useQueryClient()
-  const [blockOnHighRisk, setBlockOnHighRisk] = useState(settings.blockOnHighRisk)
-  const [sentinelAutofixEnabled, setSentinelAutofixEnabled] = useState(settings.sentinelAutofixEnabled)
+  const blockField = useServerBackedField(settings.blockOnHighRisk)
+  const sentinelField = useServerBackedField(settings.sentinelAutofixEnabled)
   const repoFullName = `${owner}/${repo}`
 
   const mutation = useMutation({
-    mutationFn: () => putRepoSettings(owner, repo, { blockOnHighRisk, sentinelAutofixEnabled }),
+    mutationFn: () => putRepoSettings(owner, repo, { blockOnHighRisk: blockField.value, sentinelAutofixEnabled: sentinelField.value }),
     onSuccess: (updated) => {
-      setBlockOnHighRisk(updated.blockOnHighRisk)
-      setSentinelAutofixEnabled(updated.sentinelAutofixEnabled)
+      blockField.set(updated.blockOnHighRisk)
+      sentinelField.set(updated.sentinelAutofixEnabled)
       void queryClient.invalidateQueries({ queryKey: repoSettingsQueryKeys.detail(repoFullName) })
     },
   })
@@ -229,13 +232,14 @@ function RiskPolicyCard({ owner, repo, settings, canEdit }: { owner: string; rep
       <h4>Merge &amp; risk policy</h4>
       <p className="ph">Both settings change what happens automatically on this repository's own pull requests, so both are admin-only and are saved together.</p>
       <label className="formrow" style={{ padding: '4px 0' }}>
-        <input type="checkbox" checked={blockOnHighRisk} disabled={!canEdit || mutation.isPending} onChange={(e) => setBlockOnHighRisk(e.target.checked)} />
+        <input type="checkbox" checked={blockField.value} disabled={!canEdit || mutation.isPending} onChange={(e) => blockField.set(e.target.checked)} />
         Block merge when a review verdict comes back high risk
       </label>
       <label className="formrow" style={{ padding: '4px 0' }}>
-        <input type="checkbox" checked={sentinelAutofixEnabled} disabled={!canEdit || mutation.isPending} onChange={(e) => setSentinelAutofixEnabled(e.target.checked)} />
+        <input type="checkbox" checked={sentinelField.value} disabled={!canEdit || mutation.isPending} onChange={(e) => sentinelField.set(e.target.checked)} />
         Let coverage/doc-drift findings open their own auto-fix follow-up pull request
       </label>
+      {(blockField.diverged || sentinelField.diverged) && <DivergedNotice />}
       {!canEdit && <RoleGateNote requiredRole="admin" />}
       {canEdit && (
         <div className="formrow">
@@ -251,13 +255,13 @@ function RiskPolicyCard({ owner, repo, settings, canEdit }: { owner: string; rep
 
 function AutoMergeCard({ owner, repo, settings, canEdit }: { owner: string; repo: string; settings: RepoSettings; canEdit: boolean }) {
   const queryClient = useQueryClient()
-  const [enabled, setEnabled] = useState(settings.autoMergeEnabled)
+  const enabledField = useServerBackedField(settings.autoMergeEnabled)
   const repoFullName = `${owner}/${repo}`
 
   const mutation = useMutation({
-    mutationFn: () => putAutoMergeToggle(owner, repo, { enabled }),
+    mutationFn: () => putAutoMergeToggle(owner, repo, { enabled: enabledField.value }),
     onSuccess: (updated) => {
-      setEnabled(updated.autoMergeEnabled)
+      enabledField.set(updated.autoMergeEnabled)
       void queryClient.invalidateQueries({ queryKey: repoSettingsQueryKeys.detail(repoFullName) })
     },
   })
@@ -268,12 +272,17 @@ function AutoMergeCard({ owner, repo, settings, canEdit }: { owner: string; repo
       <p className="ph">
         {settings.contradictionRateComputed && settings.contradictionRatePercent !== null
           ? `A human has since disagreed with the automated verdict on ${settings.contradictionRatePercent.toFixed(1)}% of this repository's own auto-approved pull requests, over ${settings.contradictionSampleSize} recorded outcome${settings.contradictionSampleSize === 1 ? '' : 's'} -- weigh this before arming the toggle below.`
-          : 'No auto-approval outcome has been recorded for this repository yet, so there is no contradiction-rate figure to weigh before arming this.'}
+          : // contradictionRateComputed false means only "no figure available".
+            // It does not distinguish "nothing recorded yet" from a read that
+            // failed, and the response carries nothing that would -- so this
+            // says what is true (there is no figure) rather than asserting why.
+            'No contradiction-rate figure is available for this repository, so there is nothing to weigh before arming this.'}
       </p>
       <label className="formrow" style={{ padding: '4px 0' }}>
-        <input type="checkbox" checked={enabled} disabled={!canEdit || mutation.isPending} onChange={(e) => setEnabled(e.target.checked)} />
+        <input type="checkbox" checked={enabledField.value} disabled={!canEdit || mutation.isPending} onChange={(e) => enabledField.set(e.target.checked)} />
         Merge an auto-approved pull request unattended, instead of waiting for a 1-click human confirm
       </label>
+      {enabledField.diverged && <DivergedNotice />}
       {!canEdit && <RoleGateNote requiredRole="admin" />}
       {canEdit && (
         <div className="formrow">
@@ -289,13 +298,13 @@ function AutoMergeCard({ owner, repo, settings, canEdit }: { owner: string; repo
 
 function AutoRetriggerReviewCard({ owner, repo, settings, canEdit }: { owner: string; repo: string; settings: RepoSettings; canEdit: boolean }) {
   const queryClient = useQueryClient()
-  const [enabled, setEnabled] = useState(settings.autoRetriggerReviewEnabled)
+  const enabledField = useServerBackedField(settings.autoRetriggerReviewEnabled)
   const repoFullName = `${owner}/${repo}`
 
   const mutation = useMutation({
-    mutationFn: () => putAutoRetriggerReviewToggle(owner, repo, { enabled }),
+    mutationFn: () => putAutoRetriggerReviewToggle(owner, repo, { enabled: enabledField.value }),
     onSuccess: (updated) => {
-      setEnabled(updated.autoRetriggerReviewEnabled)
+      enabledField.set(updated.autoRetriggerReviewEnabled)
       void queryClient.invalidateQueries({ queryKey: repoSettingsQueryKeys.detail(repoFullName) })
     },
   })
@@ -305,9 +314,10 @@ function AutoRetriggerReviewCard({ owner, repo, settings, canEdit }: { owner: st
       <h4>Auto-retrigger review on new commits</h4>
       <p className="ph">Once armed, a new commit pushed to a pull request with an existing review session enqueues a fresh review turn automatically, after a short quiet period, instead of waiting for a manual re-trigger. This never auto-approves anything on its own.</p>
       <label className="formrow" style={{ padding: '4px 0' }}>
-        <input type="checkbox" checked={enabled} disabled={!canEdit || mutation.isPending} onChange={(e) => setEnabled(e.target.checked)} />
+        <input type="checkbox" checked={enabledField.value} disabled={!canEdit || mutation.isPending} onChange={(e) => enabledField.set(e.target.checked)} />
         Automatically re-review on new commits
       </label>
+      {enabledField.diverged && <DivergedNotice />}
       {!canEdit && <RoleGateNote requiredRole="admin" />}
       {canEdit && (
         <div className="formrow">
@@ -323,13 +333,13 @@ function AutoRetriggerReviewCard({ owner, repo, settings, canEdit }: { owner: st
 
 function DescriptionAutofixCard({ owner, repo, settings, canEdit }: { owner: string; repo: string; settings: RepoSettings; canEdit: boolean }) {
   const queryClient = useQueryClient()
-  const [enabled, setEnabled] = useState(settings.descriptionAutofixEnabled)
+  const enabledField = useServerBackedField(settings.descriptionAutofixEnabled)
   const repoFullName = `${owner}/${repo}`
 
   const mutation = useMutation({
-    mutationFn: () => putDescriptionAutofixToggle(owner, repo, { enabled }),
+    mutationFn: () => putDescriptionAutofixToggle(owner, repo, { enabled: enabledField.value }),
     onSuccess: (updated) => {
-      setEnabled(updated.descriptionAutofixEnabled)
+      enabledField.set(updated.descriptionAutofixEnabled)
       void queryClient.invalidateQueries({ queryKey: repoSettingsQueryKeys.detail(repoFullName) })
     },
   })
@@ -342,9 +352,10 @@ function DescriptionAutofixCard({ owner, repo, settings, canEdit }: { owner: str
         pull requests -- a human-authored one only ever gets a rendered suggestion, never a write.
       </p>
       <label className="formrow" style={{ padding: '4px 0' }}>
-        <input type="checkbox" checked={enabled} disabled={!canEdit || mutation.isPending} onChange={(e) => setEnabled(e.target.checked)} />
+        <input type="checkbox" checked={enabledField.value} disabled={!canEdit || mutation.isPending} onChange={(e) => enabledField.set(e.target.checked)} />
         Automatically rewrite a drifted or misleading description
       </label>
+      {enabledField.diverged && <DivergedNotice />}
       {!canEdit && <RoleGateNote requiredRole="admin" />}
       {canEdit && (
         <div className="formrow">
@@ -358,25 +369,75 @@ function DescriptionAutofixCard({ owner, repo, settings, canEdit }: { owner: str
   )
 }
 
+/**
+ * useServerBackedField holds one editable field whose authoritative value
+ * lives on the server.
+ *
+ * Every card on this screen used to seed its controls with plain
+ * `useState(settings.X)`. That initial value is captured ONCE per mount, so
+ * once the query refetched -- another admin changing the same repository,
+ * another tab, or this screen's own invalidation after a sibling card saved --
+ * the read-only summary at the top re-rendered to the new value while the
+ * control below kept the old one. Pressing that card's Save then wrote the
+ * stale value back, silently reverting the newer change, with the value being
+ * overwritten visible a few lines above.
+ *
+ * The naive fix -- remount every card whenever the query returns -- trades that
+ * for a worse one: it wipes whatever the operator is halfway through typing.
+ * That direction currently works and must keep working (an unrelated card's
+ * Save must never clear your in-progress edit).
+ *
+ * So: adopt a new server value only while the field is UNTOUCHED. Once the
+ * operator edits it, their value stands, and `diverged` goes true so the card
+ * can say that the stored value has moved underneath them. Saving makes the
+ * server agree, which clears both flags -- comparison is by serialised value,
+ * so arrays compare by content rather than identity.
+ */
+function useServerBackedField<T>(serverValue: T): { value: T; set: (next: T) => void; dirty: boolean; diverged: boolean } {
+  const [state, setState] = useState<ServerBackedFieldState<T>>({ value: serverValue, server: serverValue, dirty: false })
+
+  if (!serverBackedValuesEqual(state.server, serverValue)) {
+    // Deriving state from changed props during render, not in an effect: this
+    // is React's own prescribed shape for it and avoids rendering the stale
+    // value for a frame first. The decision itself lives in the pure
+    // reconcileServerBackedField (repoSettingsFormat.ts) so it can be tested
+    // without a DOM -- see its own tests for the three cases that matter.
+    setState((prev) => reconcileServerBackedField(prev, serverValue))
+  }
+
+  return {
+    value: state.value,
+    set: (next: T) => setState((prev) => ({ ...prev, value: next, dirty: true })),
+    dirty: state.dirty,
+    diverged: state.dirty && !serverBackedValuesEqual(state.value, state.server),
+  }
+}
+
+/** DivergedNotice warns that the stored value moved while this card was being edited -- see useServerBackedField's own doc comment for why saving anyway would revert someone else's change. */
+function DivergedNotice() {
+  return <p className="sidebar-notice">This setting changed on the server while you were editing it. Saving now will replace the stored value with what is shown here.</p>
+}
+
 function AutoApprovalCard({ owner, repo, settings, canEdit }: { owner: string; repo: string; settings: RepoSettings; canEdit: boolean }) {
   const queryClient = useQueryClient()
-  const [maxFilesRaw, setMaxFilesRaw] = useState(settings.maxAutoApproveFilesChanged !== null ? String(settings.maxAutoApproveFilesChanged) : '')
-  const [tags, setTags] = useState<BlastRadiusTag[]>(settings.sensitiveBlastRadiusTags ?? [])
+  const maxFilesField = useServerBackedField(settings.maxAutoApproveFilesChanged !== null ? String(settings.maxAutoApproveFilesChanged) : '')
+  const tagsField = useServerBackedField<BlastRadiusTag[]>(settings.sensitiveBlastRadiusTags ?? [])
   const repoFullName = `${owner}/${repo}`
-  const parsedMaxFiles = parseOptionalPositiveInt(maxFilesRaw)
+  const parsedMaxFiles = parseOptionalPositiveInt(maxFilesField.value)
 
   function toggleTag(tag: BlastRadiusTag) {
-    setTags((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]))
+    const next = tagsField.value.includes(tag) ? tagsField.value.filter((t) => t !== tag) : [...tagsField.value, tag]
+    tagsField.set(next)
   }
 
   const mutation = useMutation({
     mutationFn: () => {
       if (parsedMaxFiles === 'invalid') return Promise.reject(new Error('invalid diff-size ceiling'))
-      return putAutoApprovalSettings(owner, repo, { maxAutoApproveFilesChanged: parsedMaxFiles, sensitiveBlastRadiusTags: tags.length > 0 ? tags : null })
+      return putAutoApprovalSettings(owner, repo, { maxAutoApproveFilesChanged: parsedMaxFiles, sensitiveBlastRadiusTags: tagsField.value.length > 0 ? tagsField.value : null })
     },
     onSuccess: (updated) => {
-      setMaxFilesRaw(updated.maxAutoApproveFilesChanged !== null ? String(updated.maxAutoApproveFilesChanged) : '')
-      setTags(updated.sensitiveBlastRadiusTags ?? [])
+      maxFilesField.set(updated.maxAutoApproveFilesChanged !== null ? String(updated.maxAutoApproveFilesChanged) : '')
+      tagsField.set(updated.sensitiveBlastRadiusTags ?? [])
       void queryClient.invalidateQueries({ queryKey: repoSettingsQueryKeys.detail(repoFullName) })
     },
   })
@@ -387,20 +448,34 @@ function AutoApprovalCard({ owner, repo, settings, canEdit }: { owner: string; r
       <p className="ph">Two of the criteria the automated approval engine checks, both against the server's own view of a pull request's diff -- never a reviewing model's own self-report.</p>
       <div className="formrow">
         <label htmlFor="max-files-changed">Diff-size ceiling, in changed files</label>
-        <input id="max-files-changed" placeholder="engine default" value={maxFilesRaw} disabled={!canEdit || mutation.isPending} onChange={(e) => setMaxFilesRaw(e.target.value)} style={{ width: 140 }} />
+        <input id="max-files-changed" placeholder="engine default" value={maxFilesField.value} disabled={!canEdit || mutation.isPending} onChange={(e) => maxFilesField.set(e.target.value)} style={{ width: 140 }} />
       </div>
       {parsedMaxFiles === 'invalid' && <p className="sidebar-notice">Must be a whole, non-negative number of files, or blank to use the engine's own default.</p>}
+      {/*
+        This copy used to say the selection was "layered on top of the engine's
+        own default list". It is not: LoadEligibilityConfig does
+        `cfg.SensitiveTags = tags` (internal/app/reviewverdict/config.go) -- a
+        wholesale assignment over DefaultSensitiveTags(), which is migrations,
+        auth and contracts. So saving a list REPLACES those three. An operator
+        who checked only "secrets" believing the save was additive would have
+        silently dropped all three, on the gate that decides an unattended
+        approval and, with auto-merge armed on this same screen, an unattended
+        merge. Saying which tags are in force, and that this list is the whole
+        of it, is the only honest framing.
+      */}
       <p className="ph" style={{ margin: '8px 0 4px' }}>
-        Sensitive paths that always block auto-approval, layered on top of the engine's own default list (migrations, auth, contracts):
+        Sensitive paths that always block auto-approval. This selection is the <b>complete</b> list once you save it &mdash; it replaces the engine&rsquo;s defaults rather than adding to them, so keep migrations, auth
+        and contracts checked unless you intend to drop them. Leave every box unchecked to fall back to those three defaults.
       </p>
       <div className="formrow" style={{ flexWrap: 'wrap' }}>
         {BLAST_RADIUS_TAGS.map((tag) => (
           <label key={tag} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <input type="checkbox" checked={tags.includes(tag)} disabled={!canEdit || mutation.isPending} onChange={() => toggleTag(tag)} />
+            <input type="checkbox" checked={tagsField.value.includes(tag)} disabled={!canEdit || mutation.isPending} onChange={() => toggleTag(tag)} />
             {blastRadiusTagLabel(tag)}
           </label>
         ))}
       </div>
+      {(maxFilesField.diverged || tagsField.diverged) && <DivergedNotice />}
       {!canEdit && <RoleGateNote requiredRole="maintainer+" />}
       {canEdit && (
         <div className="formrow">
@@ -416,15 +491,15 @@ function AutoApprovalCard({ owner, repo, settings, canEdit }: { owner: string; r
 
 function ReviewDepthCard({ owner, repo, settings, canEdit }: { owner: string; repo: string; settings: RepoSettings; canEdit: boolean }) {
   const queryClient = useQueryClient()
-  const [mode, setMode] = useState(settings.reviewDepthMode ?? '')
-  const [deepPathsRaw, setDeepPathsRaw] = useState(formatDeepPathsForTextarea(settings.reviewDepthDeepPaths))
+  const modeField = useServerBackedField(settings.reviewDepthMode ?? '')
+  const deepPathsField = useServerBackedField(formatDeepPathsForTextarea(settings.reviewDepthDeepPaths))
   const repoFullName = `${owner}/${repo}`
 
   const mutation = useMutation({
-    mutationFn: () => putReviewDepthConfig(owner, repo, { mode: mode.trim().length > 0 ? mode : null, deepPaths: parseDeepPathsInput(deepPathsRaw) }),
+    mutationFn: () => putReviewDepthConfig(owner, repo, { mode: modeField.value.trim().length > 0 ? modeField.value : null, deepPaths: parseDeepPathsInput(deepPathsField.value) }),
     onSuccess: (updated) => {
-      setMode(updated.reviewDepthMode ?? '')
-      setDeepPathsRaw(formatDeepPathsForTextarea(updated.reviewDepthDeepPaths))
+      modeField.set(updated.reviewDepthMode ?? '')
+      deepPathsField.set(formatDeepPathsForTextarea(updated.reviewDepthDeepPaths))
       void queryClient.invalidateQueries({ queryKey: repoSettingsQueryKeys.detail(repoFullName) })
     },
   })
@@ -434,7 +509,7 @@ function ReviewDepthCard({ owner, repo, settings, canEdit }: { owner: string; re
       <h4>Review depth routing</h4>
       <p className="ph">Which review model/effort tier -- and how much an automated review is allowed to cost -- a pull request on this repository gets routed to.</p>
       <div className="formrow">
-        <select className="sel-select" value={mode} disabled={!canEdit || mutation.isPending} onChange={(e) => setMode(e.target.value)}>
+        <select className="sel-select" value={modeField.value} disabled={!canEdit || mutation.isPending} onChange={(e) => modeField.set(e.target.value)}>
           <option value="">engine default (auto)</option>
           {REVIEW_DEPTH_MODES.map((m) => (
             <option key={m} value={m}>
@@ -451,10 +526,11 @@ function ReviewDepthCard({ owner, repo, settings, canEdit }: { owner: string; re
         className="btn"
         style={{ width: '100%', minHeight: 90, textAlign: 'left', fontFamily: 'var(--mono)', fontSize: 'var(--text-sm)', resize: 'vertical' }}
         readOnly={!canEdit || mutation.isPending}
-        value={deepPathsRaw}
-        onChange={(e) => setDeepPathsRaw(e.target.value)}
+        value={deepPathsField.value}
+        onChange={(e) => deepPathsField.set(e.target.value)}
         placeholder="e.g. internal/payments/**"
       />
+      {(modeField.diverged || deepPathsField.diverged) && <DivergedNotice />}
       {!canEdit && <RoleGateNote requiredRole="admin" />}
       {canEdit && (
         <div className="formrow">
@@ -470,11 +546,11 @@ function ReviewDepthCard({ owner, repo, settings, canEdit }: { owner: string; re
 
 function ReviewCostBudgetCard({ owner, repo, settings, canEdit }: { owner: string; repo: string; settings: RepoSettings; canEdit: boolean }) {
   const queryClient = useQueryClient()
-  const [lightRaw, setLightRaw] = useState(settings.reviewCostBudgetLightUsd !== null ? String(settings.reviewCostBudgetLightUsd) : '')
-  const [deepRaw, setDeepRaw] = useState(settings.reviewCostBudgetDeepUsd !== null ? String(settings.reviewCostBudgetDeepUsd) : '')
+  const lightField = useServerBackedField(settings.reviewCostBudgetLightUsd !== null ? String(settings.reviewCostBudgetLightUsd) : '')
+  const deepField = useServerBackedField(settings.reviewCostBudgetDeepUsd !== null ? String(settings.reviewCostBudgetDeepUsd) : '')
   const repoFullName = `${owner}/${repo}`
-  const light = parseOptionalPositiveUsd(lightRaw)
-  const deep = parseOptionalPositiveUsd(deepRaw)
+  const light = parseOptionalPositiveUsd(lightField.value)
+  const deep = parseOptionalPositiveUsd(deepField.value)
   const invalid = light === 'invalid' || deep === 'invalid'
 
   const mutation = useMutation({
@@ -483,8 +559,8 @@ function ReviewCostBudgetCard({ owner, repo, settings, canEdit }: { owner: strin
       return putReviewCostBudget(owner, repo, { lightUsd: light, deepUsd: deep })
     },
     onSuccess: (updated) => {
-      setLightRaw(updated.reviewCostBudgetLightUsd !== null ? String(updated.reviewCostBudgetLightUsd) : '')
-      setDeepRaw(updated.reviewCostBudgetDeepUsd !== null ? String(updated.reviewCostBudgetDeepUsd) : '')
+      lightField.set(updated.reviewCostBudgetLightUsd !== null ? String(updated.reviewCostBudgetLightUsd) : '')
+      deepField.set(updated.reviewCostBudgetDeepUsd !== null ? String(updated.reviewCostBudgetDeepUsd) : '')
       void queryClient.invalidateQueries({ queryKey: repoSettingsQueryKeys.detail(repoFullName) })
     },
   })
@@ -495,11 +571,12 @@ function ReviewCostBudgetCard({ owner, repo, settings, canEdit }: { owner: strin
       <p className="ph">A per-review spending ceiling, checked before each optional pass (fact-check, counter-review) -- never the primary pass a verdict depends on, and never the architecture recap, which always runs regardless of cost.</p>
       <div className="formrow">
         <label htmlFor="budget-light">Light path, in USD</label>
-        <input id="budget-light" placeholder="engine default ($0.50)" value={lightRaw} disabled={!canEdit || mutation.isPending} onChange={(e) => setLightRaw(e.target.value)} style={{ width: 160 }} />
+        <input id="budget-light" placeholder="engine default ($0.50)" value={lightField.value} disabled={!canEdit || mutation.isPending} onChange={(e) => lightField.set(e.target.value)} style={{ width: 160 }} />
         <label htmlFor="budget-deep">Deep path, in USD</label>
-        <input id="budget-deep" placeholder="engine default ($5.00)" value={deepRaw} disabled={!canEdit || mutation.isPending} onChange={(e) => setDeepRaw(e.target.value)} style={{ width: 160 }} />
+        <input id="budget-deep" placeholder="engine default ($5.00)" value={deepField.value} disabled={!canEdit || mutation.isPending} onChange={(e) => deepField.set(e.target.value)} style={{ width: 160 }} />
       </div>
       {invalid && <p className="sidebar-notice">Must be a positive dollar amount, or blank to use the engine's own default -- an explicit zero is rejected because it would silently mean unlimited spend instead.</p>}
+      {(lightField.diverged || deepField.diverged) && <DivergedNotice />}
       {!canEdit && <RoleGateNote requiredRole="admin" />}
       {canEdit && (
         <div className="formrow">
@@ -519,9 +596,9 @@ function SessionEnrollmentNote() {
     <div className="panel">
       <h4>Session enrollment</h4>
       <p className="notavailable">
-        Whether this repository is enrolled to receive automated sessions at all is not shown or changed on this screen. This screen can only ever be reached for a repository that has already sent Narvi at least one
-        pull-request session -- enrollment itself is set once, when a repository is first onboarded, from the deployment's own configuration, never from a running screen like this one. A toggle here could only ever be
-        reached after the fact, so it would not solve anything.
+        Whether this repository is enrolled to receive automated sessions at all is not shown or changed on this screen. Enrollment comes from the deployment&rsquo;s own configuration, and turning it off there is also
+        how a repository is rolled back &mdash; that takes effect immediately, refusing new sessions, sandbox restarts and further turns alike. It is deliberately not editable from a running screen: this one can only
+        ever be reached for a repository that has already sent at least one pull-request session, so a toggle here would always arrive too late to be the control that matters.
       </p>
     </div>
   )
