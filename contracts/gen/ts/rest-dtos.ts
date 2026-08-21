@@ -1631,6 +1631,10 @@ export interface WorkflowDefinition {
    */
   name: string;
   isBuiltIn: boolean;
+  /**
+   * Why this definition cannot be edited or deleted, or null when it can. Computed server-side from the SAME check the write path enforces (refusalReasonForMutation, httpapi/workflowdefinitions.go), so a client renders a verdict rather than re-deriving the rules -- an editor that reimplemented them would carry a second copy of the refusal logic AND of its wording, and the two would drift. "has_runs" is the one a client could not derive at all: nothing about runs appears on this shape, so without this field an editor only learns a definition is frozen by failing to save it, after the operator has done the work. All three apply regardless of role, admin included (§25.11). The remedy differs per reason -- duplicate for built_in and has_runs, duplicate-or-unbind for bound -- so a screen must not collapse them into one message.
+   */
+  editRefusal: 'built_in' | 'bound' | 'has_runs' | null;
   version: number;
   /**
    * Every step, in order. A definition with zero steps is not executable and is rejected (internal/domain/workflow.ValidateDefinition).

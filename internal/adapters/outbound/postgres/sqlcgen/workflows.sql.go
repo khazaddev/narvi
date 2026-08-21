@@ -751,6 +751,46 @@ func (q *Queries) GetWorkflowDefinition(ctx context.Context, id pgtype.UUID) (Wo
 	return i, err
 }
 
+const getWorkflowDefinitionWithRefusalFacts = `-- name: GetWorkflowDefinitionWithRefusalFacts :one
+SELECT
+    d.id, d.lane, d.name, d.is_built_in, d.version, d.created_at, d.updated_at,
+    EXISTS (SELECT 1 FROM workflow_bindings b WHERE b.workflow_definition_id = d.id) AS is_bound,
+    EXISTS (SELECT 1 FROM workflow_runs r WHERE r.workflow_definition_id = d.id) AS has_runs
+FROM workflow_definitions d
+WHERE d.id = $1
+`
+
+type GetWorkflowDefinitionWithRefusalFactsRow struct {
+	ID        pgtype.UUID        `json:"id"`
+	Lane      WorkflowLane       `json:"lane"`
+	Name      string             `json:"name"`
+	IsBuiltIn bool               `json:"is_built_in"`
+	Version   int32              `json:"version"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	IsBound   bool               `json:"is_bound"`
+	HasRuns   bool               `json:"has_runs"`
+}
+
+// GetWorkflowDefinition's own shape plus the same two EXISTS -- see
+// ListWorkflowDefinitions above for why they travel with the row.
+func (q *Queries) GetWorkflowDefinitionWithRefusalFacts(ctx context.Context, id pgtype.UUID) (GetWorkflowDefinitionWithRefusalFactsRow, error) {
+	row := q.db.QueryRow(ctx, getWorkflowDefinitionWithRefusalFacts, id)
+	var i GetWorkflowDefinitionWithRefusalFactsRow
+	err := row.Scan(
+		&i.ID,
+		&i.Lane,
+		&i.Name,
+		&i.IsBuiltIn,
+		&i.Version,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.IsBound,
+		&i.HasRuns,
+	)
+	return i, err
+}
+
 const getWorkflowRun = `-- name: GetWorkflowRun :one
 SELECT id, session_id, lane, workflow_definition_id, definition_version, status, created_at, updated_at, finished_at, needs_review_notified_at FROM workflow_runs WHERE id = $1
 `
@@ -844,8 +884,25 @@ func (q *Queries) ListWorkflowBindings(ctx context.Context) ([]WorkflowBinding, 
 
 const listWorkflowDefinitions = `-- name: ListWorkflowDefinitions :many
 
-SELECT id, lane, name, is_built_in, version, created_at, updated_at FROM workflow_definitions ORDER BY lane, name
+SELECT
+    d.id, d.lane, d.name, d.is_built_in, d.version, d.created_at, d.updated_at,
+    EXISTS (SELECT 1 FROM workflow_bindings b WHERE b.workflow_definition_id = d.id) AS is_bound,
+    EXISTS (SELECT 1 FROM workflow_runs r WHERE r.workflow_definition_id = d.id) AS has_runs
+FROM workflow_definitions d
+ORDER BY d.lane, d.name
 `
+
+type ListWorkflowDefinitionsRow struct {
+	ID        pgtype.UUID        `json:"id"`
+	Lane      WorkflowLane       `json:"lane"`
+	Name      string             `json:"name"`
+	IsBuiltIn bool               `json:"is_built_in"`
+	Version   int32              `json:"version"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	IsBound   bool               `json:"is_bound"`
+	HasRuns   bool               `json:"has_runs"`
+}
 
 // ---------------------------------------------------------------------
 // "workflow definition & run API" (§25.10/§25.11) own additions below:
@@ -906,15 +963,25 @@ SELECT id, lane, name, is_built_in, version, created_at, updated_at FROM workflo
 // its steps answers no question anybody asks"); each retry/revise
 // re-execution is its own row, never an update-in-place (§25.5), so
 // creation order IS execution order.
-func (q *Queries) ListWorkflowDefinitions(ctx context.Context) ([]WorkflowDefinition, error) {
+// Carries the two EXISTS a caller would otherwise have to derive itself, so
+// §25.11's three edit refusals have ONE definition (refusalReasonForMutation,
+// httpapi/workflowdefinitions.go) rather than a server copy and a client copy
+// that drift. Computed in-query rather than per-row in Go: a list endpoint
+// issuing two extra round trips per definition is the N+1 this avoids.
+//
+// The third refusal, run history, is the one a client could not derive AT ALL
+// -- nothing about runs is on WorkflowDefinition's own wire shape -- so
+// without this an editor only learns a definition is frozen by failing to
+// save it, after the operator has already done the work.
+func (q *Queries) ListWorkflowDefinitions(ctx context.Context) ([]ListWorkflowDefinitionsRow, error) {
 	rows, err := q.db.Query(ctx, listWorkflowDefinitions)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []WorkflowDefinition
+	var items []ListWorkflowDefinitionsRow
 	for rows.Next() {
-		var i WorkflowDefinition
+		var i ListWorkflowDefinitionsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Lane,
@@ -923,6 +990,8 @@ func (q *Queries) ListWorkflowDefinitions(ctx context.Context) ([]WorkflowDefini
 			&i.Version,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.IsBound,
+			&i.HasRuns,
 		); err != nil {
 			return nil, err
 		}

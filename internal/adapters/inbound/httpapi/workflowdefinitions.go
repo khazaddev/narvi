@@ -129,7 +129,30 @@ func stepEdges(edgesByStep map[string][]restdtos.WorkflowEdge, stepID string) []
 	return []restdtos.WorkflowEdge{}
 }
 
-func workflowDefinitionToDTO(def sqlcgen.WorkflowDefinition, steps []sqlcgen.WorkflowStepDefinition, edges []sqlcgen.WorkflowEdge) restdtos.WorkflowDefinition {
+// editRefusalFor renders the SAME verdict refusalReasonForMutation enforces on
+// the write path, onto the read shape, so a client presents a decision instead
+// of re-deriving the rules. An editor that re-derived them would carry a second
+// copy of the refusal logic and of its wording, and the two would drift; and
+// the run-history reason is not derivable from this shape at all, so without it
+// an editor only learns a definition is frozen by failing to save it, after the
+// operator has already done the work.
+//
+// Order matches refusalReasonForMutation exactly (§25.11): built-in first, then
+// bound, then run history. All three apply regardless of role.
+func editRefusalFor(def sqlcgen.WorkflowDefinition, isBound, hasRuns bool) *restdtos.WorkflowDefinitionEditRefusal {
+	switch {
+	case def.IsBuiltIn:
+		return &restdtos.WorkflowDefinitionEditRefusal{Value: "built_in"}
+	case isBound:
+		return &restdtos.WorkflowDefinitionEditRefusal{Value: "bound"}
+	case hasRuns:
+		return &restdtos.WorkflowDefinitionEditRefusal{Value: "has_runs"}
+	default:
+		return nil
+	}
+}
+
+func workflowDefinitionToDTO(def sqlcgen.WorkflowDefinition, steps []sqlcgen.WorkflowStepDefinition, edges []sqlcgen.WorkflowEdge, isBound, hasRuns bool) restdtos.WorkflowDefinition {
 	edgesByStep := make(map[string][]restdtos.WorkflowEdge, len(edges))
 	for _, e := range edges {
 		from := e.FromStepID.String()
@@ -169,14 +192,15 @@ func workflowDefinitionToDTO(def sqlcgen.WorkflowDefinition, steps []sqlcgen.Wor
 	}
 
 	return restdtos.WorkflowDefinition{
-		Id:        def.ID.String(),
-		Lane:      restdtos.WorkflowDefinitionLane(def.Lane),
-		Name:      def.Name,
-		IsBuiltIn: def.IsBuiltIn,
-		Version:   int(def.Version),
-		Steps:     wireSteps,
-		CreatedAt: def.CreatedAt.Time,
-		UpdatedAt: def.UpdatedAt.Time,
+		Id:          def.ID.String(),
+		Lane:        restdtos.WorkflowDefinitionLane(def.Lane),
+		Name:        def.Name,
+		IsBuiltIn:   def.IsBuiltIn,
+		EditRefusal: editRefusalFor(def, isBound, hasRuns),
+		Version:     int(def.Version),
+		Steps:       wireSteps,
+		CreatedAt:   def.CreatedAt.Time,
+		UpdatedAt:   def.UpdatedAt.Time,
 	}
 }
 
@@ -220,7 +244,7 @@ func canvasPositionToJSON(pos *restdtos.WorkflowStepDefinitionCanvasPosition) []
 // edges). Shared by every handler in this file that already holds a
 // definition row from a write (CreateDefinition/UpdateDefinitionNameAndBumpVersion),
 // so it never re-fetches the definition row itself.
-func definitionDocumentFromRow(ctx context.Context, workflows *postgres.WorkflowStore, def sqlcgen.WorkflowDefinition) (restdtos.WorkflowDefinition, error) {
+func definitionDocumentFromRow(ctx context.Context, workflows *postgres.WorkflowStore, def sqlcgen.WorkflowDefinition, isBound, hasRuns bool) (restdtos.WorkflowDefinition, error) {
 	steps, err := workflows.ListStepDefinitions(ctx, def.ID)
 	if err != nil {
 		return restdtos.WorkflowDefinition{}, fmt.Errorf("httpapi: list step definitions: %w", err)
@@ -229,7 +253,7 @@ func definitionDocumentFromRow(ctx context.Context, workflows *postgres.Workflow
 	if err != nil {
 		return restdtos.WorkflowDefinition{}, fmt.Errorf("httpapi: list edges for definition: %w", err)
 	}
-	return workflowDefinitionToDTO(def, steps, edges), nil
+	return workflowDefinitionToDTO(def, steps, edges, isBound, hasRuns), nil
 }
 
 // loadDefinitionDocument is definitionDocumentFromRow's own "by id"
@@ -237,11 +261,20 @@ func definitionDocumentFromRow(ctx context.Context, workflows *postgres.Workflow
 // ListWorkflowDefinitions) that do not already hold a definition row.
 // Returns pgx.ErrNoRows (unwrapped) when id names no definition.
 func loadDefinitionDocument(ctx context.Context, workflows *postgres.WorkflowStore, id pgtype.UUID) (restdtos.WorkflowDefinition, error) {
-	def, err := workflows.GetDefinition(ctx, id)
+	row, err := workflows.GetDefinitionWithRefusalFacts(ctx, id)
 	if err != nil {
 		return restdtos.WorkflowDefinition{}, err
 	}
-	return definitionDocumentFromRow(ctx, workflows, def)
+	def := sqlcgen.WorkflowDefinition{
+		ID:        row.ID,
+		Lane:      row.Lane,
+		Name:      row.Name,
+		IsBuiltIn: row.IsBuiltIn,
+		Version:   row.Version,
+		CreatedAt: row.CreatedAt,
+		UpdatedAt: row.UpdatedAt,
+	}
+	return definitionDocumentFromRow(ctx, workflows, def, row.IsBound, row.HasRuns)
 }
 
 // ListWorkflowDefinitions backs GET /api/workflow-definitions (§25.10):
@@ -265,7 +298,16 @@ func ListWorkflowDefinitions(workflows *postgres.WorkflowStore) http.HandlerFunc
 
 		out := make([]restdtos.WorkflowDefinition, 0, len(rows))
 		for _, row := range rows {
-			doc, err := definitionDocumentFromRow(ctx, workflows, row)
+			def := sqlcgen.WorkflowDefinition{
+				ID:        row.ID,
+				Lane:      row.Lane,
+				Name:      row.Name,
+				IsBuiltIn: row.IsBuiltIn,
+				Version:   row.Version,
+				CreatedAt: row.CreatedAt,
+				UpdatedAt: row.UpdatedAt,
+			}
+			doc, err := definitionDocumentFromRow(ctx, workflows, def, row.IsBound, row.HasRuns)
 			if err != nil {
 				logger.Error("httpapi: assemble workflow definition document failed", "error", err, "definition_id", row.ID.String())
 				writeError(w, http.StatusInternalServerError, "internal error")
@@ -592,7 +634,10 @@ func CreateWorkflowDefinition(pool *pgxpool.Pool, workflows *postgres.WorkflowSt
 			}
 		}
 
-		doc, err := definitionDocumentFromRow(ctx, txWorkflows, newDef)
+		// A freshly created or duplicated definition is unbound with no run
+		// history by construction (§25.10: the copy always lands unbound at
+		// version 1), so both refusal facts are false here rather than re-read.
+		doc, err := definitionDocumentFromRow(ctx, txWorkflows, newDef, false, false)
 		if err != nil {
 			logger.Error("httpapi: assemble created workflow definition document failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal error")
@@ -747,7 +792,10 @@ func PutWorkflowDefinition(pool *pgxpool.Pool, workflows *postgres.WorkflowStore
 			return
 		}
 
-		doc, err := definitionDocumentFromRow(ctx, txWorkflows, updated)
+		// This PUT only got here by passing refusalReasonForMutation, which
+		// means neither a binding nor a run references it -- and the row lock
+		// held since that check keeps it true through COMMIT.
+		doc, err := definitionDocumentFromRow(ctx, txWorkflows, updated, false, false)
 		if err != nil {
 			logger.Error("httpapi: assemble updated workflow definition document failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal error")

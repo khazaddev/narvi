@@ -30,6 +30,7 @@ import type {
   CreateSessionRequest,
   CreateTurnRequest,
   CreateTurnResponse,
+  CreateWorkflowDefinitionRequest,
   Environment,
   EventsResponse,
   FalsePositivePattern,
@@ -47,6 +48,8 @@ import type {
   ListProviderCredentialsResponse,
   ListSandboxSecretsResponse,
   ListSessionsResponse,
+  ListWorkflowBindingsResponse,
+  ListWorkflowDefinitionsResponse,
   Member,
   MergePullRequestRequest,
   MergePullRequestResponse,
@@ -60,6 +63,7 @@ import type {
   ProviderCredential,
   PutClusterBindingRequest,
   PutOpenCodeConfigRequest,
+  PutWorkflowBindingRequest,
   RebutFindingRequest,
   ReleaseManifestReadout,
   RepoDigestScope,
@@ -81,7 +85,10 @@ import type {
   UpdateReviewDepthConfigRequest,
   UpdateRepoSettingsRequest,
   UpdateSandboxSecretRequest,
+  UpdateWorkflowDefinitionRequest,
   UpsertIntentTemplateRequest,
+  WorkflowBinding,
+  WorkflowDefinition,
   WSTokenResponse,
 } from '@narvi/contracts/rest-dtos'
 
@@ -561,4 +568,64 @@ export function deleteOpenCodeConfig(scope: OpenCodeConfigScope, signal?: AbortS
   return request<undefined>(openCodeConfigPath(scope), { method: 'DELETE', signal })
 }
 
-export type { Environment, Member, AuditLogEntry, SandboxSecret, ProviderCredential, CloudIdentityBinding, ClusterBinding, OpenCodeConfig, ReviewAnalytics, RepoDigestScope }
+// -- workflow canvas editor: definitions + bindings (§25.10/§25.11/§25.12). --
+
+/** listWorkflowDefinitions calls GET /api/workflow-definitions -- every workflow_definitions row, built-in and custom alike, each carrying its own full document (steps, each with its own outgoing edges) -- a definition is ONE document, never assembled from per-step/per-edge routes (§25.10: no such routes exist). Maintainer+ only server-side (authz.ActionManageWorkflowDefinitions). */
+export function listWorkflowDefinitions(signal?: AbortSignal): Promise<ListWorkflowDefinitionsResponse> {
+  return request<ListWorkflowDefinitionsResponse>('/api/workflow-definitions', { signal })
+}
+
+/**
+ * createWorkflowDefinition calls POST /api/workflow-definitions -- EITHER a
+ * whole new document (body.sourceDefinitionId null; lane/steps required) OR
+ * a deep duplicate of an existing definition (body.sourceDefinitionId set;
+ * lane/steps ignored, inherited from the source). The duplicate path is this
+ * screen's own one-click escape hatch out of every structural edit refusal
+ * (built-in / bound / has run history, §25.10) -- the copy always lands
+ * unbound, not built-in, at version 1, whatever it was copied from.
+ * Maintainer+ only server-side.
+ */
+export function createWorkflowDefinition(body: CreateWorkflowDefinitionRequest, signal?: AbortSignal): Promise<WorkflowDefinition> {
+  return request<WorkflowDefinition>('/api/workflow-definitions', { method: 'POST', body, signal })
+}
+
+/**
+ * putWorkflowDefinition calls PUT /api/workflow-definitions/:id -- the
+ * complete desired state (name + steps, each with its own outgoing edges),
+ * never a partial patch (§25.10, mirrors putRepoSettings' own "always full
+ * state" convention). Maintainer+ only server-side; refused unconditionally
+ * (409, a real ApiError this call surfaces to the caller verbatim -- never
+ * swallowed) when the target definition is built-in, bound by any
+ * workflow_bindings row, or has run history -- all three are STRUCTURAL
+ * refusals, never an RBAC row, so an admin gets the identical refusal a
+ * maintainer does (workflowdefinitions.go's own refusalReasonForMutation).
+ */
+export function putWorkflowDefinition(id: string, body: UpdateWorkflowDefinitionRequest, signal?: AbortSignal): Promise<WorkflowDefinition> {
+  return request<WorkflowDefinition>(`/api/workflow-definitions/${encodeURIComponent(id)}`, { method: 'PUT', body, signal })
+}
+
+/** listWorkflowBindings calls GET /api/workflow-bindings -- every (lane, repo) binding, the 3 seeded global rows always included (§25.4: the global binding is never absent). Maintainer+ only server-side -- the SAME read gate as listWorkflowDefinitions above: an editor needs to see current bindings to know which definitions are safe to edit (the "unbound draft" check, §25.11's own amendment). */
+export function listWorkflowBindings(signal?: AbortSignal): Promise<ListWorkflowBindingsResponse> {
+  return request<ListWorkflowBindingsResponse>('/api/workflow-bindings', { signal })
+}
+
+/**
+ * putWorkflowBinding calls PUT /api/workflow-bindings -- binds (lane,
+ * repoFullName) to workflowDefinitionId at that definition's CURRENT
+ * version, pinned server-side (never a client-supplied value). repoFullName
+ * null targets the global (org-wide) binding for lane; a non-null
+ * 'owner/repo' targets that repo's own override, shadowing the global
+ * binding for that one repo only (§25.4). Admin-only server-side
+ * (authz.ActionActivateWorkflowBinding, §25.11) -- activation is the ONE
+ * action that changes what actually drives production dispatch, so this is
+ * sent unconditionally regardless of the calling component's own role
+ * check; a 403 the server returns surfaces as a genuine ApiError, an
+ * authorization refusal, never a generic "save failed" (mirrors
+ * settingsAuthorization.test.ts's own established proof for this exact
+ * client-always-sends-the-real-request pattern).
+ */
+export function putWorkflowBinding(body: PutWorkflowBindingRequest, signal?: AbortSignal): Promise<WorkflowBinding> {
+  return request<WorkflowBinding>('/api/workflow-bindings', { method: 'PUT', body, signal })
+}
+
+export type { Environment, Member, AuditLogEntry, SandboxSecret, ProviderCredential, CloudIdentityBinding, ClusterBinding, OpenCodeConfig, ReviewAnalytics, RepoDigestScope, WorkflowDefinition, WorkflowBinding }

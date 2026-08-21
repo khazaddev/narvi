@@ -292,7 +292,32 @@ UPDATE workflow_runs SET needs_review_notified_at = now(), updated_at = now() WH
 -- creation order IS execution order.
 
 -- name: ListWorkflowDefinitions :many
-SELECT * FROM workflow_definitions ORDER BY lane, name;
+-- Carries the two EXISTS a caller would otherwise have to derive itself, so
+-- §25.11's three edit refusals have ONE definition (refusalReasonForMutation,
+-- httpapi/workflowdefinitions.go) rather than a server copy and a client copy
+-- that drift. Computed in-query rather than per-row in Go: a list endpoint
+-- issuing two extra round trips per definition is the N+1 this avoids.
+--
+-- The third refusal, run history, is the one a client could not derive AT ALL
+-- -- nothing about runs is on WorkflowDefinition's own wire shape -- so
+-- without this an editor only learns a definition is frozen by failing to
+-- save it, after the operator has already done the work.
+SELECT
+    d.*,
+    EXISTS (SELECT 1 FROM workflow_bindings b WHERE b.workflow_definition_id = d.id) AS is_bound,
+    EXISTS (SELECT 1 FROM workflow_runs r WHERE r.workflow_definition_id = d.id) AS has_runs
+FROM workflow_definitions d
+ORDER BY d.lane, d.name;
+
+-- name: GetWorkflowDefinitionWithRefusalFacts :one
+-- GetWorkflowDefinition's own shape plus the same two EXISTS -- see
+-- ListWorkflowDefinitions above for why they travel with the row.
+SELECT
+    d.*,
+    EXISTS (SELECT 1 FROM workflow_bindings b WHERE b.workflow_definition_id = d.id) AS is_bound,
+    EXISTS (SELECT 1 FROM workflow_runs r WHERE r.workflow_definition_id = d.id) AS has_runs
+FROM workflow_definitions d
+WHERE d.id = $1;
 
 -- name: CreateWorkflowDefinition :one
 -- is_built_in is hardcoded false: POST /api/workflow-definitions can

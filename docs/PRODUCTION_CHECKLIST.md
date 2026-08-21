@@ -97,8 +97,8 @@ a real inbound event from each looks like once this is wired correctly.
 
 `internal/platform.SetupOTel` exports metrics and traces to **stdout
 only** by default — an unset `NARVI_OTLP_ENDPOINT` is a fully supported,
-byte-identical-to-before state, not a gap (Step 108, §33). Since Step
-108, `cmd/control-plane/main.go` (never `cmd/sandbox-agent`, which cannot
+byte-identical-to-before state, not a gap (Step 110, §33). Since Step
+110, `cmd/control-plane/main.go` (never `cmd/sandbox-agent`, which cannot
 reach one even if it wanted to — see `platform.Config.OTLPEndpoint`'s own
 doc comment for why that is structural, not incidental) CAN point
 `SetupOTel` at a real OTLP/HTTP collector by setting that var, in which
