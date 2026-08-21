@@ -2139,6 +2139,7 @@ type Turn struct {
 	ReviewDepth          *string               `json:"review_depth"`
 	ReviewDepthDecision  []byte                `json:"review_depth_decision"`
 	DispatchedEventID    *int64                `json:"dispatched_event_id"`
+	CostUsd              pgtype.Numeric        `json:"cost_usd"`
 }
 
 type User struct {

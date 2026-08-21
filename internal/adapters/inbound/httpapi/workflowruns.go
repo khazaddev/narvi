@@ -31,6 +31,7 @@ import (
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	appreviewtriage "github.com/khazaddev/narvi/internal/app/reviewtriage"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -56,9 +57,11 @@ func workflowRunToDTO(run sqlcgen.WorkflowRun) restdtos.WorkflowRun {
 	}
 }
 
-// workflowStepRunToDTO converts one workflow_step_runs row to its own
-// wire shape.
-func workflowStepRunToDTO(sr sqlcgen.WorkflowStepRun) restdtos.WorkflowStepRun {
+// workflowStepRunToDTO converts one workflow_step_runs row (joined with
+// its own turn's model_id/cost_usd, §25.15 -- ListWorkflowStepRunsForRun's
+// own generated doc comment, queries/workflows.sql) to its own wire
+// shape.
+func workflowStepRunToDTO(sr sqlcgen.ListWorkflowStepRunsForRunRow) restdtos.WorkflowStepRun {
 	var turnID *string
 	if sr.TurnID.Valid {
 		s := sr.TurnID.String()
@@ -93,6 +96,18 @@ func workflowStepRunToDTO(sr sqlcgen.WorkflowStepRun) restdtos.WorkflowStepRun {
 		t := sr.FinishedAt.Time
 		finishedAt = &t
 	}
+	// §25.15: modelId/costUsd are the joined turn's own turns.model_id/
+	// turns.cost_usd -- absent (nil) exactly when turnId itself is nil
+	// (sr.TurnID invalid) OR the turn's own column is itself NULL (model
+	// inherited the session default; no cost has arrived yet). costUsd in
+	// particular must stay nil rather than become a fabricated 0 --
+	// NumericToFloat64's own ok=false return for a SQL NULL is exactly
+	// what keeps that distinction (§25.15: "no cost yet must never render
+	// as free").
+	var costUSD *float64
+	if v, ok := appreviewtriage.NumericToFloat64(sr.TurnCostUsd); ok {
+		costUSD = &v
+	}
 	return restdtos.WorkflowStepRun{
 		Id:               sr.ID.String(),
 		WorkflowRunId:    sr.WorkflowRunID.String(),
@@ -106,6 +121,8 @@ func workflowStepRunToDTO(sr sqlcgen.WorkflowStepRun) restdtos.WorkflowStepRun {
 		DecidedBy:        restdtos.WorkflowStepRunDecidedBy(decidedBy),
 		CreatedAt:        sr.CreatedAt.Time,
 		FinishedAt:       finishedAt,
+		ModelId:          restdtos.WorkflowStepRunModelId(sr.TurnModelID),
+		CostUsd:          restdtos.WorkflowStepRunCostUsd(costUSD),
 	}
 }
 

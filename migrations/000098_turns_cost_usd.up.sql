@@ -1,0 +1,42 @@
+-- turns.cost_usd: §25.15's own "cost does need persistence" half. A
+-- running total in USD, accumulated onto the turn as step_finish events
+-- land (internal/app/sessionactor's own "step_finish" case,
+-- sandboxevent.go, via queries/turns.sql's new AddTurnCostUSD), in the
+-- SAME transaction that persists each event -- never step_finish.cost
+-- re-stored verbatim (that already lives, per step, inside
+-- events.payload, migrations/000008_events.up.sql; events carries no
+-- turn_id, so that per-step figure alone cannot be summed into an
+-- honest per-turn total without correlating on payload fields, which is
+-- a derivation, not a fact).
+--
+-- This is an independent, Postgres-durable running total, computed from
+-- the SAME wire events internal/adapters/outbound/opencode's own
+-- adapter-local turnState.spentUSD accumulator (§7.1/§26.7) already
+-- sums -- but it is NOT that accumulator, does not read from it, and
+-- does not replace it. turnState.spentUSD stays exactly what it always
+-- was: a sandbox-process-local answer to one live-turn budget question
+-- that dies with the turn. Making it authoritative for a control-plane
+-- read would give one number two owners, which §25.15 explicitly rules
+-- out.
+--
+-- Model needs no equivalent column: turns.model_id already persists the
+-- dispatched model (migration 000018), and §25.6 makes every workflow
+-- step an ordinary sequential turn on the same session, so a step's
+-- model is already a join through workflow_step_runs.turn_id. Cost
+-- works the same way, one column over -- no workflow_step_runs column
+-- of its own, no new wire field.
+--
+-- NULLABLE NUMERIC(10,2), mirroring review_cost_budget_light_usd/
+-- review_cost_budget_deep_usd's own "first currency-shaped column"
+-- reasoning (migrations/000085_repo_settings_review_cost_budget.up.sql):
+-- NUMERIC, not FLOAT/DOUBLE PRECISION, because a repeating-binary-
+-- fraction rounding error compounding across many accumulated
+-- step_finish additions over a turn's whole lifetime is a real risk a
+-- dollar figure a human reads should not carry, and NUMERIC does not
+-- have it. NULL (never 0.00) is the only representation of "no cost has
+-- arrived yet for this turn" -- §25.15's run view must never render an
+-- unfinished/unknown step as a free one -- which is exactly why the
+-- accumulating write (AddTurnCostUSD) is COALESCE(cost_usd, 0) + $2,
+-- not a plain cost_usd + $2 that would stay NULL forever once summed
+-- against its own unset value.
+ALTER TABLE turns ADD COLUMN cost_usd NUMERIC(10, 2);

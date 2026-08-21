@@ -141,3 +141,42 @@ WHERE session_id = $1 AND status = 'processing';
 UPDATE turns
 SET epistemic_outcome = $2
 WHERE id = $1 AND status = 'processing';
+
+-- name: AddTurnCostUSD :execrows
+-- §25.15's own per-step cost accumulation: called from
+-- internal/app/sessionactor's own "step_finish" case (sandboxevent.go),
+-- inside the SAME transact that already persisted this event via
+-- appendRawEvent moments ago, for every step_finish that carries a
+-- non-null cost.usd. COALESCE(cost_usd, 0) + $2, never a plain
+-- cost_usd + $2 -- turns.cost_usd's own migration (000098) doc comment:
+-- NULL must stay the ONLY representation of "no cost has arrived yet",
+-- and a bare "+ $2" against a NULL column would silently stay NULL
+-- forever once summed against its own unset value, which is the exact
+-- "no cost yet reads as free" failure §25.15 exists to prevent.
+--
+-- This single guarded UPDATE is the WHOLE concurrency story: Postgres
+-- serializes concurrent UPDATEs of the same row via its own row lock, and
+-- "SET x = x + $1" computed IN SQL is what makes that serialization
+-- sufficient to never lose an increment -- unlike a Go-side
+-- read-then-write, which reads a value, adds to it in the application,
+-- and writes it back, and can lose a concurrent sibling's own increment
+-- to exactly that race. Two step_finish events for the SAME turn
+-- (main lane and a sub-task lane both routing through §7.1's fan-out, or
+-- simply two step-finish parts in one long turn) therefore always sum,
+-- never clobber.
+--
+-- WHERE session_id = $1 AND status = 'processing' resolves "the turn
+-- THIS event belongs to" directly from the sandbox-authenticated session
+-- id alone, with no preceding read: turns_one_processing_per_session
+-- (migrations/000005_turns.up.sql) guarantees at most one row can ever
+-- match. Returns the number of rows actually updated (0 or 1): 0 means
+-- this session has no turn currently processing -- a step_finish
+-- arriving for a turn that already terminalized (should not happen in
+-- practice; step_finish only ever arrives mid-turn) or, more likely, a
+-- redelivery reaching this call site is already guarded against
+-- upstream (the caller only invokes this for a genuinely fresh
+-- appendRawEvent insert, never a resend) -- logged by the caller, not
+-- treated as an error here.
+UPDATE turns
+SET cost_usd = COALESCE(cost_usd, 0) + sqlc.arg('amount_usd')
+WHERE session_id = $1 AND status = 'processing';

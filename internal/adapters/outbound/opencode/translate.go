@@ -81,10 +81,13 @@ func translateStepStart(cmd sandboxws.Prompt, p partEnvelope, subTaskID string) 
 // warning to: cost.tokens MUST be an object, never a bare number.
 // StepFinishCostTokens.Cached is populated from tokens.cache.read
 // (per this Step's own instructions: "cost.tokens = {input, output,
-// cached: tokens.cache.read}").
+// cached: tokens.cache.read}"). Usd carries p.Cost through UNCHANGED --
+// nil stays nil (§25.15: OpenCode's own "cost" key was genuinely absent,
+// types.go's own stepFinishPart.Cost doc comment) rather than being
+// coerced into a fabricated 0, so a control-plane consumer can finally
+// tell "no cost arrived" apart from "this step cost $0".
 func translateStepFinish(cmd sandboxws.Prompt, p stepFinishPart, subTaskID string) sandboxws.StepFinish {
 	cached := int(p.Tokens.Cache.Read)
-	usd := p.Cost
 	return sandboxws.StepFinish{
 		Type:      "step_finish",
 		MessageId: p.MessageID,
@@ -98,7 +101,7 @@ func translateStepFinish(cmd sandboxws.Prompt, p stepFinishPart, subTaskID strin
 				Output: int(p.Tokens.Output),
 				Cached: &cached,
 			},
-			Usd: &usd,
+			Usd: p.Cost,
 		},
 	}
 }

@@ -1,0 +1,1 @@
+ALTER TABLE turns DROP COLUMN IF EXISTS cost_usd;

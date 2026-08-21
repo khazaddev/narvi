@@ -3228,7 +3228,7 @@
     "WorkflowStepRun": {
       "type": "object",
       "additionalProperties": false,
-      "description": "One workflow_step_runs row (\u00a725.10) -- READ-ONLY on the wire, one row per ATTEMPT of one step within a run (a retry/revise re-execution is a NEW row, never an update-in-place -- \u00a725.5's COUNT(*) iteration read depends on exactly that). Deliberately omits two persisted columns, mirroring Plan's own documented omissions: outcome_payload (the \u00a725.6 typed step-to-step handoff, internal plumbing the engine consumes -- never re-parsed presentation data) and decision_text (write-side input, carried by WorkflowStepDecideRequest.text and folded into the NEXT attempt's re-execution).",
+      "description": "One workflow_step_runs row (\u00a725.10) -- READ-ONLY on the wire, one row per ATTEMPT of one step within a run (a retry/revise re-execution is a NEW row, never an update-in-place -- \u00a725.5's COUNT(*) iteration read depends on exactly that). Deliberately omits two persisted columns, mirroring Plan's own documented omissions: outcome_payload (the \u00a725.6 typed step-to-step handoff, internal plumbing the engine consumes -- never re-parsed presentation data) and decision_text (write-side input, carried by WorkflowStepDecideRequest.text and folded into the NEXT attempt's re-execution). modelId/costUsd (\u00a725.15) are neither of them columns on this table -- both are joined through turnId onto the ordinary turn this attempt dispatched as (turns.model_id/turns.cost_usd), since \u00a725.6 makes a workflow step exactly that turn.",
       "required": [
         "id",
         "workflowRunId",
@@ -3241,7 +3241,9 @@
         "decidedAt",
         "decidedBy",
         "createdAt",
-        "finishedAt"
+        "finishedAt",
+        "modelId",
+        "costUsd"
       ],
       "properties": {
         "id": {
@@ -3347,6 +3349,20 @@
               "time"
             ]
           }
+        },
+        "modelId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "§25.15: this attempt's own dispatched model, joined from turns.model_id through turnId -- not a new fact, since §25.6 makes a workflow step an ordinary turn and turns.model_id has persisted the dispatched model since migration 000018. Null means 'inherited whatever the session would use today' (the step definition's own model_id was NULL, §25.8's zero-config default), or that turnId itself is still null -- never a placeholder for 'not loaded yet'."
+        },
+        "costUsd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "§25.15: this attempt's own running cost total in USD, joined from turns.cost_usd through turnId -- accumulated onto the turn as its own step_finish events land (internal/app/sessionactor's own \"step_finish\" case), in the same transaction that persists each event. Null means NO cost has arrived for this attempt YET -- an unfinished or just-dispatched step -- and must never be rendered as a free ($0) step; a genuine, already-observed $0.00 step_finish is a real, distinct 0, not null. Deliberately NOT internal/adapters/outbound/opencode's own adapter-local turnState.spentUSD (§7.1/§26.7): that accumulator is sandbox-process-local and answers a different, live-turn-only question; this is an independent, Postgres-durable total computed from the same wire signal."
         }
       }
     },

@@ -95,3 +95,19 @@ func (s *TurnStore) SetEpistemicOutcome(ctx context.Context, id pgtype.UUID, out
 		EpistemicOutcome: &outcome,
 	})
 }
+
+// AddCostUSD atomically adds amountUSD onto sessionID's own currently
+// processing turn's own running cost_usd total (§25.15) -- see
+// AddTurnCostUSD's own generated doc comment (sqlcgen/turns.sql.go,
+// sourced from queries/turns.sql) for why the accumulation is a single
+// guarded "SET cost_usd = COALESCE(cost_usd, 0) + $2" UPDATE rather than
+// a Go-side read-modify-write: that is what makes two concurrent
+// step_finish events for the SAME turn sum instead of racing. Returns
+// the number of rows actually updated (0 or 1): 0 means sessionID has no
+// turn currently processing.
+func (s *TurnStore) AddCostUSD(ctx context.Context, sessionID pgtype.UUID, amountUSD float64) (int64, error) {
+	return s.q.AddTurnCostUSD(ctx, sqlcgen.AddTurnCostUSDParams{
+		SessionID: sessionID,
+		AmountUsd: Float64ToNumeric(&amountUSD),
+	})
+}
