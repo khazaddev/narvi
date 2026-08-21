@@ -1275,6 +1275,16 @@ document server-side against the closed model — ordered steps, edges keyed onl
 the engine could not run. A canvas that draws more than the engine executes is a UI bug; a canvas
 that *saves* it would be a data-integrity bug.
 
+**Duplication is the escape hatch, so it is specified rather than left to taste.** The refusals
+below only work as a redirect if the copy is one obvious action; a maintainer who has to
+hand-rebuild a graph node by node will instead ask an admin to unbind, which defeats the point.
+`POST /api/workflow-definitions` therefore accepts either a whole new definition document or a
+`{sourceDefinitionId, name}` pair. The copy is deep — every step and every edge — and it always
+lands `is_built_in = false`, unbound, at version 1, whatever it was copied from. A built-in is
+copyable exactly like anything else: that is how the three seeded lane defaults are meant to be
+customised (§25.8's own override example), and refusing to copy one would leave no way to start
+from a working graph.
+
 **Two structural refusals, neither of them an RBAC row.** `PUT`/`DELETE` on a definition with
 `is_built_in = true` is refused unconditionally (§25.4) — even for an admin, who must duplicate
 instead. The second is new, and closes a real gap: see §25.11.
