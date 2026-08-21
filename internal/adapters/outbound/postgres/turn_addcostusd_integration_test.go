@@ -15,6 +15,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"golang.org/x/sync/errgroup"
 
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
@@ -69,14 +70,23 @@ func TestTurnStore_AddCostUSD_ConcurrentSameTurn_SumsAllIncrements(t *testing.T)
 		t.Fatalf("concurrent AddCostUSD: %v", err)
 	}
 
-	var stored []byte
+	// Compared as a NUMBER, never as the string Postgres happens to render.
+	// The text form carries the column's scale ("0.200000" at scale 6), so a
+	// string compare here would fail on a scale change that lost nothing --
+	// and, worse, would pass if the scale silently truncated to a value that
+	// still printed the way this test expected.
+	var stored pgtype.Numeric
 	if err := pool.QueryRow(ctx,
 		`SELECT cost_usd FROM turns WHERE session_id = $1`, sessionID,
 	).Scan(&stored); err != nil {
 		t.Fatalf("query stored cost_usd: %v", err)
 	}
-	if string(stored) != "0.20" {
-		t.Errorf("cost_usd = %s, want 0.20 (%d concurrent increments of %.2f each, none lost)", stored, n, increment)
+	got, ok := appreviewtriage.NumericToFloat64(stored)
+	if !ok {
+		t.Fatalf("cost_usd is NULL after %d concurrent increments; want %v", n, n*increment)
+	}
+	if got != n*increment {
+		t.Errorf("cost_usd = %v, want %v (%d concurrent increments of %v each, none lost)", got, n*increment, n, increment)
 	}
 }
 
@@ -86,6 +96,56 @@ func TestTurnStore_AddCostUSD_ConcurrentSameTurn_SumsAllIncrements(t *testing.T)
 // "no cost yet must never render as free"), and the FIRST AddCostUSD call
 // sets it from that NULL starting point -- not from an implicit zero the
 // column never actually held.
+// TestTurnStore_AddCostUSD_SubCentIncrementsAccumulate pins the COLUMN
+// SCALE, which is a different property from the concurrency test above and
+// fails for a completely different reason. A single agent step routinely
+// costs a fraction of a cent, and Postgres rounds each addition to the
+// column's own scale BEFORE storing it -- so at scale 2 the increments
+// never accumulate at all. Measured on real Postgres before this test
+// existed: fifty steps at $0.004, twenty cents of genuine spend, summed to
+// exactly 0.00. A cost column that reports free is worse than no column,
+// and it reports free most confidently for the cheap high-step-count turns
+// the figure matters most for.
+func TestTurnStore_AddCostUSD_SubCentIncrementsAccumulate(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	turnStore := narvipg.NewTurnStore(pool)
+	created, err := turnStore.Create(ctx, sqlcgen.CreateTurnParams{
+		SessionID: sessionID,
+		Status:    sqlcgen.TurnStatusProcessing,
+	})
+	if err != nil {
+		t.Fatalf("create processing turn: %v", err)
+	}
+
+	const steps = 50
+	const increment = 0.004
+	const want = steps * increment // $0.20, and not one cent of it is representable at scale 2
+
+	for i := 0; i < steps; i++ {
+		if _, err := turnStore.AddCostUSD(ctx, sessionID, increment); err != nil {
+			t.Fatalf("add cost %d: %v", i, err)
+		}
+	}
+
+	stored, err := turnStore.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("read back turn: %v", err)
+	}
+	got, ok := appreviewtriage.NumericToFloat64(stored.CostUsd)
+	if !ok {
+		t.Fatalf("cost_usd is NULL after %d increments; want %v", steps, want)
+	}
+	// Exact, not approximate: NUMERIC is the whole reason this column is
+	// not a float, so a scale wide enough to hold the addends must also
+	// hold their sum exactly.
+	if got != want {
+		t.Fatalf("cost_usd = %v after %d increments of %v; want exactly %v -- a rounded-to-cents column silently reports cheap turns as free", got, steps, increment, want)
+	}
+}
+
 func TestTurnStore_AddCostUSD_FirstCallSetsFromNullNeverFromZero(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)

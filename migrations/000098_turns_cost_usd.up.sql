@@ -26,17 +26,29 @@
 -- works the same way, one column over -- no workflow_step_runs column
 -- of its own, no new wire field.
 --
--- NULLABLE NUMERIC(10,2), mirroring review_cost_budget_light_usd/
--- review_cost_budget_deep_usd's own "first currency-shaped column"
--- reasoning (migrations/000085_repo_settings_review_cost_budget.up.sql):
--- NUMERIC, not FLOAT/DOUBLE PRECISION, because a repeating-binary-
--- fraction rounding error compounding across many accumulated
--- step_finish additions over a turn's whole lifetime is a real risk a
--- dollar figure a human reads should not carry, and NUMERIC does not
--- have it. NULL (never 0.00) is the only representation of "no cost has
+-- NULLABLE NUMERIC(14, 6). NUMERIC rather than FLOAT/DOUBLE PRECISION
+-- for the same reason review_cost_budget_light_usd/..._deep_usd chose it
+-- (migrations/000085): a repeating-binary-fraction error compounding
+-- across many additions is a real risk for a dollar figure a human
+-- reads, and NUMERIC does not have it.
+--
+-- The SCALE, though, is six places and deliberately NOT that column's
+-- two. Those two are CEILINGS a person types -- $0.50, $5.00 -- read
+-- once and never added to anything. This one is an accumulator of
+-- machine-reported per-step figures, and a single agent step routinely
+-- costs a fraction of a cent. At scale 2 every increment is rounded to
+-- cents BEFORE it lands, so the additions never accumulate at all:
+-- measured against real Postgres, fifty steps at $0.004 -- twenty cents
+-- of genuine spend -- summed to exactly 0.00. A column whose whole
+-- purpose is making cost visible would have reported free, and reported
+-- it most confidently for the cheap high-step-count turns it matters
+-- most for. Six places is micro-dollar resolution, which is the
+-- granularity providers themselves bill at.
+--
+-- NULL (never 0.000000) stays the ONLY representation of "no cost has
 -- arrived yet for this turn" -- §25.15's run view must never render an
--- unfinished/unknown step as a free one -- which is exactly why the
--- accumulating write (AddTurnCostUSD) is COALESCE(cost_usd, 0) + $2,
+-- unfinished or unknown step as a free one -- which is why the
+-- accumulating write (AddTurnCostUSD) is COALESCE(cost_usd, 0) + $2 and
 -- not a plain cost_usd + $2 that would stay NULL forever once summed
 -- against its own unset value.
-ALTER TABLE turns ADD COLUMN cost_usd NUMERIC(10, 2);
+ALTER TABLE turns ADD COLUMN cost_usd NUMERIC(14, 6);
