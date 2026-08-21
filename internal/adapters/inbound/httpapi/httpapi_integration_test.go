@@ -469,6 +469,9 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		// -- see reviewfindings.go's own doc comment.
 		r.Post("/{sessionID}/review/findings/{identityHash}/rebut", httpapi.RebutReviewFinding(rig.sessions, rig.prSessions, rig.reviewFindings, rig.auditLog))
 		r.Post("/{sessionID}/review/findings/{identityHash}/apply-suggestion", httpapi.ApplySuggestion(rig.sessions, rig.prSessions, rig.reviewFindings, rig.identities, rig.sourceControl, rig.tokenEncryptionKey, platform.DefaultTimeouts()))
+		// workflow-runs (§25.10's own two run-read routes) -- see
+		// httpapi/workflowruns.go's own doc comment.
+		r.Get("/{sessionID}/workflow-runs", httpapi.ListSessionWorkflowRuns(rig.sessions, rig.workflows))
 	})
 	// /api/members, /api/audit-log ("identities + full RBAC",
 	// §13.2/§13.3) -- mounted exactly like cmd/control-plane/main.go's own
@@ -578,6 +581,26 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	router.Route("/api/workflow-runs", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
 		r.Post("/{runId}/steps/{stepRunId}/decide", httpapi.DecideWorkflowStep(rig.pool, rig.sessions, rig.turns, rig.participants, rig.workflows, rig.slackThreadSession, rig.linearAgentSessions, rig.prSessions, rig.outbox, rig.registry, false))
+		// GET /{runId} ("workflow definition & run API", §25.10) -- see
+		// httpapi/workflowruns.go's own doc comment.
+		r.Get("/{runId}", httpapi.GetWorkflowRun(rig.sessions, rig.workflows))
+	})
+	// /api/workflow-definitions, /api/workflow-bindings ("workflow
+	// definition & run API", §25.10/§25.11) -- mounted exactly
+	// like cmd/control-plane/main.go's own wiring (see httpapi/
+	// workflowdefinitions.go/workflowbindings.go's own doc comments).
+	router.Route("/api/workflow-definitions", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Get("/", httpapi.ListWorkflowDefinitions(rig.workflows))
+		r.Post("/", httpapi.CreateWorkflowDefinition(rig.pool, rig.workflows))
+		r.Get("/{id}", httpapi.GetWorkflowDefinition(rig.workflows))
+		r.Put("/{id}", httpapi.PutWorkflowDefinition(rig.pool, rig.workflows))
+		r.Delete("/{id}", httpapi.DeleteWorkflowDefinition(rig.pool, rig.workflows))
+	})
+	router.Route("/api/workflow-bindings", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Get("/", httpapi.ListWorkflowBindings(rig.workflows))
+		r.Put("/", httpapi.PutWorkflowBinding(rig.pool, rig.workflows))
 	})
 	// /api/repos/{owner}/{repo}/settings (§8.2) -- mounted behind
 	// auth.Middleware, exactly like cmd/control-plane/main.go's own wiring

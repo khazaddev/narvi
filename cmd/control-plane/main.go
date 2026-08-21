@@ -1357,6 +1357,12 @@ func serve() error {
 		// release-review screen's own read model, see httpapi/
 		// releasemanifestreadout.go's own doc comment.
 		r.Get("/{sessionID}/release-manifest", httpapi.GetReleaseManifestReadout(sessionStore, githubPRSessionStore, releaseManifestCheckStore))
+		// workflow-runs ("workflow definition & run API", §25.10): a
+		// session's own runs, newest first -- the SAME session-read
+		// gate every other route in this group uses (see httpapi/
+		// workflowruns.go's own doc comment: session exists + logged in,
+		// no separate authz.Authorize call).
+		r.Get("/{sessionID}/workflow-runs", httpapi.ListSessionWorkflowRuns(sessionStore, workflowStore))
 	})
 
 	// /api/workflow-runs/{runId}/steps/{stepRunId}/decide ("workflow
@@ -1367,9 +1373,40 @@ func serve() error {
 	// instances every other caller above already uses -- notification
 	// destination resolution reuses those exact reverse-lookup stores,
 	// never a second, independently-constructed copy.
+	//
+	// GET /{runId} ("workflow definition & run API", §25.10) is this
+	// same group's own read-only twin -- one run WITH its ordered step
+	// runs, see httpapi/workflowruns.go's own doc comment.
 	router.Route("/api/workflow-runs", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
 		r.Post("/{runId}/steps/{stepRunId}/decide", httpapi.DecideWorkflowStep(pool, sessionStore, turnStore, participantStore, workflowStore, slackThreadSessionStore, linearAgentSessionStore, githubPRSessionStore, outboxStore, registry, cfg.EpistemicCheckDefault))
+		r.Get("/{runId}", httpapi.GetWorkflowRun(sessionStore, workflowStore))
+	})
+
+	// /api/workflow-definitions, /api/workflow-bindings ("workflow
+	// definition & run API", §25.10/§25.11): the definition-
+	// authoring surface (list/get/create-or-duplicate/replace/delete) and
+	// the binding-activation surface §25.4 shipped dark -- see httpapi/
+	// workflowdefinitions.go's own doc comment for the two structural
+	// refusals (built-in, bound) plus a third guard added there (run
+	// history), and httpapi/workflowbindings.go's own doc comment for the
+	// two-partial-unique-index binding upsert. Definitions are gated by
+	// authz.ActionManageWorkflowDefinitions (maintainer+); binding writes
+	// are gated by authz.ActionActivateWorkflowBinding (admin-only) --
+	// both checked inside each handler, mirroring every other
+	// admin/maintainer-gated route group in this file.
+	router.Route("/api/workflow-definitions", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Get("/", httpapi.ListWorkflowDefinitions(workflowStore))
+		r.Post("/", httpapi.CreateWorkflowDefinition(pool, workflowStore))
+		r.Get("/{id}", httpapi.GetWorkflowDefinition(workflowStore))
+		r.Put("/{id}", httpapi.PutWorkflowDefinition(pool, workflowStore))
+		r.Delete("/{id}", httpapi.DeleteWorkflowDefinition(pool, workflowStore))
+	})
+	router.Route("/api/workflow-bindings", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Get("/", httpapi.ListWorkflowBindings(workflowStore))
+		r.Put("/", httpapi.PutWorkflowBinding(pool, workflowStore))
 	})
 
 	// /api/repos/{owner}/{repo}/settings ("server-side verdict",

@@ -66,6 +66,26 @@ SELECT * FROM workflow_bindings WHERE lane = $1 AND repo_full_name = $2;
 -- name: GetGlobalWorkflowBinding :one
 SELECT * FROM workflow_bindings WHERE lane = $1 AND repo_full_name IS NULL;
 
+-- name: LockWorkflowDefinitionForUpdate :one
+-- Row-level lock making §25.11's own "a bound definition is never edited"
+-- refusal actually hold, rather than hold only because callers happen not
+-- to interleave. Taken in the SAME transaction as the bound/run-history
+-- EXISTS checks and the step rewrite that follows them, and taken again by
+-- the binding upsert (§25.10's PUT /api/workflow-bindings) before it
+-- creates a binding -- so a definition cannot acquire a binding in the
+-- window between a PUT's refusal check and its own COMMIT. Without it the
+-- refusal is a read-then-write: the EXISTS sees no binding, an admin
+-- activates the definition, and the edit lands on a now-bound definition,
+-- which is exactly the past-the-admin-gate dispatch change the refusal
+-- exists to prevent. Mirrors LockAutomationForUpdate (queries/
+-- automations.sql), taken for the identical read-check-then-write shape.
+--
+-- Serialising the two writers also fixes a second, quieter race for free:
+-- two concurrent PUTs on the same definition each deleted only the steps
+-- visible in their own snapshot, so the "complete desired state" replace
+-- could merge two step sets instead of replacing one.
+SELECT * FROM workflow_definitions WHERE id = $1 FOR UPDATE;
+
 -- name: GetWorkflowDefinition :one
 SELECT * FROM workflow_definitions WHERE id = $1;
 
@@ -210,3 +230,137 @@ WHERE id = $1 AND status = 'awaiting_decision';
 -- it, send the notice" (1) from "already claimed/sent by an earlier
 -- escalation" (0) apart, without a separate existence check.
 UPDATE workflow_runs SET needs_review_notified_at = now(), updated_at = now() WHERE id = $1 AND needs_review_notified_at IS NULL;
+
+-- ---------------------------------------------------------------------
+-- "workflow definition & run API" (§25.10/§25.11) own additions below:
+-- the definition/binding CRUD + duplicate surface, and
+-- the two run-history list reads (session's own runs; one run's own
+-- ordered step runs) the run view needs and no query above provides.
+--
+-- Definition writes (Create/Update/Delete + the two step-insert
+-- variants + CreateWorkflowEdge) are always driven from a WithTx store
+-- (§25.10: "The PUT is therefore a single transaction"): DeleteWorkflow
+-- StepDefinitionsForDefinition relies on workflow_edges' own ON DELETE
+-- CASCADE from workflow_step_definitions (migration 000057) to clear a
+-- definition's old graph in one statement, never hand-diffed, and the
+-- caller re-inserts the complete new graph in the SAME transaction.
+--
+-- CreateWorkflowStepDefinition takes a CLIENT-SUPPLIED id ($1) -- every
+-- POST(whole-document)/PUT request body carries real step ids (a canvas editor's own
+-- locally-generated uuid for a brand-new node, or an existing step's own
+-- id echoed back), so edges within the SAME request body can reference a
+-- step that has never been persisted before. DuplicateWorkflowStepDefinition
+-- is the one exception: POST .../workflow-definitions' own
+-- {sourceDefinitionId, name} path deep-copies an existing definition, and
+-- every copied step must get a genuinely NEW id (the column's own
+-- gen_random_uuid() default) so the copy never collides with its source
+-- -- the caller remaps (source step id -> new step id) in Go to translate
+-- the source's own edges onto the copy. Both hardcode kind = 'agent',
+-- the only recognized workflow_step_kind value today
+-- (internal/domain/workflow.StepKindAgent).
+--
+-- ExistsWorkflowBindingForDefinition is the "unbound draft" structural
+-- refusal's own read (§25.10/§25.11's amendment): PUT/DELETE both check
+-- this BEFORE touching a definition's rows at all. ExistsWorkflowRunForDefinition
+-- is a THIRD guard this Step adds beyond the two §25.10/§25.11 name by
+-- word: workflow_runs.workflow_definition_id and workflow_step_runs.
+-- step_definition_id are both plain NO ACTION references (migration
+-- 000057: "history outlives configuration"), so a definition that has
+-- EVER run cannot have its steps deleted-and-reinserted (PUT) or the row
+-- itself deleted (DELETE) without a raw FK-violation 500 -- reachable
+-- even on a definition that is CURRENTLY unbound (rebinding a lane to a
+-- duplicate frees the old definition's own workflow_bindings row while
+-- its workflow_runs history remains behind). Refused with its own
+-- distinct message, the same "validate first, name which rule broke"
+-- discipline the other two guards already follow.
+--
+-- UpsertGlobalWorkflowBinding/UpsertRepoWorkflowBinding mirror
+-- opencodeconfigs.sql's own UpsertEnvironmentOpenCodeConfig/
+-- UpsertGlobalOpenCodeConfig pair exactly -- see that file's own doc
+-- comment for why a value governed by two DIFFERENT partial unique
+-- indexes (workflow_bindings_global_uniq/workflow_bindings_repo_uniq,
+-- migration 000057) needs two separate upsert statements: Postgres's ON
+-- CONFLICT clause names exactly one arbiter index per statement, and a
+-- plain UNIQUE never matches on NULL, so a single "ON CONFLICT (lane,
+-- repo_full_name)" would silently INSERT a second global row instead of
+-- updating the first.
+--
+-- ListWorkflowStepRunsForRun orders oldest-first by creation -- the
+-- chronological execution/re-attempt sequence (§25.10: "a run without
+-- its steps answers no question anybody asks"); each retry/revise
+-- re-execution is its own row, never an update-in-place (§25.5), so
+-- creation order IS execution order.
+
+-- name: ListWorkflowDefinitions :many
+SELECT * FROM workflow_definitions ORDER BY lane, name;
+
+-- name: CreateWorkflowDefinition :one
+-- is_built_in is hardcoded false: POST /api/workflow-definitions can
+-- never mint a built-in row (only migration 000057's own seed does).
+-- version is hardcoded 1: every freshly created or duplicated definition
+-- starts there (§25.10).
+INSERT INTO workflow_definitions (lane, name, is_built_in, version)
+VALUES ($1, $2, false, 1)
+RETURNING *;
+
+-- name: UpdateWorkflowDefinitionNameAndBumpVersion :one
+-- PUT /api/workflow-definitions/{id}'s own definition-row write -- name
+-- is the only definition-level column this endpoint may change (lane/
+-- is_built_in are immutable post-creation); version always increments by
+-- exactly 1 on a successful write, regardless of what (if anything) the
+-- caller sent ("Bump version on a successful write", §25.10).
+UPDATE workflow_definitions SET name = $2, version = version + 1, updated_at = now() WHERE id = $1 RETURNING *;
+
+-- name: DeleteWorkflowDefinition :execrows
+DELETE FROM workflow_definitions WHERE id = $1;
+
+-- name: ExistsWorkflowBindingForDefinition :one
+SELECT EXISTS(SELECT 1 FROM workflow_bindings WHERE workflow_definition_id = $1);
+
+-- name: ExistsWorkflowRunForDefinition :one
+SELECT EXISTS(SELECT 1 FROM workflow_runs WHERE workflow_definition_id = $1);
+
+-- name: DeleteWorkflowStepDefinitionsForDefinition :exec
+DELETE FROM workflow_step_definitions WHERE workflow_definition_id = $1;
+
+-- name: CreateWorkflowStepDefinition :one
+INSERT INTO workflow_step_definitions
+    (id, workflow_definition_id, step_order, kind, model_id, effort, prompt_template, execution_scope, conversation_continuity, hitl_before, hitl_after, canvas_position)
+VALUES
+    ($1, $2, $3, 'agent', $4, $5, $6, $7, $8, $9, $10, $11)
+RETURNING *;
+
+-- name: DuplicateWorkflowStepDefinition :one
+INSERT INTO workflow_step_definitions
+    (workflow_definition_id, step_order, kind, model_id, effort, prompt_template, execution_scope, conversation_continuity, hitl_before, hitl_after, canvas_position)
+VALUES
+    ($1, $2, 'agent', $3, $4, $5, $6, $7, $8, $9, $10)
+RETURNING *;
+
+-- name: CreateWorkflowEdge :one
+INSERT INTO workflow_edges (workflow_definition_id, from_step_id, to_step_id, on_status)
+VALUES ($1, $2, $3, $4)
+RETURNING *;
+
+-- name: ListWorkflowBindings :many
+SELECT * FROM workflow_bindings ORDER BY lane, repo_full_name NULLS FIRST;
+
+-- name: UpsertGlobalWorkflowBinding :one
+INSERT INTO workflow_bindings (lane, repo_full_name, workflow_definition_id, definition_version)
+VALUES ($1, NULL, $2, $3)
+ON CONFLICT (lane) WHERE repo_full_name IS NULL
+DO UPDATE SET workflow_definition_id = EXCLUDED.workflow_definition_id, definition_version = EXCLUDED.definition_version, updated_at = now()
+RETURNING *;
+
+-- name: UpsertRepoWorkflowBinding :one
+INSERT INTO workflow_bindings (lane, repo_full_name, workflow_definition_id, definition_version)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (lane, repo_full_name) WHERE repo_full_name IS NOT NULL
+DO UPDATE SET workflow_definition_id = EXCLUDED.workflow_definition_id, definition_version = EXCLUDED.definition_version, updated_at = now()
+RETURNING *;
+
+-- name: ListWorkflowRunsForSession :many
+SELECT * FROM workflow_runs WHERE session_id = $1 ORDER BY created_at DESC;
+
+-- name: ListWorkflowStepRunsForRun :many
+SELECT * FROM workflow_step_runs WHERE workflow_run_id = $1 ORDER BY created_at ASC, id ASC;

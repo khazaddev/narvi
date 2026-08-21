@@ -1289,6 +1289,25 @@ from a working graph.
 `is_built_in = true` is refused unconditionally (§25.4) — even for an admin, who must duplicate
 instead. The second is new, and closes a real gap: see §25.11.
 
+**There is a THIRD structural refusal, and this section originally missed it.** A definition that
+any `workflow_runs` row has ever used is refused for `PUT` and `DELETE` too. Found while building
+this surface, by reading the migration rather than assuming: `workflow_runs.workflow_definition_id`
+and `workflow_step_runs.step_definition_id` carry no `ON DELETE` clause at all — plain `NO ACTION`,
+unlike their cascading neighbours — so PUT's own delete-and-reinsert of steps, and DELETE of the
+definition, would both raise a constraint violation and surface as a 500 rather than a refusal.
+
+Fixing that as an error-mapping detail would have missed the reason. `workflow_step_runs` stores no
+snapshot of what it ran — not the prompt, not the model, not the kind — and describes the executed
+step **only** through `step_definition_id`. Rewriting steps under a finished run therefore silently
+rewrites what the ledger says happened. The freeze protects the audit trail; the foreign key merely
+enforces it.
+
+The accepted cost, stated rather than discovered later: **running a draft even once freezes it.** A
+maintainer who executes a workflow to try it out must duplicate to change it. The alternative —
+snapshotting each step's own content onto its `workflow_step_run` so the ledger stands alone — is a
+schema change with a real migration behind it, and is not taken here; if per-run editing history is
+ever wanted, that is the design to reach for, not a weakening of this refusal.
+
 **Runs are read-only and always carry their step runs.** `workflow_step_runs` has no list read
 today, so a run view has no way to show a step sequence at all. `GET /api/workflow-runs/{runId}`
 returns the run and its ordered step runs together, because a run without its steps answers no

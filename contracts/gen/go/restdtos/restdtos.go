@@ -2203,6 +2203,111 @@ func (j *CreateTurnResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// Request body for POST /api/workflow-definitions (§25.10) -- accepts EITHER a
+// whole new definition document (lane+name+steps; sourceDefinitionId null) OR a
+// {sourceDefinitionId, name} pair duplicating an existing definition (lane/steps
+// omitted -- inherited from the source, deep-copied). Exactly one of the two
+// shapes is valid input; which one applies is enforced at the application layer,
+// never a schema-level oneOf -- the SAME 'closed vocabulary/conditional shape
+// enforced in Go, not in the schema' convention
+// CreateAutomationRequest.triggerConfig and Digest.archDecisions already establish
+// (this file's own top doc comment on why: go-jsonschema produces an untyped
+// interface{} for a nullable object-typed field reached via oneOf/$ref, so a
+// discriminated request shape is always modeled here as one flat object with
+// mode-dependent optional keys instead). Duplication is deep (every step, every
+// edge) and always lands isBuiltIn=false, unbound, at version 1, whatever it was
+// copied from (§25.10) -- the escape hatch a maintainer uses to customize a
+// built-in without ever editing it in place, since PUT/DELETE on an isBuiltIn=true
+// definition is refused unconditionally (§25.4). Steps carry CLIENT-SUPPLIED ids
+// in whole-document mode (WorkflowStepDefinition.id, format uuid) -- the same
+// convention UpdateWorkflowDefinitionRequest uses below -- so a canvas editor can
+// wire an edge to a step it just created, before either has ever been persisted
+// server-side.
+type CreateWorkflowDefinitionRequest struct {
+	// Required in whole-document mode (sourceDefinitionId null); ignored in duplicate
+	// mode, where the copy always inherits the source definition's own lane.
+	Lane *CreateWorkflowDefinitionRequestLane `json:"lane,omitempty,omitzero" yaml:"lane,omitempty" mapstructure:"lane,omitempty"`
+
+	// The new definition's own name -- unique per lane
+	// (workflow_definitions_lane_name_uniq). Always required, in both modes.
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+
+	// Non-null selects DUPLICATE mode: deep-copy this existing definition (built-in
+	// or custom -- a built-in is copyable exactly like anything else, §25.10). Null
+	// selects WHOLE-DOCUMENT mode: lane and steps below are then required.
+	SourceDefinitionId CreateWorkflowDefinitionRequestSourceDefinitionId `json:"sourceDefinitionId" yaml:"sourceDefinitionId" mapstructure:"sourceDefinitionId"`
+
+	// Required, non-empty, in whole-document mode; ignored in duplicate mode, where
+	// every step (and edge) is deep-copied from the source instead. Re-validated
+	// server-side against internal/domain/workflow.ValidateDefinition's closed model
+	// before anything is written.
+	Steps []WorkflowStepDefinition `json:"steps,omitempty,omitzero" yaml:"steps,omitempty" mapstructure:"steps,omitempty"`
+}
+
+type CreateWorkflowDefinitionRequestLane string
+
+const CreateWorkflowDefinitionRequestLanePlan CreateWorkflowDefinitionRequestLane = "plan"
+const CreateWorkflowDefinitionRequestLaneRequest CreateWorkflowDefinitionRequestLane = "request"
+const CreateWorkflowDefinitionRequestLaneReview CreateWorkflowDefinitionRequestLane = "review"
+
+var enumValues_CreateWorkflowDefinitionRequestLane = []interface{}{
+	"review",
+	"request",
+	"plan",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CreateWorkflowDefinitionRequestLane) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_CreateWorkflowDefinitionRequestLane {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_CreateWorkflowDefinitionRequestLane, v)
+	}
+	*j = CreateWorkflowDefinitionRequestLane(v)
+	return nil
+}
+
+// Non-null selects DUPLICATE mode: deep-copy this existing definition (built-in or
+// custom -- a built-in is copyable exactly like anything else, §25.10). Null
+// selects WHOLE-DOCUMENT mode: lane and steps below are then required.
+type CreateWorkflowDefinitionRequestSourceDefinitionId *string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CreateWorkflowDefinitionRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in CreateWorkflowDefinitionRequest: required")
+	}
+	if _, ok := raw["sourceDefinitionId"]; raw != nil && !ok {
+		return fmt.Errorf("field sourceDefinitionId in CreateWorkflowDefinitionRequest: required")
+	}
+	type Plain CreateWorkflowDefinitionRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.Name)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "name", 1)
+	}
+	if plain.Steps != nil && len(plain.Steps) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "steps", 1)
+	}
+	*j = CreateWorkflowDefinitionRequest(plain)
+	return nil
+}
+
 // §16 ('decision inbox: read model + API', §16): one decision-inbox row. Only the
 // fields relevant to `kind` are populated -- every OTHER field is present but
 // null, matching this schema's own established nullability convention (this file's
@@ -3594,6 +3699,93 @@ func (j *ListSessionsResponse) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = ListSessionsResponse(plain)
+	return nil
+}
+
+// 200 response for GET /api/workflow-bindings (§25.10) -- every (lane, repo)
+// binding, the 3 seeded global rows always included (§25.4: the global binding is
+// never absent). Gated by authz.ActionManageWorkflowDefinitions (§25.11) -- the
+// SAME read gate as the definitions list above: an editor needs to see current
+// bindings to know which definitions it may safely edit (the 'unbound draft'
+// check), even though only authz.ActionActivateWorkflowBinding (admin-only, below)
+// may CHANGE one.
+type ListWorkflowBindingsResponse struct {
+	// Bindings corresponds to the JSON schema field "bindings".
+	Bindings []WorkflowBinding `json:"bindings" yaml:"bindings" mapstructure:"bindings"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ListWorkflowBindingsResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["bindings"]; raw != nil && !ok {
+		return fmt.Errorf("field bindings in ListWorkflowBindingsResponse: required")
+	}
+	type Plain ListWorkflowBindingsResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ListWorkflowBindingsResponse(plain)
+	return nil
+}
+
+// 200 response for GET /api/workflow-definitions (§25.10) -- every
+// workflow_definitions row, built-in and custom alike, each carrying its own full
+// document shape (steps, each with its own outgoing edges). Gated by
+// authz.ActionManageWorkflowDefinitions (maintainer+, §25.11).
+type ListWorkflowDefinitionsResponse struct {
+	// Definitions corresponds to the JSON schema field "definitions".
+	Definitions []WorkflowDefinition `json:"definitions" yaml:"definitions" mapstructure:"definitions"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ListWorkflowDefinitionsResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["definitions"]; raw != nil && !ok {
+		return fmt.Errorf("field definitions in ListWorkflowDefinitionsResponse: required")
+	}
+	type Plain ListWorkflowDefinitionsResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ListWorkflowDefinitionsResponse(plain)
+	return nil
+}
+
+// 200 response for GET /api/sessions/{id}/workflow-runs (§25.10) -- this session's
+// own workflow_runs rows, newest first. Gated by the SAME session-read gate every
+// other /api/sessions/{id}/... route uses (session exists + the caller is
+// authenticated -- no separate authz.Authorize call, mirroring
+// ListEvents/ListArtifacts' own precedent: authz.ActionViewSessions, §13.3 row 1,
+// already allows every role including viewer, so there is nothing a per-call
+// Authorize would add).
+type ListWorkflowRunsResponse struct {
+	// Runs corresponds to the JSON schema field "runs".
+	Runs []WorkflowRun `json:"runs" yaml:"runs" mapstructure:"runs"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ListWorkflowRunsResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["runs"]; raw != nil && !ok {
+		return fmt.Errorf("field runs in ListWorkflowRunsResponse: required")
+	}
+	type Plain ListWorkflowRunsResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ListWorkflowRunsResponse(plain)
 	return nil
 }
 
@@ -5708,6 +5900,94 @@ func (j *PutOpenCodeConfigRequest) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = PutOpenCodeConfigRequest(plain)
+	return nil
+}
+
+// Request body for PUT /api/workflow-bindings (§25.10/§25.11) -- binds (lane,
+// repoFullName) to workflowDefinitionId at its CURRENT version (definitionVersion
+// is pinned server-side from the target definition's own version column at write
+// time, never a client-supplied value -- mirrors
+// WorkflowBinding.definitionVersion's own 'provenance for what was active when'
+// semantics). repoFullName null targets the global (org-wide) binding for lane; a
+// non-null 'owner/repo' targets that repo's own override, shadowing the global
+// binding for that one repo only (§25.4). Admin only
+// (authz.ActionActivateWorkflowBinding) -- the SAME action gates both scopes
+// (§25.11). Idempotent create-or-update: PUTting the SAME (lane, repoFullName)
+// pair twice leaves exactly one row -- two partial unique indexes back this
+// (workflow_bindings_global_uniq/workflow_bindings_repo_uniq, migrations/000057),
+// so the store issues one of two scope-specific upserts, never a single ON
+// CONFLICT that could silently miss the global row's own NULL-valued arbiter (a
+// plain UNIQUE never matches on NULL).
+type PutWorkflowBindingRequest struct {
+	// Lane corresponds to the JSON schema field "lane".
+	Lane PutWorkflowBindingRequestLane `json:"lane" yaml:"lane" mapstructure:"lane"`
+
+	// null binds the global (org-wide) scope for lane; a non-null 'owner/repo' binds
+	// that repo's own override.
+	RepoFullName PutWorkflowBindingRequestRepoFullName `json:"repoFullName" yaml:"repoFullName" mapstructure:"repoFullName"`
+
+	// WorkflowDefinitionId corresponds to the JSON schema field
+	// "workflowDefinitionId".
+	WorkflowDefinitionId string `json:"workflowDefinitionId" yaml:"workflowDefinitionId" mapstructure:"workflowDefinitionId"`
+}
+
+type PutWorkflowBindingRequestLane string
+
+const PutWorkflowBindingRequestLanePlan PutWorkflowBindingRequestLane = "plan"
+const PutWorkflowBindingRequestLaneRequest PutWorkflowBindingRequestLane = "request"
+const PutWorkflowBindingRequestLaneReview PutWorkflowBindingRequestLane = "review"
+
+var enumValues_PutWorkflowBindingRequestLane = []interface{}{
+	"review",
+	"request",
+	"plan",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PutWorkflowBindingRequestLane) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_PutWorkflowBindingRequestLane {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_PutWorkflowBindingRequestLane, v)
+	}
+	*j = PutWorkflowBindingRequestLane(v)
+	return nil
+}
+
+// null binds the global (org-wide) scope for lane; a non-null 'owner/repo' binds
+// that repo's own override.
+type PutWorkflowBindingRequestRepoFullName *string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PutWorkflowBindingRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["lane"]; raw != nil && !ok {
+		return fmt.Errorf("field lane in PutWorkflowBindingRequest: required")
+	}
+	if _, ok := raw["repoFullName"]; raw != nil && !ok {
+		return fmt.Errorf("field repoFullName in PutWorkflowBindingRequest: required")
+	}
+	if _, ok := raw["workflowDefinitionId"]; raw != nil && !ok {
+		return fmt.Errorf("field workflowDefinitionId in PutWorkflowBindingRequest: required")
+	}
+	type Plain PutWorkflowBindingRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = PutWorkflowBindingRequest(plain)
 	return nil
 }
 
@@ -8892,6 +9172,60 @@ func (j *UpdateSandboxSecretRequest) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// Request body for PUT /api/workflow-definitions/{id} (§25.10) -- the complete
+// desired state of a definition's own WRITABLE fields (name + steps, each step
+// carrying its own outgoing edges), never a partial patch, mirroring
+// UpdateRepoSettingsRequest's own 'always full state' convention.
+// id/isBuiltIn/lane/version/createdAt/updatedAt are deliberately NOT on this
+// request: id comes from the URL, isBuiltIn and lane are fixed at creation time,
+// version is bumped server-side on every successful write, createdAt/updatedAt are
+// server-maintained -- the same 'read-only fields never appear on the Update
+// request' convention RepoSettings/UpdateRepoSettingsRequest already establish.
+// Refused unconditionally -- before this body is even parsed for validation
+// purposes -- when the target definition is isBuiltIn=true OR is referenced by any
+// workflow_bindings row (§25.10/§25.11's own 'unbound draft' amendment): both are
+// STRUCTURAL refusals, never an RBAC row, so an admin gets the identical refusal a
+// maintainer does. Steps replace the ENTIRE existing set
+// (workflow_step_definitions/workflow_edges cascade-delete from the definition and
+// are re-inserted from this body, never hand-diffed) -- re-validated server-side
+// against internal/domain/workflow.ValidateDefinition's closed model before
+// anything is written; a graph the engine could not execute is rejected with a 4xx
+// naming which rule broke, never a raw constraint violation.
+type UpdateWorkflowDefinitionRequest struct {
+	// Name corresponds to the JSON schema field "name".
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+
+	// Steps corresponds to the JSON schema field "steps".
+	Steps []WorkflowStepDefinition `json:"steps" yaml:"steps" mapstructure:"steps"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *UpdateWorkflowDefinitionRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in UpdateWorkflowDefinitionRequest: required")
+	}
+	if _, ok := raw["steps"]; raw != nil && !ok {
+		return fmt.Errorf("field steps in UpdateWorkflowDefinitionRequest: required")
+	}
+	type Plain UpdateWorkflowDefinitionRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.Name)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "name", 1)
+	}
+	if plain.Steps != nil && len(plain.Steps) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "steps", 1)
+	}
+	*j = UpdateWorkflowDefinitionRequest(plain)
+	return nil
+}
+
 // POST /api/intent-templates's own request body -- mirrors
 // classifiertemplates.go's own hand-written intentTemplateUpsertRequest
 // field-for-field (name/template); that handler decodes its own identically-shaped
@@ -9300,6 +9634,41 @@ type WorkflowRun struct {
 	// WorkflowDefinitionId corresponds to the JSON schema field
 	// "workflowDefinitionId".
 	WorkflowDefinitionId string `json:"workflowDefinitionId" yaml:"workflowDefinitionId" mapstructure:"workflowDefinitionId"`
+}
+
+// 200 response for GET /api/workflow-runs/{runId} (§25.10) -- the run WITH its
+// ordered step runs ('a run without its steps answers no question anybody asks',
+// §25.10). stepRuns is ordered oldest-first by creation -- the chronological
+// execution sequence, including every retry/revise re-attempt (each its own row,
+// never an update-in-place, §25.5). Same session-read gate as
+// ListWorkflowRunsResponse above (resolved via this run's own sessionId).
+type WorkflowRunDetail struct {
+	// Run corresponds to the JSON schema field "run".
+	Run WorkflowRun `json:"run" yaml:"run" mapstructure:"run"`
+
+	// StepRuns corresponds to the JSON schema field "stepRuns".
+	StepRuns []WorkflowStepRun `json:"stepRuns" yaml:"stepRuns" mapstructure:"stepRuns"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WorkflowRunDetail) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["run"]; raw != nil && !ok {
+		return fmt.Errorf("field run in WorkflowRunDetail: required")
+	}
+	if _, ok := raw["stepRuns"]; raw != nil && !ok {
+		return fmt.Errorf("field stepRuns in WorkflowRunDetail: required")
+	}
+	type Plain WorkflowRunDetail
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = WorkflowRunDetail(plain)
+	return nil
 }
 
 type WorkflowRunLane string
@@ -10012,11 +10381,8 @@ type WorkflowStepRunStatus string
 const WorkflowStepRunStatusAwaitingDecision WorkflowStepRunStatus = "awaiting_decision"
 const WorkflowStepRunStatusCancelled WorkflowStepRunStatus = "cancelled"
 const WorkflowStepRunStatusCompleted WorkflowStepRunStatus = "completed"
-const WorkflowStepRunStatusRunning WorkflowStepRunStatus = "running"
-
-type ReviewReadoutLatestVerdict_0 = ReviewReadoutVerdict
-
 const WorkflowStepRunStatusFailed WorkflowStepRunStatus = "failed"
+const WorkflowStepRunStatusRunning WorkflowStepRunStatus = "running"
 
 var enumValues_WorkflowStepRunStatus = []interface{}{
 	"awaiting_decision",
@@ -10101,3 +10467,5 @@ func (j *WorkflowStepRun) UnmarshalJSON(value []byte) error {
 	*j = WorkflowStepRun(plain)
 	return nil
 }
+
+type ReviewReadoutLatestVerdict_0 = ReviewReadoutVerdict
