@@ -1399,7 +1399,7 @@ of the version that was current when the binding was made, for audit and diagnos
 retrievable pin — the schema keeps one row per definition and no version history, so there is no
 older version to resolve to. Nothing may be built that implies otherwise.
 
-### 25.12 Visual canvas editor (Step 88, Phase 7)
+### 25.12 Visual canvas editor (Step 91, Phase 7)
 
 A React Flow-style node/edge canvas for authoring a lane/repo workflow's steps and edges. It must
 validate/constrain what a user can draw against the engine's closed model — ordered steps plus
@@ -1446,8 +1446,9 @@ are recorded rather than left to be re-litigated:
 ### 25.14 Phasing
 
 Steps 53-56, Phase 5, immediately after Step 52 (automations: triggers & extras). 53 is a blocking
-prerequisite for 54-56; 55 is exercised by 100% of production traffic from day one. Step 88, Phase 7,
-immediately before ui finalize (Step 92).
+prerequisite for 54-56; 55 is exercised by 100% of production traffic from day one. The canvas editor
+is Step 91, Phase 7 -- after Step 88, which builds the definition/run API it reads and writes, and
+before ui finalize (Step 94), which must stay last.
 
 ## 26. Review as a merge readout (new capability)
 
