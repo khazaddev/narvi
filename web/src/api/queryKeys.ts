@@ -41,3 +41,19 @@ export const authQueryKeys = {
 export const modelCatalogQueryKeys = {
   all: () => ['models'] as const,
 }
+
+// reviewQueryKeys (§26.1/§12.2 item 2, §15.2/§15.3/§12.2 item 9) -- the
+// code-review and release-review views' own data sources, both scoped by
+// session id like sessionQueryKeys above.
+export const reviewQueryKeys = {
+  readout: (sessionId: string) => ['session', sessionId, 'review'] as const,
+  releaseManifest: (sessionId: string) => ['session', sessionId, 'release-manifest'] as const,
+}
+
+// falsePositivePatternQueryKeys (§22.4) -- the per-repo audit view,
+// parameterized by repoFullName (owner/repo combined, matching the
+// server's own repo_full_name convention) rather than owner+repo
+// separately, since every caller already has the combined form on hand.
+export const falsePositivePatternQueryKeys = {
+  list: (repoFullName: string) => ['false-positive-patterns', repoFullName] as const,
+}

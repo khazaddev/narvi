@@ -1904,6 +1904,22 @@ type ProviderCredential struct {
 	OauthNeedsRelink bool                       `json:"oauth_needs_relink"`
 }
 
+type ReleaseManifestCheck struct {
+	ID                            pgtype.UUID        `json:"id"`
+	SessionID                     pgtype.UUID        `json:"session_id"`
+	RepoFullName                  string             `json:"repo_full_name"`
+	PrNumber                      int32              `json:"pr_number"`
+	BaseRef                       string             `json:"base_ref"`
+	HeadRef                       string             `json:"head_ref"`
+	ConstituentPrCount            int32              `json:"constituent_pr_count"`
+	CoveragePartial               bool               `json:"coverage_partial"`
+	AggregateReviewTriggered      bool               `json:"aggregate_review_triggered"`
+	AggregateReviewTriggerReasons []byte             `json:"aggregate_review_trigger_reasons"`
+	Findings                      []byte             `json:"findings"`
+	MergedPrs                     []byte             `json:"merged_prs"`
+	CreatedAt                     pgtype.Timestamptz `json:"created_at"`
+}
+
 type ReleaseManifestPending struct {
 	ID            pgtype.UUID        `json:"id"`
 	SessionID     pgtype.UUID        `json:"session_id"`

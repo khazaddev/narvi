@@ -15,17 +15,24 @@
 // through this SAME request<T> + rest-dtos.ts pattern -- Steps 81+ add
 // them as each view needs one, not speculatively here.
 import type {
+  ApplySuggestionResponse,
   ArtifactsResponse,
   ConfirmUploadResponse,
   CreateSessionRequest,
   CreateTurnRequest,
   CreateTurnResponse,
   EventsResponse,
+  FalsePositivePattern,
+  ListFalsePositivePatternsResponse,
   ListSessionsResponse,
   Member,
   MintUploadRequest,
   MintUploadResponse,
   ModelCatalog,
+  RebutFindingRequest,
+  ReleaseManifestReadout,
+  ReviewFinding,
+  ReviewReadout,
   Session,
   WSTokenResponse,
 } from '@narvi/contracts/rest-dtos'
@@ -118,4 +125,41 @@ export function mintUpload(sessionId: string, body: MintUploadRequest, signal?: 
 /** confirmUpload calls POST /api/sessions/:id/uploads/:uploadId/complete (§28.4/§28.6) -- attachments.ts's own runUpload calls this as step 3, after the direct-to-storage PUT. */
 export function confirmUpload(sessionId: string, uploadId: string, signal?: AbortSignal): Promise<ConfirmUploadResponse> {
   return request<ConfirmUploadResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/uploads/${encodeURIComponent(uploadId)}/complete`, { method: 'POST', signal })
+}
+
+// -- code review + release review (§26.1/§12.2 item 2, §15.2/§15.3/§12.2 item 9). --
+
+/** getReviewReadout calls GET /api/sessions/:id/review -- the code-review view's own merge-readout data source (digest, findings, history, epistemic heads-up). */
+export function getReviewReadout(sessionId: string, signal?: AbortSignal): Promise<ReviewReadout> {
+  return request<ReviewReadout>(`/api/sessions/${encodeURIComponent(sessionId)}/review`, { signal })
+}
+
+/** getReleaseManifestReadout calls GET /api/sessions/:id/release-manifest -- the dedicated release-review screen's own data source. */
+export function getReleaseManifestReadout(sessionId: string, signal?: AbortSignal): Promise<ReleaseManifestReadout> {
+  return request<ReleaseManifestReadout>(`/api/sessions/${encodeURIComponent(sessionId)}/release-manifest`, { signal })
+}
+
+/** retriggerReview calls POST /api/sessions/:id/review/retrigger (§12.2 item 2's "re-run action") -- admin/maintainer only server-side (authz.ActionRetriggerReview); the button itself is rendered role-aware but the server is the real gate. */
+export function retriggerReview(sessionId: string, signal?: AbortSignal): Promise<CreateTurnResponse> {
+  return request<CreateTurnResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/review/retrigger`, { method: 'POST', signal })
+}
+
+/** rebutReviewFinding calls POST /api/sessions/:id/review/findings/:identityHash/rebut (§22.1) -- maintainer+ only server-side. */
+export function rebutReviewFinding(sessionId: string, identityHash: string, body: RebutFindingRequest, signal?: AbortSignal): Promise<ReviewFinding> {
+  return request<ReviewFinding>(`/api/sessions/${encodeURIComponent(sessionId)}/review/findings/${encodeURIComponent(identityHash)}/rebut`, { method: 'POST', body, signal })
+}
+
+/** applySuggestion calls POST /api/sessions/:id/review/findings/:identityHash/apply-suggestion (§12.2 item 2) -- maintainer+ only server-side. */
+export function applySuggestion(sessionId: string, identityHash: string, signal?: AbortSignal): Promise<ApplySuggestionResponse> {
+  return request<ApplySuggestionResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/review/findings/${encodeURIComponent(identityHash)}/apply-suggestion`, { method: 'POST', signal })
+}
+
+/** listFalsePositivePatterns calls GET /api/repos/:owner/:repo/false-positive-patterns (§22.4) -- the per-repo audit view, maintainer+ only server-side (authz.ActionManageFalsePositivePatterns). */
+export function listFalsePositivePatterns(owner: string, repo: string, signal?: AbortSignal): Promise<ListFalsePositivePatternsResponse> {
+  return request<ListFalsePositivePatternsResponse>(`/api/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/false-positive-patterns`, { signal })
+}
+
+/** retireFalsePositivePattern calls POST /api/repos/:owner/:repo/false-positive-patterns/:patternId/retire (§22.4) -- maintainer+ only server-side. */
+export function retireFalsePositivePattern(owner: string, repo: string, patternId: string, signal?: AbortSignal): Promise<FalsePositivePattern> {
+  return request<FalsePositivePattern>(`/api/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/false-positive-patterns/${encodeURIComponent(patternId)}/retire`, { method: 'POST', signal })
 }

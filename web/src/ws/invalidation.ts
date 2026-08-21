@@ -1,6 +1,6 @@
 import type { QueryClient, QueryKey } from '@tanstack/react-query'
 
-import { sessionQueryKeys } from '../api/queryKeys'
+import { reviewQueryKeys, sessionQueryKeys } from '../api/queryKeys'
 import type { EventEnvelope } from './types'
 
 // invalidation.ts is the "-> query invalidation" stage of §12.1's
@@ -35,7 +35,19 @@ import type { EventEnvelope } from './types'
 type InvalidationRule = (sessionId: string) => QueryKey[]
 
 const EVENT_TYPE_INVALIDATION: Record<string, InvalidationRule> = {
-  execution_complete: (sessionId) => [sessionQueryKeys.detail(sessionId), sessionQueryKeys.events(sessionId)],
+  // A review/manifest verdict is posted via a server-side REST tool call
+  // mid-turn (§8.2/§26.1), never its own distinct sandbox-ws event type --
+  // execution_complete (a turn boundary) is the closest real signal that
+  // one MAY have landed, so the merge-readout/release-manifest queries
+  // piggyback on it rather than polling. An occasional over-broad refetch
+  // when no verdict actually posted this turn is the same accepted cost
+  // DEFAULT_RULE's own doc comment already accepts below.
+  execution_complete: (sessionId) => [
+    sessionQueryKeys.detail(sessionId),
+    sessionQueryKeys.events(sessionId),
+    reviewQueryKeys.readout(sessionId),
+    reviewQueryKeys.releaseManifest(sessionId),
+  ],
   tool_call: (sessionId) => [sessionQueryKeys.events(sessionId)],
   artifact: (sessionId) => [sessionQueryKeys.artifacts(sessionId)],
   warning: (sessionId) => [sessionQueryKeys.events(sessionId)],

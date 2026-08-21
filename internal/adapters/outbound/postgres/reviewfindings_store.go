@@ -65,6 +65,17 @@ func (s *ReviewFindingStore) ListOpenAndRebutted(ctx context.Context, repoFullNa
 	})
 }
 
+// ListAllForPR returns EVERY finding ever posted for one PR, regardless of
+// status, oldest-first -- the merge readout's own collapsed appendix
+// (§26.1 item 5, §12.2 item 2), unlike ListOpenAndRebutted's own narrower
+// re-review-reconciliation scope above.
+func (s *ReviewFindingStore) ListAllForPR(ctx context.Context, repoFullName string, prNumber int32) ([]sqlcgen.ReviewFinding, error) {
+	return s.q.ListAllReviewFindingsForPR(ctx, sqlcgen.ListAllReviewFindingsForPRParams{
+		RepoFullName: repoFullName,
+		PrNumber:     prNumber,
+	})
+}
+
 // MarkRebutted records a maintainer+'s explicit dismissal (§22.1) --
 // pgx.ErrNoRows (unwrapped) means no finding with this identity hash
 // exists on this PR at all.

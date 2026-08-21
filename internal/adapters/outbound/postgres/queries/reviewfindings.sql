@@ -48,6 +48,18 @@ SELECT * FROM review_findings
 WHERE repo_full_name = $1 AND pr_number = $2 AND status IN ('open', 'rebutted')
 ORDER BY first_seen_at ASC;
 
+-- name: ListAllReviewFindingsForPR :many
+-- §26.1 item 5's own merge-readout appendix (§12.2 item 2): EVERY
+-- finding ever posted for one PR, regardless of status -- unlike
+-- ListOpenAndRebuttedReviewFindings above (which deliberately excludes
+-- fix_pending/fix_open/fix_merged/fix_applied for re-review reconciliation
+-- purposes), a human reading the merge readout needs to see a finding's
+-- full remediation history too, not just the subset still "live". Ordered
+-- oldest-first, mirroring that query's own stable ordering.
+SELECT * FROM review_findings
+WHERE repo_full_name = $1 AND pr_number = $2
+ORDER BY first_seen_at ASC;
+
 -- name: MarkReviewFindingRebutted :one
 -- The rebuttal endpoint's own write (POST .../findings/{identityHash}/rebut,
 -- maintainer+ only, authz.ActionEditReviewVerdict) -- sets status,

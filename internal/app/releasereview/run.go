@@ -87,7 +87,13 @@ type OutboxEnqueuer interface {
 type Deps struct {
 	SourceControl MergedPRLister
 	Outbox        OutboxEnqueuer
-	Timeouts      platform.Timeouts
+	// ReleaseManifestChecks (§12.2 item 9) persists this check's
+	// own typed result so the release-review screen has a durable read
+	// model -- nil-safe (persistReleaseManifestCheck's own doc comment),
+	// mirroring this package's own established "every internal failure
+	// degrades, never blocks" posture for a caller that doesn't wire one.
+	ReleaseManifestChecks ReleaseManifestCheckInserter
+	Timeouts              platform.Timeouts
 }
 
 // Input is what Run needs to know about the just-detected release PR.
@@ -155,6 +161,7 @@ func Run(ctx context.Context, logger *slog.Logger, deps Deps, in Input) {
 
 	findings := review.ComputeReleaseManifestFindings(domainMerged)
 	aggregateReview := review.ShouldRunAggregateReview(domainMerged)
+	triggerReasons := review.AggregateReviewTriggerReasons(domainMerged)
 	// Blocking-finding fix #5: truncated (ListMergedBetween's own second
 	// return -- see MergedPRLister's own doc comment) is threaded through
 	// so the rendered comment never claims a completeness guarantee this
@@ -166,6 +173,12 @@ func Run(ctx context.Context, logger *slog.Logger, deps Deps, in Input) {
 		"owner", in.Owner, "repo", in.Repo, "pr_number", in.PRNumber,
 		"constituent_pr_count", len(domainMerged), "finding_count", len(findings),
 		"aggregate_review_triggered", aggregateReview, "coverage_truncated", truncated)
+
+	// §12.2 item 9's own release-review screen: persist the SAME typed
+	// data above, alongside (never instead of) the outbox-delivered
+	// comment below -- see persist.go's own doc comment for why this
+	// exists and why it is best-effort.
+	persistReleaseManifestCheck(ctx, logger, deps.ReleaseManifestChecks, in, domainMerged, findings, aggregateReview, triggerReasons, truncated)
 
 	payload, err := json.Marshal(githubapi.ReleaseManifestPayload{
 		Owner:    in.Owner,

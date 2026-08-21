@@ -34,6 +34,46 @@ func ShouldRunAggregateReview(merged []MergedPR) bool {
 	return false
 }
 
+// AggregateReviewTriggerReasons reports, in human-readable form, WHICH of
+// §15.3's three OR-conditions fired for merged -- added for the release-
+// review screen's own trigger banner (§12.2 item 9: "aggregate-diff
+// trigger banner showing why the conditional pass fired"), which needs
+// more than ShouldRunAggregateReview's own bare bool to explain itself.
+// Deliberately generic causes, not the specific PR numbers/path prefix
+// involved (unlike the mockup's own illustrative "3 PRs touched
+// internal/domain/sandbox/** this release" wording) -- this package holds
+// no rendering/formatting concerns (doc.go's own "zero external imports,
+// pure functions only" stance), and the SPECIFIC prefix/PR-number detail
+// behind an overlapping-path trigger is exactly the kind of thing a
+// caller with real formatting/i18n concerns should render, not this
+// package. Order matches ShouldRunAggregateReview's own listed order;
+// more than one reason may fire at once, and every one that does is
+// returned, not just the first (unlike ShouldRunAggregateReview's own
+// short-circuiting OR, which only needs to know THAT one fired).
+func AggregateReviewTriggerReasons(merged []MergedPR) []string {
+	var reasons []string
+	if hasOverlappingPathPrefixes(merged) {
+		reasons = append(reasons, "3 or more pull requests in this release touched an overlapping subsystem")
+	}
+	highRisk := false
+	manualConflict := false
+	for _, pr := range merged {
+		if pr.HighRiskFlagged {
+			highRisk = true
+		}
+		if pr.HadManualConflictResolution {
+			manualConflict = true
+		}
+	}
+	if highRisk {
+		reasons = append(reasons, "a high-risk pull request is included in this release")
+	}
+	if manualConflict {
+		reasons = append(reasons, "a pull request in this release required manually resolving a merge conflict")
+	}
+	return reasons
+}
+
 // hasOverlappingPathPrefixes reports whether at least 3 DISTINCT
 // constituent PRs (by Number) touch at least one SHARED path prefix
 // (§15.3: "≥3 constituent PRs touch overlapping path prefixes (same
