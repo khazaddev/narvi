@@ -1,7 +1,7 @@
 import { QueryClient } from '@tanstack/react-query'
 import { describe, expect, it, vi } from 'vitest'
 
-import { reviewQueryKeys, sessionQueryKeys } from '../../api/queryKeys'
+import { planQueryKeys, reviewQueryKeys, sessionQueryKeys } from '../../api/queryKeys'
 import { invalidateForEvents, queryKeysForEvent } from '../invalidation'
 import type { EventEnvelope } from '../types'
 
@@ -14,12 +14,13 @@ describe('queryKeysForEvent', () => {
     expect(queryKeysForEvent('s1', event(1, 'tool_call'))).toEqual([sessionQueryKeys.events('s1')])
   })
 
-  it('maps execution_complete to the session detail/events keys plus the review readout/release-manifest keys (a verdict may have posted mid-turn)', () => {
+  it('maps execution_complete to the session detail/events keys plus the review readout/release-manifest/plan-list keys (a verdict or new plan version may have posted mid-turn)', () => {
     expect(queryKeysForEvent('s1', event(1, 'execution_complete'))).toEqual([
       sessionQueryKeys.detail('s1'),
       sessionQueryKeys.events('s1'),
       reviewQueryKeys.readout('s1'),
       reviewQueryKeys.releaseManifest('s1'),
+      planQueryKeys.list('s1'),
     ])
   })
 
@@ -40,12 +41,13 @@ describe('invalidateForEvents', () => {
     expect(invalidatedKeys).toContainEqual(sessionQueryKeys.detail('s1'))
     expect(invalidatedKeys).toContainEqual(reviewQueryKeys.readout('s1'))
     expect(invalidatedKeys).toContainEqual(reviewQueryKeys.releaseManifest('s1'))
+    expect(invalidatedKeys).toContainEqual(planQueryKeys.list('s1'))
     // tool_call's own key (events) is only requested ONCE across both
     // tool_call events, even though two separate events asked for it --
     // de-duplicated, not one invalidateQueries call per event. The union
     // across tool_call (events) and execution_complete (detail, events,
-    // readout, releaseManifest) is 4 unique keys.
-    expect(spy).toHaveBeenCalledTimes(4)
+    // readout, releaseManifest, plan list) is 5 unique keys.
+    expect(spy).toHaveBeenCalledTimes(5)
   })
 
   it('does nothing for an empty event list', () => {

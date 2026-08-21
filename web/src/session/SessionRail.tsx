@@ -242,6 +242,23 @@ function ReviewLinksPanel({ sessionId }: { sessionId: string }) {
   )
 }
 
+// PlanLinkPanel: entry point into the plan-mode view (§12.2 item 3, Step
+// 85) -- always rendered, mirroring ReviewLinksPanel's own identical
+// precedent immediately above and its own doc comment's reasoning: the
+// session DTO carries no "does this session have a plan" signal to gate
+// on cheaply, so a session with no plan simply gets PlanModeView's own
+// graceful "no plan has been proposed" state on the destination route.
+function PlanLinkPanel({ sessionId }: { sessionId: string }) {
+  return (
+    <div>
+      <h3>Plan</h3>
+      <Link to="/session/$sessionId/plan" params={{ sessionId }} className="btn" style={{ textDecoration: 'none', textAlign: 'center', display: 'block' }}>
+        View plan
+      </Link>
+    </div>
+  )
+}
+
 export function SessionRail({ sessionId, sandbox, cost }: { sessionId: string; sandbox: SandboxRailModel; cost: CostRollup }) {
   return (
     <aside className="rail" aria-label="Session details">
@@ -249,6 +266,7 @@ export function SessionRail({ sessionId, sandbox, cost }: { sessionId: string; s
       <BootProgressPanel model={sandbox} />
       <ArtifactsPanel sessionId={sessionId} />
       <CostPanel cost={cost} />
+      <PlanLinkPanel sessionId={sessionId} />
       <ReviewLinksPanel sessionId={sessionId} />
     </aside>
   )

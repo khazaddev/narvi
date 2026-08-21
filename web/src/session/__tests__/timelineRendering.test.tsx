@@ -43,6 +43,8 @@ function baseSession(overrides: Partial<Session> = {}): Session {
     updatedAt: '2026-08-20T10:00:00Z',
     repos: [],
     sandboxStatus: null,
+    buildModelId: null,
+    buildEffort: null,
     ...overrides,
   }
 }

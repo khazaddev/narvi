@@ -16,19 +16,26 @@
 // them as each view needs one, not speculatively here.
 import type {
   ApplySuggestionResponse,
+  Automation,
   ArtifactsResponse,
   ConfirmUploadResponse,
+  CreateAutomationRequest,
+  CreateAutomationResponse,
   CreateSessionRequest,
   CreateTurnRequest,
   CreateTurnResponse,
   EventsResponse,
   FalsePositivePattern,
+  ListAutomationInvocationsResponse,
+  ListAutomationsResponse,
   ListFalsePositivePatternsResponse,
+  ListPlansResponse,
   ListSessionsResponse,
   Member,
   MintUploadRequest,
   MintUploadResponse,
   ModelCatalog,
+  PlanActionResponse,
   RebutFindingRequest,
   ReleaseManifestReadout,
   ReviewFinding,
@@ -162,4 +169,64 @@ export function listFalsePositivePatterns(owner: string, repo: string, signal?: 
 /** retireFalsePositivePattern calls POST /api/repos/:owner/:repo/false-positive-patterns/:patternId/retire (§22.4) -- maintainer+ only server-side. */
 export function retireFalsePositivePattern(owner: string, repo: string, patternId: string, signal?: AbortSignal): Promise<FalsePositivePattern> {
   return request<FalsePositivePattern>(`/api/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/false-positive-patterns/${encodeURIComponent(patternId)}/retire`, { method: 'POST', signal })
+}
+
+// -- plan mode (§8.1/§12.2 item 3). --
+
+/** listPlans calls GET /api/sessions/:id/plans -- every plan VERSION for the session, ordered by version, each carrying its own best-effort-extracted content (restdtos.Plan.content's own doc comment). */
+export function listPlans(sessionId: string, signal?: AbortSignal): Promise<ListPlansResponse> {
+  return request<ListPlansResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/plans`, { signal })
+}
+
+/**
+ * approvePlan calls POST /api/sessions/:id/plans/:planId/approve
+ * (§12.2 item 3's "Approve & build"). Own/joined-aware server-side
+ * (authz.ActionApprovePlan, planauthz.go) -- this call is sent regardless
+ * of what the client-side affordance decided to render; a caller not
+ * actually authorized gets a real 403 back, never a client-side-only
+ * refusal (see PlanModeView.tsx's own top doc comment).
+ */
+export function approvePlan(sessionId: string, planId: string, signal?: AbortSignal): Promise<PlanActionResponse> {
+  return request<PlanActionResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/plans/${encodeURIComponent(planId)}/approve`, { method: 'POST', signal })
+}
+
+/** rejectPlan calls POST /api/sessions/:id/plans/:planId/reject (§12.2 item 3's "Reject") -- same server-side authorization as approvePlan above. */
+export function rejectPlan(sessionId: string, planId: string, signal?: AbortSignal): Promise<PlanActionResponse> {
+  return request<PlanActionResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/plans/${encodeURIComponent(planId)}/reject`, { method: 'POST', signal })
+}
+
+// -- automations (§8.4/§12.2 item 4). --
+
+/** listAutomations calls GET /api/automations, optionally filtered by creator/status (§8.4's own "creator/status filters" -- mockups.html's "My automations ▾ / All statuses ▾" toolbar). No extra RBAC beyond signed-in (automations.go's own doc comment). */
+export function listAutomations(filter: { createdBy?: 'me' | string; status?: 'active' | 'paused' } = {}, signal?: AbortSignal): Promise<ListAutomationsResponse> {
+  const params = new URLSearchParams()
+  if (filter.createdBy !== undefined) params.set('createdBy', filter.createdBy)
+  if (filter.status !== undefined) params.set('status', filter.status)
+  const query = params.size > 0 ? `?${params.toString()}` : ''
+  return request<ListAutomationsResponse>(`/api/automations${query}`, { signal })
+}
+
+/** createAutomation calls POST /api/automations -- admin/maintainer only server-side (authz.ActionManageAutomations); the button itself is rendered role-aware but the server is the real gate. */
+export function createAutomation(body: CreateAutomationRequest, signal?: AbortSignal): Promise<CreateAutomationResponse> {
+  return request<CreateAutomationResponse>('/api/automations', { method: 'POST', body, signal })
+}
+
+/** getAutomation calls GET /api/automations/:id. */
+export function getAutomation(automationId: string, signal?: AbortSignal): Promise<Automation> {
+  return request<Automation>(`/api/automations/${encodeURIComponent(automationId)}`, { signal })
+}
+
+/** listAutomationInvocations calls GET /api/automations/:id/invocations (the automations UI's own "runs table" addition) -- this automation's own most recent invocations, newest first, each with its own nested runs (automationinvocations.go's own doc comment). */
+export function listAutomationInvocations(automationId: string, signal?: AbortSignal): Promise<ListAutomationInvocationsResponse> {
+  return request<ListAutomationInvocationsResponse>(`/api/automations/${encodeURIComponent(automationId)}/invocations`, { signal })
+}
+
+/** pauseAutomation calls POST /api/automations/:id/pause -- admin/maintainer only server-side (authz.ActionManageAutomations). */
+export function pauseAutomation(automationId: string, signal?: AbortSignal): Promise<Automation> {
+  return request<Automation>(`/api/automations/${encodeURIComponent(automationId)}/pause`, { method: 'POST', signal })
+}
+
+/** resumeAutomation calls POST /api/automations/:id/resume -- same server-side gate as pauseAutomation above; this is the mockup's own "auto-paused chip + Resume" action. */
+export function resumeAutomation(automationId: string, signal?: AbortSignal): Promise<Automation> {
+  return request<Automation>(`/api/automations/${encodeURIComponent(automationId)}/resume`, { method: 'POST', signal })
 }

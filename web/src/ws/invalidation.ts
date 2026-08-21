@@ -1,6 +1,6 @@
 import type { QueryClient, QueryKey } from '@tanstack/react-query'
 
-import { reviewQueryKeys, sessionQueryKeys } from '../api/queryKeys'
+import { planQueryKeys, reviewQueryKeys, sessionQueryKeys } from '../api/queryKeys'
 import type { EventEnvelope } from './types'
 
 // invalidation.ts is the "-> query invalidation" stage of §12.1's
@@ -41,12 +41,19 @@ const EVENT_TYPE_INVALIDATION: Record<string, InvalidationRule> = {
   // one MAY have landed, so the merge-readout/release-manifest queries
   // piggyback on it rather than polling. An occasional over-broad refetch
   // when no verdict actually posted this turn is the same accepted cost
-  // DEFAULT_RULE's own doc comment already accepts below.
+  // DEFAULT_RULE's own doc comment already accepts below. planQueryKeys
+  // piggybacks for the identical reason: a NEW plan version is
+  // created exactly when a plan_mode=true turn completes -- there is no
+  // dedicated "plan_created" sandbox-ws event type either (migrations/
+  // 000034_plan_mode.up.sql's own doc comment: the plans row is written in
+  // the SAME transaction as the producing turn's own terminal-state write,
+  // internal/app/sessionactor/planrecord.go).
   execution_complete: (sessionId) => [
     sessionQueryKeys.detail(sessionId),
     sessionQueryKeys.events(sessionId),
     reviewQueryKeys.readout(sessionId),
     reviewQueryKeys.releaseManifest(sessionId),
+    planQueryKeys.list(sessionId),
   ],
   tool_call: (sessionId) => [sessionQueryKeys.events(sessionId)],
   artifact: (sessionId) => [sessionQueryKeys.artifacts(sessionId)],

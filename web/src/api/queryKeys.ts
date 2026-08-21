@@ -57,3 +57,18 @@ export const reviewQueryKeys = {
 export const falsePositivePatternQueryKeys = {
   list: (repoFullName: string) => ['false-positive-patterns', repoFullName] as const,
 }
+
+// planQueryKeys (§8.1/§12.2 item 3) -- the plan-mode view's own
+// data source, scoped by session id like sessionQueryKeys above.
+export const planQueryKeys = {
+  list: (sessionId: string) => ['session', sessionId, 'plans'] as const,
+}
+
+// automationQueryKeys (§8.4/§12.2 item 4) -- the automations
+// view's own list (parameterized by the SAME creator/status filter shape
+// listAutomations accepts) and per-automation detail/invocations queries.
+export const automationQueryKeys = {
+  list: (filter: { createdBy?: string; status?: string }) => ['automations', 'list', filter.createdBy ?? null, filter.status ?? null] as const,
+  detail: (automationId: string) => ['automations', automationId, 'detail'] as const,
+  invocations: (automationId: string) => ['automations', automationId, 'invocations'] as const,
+}
