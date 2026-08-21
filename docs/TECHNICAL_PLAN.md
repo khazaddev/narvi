@@ -1436,7 +1436,8 @@ are recorded rather than left to be re-litigated:
   per-model cost attribution when a sub-task runs on a different model than its turn "is not
   designed here ... left to whichever future work actually adds it." This chantier inherits, and
   must close, the equivalent gap at the workflow-step level.
-- **Decision inbox** (§16, Step 60/78) is not extended by this chantier.
+- **Decision inbox** (§16, Steps 60 and 87 -- the read model/API and the screen over it) is not
+  extended by this chantier.
 - **`LaneFor` must inherit the classifier's fail-open discipline**: `IsActive` defaults every
   surface to shadow when unconfigured (§18.5) — `LaneFor` must default the same way rather than
   block dispatch on an unresolved lane.
