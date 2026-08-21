@@ -428,7 +428,25 @@ already takes.
 
 | Route | Action | Notes |
 |---|---|---|
-| `GET /api/integrations` | `ActionManageIntegrations` (admin) | one row per surface: configured, last inbound delivery, last delivery outcome |
+| `GET /api/integrations` | `ActionManageIntegrations` (admin) | one row per surface: configured, last inbound delivery, last outbound delivery outcome |
+
+**Inbound and outbound are different tables and different facts, and an earlier
+draft of this section conflated them.** `webhook_deliveries` is a
+deduplication ledger — `(provider, delivery_id, received_at)` and nothing else —
+so it answers "when did we last hear from this surface" and carries no outcome
+at all. Outcomes live on `outbox`, which is the other direction entirely: what
+Narvi last tried to POST to that surface, with its status, attempt count and
+last error. A row therefore carries two independent timestamps, and must label
+them as what they are; collapsing them into one "last activity" would make a
+surface that receives fine but cannot post look healthy.
+
+**Mapping an outbox row to a surface is a naming convention, not a constraint.**
+`outbox.kind` is free text following `<provider>_<what>` (`slack_digest`,
+`linear_progress`, `github_verdict`), so the provider comes from a prefix match.
+Nothing enforces that convention, and a future kind that breaks it drops
+silently out of this read rather than failing loudly. Say so where the mapping
+is implemented, and prefer a shared, tested prefix helper over a match inlined
+at the query.
 
 **Never the secrets themselves, not even shaped.** The response says *whether* a surface is
 configured and nothing about what configures it — no token prefix, no length, no masked form. This
