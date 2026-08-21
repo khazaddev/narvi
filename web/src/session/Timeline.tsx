@@ -30,8 +30,11 @@ import type { StepNode, SubTaskNode, ToolCallNode, TurnNode } from './timelineMo
 // what actually carries context forward (sessions.opencode_conversation_id,
 // threaded automatically server-side, CreateTurnRequest's own doc
 // comment) -- this string only needs to nudge the model to continue, not
-// restate anything.
-const RESUME_PROMPT = 'Resume — continue exactly where the previous turn left off.'
+// restate anything. Exported so DecisionInboxView.tsx's own needs_attention
+// "Resume" action (a failed-session row, decision inbox §16.1) sends the
+// exact same createTurn call this file's own FailureCard does, rather than
+// a second, independently-drifting copy of this string.
+export const RESUME_PROMPT = 'Resume — continue exactly where the previous turn left off.'
 
 // MAX_RENDERED_TURNS -- the "very long timeline must stay readable and
 // must not hang the tab" requirement: rather than rendering every turn a

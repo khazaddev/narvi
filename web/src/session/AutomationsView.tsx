@@ -22,8 +22,8 @@
 // triggerType fixed to "manual") -- CreateAutomationRequest's full surface
 // (cron/GitHub/Linear trigger-config editors, sandbox path-scope/mock
 // config, per-automation env vars) is a materially larger settings-style
-// form, out of THIS Step's own named scope ("automations health/runs
-// table", docs/IMPLEMENTATION_PLAN.md row 85) -- named here rather than
+// form, out of this view's own named scope (the automations health/runs
+// table, §8.4) -- named here rather than
 // silently built partially. A per-run one-line narrative (mockups.html's
 // own decisions 19/20, "Reviewed PR #1187 · verdict medium risk · 2
 // findings" / "reason: image_build_failed · retried with backoff") is

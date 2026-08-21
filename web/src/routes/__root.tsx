@@ -26,21 +26,20 @@ function RootLayout() {
     <div className="app-shell">
       <header className="app-header">
         <span className="wordmark">Narvi</span>
-        {/* Automations (§12.2 item 4): the only real top-level nav
-            entry point this shell has today -- unlike every other view
-            shipped so far (session-scoped, reached from SessionRail),
-            automations belong to no single session, so there is nowhere
-            else in the app to link from yet. A fuller top nav (sessions,
-            decision inbox, settings) lands with the decision-inbox home
-            view (§16); this is a minimal, honest placeholder, not a
-            finished nav bar. */}
+        {/* The real top nav (§16): Home is the decision-inbox queue
+            (routes/index.tsx); Sessions is its own second tab
+            (routes/sessions.tsx, §16.3 -- "sessions list moves to the
+            second tab"), no longer reachable
+            only from inside an already-open session's own sidebar. */}
+        <Link to="/" className="header-nav-link">
+          Home
+        </Link>
+        <Link to="/sessions" className="header-nav-link">
+          Sessions
+        </Link>
         <Link to="/automations" className="header-nav-link">
           Automations
         </Link>
-        {/* Settings/Analytics (§12.2 item 5): the same minimal,
-            honest placeholder-nav precedent Automations above already
-            established -- a fuller top nav still lands with the
-            decision-inbox home view (§16). */}
         <Link to="/settings" className="header-nav-link">
           Settings
         </Link>

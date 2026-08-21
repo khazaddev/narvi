@@ -25,6 +25,17 @@ export const sessionListQueryKeys = {
   list: (filter: 'mine' | 'all') => ['sessions', 'list', filter] as const,
 }
 
+// decisionInboxQueryKeys (§16.2/§16.3, decisions 32-34) -- the home view's
+// own read model. One key, no params: GET /api/decision-inbox always
+// returns the CURRENT caller's own queue (there is no server-side filter
+// param) -- the repo filter the view offers is applied client-side over
+// this ONE cached list, mirroring reviewQueryKeys' own single-key shape
+// for a response that is inherently scoped to "the current caller", not
+// parameterized by anything a client chooses.
+export const decisionInboxQueryKeys = {
+  list: () => ['decision-inbox', 'list'] as const,
+}
+
 // authQueryKeys (§13.1) -- the sign-in view's own "am I signed
 // in, and as whom" query (GET /api/me). One key, no params: there is only
 // ever one meaningful "current caller" per browser session, unlike
