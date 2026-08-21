@@ -38,6 +38,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
@@ -95,7 +96,7 @@ func ListWorkflowBindings(workflows *postgres.WorkflowStore) http.HandlerFunc {
 // target definition's own version column at write time, never a
 // client-supplied value. repoFullName null targets the global binding
 // for lane; non-null targets that repo's own override. Admin only.
-func PutWorkflowBinding(workflows *postgres.WorkflowStore) http.HandlerFunc {
+func PutWorkflowBinding(pool *pgxpool.Pool, workflows *postgres.WorkflowStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		logger := platform.Logger(ctx)
@@ -117,13 +118,30 @@ func PutWorkflowBinding(workflows *postgres.WorkflowStore) http.HandlerFunc {
 			return
 		}
 
-		definition, err := workflows.GetDefinition(ctx, definitionID)
+		// This handler ran entirely outside a transaction, each store call
+		// autocommitting on its own. That made §25.11's bound-definition
+		// refusal defeatable from THIS side: a PUT on the definition could
+		// check for bindings, find none, and still be mid-flight when this
+		// upsert committed one -- so the edit landed on a definition that was
+		// bound by the time it committed. Both sides now take the same row
+		// lock on workflow_definitions inside a transaction, so activation and
+		// editing serialise instead of interleaving.
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			logger.Error("httpapi: begin put-workflow-binding tx failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		txWorkflows := workflows.WithTx(tx)
+
+		definition, err := txWorkflows.LockDefinitionForUpdate(ctx, definitionID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				writeError(w, http.StatusNotFound, "workflow definition not found")
 				return
 			}
-			logger.Error("httpapi: get workflow definition for binding failed", "error", err)
+			logger.Error("httpapi: lock workflow definition for binding failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
@@ -139,7 +157,7 @@ func PutWorkflowBinding(workflows *postgres.WorkflowStore) http.HandlerFunc {
 
 		var binding sqlcgen.WorkflowBinding
 		if req.RepoFullName == nil {
-			binding, err = workflows.UpsertGlobalBinding(ctx, string(req.Lane), definitionID, definition.Version)
+			binding, err = txWorkflows.UpsertGlobalBinding(ctx, string(req.Lane), definitionID, definition.Version)
 			if err != nil {
 				logger.Error("httpapi: upsert global workflow binding failed", "error", err)
 				writeError(w, http.StatusInternalServerError, "internal error")
@@ -151,12 +169,18 @@ func PutWorkflowBinding(workflows *postgres.WorkflowStore) http.HandlerFunc {
 				writeError(w, http.StatusBadRequest, "repoFullName must be non-empty, or null for the global binding")
 				return
 			}
-			binding, err = workflows.UpsertRepoBinding(ctx, string(req.Lane), repoFullName, definitionID, definition.Version)
+			binding, err = txWorkflows.UpsertRepoBinding(ctx, string(req.Lane), repoFullName, definitionID, definition.Version)
 			if err != nil {
 				logger.Error("httpapi: upsert repo workflow binding failed", "error", err)
 				writeError(w, http.StatusInternalServerError, "internal error")
 				return
 			}
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			logger.Error("httpapi: commit put-workflow-binding tx failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
 		}
 
 		logger.Info("httpapi: put workflow binding", "lane", string(binding.Lane), "definition_id", binding.WorkflowDefinitionID.String())

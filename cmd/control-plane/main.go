@@ -1406,7 +1406,7 @@ func serve() error {
 	router.Route("/api/workflow-bindings", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
 		r.Get("/", httpapi.ListWorkflowBindings(workflowStore))
-		r.Put("/", httpapi.PutWorkflowBinding(workflowStore))
+		r.Put("/", httpapi.PutWorkflowBinding(pool, workflowStore))
 	})
 
 	// /api/repos/{owner}/{repo}/settings ("server-side verdict",

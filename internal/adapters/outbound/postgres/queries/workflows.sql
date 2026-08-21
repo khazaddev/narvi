@@ -66,6 +66,26 @@ SELECT * FROM workflow_bindings WHERE lane = $1 AND repo_full_name = $2;
 -- name: GetGlobalWorkflowBinding :one
 SELECT * FROM workflow_bindings WHERE lane = $1 AND repo_full_name IS NULL;
 
+-- name: LockWorkflowDefinitionForUpdate :one
+-- Row-level lock making §25.11's own "a bound definition is never edited"
+-- refusal actually hold, rather than hold only because callers happen not
+-- to interleave. Taken in the SAME transaction as the bound/run-history
+-- EXISTS checks and the step rewrite that follows them, and taken again by
+-- the binding upsert (§25.10's PUT /api/workflow-bindings) before it
+-- creates a binding -- so a definition cannot acquire a binding in the
+-- window between a PUT's refusal check and its own COMMIT. Without it the
+-- refusal is a read-then-write: the EXISTS sees no binding, an admin
+-- activates the definition, and the edit lands on a now-bound definition,
+-- which is exactly the past-the-admin-gate dispatch change the refusal
+-- exists to prevent. Mirrors LockAutomationForUpdate (queries/
+-- automations.sql), taken for the identical read-check-then-write shape.
+--
+-- Serialising the two writers also fixes a second, quieter race for free:
+-- two concurrent PUTs on the same definition each deleted only the steps
+-- visible in their own snapshot, so the "complete desired state" replace
+-- could merge two step sets instead of replacing one.
+SELECT * FROM workflow_definitions WHERE id = $1 FOR UPDATE;
+
 -- name: GetWorkflowDefinition :one
 SELECT * FROM workflow_definitions WHERE id = $1;
 

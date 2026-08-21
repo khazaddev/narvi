@@ -469,8 +469,8 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		// -- see reviewfindings.go's own doc comment.
 		r.Post("/{sessionID}/review/findings/{identityHash}/rebut", httpapi.RebutReviewFinding(rig.sessions, rig.prSessions, rig.reviewFindings, rig.auditLog))
 		r.Post("/{sessionID}/review/findings/{identityHash}/apply-suggestion", httpapi.ApplySuggestion(rig.sessions, rig.prSessions, rig.reviewFindings, rig.identities, rig.sourceControl, rig.tokenEncryptionKey, platform.DefaultTimeouts()))
-		// workflow-runs ("workflow definition & run API", §25.10, Step
-		// 88) -- see httpapi/workflowruns.go's own doc comment.
+		// workflow-runs (§25.10's own two run-read routes) -- see
+		// httpapi/workflowruns.go's own doc comment.
 		r.Get("/{sessionID}/workflow-runs", httpapi.ListSessionWorkflowRuns(rig.sessions, rig.workflows))
 	})
 	// /api/members, /api/audit-log ("identities + full RBAC",
@@ -600,7 +600,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	router.Route("/api/workflow-bindings", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
 		r.Get("/", httpapi.ListWorkflowBindings(rig.workflows))
-		r.Put("/", httpapi.PutWorkflowBinding(rig.workflows))
+		r.Put("/", httpapi.PutWorkflowBinding(rig.pool, rig.workflows))
 	})
 	// /api/repos/{owner}/{repo}/settings (§8.2) -- mounted behind
 	// auth.Middleware, exactly like cmd/control-plane/main.go's own wiring

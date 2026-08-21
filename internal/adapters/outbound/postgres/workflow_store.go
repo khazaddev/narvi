@@ -67,6 +67,16 @@ func (s *WorkflowStore) GetDefinition(ctx context.Context, id pgtype.UUID) (sqlc
 	return s.q.GetWorkflowDefinition(ctx, id)
 }
 
+// LockDefinitionForUpdate reads a definition row and holds a row-level lock
+// on it for the rest of the calling transaction -- see the query's own
+// comment (queries/workflows.sql) for why §25.11's bound-definition refusal
+// needs it to be more than a read-then-write. Must be called on a WithTx
+// store; on the pool-backed store it takes a lock that is released
+// immediately, which is useless rather than harmful.
+func (s *WorkflowStore) LockDefinitionForUpdate(ctx context.Context, id pgtype.UUID) (sqlcgen.WorkflowDefinition, error) {
+	return s.q.LockWorkflowDefinitionForUpdate(ctx, id)
+}
+
 // ListStepDefinitions fetches every workflow_step_definitions row for
 // definitionID, ordered by step_order.
 func (s *WorkflowStore) ListStepDefinitions(ctx context.Context, definitionID pgtype.UUID) ([]sqlcgen.WorkflowStepDefinition, error) {

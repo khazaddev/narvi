@@ -84,6 +84,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -118,6 +119,16 @@ func parseWorkflowDefinitionID(w http.ResponseWriter, r *http.Request) (pgtype.U
 // layer" split workflowengine.LoadDefinition already applies for the
 // domain/workflow.Definition value (definition.go); this is that same
 // three-query composition, rendered as the REST DTO instead.
+// stepEdges returns a step's outgoing edges as a slice that always marshals
+// as a JSON array, never as `null` -- see its call site for why the bare map
+// lookup was wrong.
+func stepEdges(edgesByStep map[string][]restdtos.WorkflowEdge, stepID string) []restdtos.WorkflowEdge {
+	if found, ok := edgesByStep[stepID]; ok {
+		return found
+	}
+	return []restdtos.WorkflowEdge{}
+}
+
 func workflowDefinitionToDTO(def sqlcgen.WorkflowDefinition, steps []sqlcgen.WorkflowStepDefinition, edges []sqlcgen.WorkflowEdge) restdtos.WorkflowDefinition {
 	edgesByStep := make(map[string][]restdtos.WorkflowEdge, len(edges))
 	for _, e := range edges {
@@ -144,7 +155,16 @@ func workflowDefinitionToDTO(def sqlcgen.WorkflowDefinition, steps []sqlcgen.Wor
 			HitlBefore:             s.HitlBefore,
 			HitlAfter:              s.HitlAfter,
 			CanvasPosition:         canvasPositionFromJSON(s.CanvasPosition),
-			Edges:                  edgesByStep[id],
+			// stepEdges, never edgesByStep[id] directly: a step with no
+			// outgoing edges is absent from the map, the lookup yields a nil
+			// slice, and encoding/json renders a nil slice as `null`. The
+			// schema declares edges as a required, non-nullable array and the
+			// generated TS types it `WorkflowEdge[]`, so `step.edges.map(...)`
+			// on the canvas would throw -- and every seeded built-in is a
+			// single-step passthrough with zero edges, so this is the common
+			// case, not an edge case. Member.identities already cost this
+			// codebase the identical finding (members_integration_test.go).
+			Edges: stepEdges(edgesByStep, id),
 		})
 	}
 
@@ -341,6 +361,16 @@ func validateStepsForWrite(lane workflow.Lane, steps []restdtos.WorkflowStepDefi
 		var u pgtype.UUID
 		if err := u.Scan(s.Id); err != nil {
 			return fmt.Sprintf("step id %q is not a valid uuid", s.Id)
+		}
+		// order is an int on the wire and an int32 in the column, and the
+		// conversion at the write site is a silent truncation. Without this
+		// bound, 4294967297 validates as a positive, unique order here and
+		// then lands as 1 in Postgres -- either tripping the def_order_uniq
+		// constraint as a 500, or worse, executing in an order the operator
+		// never authored. The domain validator cannot catch it: it works on
+		// int, where the value is genuinely fine.
+		if s.Order < 1 || s.Order > math.MaxInt32 {
+			return fmt.Sprintf("step order %d is out of range (must be between 1 and %d)", s.Order, math.MaxInt32)
 		}
 	}
 	candidate := workflow.Definition{
@@ -654,13 +684,23 @@ func PutWorkflowDefinition(pool *pgxpool.Pool, workflows *postgres.WorkflowStore
 		defer func() { _ = tx.Rollback(ctx) }()
 		txWorkflows := workflows.WithTx(tx)
 
-		existing, err := txWorkflows.GetDefinition(ctx, id)
+		// LockDefinitionForUpdate, not GetDefinition: the refusal checks
+		// below are a read, and without a row lock they are a read-then-write.
+		// The bound check could see no binding, an admin could activate the
+		// definition, and this edit would still land -- on a definition that
+		// is bound at COMMIT time, which is precisely the past-the-admin-gate
+		// dispatch change §25.11's amendment says the refusal prevents. The
+		// binding upsert takes the same lock, so the two serialise. It also
+		// serialises two concurrent PUTs, which otherwise each deleted only
+		// the steps visible in their own snapshot and merged their step sets
+		// instead of replacing.
+		existing, err := txWorkflows.LockDefinitionForUpdate(ctx, id)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				writeError(w, http.StatusNotFound, "workflow definition not found")
 				return
 			}
-			logger.Error("httpapi: get workflow definition for put failed", "error", err)
+			logger.Error("httpapi: lock workflow definition for put failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
@@ -752,13 +792,17 @@ func DeleteWorkflowDefinition(pool *pgxpool.Pool, workflows *postgres.WorkflowSt
 		defer func() { _ = tx.Rollback(ctx) }()
 		txWorkflows := workflows.WithTx(tx)
 
-		existing, err := txWorkflows.GetDefinition(ctx, id)
+		// Locked for the same reason PutWorkflowDefinition locks -- see its
+		// own comment: an unlocked refusal check is a read-then-write, and a
+		// binding committed in the window would leave this DELETE removing a
+		// definition that is bound.
+		existing, err := txWorkflows.LockDefinitionForUpdate(ctx, id)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				writeError(w, http.StatusNotFound, "workflow definition not found")
 				return
 			}
-			logger.Error("httpapi: get workflow definition for delete failed", "error", err)
+			logger.Error("httpapi: lock workflow definition for delete failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}

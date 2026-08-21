@@ -16,9 +16,11 @@
 package httpapi_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -27,6 +29,7 @@ import (
 
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/platform"
 )
 
 const (
@@ -338,11 +341,24 @@ func TestPutWorkflowDefinition_DocumentRoundTrip_FieldByField(t *testing.T) {
 				s := newTestStep(step1, 1)
 				s.HitlAfter = true
 				s.Edges = []restdtos.WorkflowEdge{{FromStepId: step1, OnStatus: restdtos.WorkflowEdgeOnStatusOk, ToStepId: step2}}
+				// A round trip that leaves every optional field at its zero
+				// value proves nothing about the optional fields. modelId and
+				// effort are nullable passthroughs, and canvasPosition is the
+				// ONLY step field on this surface with hand-written encode and
+				// decode (canvasPositionToJSON/FromJSON) -- so it is the field
+				// most able to be silently dropped, and the earlier version of
+				// this test never constructed it.
+				modelID := "anthropic/claude-opus-5"
+				s.ModelId = &modelID
+				effort := "high"
+				s.Effort = &effort
+				s.CanvasPosition = &restdtos.WorkflowStepDefinitionCanvasPosition{X: 12.5, Y: -40}
 				return s
 			}(),
 			func() restdtos.WorkflowStepDefinition {
 				s := newTestStep(step2, 2)
 				s.ConversationContinuity = restdtos.WorkflowStepDefinitionConversationContinuityFresh
+				s.HitlBefore = true
 				return s
 			}(),
 		},
@@ -397,6 +413,38 @@ func TestPutWorkflowDefinition_DocumentRoundTrip_FieldByField(t *testing.T) {
 		if s2.Order != 2 || s2.ConversationContinuity != restdtos.WorkflowStepDefinitionConversationContinuityFresh {
 			t.Errorf("%s: step2 = (order %d, continuity %q), want (2, fresh)", name, s2.Order, s2.ConversationContinuity)
 		}
+
+		// The fields the test's own name promises and the earlier version
+		// never sent or compared.
+		if s1.PromptTemplate != "{{prompt}}" {
+			t.Errorf("%s: step1 PromptTemplate = %q, want {{prompt}}", name, s1.PromptTemplate)
+		}
+		if s1.Kind != restdtos.WorkflowStepDefinitionKindAgent {
+			t.Errorf("%s: step1 Kind = %q, want agent", name, s1.Kind)
+		}
+		if s1.ExecutionScope != restdtos.WorkflowStepDefinitionExecutionScopeSameSession {
+			t.Errorf("%s: step1 ExecutionScope = %q, want same_session", name, s1.ExecutionScope)
+		}
+		if s1.ModelId == nil || *s1.ModelId != "anthropic/claude-opus-5" {
+			t.Errorf("%s: step1 ModelId = %v, want anthropic/claude-opus-5", name, s1.ModelId)
+		}
+		if s1.Effort == nil || *s1.Effort != "high" {
+			t.Errorf("%s: step1 Effort = %v, want high", name, s1.Effort)
+		}
+		if s1.CanvasPosition == nil {
+			t.Errorf("%s: step1 CanvasPosition is nil, want {12.5, -40} -- the hand-encoded field", name)
+		} else if s1.CanvasPosition.X != 12.5 || s1.CanvasPosition.Y != -40 {
+			t.Errorf("%s: step1 CanvasPosition = %+v, want {12.5, -40}", name, *s1.CanvasPosition)
+		}
+		if s1.HitlBefore {
+			t.Errorf("%s: step1 HitlBefore = true, want false", name)
+		}
+		if !s2.HitlBefore {
+			t.Errorf("%s: step2 HitlBefore = false, want true", name)
+		}
+		if s2.ModelId != nil || s2.Effort != nil || s2.CanvasPosition != nil {
+			t.Errorf("%s: step2 optional fields should round-trip as null, got model=%v effort=%v canvas=%v", name, s2.ModelId, s2.Effort, s2.CanvasPosition)
+		}
 	}
 }
 
@@ -447,9 +495,13 @@ func TestDeleteWorkflowDefinition_BuiltIn_RefusedEvenForAdmin(t *testing.T) {
 // TestPutWorkflowDefinition_BoundCustom_RefusedEvenForAdmin and
 // TestDeleteWorkflowDefinition_BoundCustom_RefusedEvenForAdmin cover the
 // SECOND structural refusal on a definition where is_built_in=false --
-// isolating it from the built-in check (§25.10/§25.11's own explicit
-// warning: "every built-in is ALSO bound ... a test that only exercises
-// one of them proves nothing about the other").
+// isolating it from the built-in check. That isolation matters because the
+// three seeded lane defaults are built-in AND globally bound (§25.8, and
+// migration 000057's own seed), so on a fresh database both refusals fire on
+// the same rows -- a test using only a built-in would leave the bound refusal
+// entirely unexercised. Neither §25.10 nor §25.11 states this; it is a
+// property of the seed, said here rather than attributed to a section that
+// does not carry it.
 func TestPutWorkflowDefinition_BoundCustom_RefusedEvenForAdmin(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
@@ -651,3 +703,51 @@ func containsFold(s, substr string) bool {
 // ptr returns a pointer to v -- a small generic helper for building
 // request DTOs whose optional fields are typed pointers.
 func ptr[T any](v T) *T { return &v }
+
+// TestGetWorkflowDefinitions_EdgesAreAlwaysAnArrayOnTheWire asserts on the RAW
+// response bytes, not on a decoded struct, and that distinction is the whole
+// point.
+//
+// Go's encoding/json decodes both `null` and `[]` into a nil slice, so every
+// existing test here — which decodes into restdtos.WorkflowDefinition and
+// checks len(Edges) — passes identically whether the server emitted an array
+// or a null. The schema declares edges as a required, non-nullable array and
+// the generated TypeScript types it WorkflowEdge[], so a canvas calling
+// step.edges.map(...) would throw on null. Every seeded built-in is a
+// single-step passthrough with zero edges, so this is the common case.
+//
+// Member.identities already cost this codebase the identical finding; this is
+// the same assertion shape, applied before a consumer exists rather than after
+// one crashed.
+func TestGetWorkflowDefinitions_EdgesAreAlwaysAnArrayOnTheWire(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
+
+	req, err := http.NewRequest(http.MethodGet, rig.server.URL+"/api/workflow-definitions", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.AddCookie(&http.Cookie{Name: platform.AuthSessionCookieName, Value: token})
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	if bytes.Contains(raw, []byte(`"edges":null`)) {
+		t.Errorf("response contains \"edges\":null; the schema declares edges as a required non-nullable array.\nbody: %s", raw)
+	}
+	// And prove the assertion above is not vacuous: the seeded built-ins must
+	// actually be present, each with an edges key.
+	if !bytes.Contains(raw, []byte(`"edges":[]`)) {
+		t.Errorf("no empty edges array found; the three seeded built-ins are single-step passthroughs and should each carry one.\nbody: %s", raw)
+	}
+}
