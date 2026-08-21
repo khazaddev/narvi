@@ -127,6 +127,16 @@ export const repoAnalyticsQueryKeys = {
   reviewAnalytics: (repoFullName: string) => ['repo-review-analytics', repoFullName] as const,
 }
 
+// repoSettingsQueryKeys -- RepoSettingsView.tsx's own data source (§21,
+// §26.7, §26.8, §4.1.2), parameterized by repoFullName like
+// falsePositivePatternQueryKeys/repoAnalyticsQueryKeys above. One key: all
+// eight endpoints (GET plus seven separately-gated PUTs) read/write the
+// SAME repo_settings row, so every mutation invalidates this one entry
+// rather than each owning a disjoint slice of the cache.
+export const repoSettingsQueryKeys = {
+  detail: (repoFullName: string) => ['repo-settings', repoFullName] as const,
+}
+
 export const sandboxSecretQueryKeys = {
   list: (scope: Parameters<typeof scopeKeyParts>[0]) => ['sandbox-secrets', ...scopeKeyParts(scope)] as const,
 }

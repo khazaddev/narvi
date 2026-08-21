@@ -5,21 +5,18 @@
 // OpenCode config editor) folded into the Environments panel, since each
 // of those sub-resources is itself keyed by environments.id.
 //
-// # Where this Step drew the line against row 89 ("ui repository
-// settings")
+// # Where this screen draws the line against per-repository settings
 //
-// Row 89 owns the per-repository surface in full: the four automation
-// toggles (auto_merge_enabled/auto_retrigger_review_enabled/
-// sentinel_autofix_enabled/description_autofix_enabled),
-// block_on_high_risk, review-depth/cost-budget config, and
-// sensitive_blast_radius_tags/rwx_preview_* -- none of that lives here,
-// including the per-repo auto-merge/auto-retrigger-review toggles: the
-// per-repository view (§21, §26.7, §26.8, §4.1.2) owns all of them, and
-// this screen owns the org-level Settings surfaces. This screen owns
-// ORG-LEVEL
-// configuration only: Environments, Secrets (repo/environment/global
-// scoped, but the SCOPE PICKER lives here, not a per-repo settings page),
-// Members & access, Prompt templates.
+// The per-repository surface (RepoSettingsView.tsx, routes/repo-settings.tsx)
+// owns the four automation toggles (auto_merge_enabled/
+// auto_retrigger_review_enabled/sentinel_autofix_enabled/
+// description_autofix_enabled), block_on_high_risk, review-depth/
+// cost-budget config, and sensitive_blast_radius_tags (§21, §26.7, §26.8,
+// §4.1.2) -- none of that lives here, including the per-repo auto-merge/
+// auto-retrigger-review toggles. This screen owns ORG-LEVEL configuration
+// only: Environments, Secrets (repo/environment/global scoped, but the
+// SCOPE PICKER lives here, not a per-repo settings page), Members &
+// access, Prompt templates.
 //
 // # A nav tab for every mockup entry, real content behind only some
 //

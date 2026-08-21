@@ -43,6 +43,9 @@ function RootLayout() {
         <Link to="/settings" className="header-nav-link">
           Settings
         </Link>
+        <Link to="/repo-settings" className="header-nav-link">
+          Repo settings
+        </Link>
         <Link to="/analytics" className="header-nav-link">
           Analytics
         </Link>
