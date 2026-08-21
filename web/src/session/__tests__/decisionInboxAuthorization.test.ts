@@ -42,7 +42,15 @@ describe('mergePullRequest -- the client always sends the real request', () => {
     expect(result).toEqual({ merged: true, mergeCommitSha: 'abc123', message: 'Pull request merged' })
   })
 
-  it('a 403 (a viewer, or a PR RevalidateForMerge finds is not actually assigned to this actor -- the REAL authz.ActionMergePR gate) surfaces as a genuine ApiError carrying the server\'s own message', async () => {
+  // The two codes mean different things and it is worth naming them
+  // precisely, because a reader builds error handling from these names.
+  // 403 is the ROLE-ONLY gate (authz.ActionMergePR) plus the no-usable-git-
+  // credential path -- decisioninbox.go writes it in exactly those places.
+  // "This PR is not assigned to you" is NOT a 403: RevalidateForMerge returns
+  // eligible=false and the handler writes 409 with the server's own reason.
+  // An earlier version of this test name asserted the opposite, which would
+  // have led a reader to invert the two.
+  it('a 403 (a viewer, or no usable git credential -- the role-only authz.ActionMergePR gate) surfaces as a genuine ApiError carrying the server\'s own message', async () => {
     respondWith({ error: 'not authorized to perform this action' }, 403)
 
     await expect(mergePullRequest({ repoFullName: 'acme/widgets', prNumber: 42 })).rejects.toMatchObject({
@@ -51,7 +59,7 @@ describe('mergePullRequest -- the client always sends the real request', () => {
     })
   })
 
-  it('a 409 (RevalidateForMerge\'s own live re-check failing -- CI not green, changes requested, or the PR moved) surfaces the SERVER\'s own reason text, never a generic failure', async () => {
+  it('a 409 (RevalidateForMerge\'s own live re-check failing -- CI not green, changes requested, the PR moved, or it is no longer assigned to this actor) surfaces the SERVER\'s own reason text, never a generic failure', async () => {
     respondWith({ error: 'this pull request has changes requested and cannot be merged' }, 409)
 
     await expect(mergePullRequest({ repoFullName: 'acme/widgets', prNumber: 42 })).rejects.toMatchObject({

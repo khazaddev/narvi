@@ -1,5 +1,5 @@
-// The sessions list view (docs/IMPLEMENTATION_PLAN.md row 87: "the
-// sessions list moves to a second tab") -- /sessions, a top-level route
+// The sessions list view (§16.3: "sessions list moves to the second
+// tab") -- /sessions, a top-level route
 // mirroring automations.tsx/settings.tsx's own precedent (a screen owned
 // by no single session).
 import { createFileRoute } from '@tanstack/react-router'

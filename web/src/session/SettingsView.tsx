@@ -13,10 +13,10 @@
 // sentinel_autofix_enabled/description_autofix_enabled),
 // block_on_high_risk, review-depth/cost-budget config, and
 // sensitive_blast_radius_tags/rwx_preview_* -- none of that lives here,
-// including the per-repo auto-merge/auto-retrigger-review toggles row
-// 86's own plan-row text also mentions (docs/IMPLEMENTATION_PLAN.md's own
-// explicit tie-breaker: "row 89 owns the per-repo view and this Step owns
-// the org-level Settings screens"). This screen owns ORG-LEVEL
+// including the per-repo auto-merge/auto-retrigger-review toggles: the
+// per-repository view (§21, §26.7, §26.8, §4.1.2) owns all of them, and
+// this screen owns the org-level Settings surfaces. This screen owns
+// ORG-LEVEL
 // configuration only: Environments, Secrets (repo/environment/global
 // scoped, but the SCOPE PICKER lives here, not a per-repo settings page),
 // Members & access, Prompt templates.
@@ -55,11 +55,21 @@ const TABS: { id: SettingsTab; label: string }[] = [
   { id: 'image-builds', label: 'Image builds' },
 ]
 
-function NotPartOfThisStep({ ownerNote }: { ownerNote: string }) {
+/**
+ * NotBuiltYet is what a tab with no real surface behind it renders.
+ *
+ * It used to say "Not part of this Step." and then cite a row of the
+ * project's own build schedule by filename. Both halves were written for a
+ * developer reading the repository, not for the operator who actually
+ * reaches this screen: an operator has no Step, and cannot open a planning
+ * document being cited at them. The honest thing to tell them is what is
+ * missing and whether it is coming.
+ */
+function NotBuiltYet({ note }: { note: string }) {
   return (
     <div className="panel">
       <p className="notavailable">
-        <b>Not part of this Step.</b> {ownerNote}
+        <b>Nothing to configure here yet.</b> {note}
       </p>
     </div>
   )
@@ -80,14 +90,14 @@ export function SettingsView() {
             ))}
           </nav>
           <div className="setbody">
-            {tab === 'general' && <NotPartOfThisStep ownerNote="No §-cited data model exists for org-wide general settings yet -- nothing in docs/TECHNICAL_PLAN.md names one." />}
+            {tab === 'general' && <NotBuiltYet note="There are no org-wide general settings. Everything configurable today is scoped to an environment, a repository or a member." />}
             {tab === 'environments' && <EnvironmentsPanel />}
             {tab === 'secrets' && <SecretsPanel />}
             {tab === 'members' && <MembersPanel />}
-            {tab === 'integrations' && <NotPartOfThisStep ownerNote="Integrations (Slack/Linear/GitHub connections, ChatGPT linking, cloud-identity signing-key rotation) is docs/IMPLEMENTATION_PLAN.md row 90's own screen." />}
-            {tab === 'models' && <NotPartOfThisStep ownerNote="No settings-level model-catalog management surface is named by row 86's own citations -- GET /api/models already backs the composer's model selector directly." />}
+            {tab === 'integrations' && <NotBuiltYet note="Slack, Linear and GitHub connections, ChatGPT account linking and cloud-identity signing-key rotation will live here. They are not built yet." />}
+            {tab === 'models' && <NotBuiltYet note="There is nothing to manage: the model catalogue is read from the configured providers, and you choose a model per session in the composer." />}
             {tab === 'prompt-templates' && <PromptTemplatesPanel />}
-            {tab === 'image-builds' && <NotPartOfThisStep ownerNote="No per-Environment image-build observability read model exists yet (fingerprint/duration/backoff) -- see EnvironmentsPanel's own doc comment for the same gap on the Environments card itself." />}
+            {tab === 'image-builds' && <NotBuiltYet note="Image-build history for each environment — fingerprint, duration and retry backoff — is not recorded anywhere yet, so there is nothing to show." />}
           </div>
         </div>
       </section>

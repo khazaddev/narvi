@@ -1,6 +1,6 @@
 // SessionsListView.tsx -- the sessions list's own top-level surface,
-// docs/IMPLEMENTATION_PLAN.md row 87's own "the sessions list moves to a
-// second tab": now that `/` is the decision-inbox home view (§16), the
+// §16.3's own "sessions list moves to the second tab": now that `/` is
+// the decision-inbox home view (§16), the
 // session list -- previously reachable only as SessionSidebar.tsx's own
 // narrow rail inside an already-open session -- gets a real, full-page
 // home of its own at `/sessions` so a signed-in user can browse sessions

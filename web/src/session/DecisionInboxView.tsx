@@ -300,9 +300,17 @@ export function DecisionInboxRow({ item, canMerge }: { item: DecisionInboxItem; 
         </span>
       )}
 
-      <span className={item.stale ? 'qage stale' : 'qage'}>
+      {/*
+        `stale` is the server's own flag and it is past tense: DecisionInboxItem.stale
+        is "true once age exceeds the configured staleness threshold" (§16.1's >48h,
+        configurable). This read "going stale", which says the opposite -- that the
+        item is approaching a threshold it has in fact already crossed. On a triage
+        queue that is the difference between acting now and leaving it another day.
+        The threshold itself is never recomputed here; the flag is taken as given.
+      */}
+      <span className={item.stale ? 'qage stale' : 'qage'} title={item.stale ? 'Older than the staleness threshold' : undefined}>
         {formatAgeSeconds(item.ageSeconds)}
-        {item.stale ? ' — going stale' : ''}
+        {item.stale ? ' — stale' : ''}
       </span>
 
       {item.kind === 'ready_to_merge' && <MergeButton item={item} canMerge={canMerge} />}
@@ -312,9 +320,36 @@ export function DecisionInboxRow({ item, canMerge }: { item: DecisionInboxItem; 
       {kind === 'session' && item.sessionId !== null && <ResumeSessionButton sessionId={item.sessionId} />}
       {kind === 'automation' && item.automationId !== null && <ResumeAutomationButton automationId={item.automationId} />}
 
-      {why !== null && <span className="qwhy">{why}</span>}
+      {/*
+        Through T like every other untrusted string on this row, not a bare
+        interpolation: `why` is built from provenanceRepoFullName and
+        provenancePattern, and a CODEOWNERS pattern is repository content, not
+        something this platform validates. React escapes it either way, so the
+        injection half was never at risk -- but the bound was, and the bound is
+        what textSafety.ts exists for. This line was the one field named in
+        this file's own rendering-safety accounting that did not actually go
+        through it.
+      */}
+      {why !== null && (
+        <span className="qwhy">
+          <T text={why} />
+        </span>
+      )}
       {kind === 'session' && (
-        <span className="qwhy">Your conversation and branch are intact -- resuming replays the same conversation on a fresh sandbox.</span>
+        <span className="qwhy">
+          {/*
+            Not "your conversation". This section is admin-only and the rows
+            behind it are system-wide: buildAttentionItems calls
+            SessionStore.ListFailed, whose query carries no per-user filter at
+            all ("an admin's own ops-triage view is system-wide, not narrowed
+            to sessions they personally created"). The wire row has no owner
+            field, so the client cannot know whose session this is -- and the
+            usual reader of this string is an admin looking at someone else's.
+            The resume semantics below are true regardless of owner, which is
+            the part worth saying.
+          */}
+          Conversation and branch are intact -- resuming replays the same conversation on a fresh sandbox.
+        </span>
       )}
       {kind === 'automation' && (
         <span className="qwhy">

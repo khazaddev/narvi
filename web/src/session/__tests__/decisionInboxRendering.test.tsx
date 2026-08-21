@@ -187,10 +187,35 @@ describe('DecisionInboxRow -- hasChangesRequested, not hasApprovingReview, gates
     expect(html).toMatch(/<button[^>]*disabled/)
   })
 
-  it('a true hasApprovingReview never enables or disables Merge on its own -- display only', () => {
-    const eligible = prItem({ kind: 'ready_to_merge', hasChangesRequested: false, hasApprovingReview: false })
-    const html = withQueryClient(<DecisionInboxRow item={eligible} canMerge={true} />)
-    expect(html).toMatch(/<button[^>]*>\s*Merge\s*<\/button>/)
+  // hasApprovingReview is display-only: DecisionInboxItem's own schema says it
+  // is "NEVER what kind=ready_to_merge's own 'approved' means", while
+  // hasChangesRequested "DOES gate an action". These two cases pin exactly
+  // that asymmetry by holding hasChangesRequested fixed at false and flipping
+  // hasApprovingReview across both values -- the earlier single case set it to
+  // false and so never touched the field it was named for.
+  //
+  // The assertion must also be able to SEE a disabled button. A /<button[^>]*>/
+  // pattern cannot: [^>]* swallows the whole attribute list, `disabled` included,
+  // so it matches either way. Asserting on the absence of the disabled attribute
+  // is what makes gating on the wrong field fail this test.
+  it('a false hasApprovingReview does not disable Merge -- display only', () => {
+    const item = prItem({ kind: 'ready_to_merge', hasChangesRequested: false, hasApprovingReview: false })
+    const html = withQueryClient(<DecisionInboxRow item={item} canMerge={true} />)
+    expect(html).toContain('Merge')
+    expect(html).not.toMatch(/<button[^>]*disabled/)
+  })
+
+  it('a true hasApprovingReview does not enable Merge on its own either -- hasChangesRequested is the gate', () => {
+    const displayOnly = prItem({ kind: 'ready_to_merge', hasChangesRequested: false, hasApprovingReview: true })
+    const html = withQueryClient(<DecisionInboxRow item={displayOnly} canMerge={true} />)
+    expect(html).toContain('Merge')
+    expect(html).not.toMatch(/<button[^>]*disabled/)
+
+    // The gate is hasChangesRequested, and it wins regardless of an approving
+    // review being present.
+    const blocked = prItem({ kind: 'ready_to_merge', hasChangesRequested: true, hasApprovingReview: true })
+    const blockedHtml = withQueryClient(<DecisionInboxRow item={blocked} canMerge={true} />)
+    expect(blockedHtml).toMatch(/<button[^>]*disabled/)
   })
 })
 

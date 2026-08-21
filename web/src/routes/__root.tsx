@@ -28,8 +28,8 @@ function RootLayout() {
         <span className="wordmark">Narvi</span>
         {/* The real top nav (§16): Home is the decision-inbox queue
             (routes/index.tsx); Sessions is its own second tab
-            (routes/sessions.tsx, docs/IMPLEMENTATION_PLAN.md row 87 --
-            "the sessions list moves to a second tab"), no longer reachable
+            (routes/sessions.tsx, §16.3 -- "sessions list moves to the
+            second tab"), no longer reachable
             only from inside an already-open session's own sidebar. */}
         <Link to="/" className="header-nav-link">
           Home

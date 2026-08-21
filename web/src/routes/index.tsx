@@ -9,8 +9,8 @@ import '../styles/session.css'
 // placeholder's own doc comment ("Replaced by the decision-inbox home
 // view later, not extended in place"), rather than grown into this. The
 // sessions list -- previously reachable only via a session's own sidebar
-// -- moves to its own top-level route (routes/sessions.tsx,
-// docs/IMPLEMENTATION_PLAN.md row 87).
+// -- moves to its own top-level route (routes/sessions.tsx, §16.3:
+// "sessions list moves to the second tab").
 //
 // beforeLoad: requireAuth (§13.1) -- unchanged from the placeholder: "/"
 // is an authenticated-only screen (the inbox is inherently "YOUR pending
