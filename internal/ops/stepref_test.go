@@ -3,6 +3,7 @@ package ops
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -190,6 +191,60 @@ func TestCheckStepRefs_CatchesPlanDocReferences(t *testing.T) {
 			got := len(refs) > 0
 			if got != c.wantCaught {
 				t.Errorf("line %q: caught = %v, want %v (refs = %+v)", c.line, got, c.wantCaught, refs)
+			}
+		})
+	}
+}
+
+// TestCheckStepRefs_CatchesWrappedCitations pins the line-wrap blind spot.
+//
+// stepRefPattern matches per line. A citation whose comment wrapped between
+// the word and the number — "Step" ending one line, "88)" beginning the next —
+// matches neither half, so it was invisible. Comments in this repo wrap at 80
+// columns constantly, so that is the ordinary way a citation survives, not an
+// exotic one: ten of them were found repo-wide AFTER every single-line
+// citation had been swept, three of them in web/src, which a previous sweep
+// had reported as complete.
+//
+// The negative cases matter as much as the positive ones. The head pattern
+// requires the capitalised citation form at end of line, so ordinary English
+// ending in "step" before an unrelated numbered line must not trip it.
+func TestCheckStepRefs_CatchesWrappedCitations(t *testing.T) {
+	cases := []struct {
+		name       string
+		lines      []string
+		wantCaught bool
+	}{
+		{"wrapped possessive citation", []string{`// see the resolution table (§29.5, Step`, `// 59) for the details.`}, true},
+		{"wrapped plural citation", []string{`// shared across Steps`, `// 32/33/34's own ingress.`}, true},
+		{"wrapped citation in a doc block", []string{`/*`, ` * built by Step`, ` * 21) and never since.`, ` */`}, true},
+		{"ordinary english 'step' before a numbered line", []string{`// each one is a genuinely independent step`, `// 2 of the pipeline is where it lands.`}, false},
+		{"the word alone with no number after it", []string{`// this is a narrative step`, `// describing what happens next.`}, false},
+		{"number on the next line but no Step word", []string{`// bounded by the retry ceiling`, `// 5 attempts, then it stops.`}, false},
+	}
+
+	dir := t.TempDir()
+	pkgDir := filepath.Join(dir, "internal", "pkg")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := "package pkg\n\n" + strings.Join(c.lines, "\n") + "\nfunc x() {}\n"
+			path := filepath.Join(pkgDir, "fixture.go")
+			if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+			t.Cleanup(func() { _ = os.Remove(path) })
+
+			refs, err := CheckStepRefs(dir, []string{"internal"})
+			if err != nil {
+				t.Fatalf("CheckStepRefs: %v", err)
+			}
+			got := len(refs) > 0
+			if got != c.wantCaught {
+				t.Errorf("lines %q: caught = %v, want %v (refs = %+v)", c.lines, got, c.wantCaught, refs)
 			}
 		})
 	}

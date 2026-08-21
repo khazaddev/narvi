@@ -38,8 +38,8 @@ type CreateEventRow struct {
 // Queries backing EventStore (§4.3, §6.1's append-only per-session event
 // log). CreateEvent appends; ListEventsForSession is the cursor-paginated
 // read this same table's own migration comment predicted ("reads
-// (cursor-paginated fetch_history) land with the client WS hub (Steps
-// 18+)") -- this is that Step, backing both the client WS hub's own
+// (cursor-paginated fetch_history) land with the client WS hub") -- this
+// is that work, backing both the client WS hub's own
 // fetch_history/replay and the REST GET .../events endpoint (one
 // implementation, two callers).
 // Upsert-on-(session_id, message_id) (§6.1: "receiver dedupes by

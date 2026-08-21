@@ -68,8 +68,8 @@ func MatchVerdict(text string) (verdict string, ok bool) {
 // must start with (once trimmed) to be recognized as a "request changes"
 // reply while a plan is awaiting_approval -- this batch's own follow-up fix
 // (§8.1, closing the "reply matching no verdict keyword dispatches an
-// ordinary build turn anyway" hole discovered during design review of Steps
-// 37/38). Chosen alongside ApproveKeywords/RejectKeywords for the exact
+// ordinary build turn anyway" hole discovered during design review of §23).
+// Chosen alongside ApproveKeywords/RejectKeywords for the exact
 // same reason: a genuinely free-text reply might easily mention the word
 // "revise" in passing ("let's revise the approach before shipping") without
 // meaning to invoke this deterministic override, so MatchRevise below only

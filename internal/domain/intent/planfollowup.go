@@ -8,8 +8,8 @@ package intent
 // file for a single classification category's own domain-level pieces,
 // one level up from rubric.go's shared, cross-category constants.
 //
-// Problem this answers: the interim server-side gate shipped by Steps
-// 37/38's own follow-up fix (internal/adapters/inbound/httpapi's
+// Problem this answers: the interim server-side gate shipped by §23's own
+// follow-up fix (internal/adapters/inbound/httpapi's
 // createTurnLocked, turn.go) holds ANY plan-mode=false reply while a
 // plan is awaiting_approval, UNLESS it starts with the deterministic
 // "revise:" prefix (plandomain.RevisePrefix, verdict.go) -- that file's

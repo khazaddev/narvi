@@ -1,5 +1,5 @@
-// PromptTemplatesPanel.tsx -- Settings -> Prompt templates (§18.6, Step
-// 86): list, edit (upsert), and preview-assembled-prompt.
+// PromptTemplatesPanel.tsx -- Settings -> Prompt templates (§18.6): list,
+// edit (upsert), and preview-assembled-prompt.
 //
 // # What this panel declines to render, and why
 //

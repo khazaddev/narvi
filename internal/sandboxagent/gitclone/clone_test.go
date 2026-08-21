@@ -44,8 +44,8 @@ const (
 // ManualReader here (audit-remediation batch B7, Finding 3), so
 // telemetry.go's own gitFetchDurationHistogram/gitCheckoutDurationHistogram
 // -- lazily resolved via sync.OnceValue on first use -- observed a real
-// reader regardless of which test in this package ran first. §33.3 (Step
-// 109) deleted that local histogram machinery entirely: this package now
+// reader regardless of which test in this package ran first. §33.3 deleted
+// that local histogram machinery entirely: this package now
 // reports fetch/checkout timing via OnGitFetchTiming/OnGitCheckoutTiming
 // callbacks (sync.go) instead of recording anything itself, so there is no
 // longer any OTel state for this test binary to set up.
