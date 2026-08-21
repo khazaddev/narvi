@@ -63,7 +63,7 @@ import { getChatGPTLinkStatus, getIntegrations, listCloudIdentityBindings, rotat
 import { ApiError } from '../api/http'
 import { chatgptLinkQueryKeys, cloudIdentityBindingQueryKeys, integrationQueryKeys } from '../api/queryKeys'
 import { meQueryOptions } from '../auth/session'
-import { chatgptLinkStatusPresentation, formatDateTime, integrationOutboundTone, integrationSurfaceLabel } from './settingsFormat'
+import { chatgptCardPresentation, chatgptLinkStatusPresentation, formatDateTime, integrationOutboundTone, integrationSurfaceLabel } from './settingsFormat'
 import { truncateForDisplay } from './textSafety'
 import { isSafeHref } from './urlSafety'
 
@@ -126,7 +126,7 @@ function IngressIntegrationsSection() {
     <div className="panel">
       <h4>Ingress integrations</h4>
       <p className="ph">
-        Slack, Linear and GitHub connect by deployment configuration, not a button here. Each row is a fact with a timestamp, never a health verdict -- a quiet surface and a broken one can look identical from here (§12.5).
+        Slack, Linear and GitHub connect by deployment configuration, not a button here. Each row is a fact with a timestamp, never a health verdict -- a quiet surface and a broken one can look identical from here.
       </p>
       {forbidden && <p className="notavailable">Integrations are admin-only. Your role cannot view this panel -- enforced server-side, not merely hidden here.</p>}
       {!forbidden && query.isPending && <p className="rail-empty">Loading integrations…</p>}
@@ -258,16 +258,31 @@ function ChatGPTLinkSection({ canLink }: { canLink: boolean }) {
   })
 
   const forbidden = query.isError && query.error instanceof ApiError && query.error.status === 403
+  const show = chatgptCardPresentation({ isPending: query.isPending, isError: query.isError, hasData: query.data !== undefined })
 
   return (
     <div className="panel">
       <h4>ChatGPT account (Codex)</h4>
-      <p className="ph">Personal and subscription-tied -- links your own ChatGPT Plus/Pro account over the device flow so Codex models run under your seat. The control plane is the only refresher; a sandbox never sees the rotating token (§29.5/§29.6).</p>
+      <p className="ph">Personal and subscription-tied -- links your own ChatGPT Plus/Pro account over the device flow so Codex models run under your seat. The control plane is the only refresher; a sandbox never sees the rotating token.</p>
       {!canLink && <p className="notavailable">Viewers cannot link a ChatGPT account.</p>}
       {canLink && forbidden && <p className="notavailable">Couldn't load your link status. Try again.</p>}
-      {canLink && !forbidden && query.isPending && <p className="rail-empty">Loading link status…</p>}
-      {canLink && !forbidden && query.isError && <p className="rail-empty">Couldn't load your ChatGPT link status.</p>}
-      {canLink && !forbidden && query.isSuccess && (
+      {canLink && !forbidden && show.loading && <p className="rail-empty">Loading link status…</p>}
+      {/*
+        Render from the last status we have, NOT from query.isSuccess. While a
+        device-flow attempt is pending this query polls every few seconds, and
+        keying the card on isSuccess meant a single failed poll unmounted it --
+        taking away the verification URL and the user code at the exact moment
+        someone is typing them into another window, with no way to get them
+        back but starting a new attempt. A failed refetch is a stale card, not
+        a lost one: keep showing what we last knew and say so above it.
+      */}
+      {canLink && !forbidden && show.staleNotice && (
+        <p className="sidebar-notice">Couldn't refresh your link status just now -- showing the last known state.</p>
+      )}
+      {canLink && !forbidden && show.error && (
+        <p className="rail-empty">Couldn't load your ChatGPT link status.</p>
+      )}
+      {canLink && !forbidden && show.card && query.data !== undefined && (
         <ChatGPTLinkCard status={query.data} onStart={() => startMutation.mutate()} onUnlink={() => unlinkMutation.mutate()} starting={startMutation.isPending} unlinking={unlinkMutation.isPending} />
       )}
       {startMutation.isError && <p className="sidebar-notice">Couldn't start the link. Try again.</p>}
@@ -314,7 +329,7 @@ function SigningKeyRotationSection({ canRotate }: { canRotate: boolean }) {
       <div className="panel">
         <h4>Cloud-identity signing-key rotation</h4>
         <p className="notavailable">
-          Cloud identity federation is not configured on this deployment -- no signing-key rotation affordance is shown (fails closed, matching every other §27.3 surface).
+          Cloud identity federation is not configured on this deployment, so there is nothing to rotate.
         </p>
       </div>
     )
@@ -324,7 +339,7 @@ function SigningKeyRotationSection({ canRotate }: { canRotate: boolean }) {
   return (
     <div className="panel">
       <h4>Cloud-identity signing-key rotation</h4>
-      <p className="ph">Rotates the trust anchor customer clouds federate to. The retired key keeps verifying tokens minted before rotation until the JWKS overlap window ends, and no longer after (§27.3).</p>
+      <p className="ph">Rotates the trust anchor customer clouds federate to. The retired key keeps verifying tokens minted before rotation until the JWKS overlap window ends, and no longer after.</p>
       {!confirming && !rotateMutation.isSuccess && (
         <button type="button" className="btn danger" onClick={() => setConfirming(true)}>
           Rotate signing key

@@ -194,3 +194,24 @@ export function chatgptLinkStatusPresentation(status: ChatGPTLinkStatus['status'
       return { tone: 'neutral', label: status }
   }
 }
+
+/**
+ * chatgptCardPresentation decides what the ChatGPT link section shows, kept
+ * OUT of the JSX so it can be asserted on. The load-bearing case is the third
+ * one: while a device-flow attempt is pending this query polls, and a single
+ * failed poll must NOT take the card away -- the verification URL and user
+ * code are on it, and someone is typing them into another window. A failed
+ * refetch that still has data is a stale card with a notice, never a lost one.
+ * Only a failure with nothing ever loaded is a bare error.
+ */
+export function chatgptCardPresentation(q: { isPending: boolean; isError: boolean; hasData: boolean }): {
+  card: boolean
+  staleNotice: boolean
+  loading: boolean
+  error: boolean
+} {
+  if (q.isPending) return { card: false, staleNotice: false, loading: true, error: false }
+  if (q.isError && q.hasData) return { card: true, staleNotice: true, loading: false, error: false }
+  if (q.isError) return { card: false, staleNotice: false, loading: false, error: true }
+  return { card: q.hasData, staleNotice: false, loading: false, error: false }
+}

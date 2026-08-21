@@ -68,9 +68,13 @@ describe('IntegrationRow rendering -- adversarial lastOutboundError stays text, 
     expect(html).toContain('never received')
   })
 
-  it('configured=false renders "not configured", never the configured chip', () => {
+  it('configured=false renders "not configured", and no bare "configured" chip survives beside it', () => {
     const html = renderRow(baseIntegration({ configured: false }))
     expect(html).toContain('not configured')
+    // The name used to promise this half and the body never checked it. A
+    // substring test cannot: "configured" is inside "not configured". Strip
+    // the negated form first, then nothing may still claim the positive one.
+    expect(html.replace(/not configured/g, '')).not.toContain('configured')
   })
 })
 

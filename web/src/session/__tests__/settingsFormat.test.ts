@@ -1,20 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import {
-  chatgptLinkStatusPresentation,
-  cloudIdentityBindingSummary,
-  cloudIdentityParamsComplete,
-  environmentSummaryLine,
-  formatDateTime,
-  identityLinkProof,
-  identityProviderLabel,
-  integrationOutboundTone,
-  integrationSurfaceLabel,
-  lookbackDaysLabel,
-  roleTone,
-  secretScopeLabel,
-  secretScopeTone,
-} from '../settingsFormat'
+import { chatgptCardPresentation, chatgptLinkStatusPresentation, cloudIdentityBindingSummary, cloudIdentityParamsComplete, environmentSummaryLine, formatDateTime, identityLinkProof, identityProviderLabel, integrationOutboundTone, integrationSurfaceLabel, lookbackDaysLabel, roleTone, secretScopeLabel, secretScopeTone } from '../settingsFormat'
 
 describe('roleTone', () => {
   it('maps every §13.3 role to a chip tone', () => {
@@ -212,8 +198,31 @@ describe('integrationOutboundTone', () => {
 // DISTINCT from pending: one is "hasn't been confirmed yet" (expected,
 // transient), the other is "the refresh pump gave up and this credential is
 // no longer served to any sandbox" (a silent degradation with no other
-// signal). Collapsing them to the same tone would erase the one distinction
-// row 92's own plan text calls out by name.
+// signal). Collapsing them to the same tone would erase that distinction --
+// the terminal refresh-pump failure §29.5 defines would read as an ordinary
+// mid-flow wait.
+// The case that matters is a failed poll DURING a live device-flow attempt.
+// Keying the card on isSuccess meant one transient failure unmounted it,
+// taking the verification URL and user code away mid-flow. These four cases
+// are the whole contract, and the third is the one a regression would break.
+describe('chatgptCardPresentation', () => {
+  it('shows only the spinner before anything has loaded', () => {
+    expect(chatgptCardPresentation({ isPending: true, isError: false, hasData: false })).toEqual({ card: false, staleNotice: false, loading: true, error: false })
+  })
+
+  it('keeps the card up when a poll fails but a status is already known, and says it is stale', () => {
+    expect(chatgptCardPresentation({ isPending: false, isError: true, hasData: true })).toEqual({ card: true, staleNotice: true, loading: false, error: false })
+  })
+
+  it('shows a bare error only when nothing ever loaded', () => {
+    expect(chatgptCardPresentation({ isPending: false, isError: true, hasData: false })).toEqual({ card: false, staleNotice: false, loading: false, error: true })
+  })
+
+  it('shows the card, with no stale notice, on a healthy read', () => {
+    expect(chatgptCardPresentation({ isPending: false, isError: false, hasData: true })).toEqual({ card: true, staleNotice: false, loading: false, error: false })
+  })
+})
+
 describe('chatgptLinkStatusPresentation', () => {
   it('marks unlinked neutral', () => {
     expect(chatgptLinkStatusPresentation('unlinked')).toEqual({ tone: 'neutral', label: 'not connected' })
