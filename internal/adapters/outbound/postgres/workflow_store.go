@@ -310,8 +310,17 @@ func (s *WorkflowStore) ClaimEscalationNotice(ctx context.Context, runID pgtype.
 
 // ListDefinitions fetches every workflow_definitions row, built-in and
 // custom alike, ordered (lane, name) -- GET /api/workflow-definitions.
-func (s *WorkflowStore) ListDefinitions(ctx context.Context) ([]sqlcgen.WorkflowDefinition, error) {
+// Each row carries is_bound/has_runs alongside the definition -- see the
+// query's own comment for why those two facts travel with the row rather
+// than being re-derived per definition by a caller.
+func (s *WorkflowStore) ListDefinitions(ctx context.Context) ([]sqlcgen.ListWorkflowDefinitionsRow, error) {
 	return s.q.ListWorkflowDefinitions(ctx)
+}
+
+// GetDefinitionWithRefusalFacts is GetDefinition plus the same two EXISTS
+// ListDefinitions carries, for the single-definition read.
+func (s *WorkflowStore) GetDefinitionWithRefusalFacts(ctx context.Context, id pgtype.UUID) (sqlcgen.GetWorkflowDefinitionWithRefusalFactsRow, error) {
+	return s.q.GetWorkflowDefinitionWithRefusalFacts(ctx, id)
 }
 
 // CreateDefinition inserts a new workflow_definitions row -- is_built_in

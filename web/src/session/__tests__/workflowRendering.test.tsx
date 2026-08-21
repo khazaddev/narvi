@@ -49,6 +49,7 @@ function baseDefinition(overrides: Partial<WorkflowDefinition> = {}): WorkflowDe
     lane: 'request',
     name: 'My workflow',
     isBuiltIn: false,
+    editRefusal: null,
     version: 1,
     steps: [baseStep()],
     createdAt: '2026-08-20T00:00:00Z',
@@ -136,15 +137,45 @@ describe('DefinitionRow -- adversarial definition name stays text', () => {
     expect(html).not.toContain('<script>')
   })
 
-  it('shows a built-in definition as read-only (locked), and a bound definition as read-only, each with their own distinct chip label', () => {
-    const builtIn = baseDefinition({ id: 'd1', isBuiltIn: true })
-    const builtInHtml = withQueryClient(<DefinitionRow definition={builtIn} bindings={[]} isSelected={false} onSelect={() => {}} onDuplicateClick={() => {}} />)
-    expect(builtInHtml).toContain('built-in')
+  // Each of the three refusals must be visibly its own: an operator reading
+  // "read-only" without knowing WHY cannot pick between duplicating and
+  // unbinding, which are different actions (§25.10).
+  it('shows all three refusals as read-only with three DISTINCT labels', () => {
+    const render = (refusal: 'built_in' | 'bound' | 'has_runs') =>
+      withQueryClient(
+        <DefinitionRow
+          definition={baseDefinition({ id: `d-${refusal}`, isBuiltIn: refusal === 'built_in', editRefusal: refusal })}
+          bindings={[]}
+          isSelected={false}
+          onSelect={() => {}}
+          onDuplicateClick={() => {}}
+        />,
+      )
 
-    const bound = baseDefinition({ id: 'd2', isBuiltIn: false })
-    const boundBindings: WorkflowBinding[] = [{ id: 'b1', lane: 'request', repoFullName: null, workflowDefinitionId: 'd2', definitionVersion: 1, createdAt: '2026-08-20T00:00:00Z', updatedAt: '2026-08-20T00:00:00Z' }]
-    const boundHtml = withQueryClient(<DefinitionRow definition={bound} bindings={boundBindings} isSelected={false} onSelect={() => {}} onDuplicateClick={() => {}} />)
-    expect(boundHtml).toContain('bound')
-    expect(boundHtml).toContain('global')
+    const builtIn = render('built_in')
+    const bound = render('bound')
+    const hasRuns = render('has_runs')
+
+    expect(builtIn.toLowerCase()).toContain('built-in')
+    expect(bound.toLowerCase()).toContain('bound')
+    expect(hasRuns.toLowerCase()).toMatch(/run/)
+
+    // and they are not the same rendering with a different word swapped in
+    expect(new Set([builtIn, bound, hasRuns]).size).toBe(3)
+  })
+
+  it('offers duplicate on every refused definition -- the refusals only work as a redirect if the copy is one click (§25.10)', () => {
+    for (const refusal of ['built_in', 'bound', 'has_runs'] as const) {
+      const html = withQueryClient(
+        <DefinitionRow
+          definition={baseDefinition({ id: `d-${refusal}`, isBuiltIn: refusal === 'built_in', editRefusal: refusal })}
+          bindings={[]}
+          isSelected={false}
+          onSelect={() => {}}
+          onDuplicateClick={() => {}}
+        />,
+      )
+      expect(html, `${refusal} row must offer duplicate`).toMatch(/Duplicate/i)
+    }
   })
 })

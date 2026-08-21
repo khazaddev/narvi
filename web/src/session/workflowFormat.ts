@@ -80,7 +80,7 @@ export function summarizeBindingsForDefinition(bindings: readonly WorkflowBindin
   return { global, repos }
 }
 
-export type StructuralRefusalKind = 'built_in' | 'bound'
+export type StructuralRefusalKind = 'built_in' | 'bound' | 'has_runs'
 
 export interface StructuralRefusal {
   kind: StructuralRefusalKind
@@ -88,42 +88,64 @@ export interface StructuralRefusal {
 }
 
 /**
- * structuralRefusalFor derives the two edit refusals this screen can know
- * about WITHOUT ever attempting a write (§25.10/§25.11): is_built_in and
- * "referenced by any workflow_bindings row" are both structural,
- * unconditional (even for an admin), and readable straight off data this
- * screen already has on hand -- WorkflowDefinition.isBuiltIn and the join
- * summarizeBindingsForDefinition above performs.
+ * structuralRefusalFor renders WorkflowDefinition.editRefusal -- the server's
+ * own verdict -- into the copy this screen shows. It does NOT re-derive the
+ * rules.
  *
- * The THIRD refusal (has run history) has no such signal ANYWHERE on the
- * wire -- WorkflowDefinition carries no "has run history" flag, and there is
- * no endpoint to ask "has this definition ever run" other than attempting
- * the write itself and reading refusalReasonForMutation's own 409 (workflow
- * definitions.go). This function can only ever return null for that case --
- * a null result means "editable as far as this screen can tell", not
- * "definitely editable"; WorkflowEditorView.tsx's own save handler is what
- * catches the third refusal reactively, from the server's own verbatim
- * message, when it fires.
+ * An earlier version did: it read isBuiltIn and joined the bindings list
+ * itself, carrying a second copy of two of the three refusal rules and of
+ * their wording. Two things were wrong with that. The rules would drift from
+ * refusalReasonForMutation (httpapi/workflowdefinitions.go), which is the one
+ * that actually decides; and the THIRD refusal — a definition frozen by run
+ * history — was not derivable from anything on the wire at all, so the screen
+ * could only discover it by letting the operator do the work and then failing
+ * the save.
+ *
+ * The server now sends the verdict and this maps it to operator language. The
+ * rule lives in one place; the wording lives here, where wording belongs.
+ * Each reason keeps its own remedy: duplicating and unbinding are different
+ * actions and must never be collapsed into one message (§25.10).
  */
-export function structuralRefusalFor(definition: Pick<WorkflowDefinition, 'id' | 'isBuiltIn'>, bindings: readonly WorkflowBinding[]): StructuralRefusal | null {
-  if (definition.isBuiltIn) {
-    return {
-      kind: 'built_in',
-      message: 'This is a built-in system template. It is read-only, even for an admin -- duplicate it to make an editable copy.',
-    }
+export function structuralRefusalFor(definition: Pick<WorkflowDefinition, 'editRefusal'>): StructuralRefusal | null {
+  switch (definition.editRefusal) {
+    case 'built_in':
+      return {
+        kind: 'built_in',
+        message: 'This is one of the three built-in lane defaults. It is read-only for everyone, admins included — duplicate it to get an editable copy.',
+      }
+    case 'bound':
+      return {
+        kind: 'bound',
+        message: 'This definition is in use: a lane is bound to it, so editing it would change what runs in production without an admin activating anything. Duplicate it and edit the copy, then have an admin point the binding at the copy — or unbind it first.',
+      }
+    case 'has_runs':
+      return {
+        kind: 'has_runs',
+        message: 'This definition has already run at least once, which freezes it: a completed run describes what it executed only by pointing at these steps, so changing them would rewrite history. Duplicate it and edit the copy.',
+      }
+    default:
+      return null
   }
-  const summary = summarizeBindingsForDefinition(bindings, definition.id)
-  if (summary.global || summary.repos.length > 0) {
-    const where = [summary.global ? 'the global binding' : null, ...summary.repos].filter((s): s is string => s !== null)
-    return {
-      kind: 'bound',
-      message: `This definition is bound (${where.join(', ')}) and cannot be edited or deleted while bound, even by an admin -- duplicate it, edit the copy, then have an admin activate the copy instead.`,
-    }
-  }
-  return null
 }
 
 /** nextStepOrder returns the order value a newly-added step should carry -- one past the current maximum, so a fresh step always lands after every existing one and order stays positive/unique by construction (internal/domain/workflow.ValidateDefinition's own rule, enforced client-side here as cheaply as possible, per §25.12's "make the obviously-invalid hard to draw" mandate). */
 export function nextStepOrder(orders: readonly number[]): number {
   return orders.length === 0 ? 1 : Math.max(...orders) + 1
+}
+
+/** refusalChipLabel names each edit refusal in one or two words -- exhaustive over StructuralRefusalKind so a new reason is a compile error rather than a silent fallback to someone else's label. */
+export function refusalChipLabel(kind: StructuralRefusalKind): string {
+  switch (kind) {
+    case 'built_in':
+      return 'built-in'
+    case 'bound':
+      return 'bound'
+    case 'has_runs':
+      return 'has run'
+  }
+}
+
+/** refusalChipTone maps a refusal to its chip tone: built-in is a neutral fact about a template, the other two are states an operator may want to change. */
+export function refusalChipTone(kind: StructuralRefusalKind): string {
+  return kind === 'built_in' ? 'neutral' : 'warn'
 }

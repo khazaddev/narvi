@@ -27,6 +27,7 @@ function baseDefinition(overrides: Partial<WorkflowDefinition> = {}): WorkflowDe
     lane: 'request',
     name: 'My workflow',
     isBuiltIn: false,
+    editRefusal: null,
     version: 1,
     steps: [baseStep()],
     createdAt: '2026-08-20T00:00:00Z',
@@ -96,30 +97,41 @@ describe('summarizeBindingsForDefinition', () => {
 })
 
 describe('structuralRefusalFor', () => {
-  it('refuses a built-in definition regardless of any binding state', () => {
-    const refusal = structuralRefusalFor(baseDefinition({ isBuiltIn: true }), [])
+  // The rule lives on the server (refusalReasonForMutation); this maps its
+  // verdict to copy. So what is worth pinning here is that each reason keeps
+  // its OWN remedy -- duplicating and unbinding are different actions, and
+  // §25.10 forbids collapsing them into one message.
+  it('renders the built-in refusal, saying it holds for admins too', () => {
+    const refusal = structuralRefusalFor(baseDefinition({ editRefusal: 'built_in' }))
     expect(refusal?.kind).toBe('built_in')
     expect(refusal?.message).toMatch(/built-in/i)
     expect(refusal?.message).toMatch(/duplicate/i)
+    expect(refusal?.message).toMatch(/admin/i)
   })
 
-  it('refuses a non-built-in definition bound globally, naming the global binding', () => {
-    const def = baseDefinition({ id: 'd1', isBuiltIn: false })
-    const refusal = structuralRefusalFor(def, [baseBinding({ repoFullName: null, workflowDefinitionId: 'd1' })])
+  it('renders the bound refusal, naming BOTH remedies', () => {
+    const refusal = structuralRefusalFor(baseDefinition({ editRefusal: 'bound' }))
     expect(refusal?.kind).toBe('bound')
-    expect(refusal?.message).toMatch(/global binding/i)
+    expect(refusal?.message).toMatch(/duplicate/i)
+    expect(refusal?.message).toMatch(/unbind/i)
   })
 
-  it('refuses a non-built-in definition bound by a repo override, naming the repo', () => {
-    const def = baseDefinition({ id: 'd1', isBuiltIn: false })
-    const refusal = structuralRefusalFor(def, [baseBinding({ repoFullName: 'acme/widgets', workflowDefinitionId: 'd1' })])
-    expect(refusal?.kind).toBe('bound')
-    expect(refusal?.message).toContain('acme/widgets')
+  it('renders the run-history refusal, explaining the freeze rather than just asserting it', () => {
+    const refusal = structuralRefusalFor(baseDefinition({ editRefusal: 'has_runs' }))
+    expect(refusal?.kind).toBe('has_runs')
+    expect(refusal?.message).toMatch(/duplicate/i)
+    // The surprising part is WHY a single run freezes a draft; a refusal that
+    // only asserts is one an operator works around rather than understands.
+    expect(refusal?.message).toMatch(/run/i)
   })
 
-  it('returns null for an unbound, non-built-in definition -- editable as far as this screen can tell', () => {
-    const def = baseDefinition({ id: 'd1', isBuiltIn: false })
-    expect(structuralRefusalFor(def, [baseBinding({ workflowDefinitionId: 'other-definition' })])).toBeNull()
+  it('gives the three reasons three DIFFERENT messages', () => {
+    const messages = (['built_in', 'bound', 'has_runs'] as const).map((r) => structuralRefusalFor(baseDefinition({ editRefusal: r }))?.message)
+    expect(new Set(messages).size).toBe(3)
+  })
+
+  it('returns null when the server says the definition is editable', () => {
+    expect(structuralRefusalFor(baseDefinition({ editRefusal: null }))).toBeNull()
   })
 })
 

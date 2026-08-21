@@ -90,7 +90,7 @@ import { truncateForDisplay } from './textSafety'
 import { WorkflowCanvas } from './WorkflowCanvas'
 import { WorkflowStepEditor } from './WorkflowStepEditor'
 import type { WorkflowLaneValue } from './workflowFormat'
-import { WORKFLOW_LANES, laneLabel, nextStepOrder, structuralRefusalFor, summarizeBindingsForDefinition } from './workflowFormat'
+import { WORKFLOW_LANES, laneLabel, nextStepOrder, refusalChipLabel, refusalChipTone, structuralRefusalFor, summarizeBindingsForDefinition } from './workflowFormat'
 import { stepOrders } from './workflowGraphModel'
 
 const MAX_FIELD_CHARS = 2000
@@ -150,7 +150,7 @@ function asNonEmptySteps(steps: WorkflowStepDefinition[]): [WorkflowStepDefiniti
 /** DefinitionRow renders one definition's own row in the lane list -- exported for direct render-safety testing (mirrors AutomationRow/MemberRow's own established precedent): definition.name is operator-entered free text and must render as plain text only. */
 export function DefinitionRow({ definition, bindings, isSelected, onSelect, onDuplicateClick }: { definition: WorkflowDefinition; bindings: WorkflowBinding[]; isSelected: boolean; onSelect: () => void; onDuplicateClick: () => void }) {
   const summary = summarizeBindingsForDefinition(bindings, definition.id)
-  const refusal = structuralRefusalFor(definition, bindings)
+  const refusal = structuralRefusalFor(definition)
   return (
     <div className={`wfitem${isSelected ? ' active' : ''}`} onClick={onSelect} role="button" tabIndex={0} onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ' ? onSelect() : undefined)}>
       <span className="wt">
@@ -159,10 +159,17 @@ export function DefinitionRow({ definition, bindings, isSelected, onSelect, onDu
       </span>
       <span className="wm">
         {definition.steps.length} step{definition.steps.length === 1 ? '' : 's'} · v{definition.version}
+        {/*
+          One label per reason, never a two-way fallback: the ternary this
+          replaces rendered "bound" for anything that was not built-in, so a
+          definition frozen by run history wore the wrong chip and pointed the
+          operator at unbinding, which would not have helped. The three
+          remedies differ (§25.10), so the three labels must.
+        */}
         {refusal && (
-          <span className={`chip ${refusal.kind === 'built_in' ? 'neutral' : 'warn'}`} style={{ marginLeft: 4 }} title={refusal.message}>
+          <span className={`chip ${refusalChipTone(refusal.kind)}`} style={{ marginLeft: 4 }} title={refusal.message}>
             <span className="dot" />
-            {refusal.kind === 'built_in' ? 'built-in' : 'bound'}
+            {refusalChipLabel(refusal.kind)}
           </span>
         )}
         {summary.global && (
@@ -370,7 +377,7 @@ export function WorkflowEditorView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDefinition?.id, selectedDefinition?.version])
 
-  const preemptiveRefusal = selectedDefinition ? structuralRefusalFor(selectedDefinition, bindings) : null
+  const preemptiveRefusal = selectedDefinition ? structuralRefusalFor(selectedDefinition) : null
   const effectiveRefusalMessage = preemptiveRefusal?.message ?? learnedRefusalMessage
   const effectiveReadOnly = effectiveRefusalMessage !== null
 

@@ -9743,6 +9743,20 @@ type WorkflowDefinition struct {
 	// CreatedAt corresponds to the JSON schema field "createdAt".
 	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
 
+	// Why this definition cannot be edited or deleted, or null when it can. Computed
+	// server-side from the SAME check the write path enforces
+	// (refusalReasonForMutation, httpapi/workflowdefinitions.go), so a client renders
+	// a verdict rather than re-deriving the rules -- an editor that reimplemented
+	// them would carry a second copy of the refusal logic AND of its wording, and the
+	// two would drift. "has_runs" is the one a client could not derive at all:
+	// nothing about runs appears on this shape, so without this field an editor only
+	// learns a definition is frozen by failing to save it, after the operator has
+	// done the work. All three apply regardless of role, admin included (§25.11). The
+	// remedy differs per reason -- duplicate for built_in and has_runs,
+	// duplicate-or-unbind for bound -- so a screen must not collapse them into one
+	// message.
+	EditRefusal *WorkflowDefinitionEditRefusal `json:"editRefusal" yaml:"editRefusal" mapstructure:"editRefusal"`
+
 	// Id corresponds to the JSON schema field "id".
 	Id string `json:"id" yaml:"id" mapstructure:"id"`
 
@@ -9765,6 +9779,44 @@ type WorkflowDefinition struct {
 
 	// Version corresponds to the JSON schema field "version".
 	Version int `json:"version" yaml:"version" mapstructure:"version"`
+}
+
+type WorkflowDefinitionEditRefusal struct {
+	Value interface{}
+}
+
+// MarshalJSON implements json.Marshaler.
+func (j *WorkflowDefinitionEditRefusal) MarshalJSON() ([]byte, error) {
+	return json.Marshal(j.Value)
+}
+
+var enumValues_WorkflowDefinitionEditRefusal = []interface{}{
+	"built_in",
+	"bound",
+	"has_runs",
+	nil,
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WorkflowDefinitionEditRefusal) UnmarshalJSON(value []byte) error {
+	var v struct {
+		Value interface{}
+	}
+	if err := json.Unmarshal(value, &v.Value); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_WorkflowDefinitionEditRefusal {
+		if reflect.DeepEqual(v.Value, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_WorkflowDefinitionEditRefusal, v.Value)
+	}
+	*j = WorkflowDefinitionEditRefusal(v)
+	return nil
 }
 
 type WorkflowDefinitionLane string
@@ -9807,6 +9859,9 @@ func (j *WorkflowDefinition) UnmarshalJSON(value []byte) error {
 	}
 	if _, ok := raw["createdAt"]; raw != nil && !ok {
 		return fmt.Errorf("field createdAt in WorkflowDefinition: required")
+	}
+	if _, ok := raw["editRefusal"]; raw != nil && !ok {
+		return fmt.Errorf("field editRefusal in WorkflowDefinition: required")
 	}
 	if _, ok := raw["id"]; raw != nil && !ok {
 		return fmt.Errorf("field id in WorkflowDefinition: required")
