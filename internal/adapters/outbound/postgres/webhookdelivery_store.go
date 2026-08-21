@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
@@ -44,6 +45,19 @@ func (s *WebhookDeliveryStore) Claim(ctx context.Context, provider, deliveryID s
 		Provider:   provider,
 		DeliveryID: deliveryID,
 	})
+}
+
+// GetLastInboundAt returns the most recent received_at across every
+// delivery this exact provider (an EXACT match, never a prefix -- see
+// GetLastInboundDeliveryAt's own generated doc comment) has ever claimed
+// -- §12.5's own ("integrations read model & routes" amendment) GET
+// /api/integrations, "when did we last hear from this surface". The
+// returned pgtype.Timestamptz.Valid is false (never an error) when this
+// provider has never had a claim at all -- a bare MAX() aggregate always
+// returns exactly one row, so this never surfaces pgx.ErrNoRows the way
+// a caller might otherwise expect.
+func (s *WebhookDeliveryStore) GetLastInboundAt(ctx context.Context, provider string) (pgtype.Timestamptz, error) {
+	return s.q.GetLastInboundDeliveryAt(ctx, provider)
 }
 
 // Release un-claims a (provider, deliveryID) this same caller previously

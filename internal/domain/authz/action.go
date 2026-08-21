@@ -447,6 +447,31 @@ const (
 	// unattended, on every future PR, never a per-PR maintainer judgment
 	// call the way row 5's actions are.
 	ActionConfigureReviewCostBudget Action = "configure_review_cost_budget"
+	// ActionConfigurePreviewLinks covers §4.1.2 amendment's own new
+	// PUT /api/repos/{owner}/{repo}/preview-config endpoint
+	// (internal/adapters/inbound/httpapi/previewconfig.go) --
+	// (re)configures a repo's own RWX preview-link dispatch (repo_settings.
+	// rwx_preview_dispatch_key/rwx_preview_endpoint_template/
+	// rwx_preview_org_slug, migrations/000059_repo_settings_rwx_preview.
+	// up.sql), previously reachable only by internal/app/sessionactor/
+	// previewpr.go reading the row directly, on no REST shape at all.
+	// Admin only, this SAME row as ActionToggleSentinelAutoFix/
+	// ActionToggleAutoMerge/ActionToggleAutoRetriggerReview/
+	// ActionToggleDescriptionAutofix/ActionConfigureReviewDepth/
+	// ActionConfigureReviewCostBudget immediately above, by the identical
+	// reasoning those actions' own doc comments already state: arming
+	// this (setting a real dispatchKey/endpointTemplate/orgSlug) changes
+	// what runs UNATTENDED on a repo's own pushes -- every future push
+	// with a PR now triggers a build dispatch on an external provider
+	// (RWX), with no human in the loop and no per-push judgment call the
+	// way row 5's actions are. Deliberately its own action, not reused
+	// from any §21/§24/§26 sibling: this is the ONLY row-6 action whose
+	// own request body carries a credential (dispatchKey), which is why
+	// it also gets its own dedicated endpoint rather than folding into
+	// the combined PUT .../settings (§4.1.2 amendment's own explicit
+	// instruction -- see httpapi/previewconfig.go's own doc comment for
+	// the full "why a separate endpoint" reasoning).
+	ActionConfigurePreviewLinks Action = "configure_preview_links"
 )
 
 // AllActions is every recognized Action, in this file's own declaration
@@ -492,4 +517,5 @@ var AllActions = []Action{
 	ActionToggleDescriptionAutofix,
 	ActionConfigureReviewDepth,
 	ActionConfigureReviewCostBudget,
+	ActionConfigurePreviewLinks,
 }

@@ -19,6 +19,30 @@ INSERT INTO webhook_deliveries (provider, delivery_id) VALUES ($1, $2)
 ON CONFLICT (provider, delivery_id) DO UPDATE SET received_at = webhook_deliveries.received_at
 RETURNING *, (xmax = 0) AS inserted;
 
+-- name: GetLastInboundDeliveryAt :one
+-- §12.5's own ("integrations read model & routes" amendment) GET
+-- /api/integrations: "when did we last hear from this surface" --
+-- MAX(received_at) across every (provider, delivery_id) row this
+-- provider has ever claimed, an EXACT match on provider (never a prefix
+-- match the way outbox.kind needs -- GetLatestOutboxEntryByKindPrefix,
+-- postgres/queries/outbox.sql -- since every provider here writes its own
+-- CONSTANT, exact string: githubDeliveryProvider "github",
+-- internal/adapters/inbound/slack/handler.go's own literal "slack",
+-- internal/adapters/inbound/linear/webhook.go's own literal "linear").
+-- Deliberately does NOT match internal/adapters/inbound/slack/handler.go's
+-- own SECOND, distinct claim namespace "slack-message"
+-- (slackMessageClaimProvider) -- that one claims a MESSAGE for
+-- coalescing, not a genuine webhook delivery, and an exact "=" comparison
+-- (never LIKE) correctly leaves it out.
+--
+-- A bare aggregate with no GROUP BY always returns exactly ONE row
+-- (MAX of zero matching rows is a genuine SQL NULL, not an absent row),
+-- so this is a true :one query -- never pgx.ErrNoRows -- and the Go
+-- caller reads pgtype.Timestamptz.Valid to distinguish "never heard from
+-- this provider" (false) from a real timestamp.
+SELECT MAX(received_at)::timestamptz AS last_received_at FROM webhook_deliveries
+WHERE provider = $1;
+
 -- name: ReleaseWebhookDelivery :exec
 -- Un-claims a (provider, delivery_id) this same request just claimed via
 -- ClaimWebhookDelivery, but failed to actually process (payload parse

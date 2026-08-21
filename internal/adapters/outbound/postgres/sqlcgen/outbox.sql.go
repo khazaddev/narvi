@@ -148,6 +148,51 @@ func (q *Queries) CreateOutboxEntry(ctx context.Context, arg CreateOutboxEntryPa
 	return i, err
 }
 
+const getLatestOutboxEntryByKindPrefix = `-- name: GetLatestOutboxEntryByKindPrefix :one
+SELECT id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id FROM outbox
+WHERE kind LIKE $1::text || '%'
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+// §12.5's own ("integrations read model & routes" amendment) GET
+// /api/integrations: "what did Narvi last try to POST to this surface" --
+// the most-recently-CREATED (never delivered_at, which is NULL for a
+// still-pending or dead-lettered row) outbox row whose own kind begins
+// with sqlc.arg('kind_prefix') -- httpapi/integrations.go passes each of
+// internal/domain/integrations.Providers' own three literal names
+// ("slack"/"linear"/"github") here, one call per provider, NEVER a
+// caller-supplied value (this read model has no user input at all). The
+// '%' wildcard is appended HERE, in SQL, rather than by the Go caller
+// concatenating it onto kind_prefix itself, so the "prefix means LIKE
+// X%" mechanism lives in exactly one place -- see
+// internal/domain/integrations.ProviderForOutboxKind's own doc comment
+// for the SAME naming-convention fragility this LIKE match shares
+// (a kind that does not literally begin with its own provider's name,
+// e.g. "sentinel_auto_fix"/"handoff_sentinel"/"release_manifest" as of
+// this query's own introduction, silently never matches ANY provider's
+// prefix here either -- the identical, deliberately-not-hidden gap).
+// pgx.ErrNoRows (unwrapped) means this provider has never had an outbox
+// row at all -- "no outbound attempt on record", never a store error.
+func (q *Queries) GetLatestOutboxEntryByKindPrefix(ctx context.Context, kindPrefix string) (Outbox, error) {
+	row := q.db.QueryRow(ctx, getLatestOutboxEntryByKindPrefix, kindPrefix)
+	var i Outbox
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.Kind,
+		&i.Payload,
+		&i.Status,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.DeliveredAt,
+		&i.LastError,
+		&i.CreatedAt,
+		&i.CorrelationID,
+	)
+	return i, err
+}
+
 const getOutboxEntry = `-- name: GetOutboxEntry :one
 SELECT id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id FROM outbox
 WHERE id = $1

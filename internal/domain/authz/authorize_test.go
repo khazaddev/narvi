@@ -331,6 +331,19 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"maintainer cannot configure review depth even if ownedOrJoined", authz.RoleMaintainer, authz.ActionConfigureReviewDepth, true, false},
 		{"member cannot configure review depth", authz.RoleMember, authz.ActionConfigureReviewDepth, false, false},
 		{"viewer cannot configure review depth", authz.RoleViewer, authz.ActionConfigureReviewDepth, false, false},
+
+		// (§4.1.2 amendment): configuring a repo's own RWX
+		// preview-link dispatch (PUT /api/repos/{owner}/{repo}/preview-config)
+		// is admin ONLY, the SAME row as ActionConfigureReviewDepth
+		// immediately above -- asserted with ownedOrJoined=true too, to
+		// prove the ownership escape hatch does not exist for this row
+		// at all. A maintainer is explicitly refused PUT
+		// .../preview-config; an admin is allowed.
+		{"admin configures preview links", authz.RoleAdmin, authz.ActionConfigurePreviewLinks, false, true},
+		{"maintainer cannot configure preview links", authz.RoleMaintainer, authz.ActionConfigurePreviewLinks, false, false},
+		{"maintainer cannot configure preview links even if ownedOrJoined", authz.RoleMaintainer, authz.ActionConfigurePreviewLinks, true, false},
+		{"member cannot configure preview links", authz.RoleMember, authz.ActionConfigurePreviewLinks, false, false},
+		{"viewer cannot configure preview links", authz.RoleViewer, authz.ActionConfigurePreviewLinks, false, false},
 	}
 
 	for _, tc := range tests {
