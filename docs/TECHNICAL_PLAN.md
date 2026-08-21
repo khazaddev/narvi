@@ -159,7 +159,7 @@ Capabilities{Snapshots: false, Resume: <verified>, ExplicitStop: true, ImageBuil
 
 §8.9's exit criterion, built on RWX **preview apps** — RWX's own primitive for exactly this: a run task carrying `app: {endpoint, port, timeout}` serves "traffic on publicly accessible URLs under rwx.run", with a **canonical** URL (`https://{task-cache-key}--{org-slug}.rwx.run`, "pinned to one specific build") and a **friendly** URL (`https://{endpoint}--{org-slug}.rwx.run`, always the latest build — RWX's docs: "Use for shared PR links that automatically pick up new commits", fetched 2026-08-06). Apps start on demand (~3s claimed), spin down "after 10 minutes of inactivity", restart on the next request. Narvi's job is therefore two small side effects per push — (a) trigger a preview build at the PR's newest commit, (b) attach the link to that commit — both delivered through the existing outbox machinery (§5.1), never a new delivery pathway.
 
-1. **Trigger and enqueue point.** `push_complete` (§6.1) already carries `repos[].sha` — the pushed head. The sessionactor's own PR-creation path (`pushpr.go`'s `createPRBestEffort`, which has just ensured the PR exists and holds its `PRRef`) is the ONE enqueue point: for each pushed repo whose per-repo preview setting is present, one small fresh transaction (mirroring `recordPRArtifact`'s own established fresh-transact pattern) writes a `preview`-typed artifact row + both outbox rows below. The `preview` slot in `artifact_type` and the §6.1 `artifact` event have existed since Steps 4/5 with no writer — this is their first real producer, and §12.2 item 1's artifacts rail renders it with zero new UI machinery. Per-repo setting `{dispatchKey, endpointTemplate, orgSlug}`; absent = feature off (off by default, §24.5's posture). No new trigger surface: sessions that never push never preview.
+1. **Trigger and enqueue point.** `push_complete` (§6.1) already carries `repos[].sha` — the pushed head. The sessionactor's own PR-creation path (`pushpr.go`'s `createPRBestEffort`, which has just ensured the PR exists and holds its `PRRef`) is the ONE enqueue point: for each pushed repo whose per-repo preview setting is present, one small fresh transaction (mirroring `recordPRArtifact`'s own established fresh-transact pattern) writes a `preview`-typed artifact row + both outbox rows below. The `preview` slot in `artifact_type` and the §6.1 `artifact` event have existed since Steps 4/5 with no writer — this is their first real producer, and §12.2 item 1's artifacts rail renders it with zero new UI machinery. Per-repo setting `{dispatchKey, endpointTemplate, orgSlug}`; absent = feature off (off by default, §24.5's posture). **These three are not on any REST shape today (amendment).** The columns exist and only `previewpr.go` reads them, so the per-repository settings screen can neither show nor change preview configuration. Exposing them is not symmetric across the three: `endpointTemplate` and `orgSlug` are ordinary identifiers and read/write normally, while `dispatchKey` is the credential authorising a run dispatch and must follow the write-only rule every other credential in this codebase follows — accepted on write, never present in any response, with a fixed non-secret placeholder proving one is configured, exactly as `SandboxSecret`/`ProviderCredential` already do. A response that returned it, in any form, would be a regression. No new trigger surface: sessions that never push never preview.
 2. **`rwx_preview_dispatch` (new outbox kind).** Delivered by the `rwx` package's own `ports.Notifier` implementation (the outboxworker routes kind→notifier exactly as for every other kind): `POST /mint/api/runs/dispatches` with `ref` = the pushed sha, `key` = the repo's `dispatchKey`, `params` = `{pr-number, head-sha, session-id}` — surfaced to the run as `event.dispatch.params`, from which the repo's own `.rwx` run definition templates its app endpoint. The build runs on RWX's infrastructure from the ref itself — fully decoupled from the session's sandbox — and repeat dispatches are cheap by construction (content-addressed cache). Delivery is the fast dispatch POST only; it never waits for the build.
 3. **`github_preview_link` (new outbox kind).** Delivered by a small `githubapi` notifier via a new `CreateCommitStatus` adapter capability: `POST /repos/{owner}/{repo}/statuses/{sha}` with `context: narvi/preview`, `state: success`, `target_url` = the friendly URL rendered from `endpointTemplate` + `orgSlug`, and a description carrying the ephemerality caveat (live while RWX serves it). A commit status **is** "a preview link at a commit": each push posts at the new head, GitHub surfaces exactly the head commit's statuses on the PR, and redelivery of the same (context, sha) converges instead of duplicating — strictly better here than `PostIssueComment`, whose own notifiers document double-posting on retry as an accepted limitation (`releasemanifestnotifier.go`), and zero timeline noise per push. Not GitHub Deployments: a preview that dies with RWX's idle reaper should not masquerade as a deployment environment.
 4. **Friendly, not canonical.** The friendly URL is deterministic at enqueue time (no build to await inside a `Deliver`) and never goes stale — it is RWX's own "latest build for this PR" pointer, which is precisely §8.9's promise. The canonical per-build URL requires the finished build's task cache key (pollable via `rwx results <run_id>`); that is the v2 upgrade path if template drift bites (§4.1.3), not v1 machinery.
@@ -408,6 +408,37 @@ Boot progress phases instead of spinner; failure reason + resume everywhere (mat
 
 ### 12.4 Sequencing & exit
 Built in phase 7. Definition of done: all nine views built to the mockups + §12.3 items; screenshot-level review against the mockups; `make dist` produces the single self-contained binary.
+
+### 12.5 Integrations read model & routes (amendment)
+
+The integrations screen in §12.2's inventory needs to show, per ingress surface (Slack, Linear,
+GitHub): whether it is connected, and evidence of its last delivery. Neither is reachable today.
+`authz.ActionManageIntegrations` exists and is real — but its only consumer is
+`adapters/inbound/linear`, gating an ingress path, not an HTTP handler a UI could call. There is no
+`/api/integrations` route and no read model behind one, so this is specified here rather than
+improvised by whoever builds the screen.
+
+**A derived read, not a new table.** Every fact the screen needs already exists: whether a surface
+is configured comes from `platform.Config` (each ingress has its own required secrets, and a
+partially-configured surface must read as NOT connected rather than as connected-and-broken);
+per-surface delivery evidence comes from the existing `webhook_deliveries` and outbox rows. Nothing
+new is persisted, which also means there is no connect/disconnect *write* here — a surface is
+connected by deploying its configuration, the same posture §27.3's cloud-identity capability
+already takes.
+
+| Route | Action | Notes |
+|---|---|---|
+| `GET /api/integrations` | `ActionManageIntegrations` (admin) | one row per surface: configured, last inbound delivery, last delivery outcome |
+
+**Never the secrets themselves, not even shaped.** The response says *whether* a surface is
+configured and nothing about what configures it — no token prefix, no length, no masked form. This
+is the same rule `SandboxSecret`/`ProviderCredential` follow by carrying no `value` field at all,
+and it is why "connected" is a boolean rather than anything richer.
+
+**Last-delivery evidence is a fact with a timestamp, never a health verdict.** The screen may state
+when the last delivery arrived and whether it succeeded. It must not derive "healthy"/"degraded"
+from that: a quiet Slack workspace and a broken one look identical from here, and a green badge on
+a surface nobody has exercised is exactly the claim this codebase's own conventions forbid.
 
 ## 13. Identity, authentication & RBAC
 
@@ -1212,6 +1243,57 @@ New schema-first entities in `contracts/rest/v1/dtos.schema.json`: `WorkflowDefi
 `WorkflowStepDecideRequest`/`Response`. An optional `canvasPosition {x, y}`, opaque server-side. No
 SESSION_CONFIG change, no `AgentRuntime` change.
 
+**Routes (amendment — these were never specified, and the omission was load-bearing).** The
+subsections above define the DTOs and the RBAC actions but never say through what endpoints either
+is reached. Only §25.9's HITL decide route was ever named, and it is the only one that exists. An
+editing surface (§25.12) and a run view cannot be built against entities with no routes, so the
+surface is specified here rather than invented per-consumer:
+
+| Route | Action | Notes |
+|---|---|---|
+| `GET /api/workflow-definitions` | `ActionManageWorkflowDefinitions` | every definition, built-in and custom |
+| `GET /api/workflow-definitions/{id}` | `ActionManageWorkflowDefinitions` | one whole document |
+| `POST /api/workflow-definitions` | `ActionManageWorkflowDefinitions` | create a draft, or duplicate an existing definition |
+| `PUT /api/workflow-definitions/{id}` | `ActionManageWorkflowDefinitions` | whole document; refused for built-in AND for bound (below) |
+| `DELETE /api/workflow-definitions/{id}` | `ActionManageWorkflowDefinitions` | refused for built-in AND for bound |
+| `GET /api/workflow-bindings` | `ActionManageWorkflowDefinitions` | every `(lane, repo)` binding, global row included |
+| `PUT /api/workflow-bindings` | `ActionActivateWorkflowBinding` | admin-only; binds one `(lane, repo-or-global)` |
+| `GET /api/sessions/{id}/workflow-runs` | session read | a session's runs, newest first |
+| `GET /api/workflow-runs/{runId}` | session read | one run WITH its ordered step runs |
+
+**A definition is one document, not a graph assembled from three endpoints.** `WorkflowDefinition`
+already embeds `steps`, and each step embeds its own outgoing `edges`, so GET returns and PUT
+accepts the whole thing in one shape — complete desired state, never a partial patch, the same
+convention `UpdateRepoSettingsRequest` already carries. There are deliberately no per-step or
+per-edge routes: a canvas edits a graph, and a graph saved a node at a time has intermediate states
+the engine could not execute.
+
+**Validation belongs to the save, not to the canvas.** §25.12 requires the editor to constrain what
+a user can draw; that is a usability duty and never the guarantee. `PUT` re-validates the whole
+document server-side against the closed model — ordered steps, edges keyed only on the three
+`StepOutcomeStatus` values, every `toStepId` resolving inside this definition — and refuses a graph
+the engine could not run. A canvas that draws more than the engine executes is a UI bug; a canvas
+that *saves* it would be a data-integrity bug.
+
+**Duplication is the escape hatch, so it is specified rather than left to taste.** The refusals
+below only work as a redirect if the copy is one obvious action; a maintainer who has to
+hand-rebuild a graph node by node will instead ask an admin to unbind, which defeats the point.
+`POST /api/workflow-definitions` therefore accepts either a whole new definition document or a
+`{sourceDefinitionId, name}` pair. The copy is deep — every step and every edge — and it always
+lands `is_built_in = false`, unbound, at version 1, whatever it was copied from. A built-in is
+copyable exactly like anything else: that is how the three seeded lane defaults are meant to be
+customised (§25.8's own override example), and refusing to copy one would leave no way to start
+from a working graph.
+
+**Two structural refusals, neither of them an RBAC row.** `PUT`/`DELETE` on a definition with
+`is_built_in = true` is refused unconditionally (§25.4) — even for an admin, who must duplicate
+instead. The second is new, and closes a real gap: see §25.11.
+
+**Runs are read-only and always carry their step runs.** `workflow_step_runs` has no list read
+today, so a run view has no way to show a step sequence at all. `GET /api/workflow-runs/{runId}`
+returns the run and its ordered step runs together, because a run without its steps answers no
+question anybody asks.
+
 ### 25.11 RBAC
 
 Three new actions, each mirroring an existing row in `internal/domain/authz/authorize.go`:
@@ -1223,6 +1305,32 @@ Three new actions, each mirroring an existing row in `internal/domain/authz/auth
 - `ActionDecideWorkflowStep` — own/joined-aware (same row as `ActionApprovePlan`).
 
 `is_built_in` immutability is a structural invariant, not an RBAC row (§25.4).
+
+**"Unbound draft" is doing security work, and nothing enforced it (amendment).** The maintainer-level
+row above is justified by the word *unbound* — a draft with no effect on production until an admin
+activates it — and the admin-only row exists because activation "is the action that changes what
+actually drives dispatch". As built, that premise is false. `resolveBinding` resolves
+`(lane, repo)` to a binding and `LoadDefinition` then reads the definition **by id alone**;
+`workflow_bindings.definition_version` is recorded and never consulted. So editing a definition that
+is already bound changes production dispatch for every session started afterwards, immediately, with
+no admin involved — the maintainer-level action reaching straight past the admin-only gate that
+exists to prevent exactly that.
+
+Two ways to close it, and only one keeps this section's own reasoning intact:
+
+1. **Make *unbound* true.** `PUT`/`DELETE` on a definition referenced by any `workflow_bindings` row
+   is refused, structurally, the same way `is_built_in` is — not as an RBAC row, so it cannot be
+   configured away. A maintainer duplicates, edits the copy, and an admin activates it. Every word
+   of the RBAC split above then holds as written, and the admin gate becomes the only path by which
+   production behaviour changes.
+2. Let edits go live and raise editing a bound definition to admin-only. This abandons the
+   maintainer-level row's stated purpose and gives admins a second, unaudited route to the same
+   effect as activation.
+
+**Option 1 is the specified behaviour.** It also settles what `definition_version` means: a record
+of the version that was current when the binding was made, for audit and diagnosis, never a
+retrievable pin — the schema keeps one row per definition and no version history, so there is no
+older version to resolve to. Nothing may be built that implies otherwise.
 
 ### 25.12 Visual canvas editor (Step 88, Phase 7)
 
