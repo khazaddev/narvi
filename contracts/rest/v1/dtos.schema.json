@@ -4413,6 +4413,221 @@
           }
         }
       }
+    },
+    "Environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One environments row's own REST wire shape (\u00a714.1, migrations/000021_environments.up.sql + 000025/000095). Returned by GET /api/environments (\u00a712.2 item 5) -- the first standalone read surface over this table; environments.up.sql's own scope note is explicit that create/update stay inline-at-session-creation-time only (httpapi.CreateSession), so this DTO carries no name/repos/image-build fields -- none exist on this row. id is the only stable handle a caller has for reusing this Environment's own scoped sub-resources (sandbox-secrets, opencode-config, cloud-identity-bindings, cluster-binding), all already keyed by environments.id.",
+      "required": [
+        "id",
+        "pathScope",
+        "mockConfigured",
+        "contractsPath",
+        "dockerRequired",
+        "egressPolicyMode",
+        "egressPolicyAllowlist",
+        "createdAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "pathScope": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Sparse-checkout glob patterns (\u00a714.1). Null/absent means full access -- the ordinary, unscoped case."
+        },
+        "mockConfigured": {
+          "type": "boolean"
+        },
+        "contractsPath": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "\u00a714.3's own contract-drift fingerprint path; null when mockConfigured is false."
+        },
+        "dockerRequired": {
+          "type": "boolean",
+          "description": "\u00a727.5's per-Environment Docker-in-sandbox flag."
+        },
+        "egressPolicyMode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "open",
+            "allowlist",
+            null
+          ],
+          "description": "\u00a727.6's per-Environment enforced-egress mode. Null means no policy attached (unrestricted, today's unchanged behavior)."
+        },
+        "egressPolicyAllowlist": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "The customer's own configured allowlist ONLY (\u00a727.6) -- the non-negotiable floor (CP host + git hosts) is appended server-side at SessionConfig assembly time, never persisted here. Non-null only when egressPolicyMode is 'allowlist'."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "ListEnvironmentsResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "GET /api/environments's own response body (\u00a712.2 item 5) -- every environments row that exists, newest-first. Unbounded (no pagination), matching ListAutomationsResponse's own identical precedent -- environments rows are created only when a session or automation supplies a pathScope/mockConfig/docker/egressPolicy, so volume stays small in practice.",
+      "required": [
+        "environments"
+      ],
+      "properties": {
+        "environments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Environment"
+          }
+        }
+      }
+    },
+    "PromptTemplate": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One prompt_templates row's own REST wire shape (\u00a718.6, migrations/000033_intent_classifier.up.sql). Mirrors classifiertemplates.go's own hand-written intentTemplateDTO field-for-field (name/template/updatedAt) -- that handler's own JSON output is unchanged by this schema addition; this definition exists so the NEW list endpoint (\u00a712.2 item 5) and the web client's typed calls against the existing upsert/preview endpoints all share one generated shape instead of the frontend hand-rolling one. No version/active-shadow/divergence/editedBy fields -- \u00a718.6's own explicit scope note is that prompt_templates has no such columns yet (see prompttemplate_store.go's own doc comment); the Settings \u2192 Prompt templates view renders that honestly rather than inventing them.",
+      "required": [
+        "name",
+        "template",
+        "updatedAt"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "template": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "ListPromptTemplatesResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "GET /api/intent-templates's own response body (\u00a712.2 item 5) -- every prompt_templates row, ordered by name. Unbounded (no pagination) -- bounded in practice to however many distinct template names this deployment has ever upserted.",
+      "required": [
+        "promptTemplates"
+      ],
+      "properties": {
+        "promptTemplates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PromptTemplate"
+          }
+        }
+      }
+    },
+    "UpsertIntentTemplateRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "POST /api/intent-templates's own request body -- mirrors classifiertemplates.go's own hand-written intentTemplateUpsertRequest field-for-field (name/template); that handler decodes its own identically-shaped struct, so this generated type is wire-compatible without any Go handler change.",
+      "required": [
+        "name",
+        "template"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "template": {
+          "type": "string"
+        }
+      }
+    },
+    "PreviewIntentTemplateRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "POST /api/intent-templates/preview's own request body -- mirrors classifiertemplates.go's own hand-written intentTemplatePreviewRequest field-for-field (name/template/vars).",
+      "required": [
+        "name",
+        "template",
+        "vars"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "template": {
+          "type": "string"
+        },
+        "vars": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Preview-time placeholder substitution values -- never persisted, never validated against any allow-list server-side (see classifiertemplates.go's own doc comment)."
+        }
+      }
+    },
+    "PreviewIntentTemplateResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "POST /api/intent-templates/preview's own success response -- mirrors classifiertemplates.go's own hand-written intentTemplatePreviewResponse field-for-field (assembled).",
+      "required": [
+        "assembled"
+      ],
+      "properties": {
+        "assembled": {
+          "type": "string"
+        }
+      }
+    },
+    "RepoDigestScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "GET /api/repos/{owner}/{repo}/digest-scope's own response body (\u00a712.2 item 5, \u00a721.3). \u00a721.3's own design is explicit that a repo's daily digest is entirely deterministic and its scope auto-derived, fresh, from recent review-session thread history (slack_thread_sessions/linear_agent_sessions joined through github_pr_sessions) -- there is no cadence/scope SETTING to persist or edit; this read-only endpoint surfaces exactly the same derivation internal/app/digest's own pump uses (postgres.DigestChannelStore.ListSlackChannels/ListLinearOrganizations, windowed by platform.Timeouts.DigestChannelDiscoveryLookback), so Settings can show which channels would receive today's digest without inventing a second, editable copy of what is otherwise a computed fact.",
+      "required": [
+        "repoFullName",
+        "slackChannelIds",
+        "linearOrganizationIds",
+        "lookbackDays"
+      ],
+      "properties": {
+        "repoFullName": {
+          "type": "string"
+        },
+        "slackChannelIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Every distinct Slack channel_id this repo's own review sessions have threaded through within the lookback window -- each receives this repo's own daily digest fan-out (\u00a721.3)."
+        },
+        "linearOrganizationIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Every distinct Linear organization_id this repo's own review sessions have threaded through within the lookback window -- same fan-out rule as slackChannelIds."
+        },
+        "lookbackDays": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The window (in whole days) this derivation was computed over -- platform.Timeouts.DigestChannelDiscoveryLookback, the SAME window internal/app/digest's own real pump uses, surfaced so the UI never states a number it did not actually use."
+        }
+      }
     }
   }
 }
