@@ -17,6 +17,7 @@
 // through urlSafety.ts").
 import { Fragment } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
 
 import { listArtifacts } from '../api/endpoints'
 import { sessionQueryKeys } from '../api/queryKeys'
@@ -218,6 +219,29 @@ function CostPanel({ cost }: { cost: CostRollup }) {
   )
 }
 
+// ReviewLinksPanel: entry points into the code-review/release-review
+// views (§26.1/§15, §12.2 items 2/9) -- always rendered, since the
+// session DTO carries no "does this session have an associated PR"
+// signal to gate on cheaply; a session with no PR simply gets a graceful
+// "no associated pull request" state on the destination route itself
+// (CodeReviewView/ReleaseReviewView's own isError branch), never a
+// crash.
+function ReviewLinksPanel({ sessionId }: { sessionId: string }) {
+  return (
+    <div>
+      <h3>Review</h3>
+      <div className="btnrow" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+        <Link to="/session/$sessionId/review" params={{ sessionId }} className="btn" style={{ textDecoration: 'none', textAlign: 'center' }}>
+          Code review
+        </Link>
+        <Link to="/session/$sessionId/release-review" params={{ sessionId }} className="btn" style={{ textDecoration: 'none', textAlign: 'center' }}>
+          Release review
+        </Link>
+      </div>
+    </div>
+  )
+}
+
 export function SessionRail({ sessionId, sandbox, cost }: { sessionId: string; sandbox: SandboxRailModel; cost: CostRollup }) {
   return (
     <aside className="rail" aria-label="Session details">
@@ -225,6 +249,7 @@ export function SessionRail({ sessionId, sandbox, cost }: { sessionId: string; s
       <BootProgressPanel model={sandbox} />
       <ArtifactsPanel sessionId={sessionId} />
       <CostPanel cost={cost} />
+      <ReviewLinksPanel sessionId={sessionId} />
     </aside>
   )
 }
