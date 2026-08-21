@@ -290,3 +290,155 @@ func (s *WorkflowStore) DecideStepRun(ctx context.Context, stepRunID pgtype.UUID
 func (s *WorkflowStore) ClaimEscalationNotice(ctx context.Context, runID pgtype.UUID) (int64, error) {
 	return s.q.ClaimWorkflowRunEscalationNotice(ctx, runID)
 }
+
+// --- "workflow definition & run API" (§25.10/§25.11) own additions
+// below: the definition/binding CRUD + duplicate surface, and
+// the two run-history list reads the run view needs. Definition writes
+// always run through WithTx (above) -- httpapi's own handlers open one
+// transaction per PUT/POST/DELETE, exactly like DecideWorkflowStep does
+// for the run/step-run writes above.
+
+// ListDefinitions fetches every workflow_definitions row, built-in and
+// custom alike, ordered (lane, name) -- GET /api/workflow-definitions.
+func (s *WorkflowStore) ListDefinitions(ctx context.Context) ([]sqlcgen.WorkflowDefinition, error) {
+	return s.q.ListWorkflowDefinitions(ctx)
+}
+
+// CreateDefinition inserts a new workflow_definitions row -- is_built_in
+// always false, version always 1 (§25.10: "always lands is_built_in =
+// false, unbound, at version 1"), for both POST /api/workflow-definitions
+// paths (whole-document and {sourceDefinitionId, name} duplicate).
+func (s *WorkflowStore) CreateDefinition(ctx context.Context, lane, name string) (sqlcgen.WorkflowDefinition, error) {
+	return s.q.CreateWorkflowDefinition(ctx, sqlcgen.CreateWorkflowDefinitionParams{
+		Lane: sqlcgen.WorkflowLane(lane),
+		Name: name,
+	})
+}
+
+// UpdateDefinitionNameAndBumpVersion updates id's own name and increments
+// version by exactly 1 -- PUT /api/workflow-definitions/{id}'s own
+// definition-row write (the steps/edges half of that same transaction is
+// DeleteStepDefinitionsForDefinition + CreateStepDefinition + CreateEdge,
+// below).
+func (s *WorkflowStore) UpdateDefinitionNameAndBumpVersion(ctx context.Context, id pgtype.UUID, name string) (sqlcgen.WorkflowDefinition, error) {
+	return s.q.UpdateWorkflowDefinitionNameAndBumpVersion(ctx, sqlcgen.UpdateWorkflowDefinitionNameAndBumpVersionParams{ID: id, Name: name})
+}
+
+// DeleteDefinition deletes id's own workflow_definitions row -- DELETE
+// /api/workflow-definitions/{id}, called only once the caller's own
+// is-built-in/is-bound/has-run-history pre-checks have all passed (see
+// ExistsBindingForDefinition/ExistsRunForDefinition below).
+func (s *WorkflowStore) DeleteDefinition(ctx context.Context, id pgtype.UUID) (int64, error) {
+	return s.q.DeleteWorkflowDefinition(ctx, id)
+}
+
+// ExistsBindingForDefinition reports whether any workflow_bindings row
+// still resolves to id -- the "unbound draft" structural refusal's own
+// read (§25.10/§25.11's own amendment): PUT/DELETE both consult this
+// BEFORE touching this definition's own rows at all.
+func (s *WorkflowStore) ExistsBindingForDefinition(ctx context.Context, id pgtype.UUID) (bool, error) {
+	return s.q.ExistsWorkflowBindingForDefinition(ctx, id)
+}
+
+// ExistsRunForDefinition reports whether any workflow_runs row has EVER
+// run id -- a THIRD structural guard PUT/DELETE both also consult, beyond
+// the two §25.10/§25.11 name by word: workflow_runs.workflow_definition_id
+// and workflow_step_runs.step_definition_id are both plain NO ACTION
+// references (migration 000057: "history outlives configuration"), so a
+// definition with run history cannot have its steps deleted-and-reinserted
+// (PUT) or the row itself deleted (DELETE) without a raw FK-violation 500
+// -- reachable even when the definition is CURRENTLY unbound (rebinding a
+// lane to a duplicate frees the old definition's own workflow_bindings row
+// while its workflow_runs history remains behind). Refused with its own
+// distinct message, the same "validate first, name which rule broke"
+// discipline the other two guards already follow.
+func (s *WorkflowStore) ExistsRunForDefinition(ctx context.Context, id pgtype.UUID) (bool, error) {
+	return s.q.ExistsWorkflowRunForDefinition(ctx, id)
+}
+
+// DeleteStepDefinitionsForDefinition deletes every workflow_step_definitions
+// row for definitionID -- workflow_edges cascades away with them
+// (migration 000057's own ON DELETE CASCADE), so this single statement
+// clears a definition's ENTIRE existing graph in one step: always the
+// first half of PUT's own "replace wholesale, never hand-diff" write
+// (§25.10), inside the same transaction as the CreateStepDefinition/
+// CreateEdge calls that re-populate it.
+func (s *WorkflowStore) DeleteStepDefinitionsForDefinition(ctx context.Context, definitionID pgtype.UUID) error {
+	return s.q.DeleteWorkflowStepDefinitionsForDefinition(ctx, definitionID)
+}
+
+// CreateStepDefinition inserts one step carrying a CLIENT-SUPPLIED id --
+// every POST(whole-document)/PUT request body carries real step ids, so
+// an edge within the SAME request body can reference a step that has
+// never been persisted before (a canvas editor's own locally-generated
+// uuid for a brand-new node, or an existing step's own id echoed back).
+func (s *WorkflowStore) CreateStepDefinition(ctx context.Context, arg sqlcgen.CreateWorkflowStepDefinitionParams) (sqlcgen.WorkflowStepDefinition, error) {
+	return s.q.CreateWorkflowStepDefinition(ctx, arg)
+}
+
+// DuplicateStepDefinition inserts one step with a SERVER-GENERATED id
+// (the column's own gen_random_uuid() default) -- POST /api/workflow-
+// definitions' own {sourceDefinitionId, name} duplicate path: every
+// copied step gets a genuinely NEW id, never reusing its source's own, so
+// the caller remaps (source step id -> new step id) in Go to translate
+// the source's own edges onto the copy.
+func (s *WorkflowStore) DuplicateStepDefinition(ctx context.Context, arg sqlcgen.DuplicateWorkflowStepDefinitionParams) (sqlcgen.WorkflowStepDefinition, error) {
+	return s.q.DuplicateWorkflowStepDefinition(ctx, arg)
+}
+
+// CreateEdge inserts one workflow_edges row -- shared by every write path
+// (whole-document create, PUT, duplicate): an edge never carries a
+// client-supplied id (WorkflowEdge's own wire shape has none), so this is
+// the ONE insert variant every caller needs.
+func (s *WorkflowStore) CreateEdge(ctx context.Context, definitionID, fromStepID, toStepID pgtype.UUID, onStatus string) (sqlcgen.WorkflowEdge, error) {
+	return s.q.CreateWorkflowEdge(ctx, sqlcgen.CreateWorkflowEdgeParams{
+		WorkflowDefinitionID: definitionID,
+		FromStepID:           fromStepID,
+		ToStepID:             toStepID,
+		OnStatus:             sqlcgen.WorkflowStepOutcomeStatus(onStatus),
+	})
+}
+
+// ListBindings fetches every workflow_bindings row -- GET /api/workflow-bindings.
+func (s *WorkflowStore) ListBindings(ctx context.Context) ([]sqlcgen.WorkflowBinding, error) {
+	return s.q.ListWorkflowBindings(ctx)
+}
+
+// UpsertGlobalBinding create-or-replaces the (lane, NULL) global binding
+// -- one of TWO scope-specific upserts PutWorkflowBinding's own handler
+// picks between (see UpsertRepoBinding below), never a single ON
+// CONFLICT spanning both partial unique indexes (queries/workflows.sql's
+// own doc comment states the full "why" -- mirrors postgres.
+// OpenCodeConfigStore's own identical two-query precedent).
+func (s *WorkflowStore) UpsertGlobalBinding(ctx context.Context, lane string, definitionID pgtype.UUID, definitionVersion int32) (sqlcgen.WorkflowBinding, error) {
+	return s.q.UpsertGlobalWorkflowBinding(ctx, sqlcgen.UpsertGlobalWorkflowBindingParams{
+		Lane:                 sqlcgen.WorkflowLane(lane),
+		WorkflowDefinitionID: definitionID,
+		DefinitionVersion:    definitionVersion,
+	})
+}
+
+// UpsertRepoBinding create-or-replaces the (lane, repoFullName) repo-scoped
+// binding -- the repo-scoped counterpart to UpsertGlobalBinding above.
+func (s *WorkflowStore) UpsertRepoBinding(ctx context.Context, lane, repoFullName string, definitionID pgtype.UUID, definitionVersion int32) (sqlcgen.WorkflowBinding, error) {
+	return s.q.UpsertRepoWorkflowBinding(ctx, sqlcgen.UpsertRepoWorkflowBindingParams{
+		Lane:                 sqlcgen.WorkflowLane(lane),
+		RepoFullName:         &repoFullName,
+		WorkflowDefinitionID: definitionID,
+		DefinitionVersion:    definitionVersion,
+	})
+}
+
+// ListRunsForSession fetches sessionID's own workflow_runs rows, newest
+// first -- GET /api/sessions/{id}/workflow-runs.
+func (s *WorkflowStore) ListRunsForSession(ctx context.Context, sessionID pgtype.UUID) ([]sqlcgen.WorkflowRun, error) {
+	return s.q.ListWorkflowRunsForSession(ctx, sessionID)
+}
+
+// ListStepRunsForRun fetches every workflow_step_runs row for runID,
+// oldest first -- GET /api/workflow-runs/{runId}: the chronological
+// execution/re-attempt sequence a run detail view renders (§25.10: "a run
+// without its steps answers no question anybody asks").
+func (s *WorkflowStore) ListStepRunsForRun(ctx context.Context, runID pgtype.UUID) ([]sqlcgen.WorkflowStepRun, error) {
+	return s.q.ListWorkflowStepRunsForRun(ctx, runID)
+}
