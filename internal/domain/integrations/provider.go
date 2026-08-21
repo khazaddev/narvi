@@ -41,6 +41,22 @@ const (
 // iteration order Go deliberately randomizes).
 var Providers = []Provider{ProviderSlack, ProviderLinear, ProviderGitHub}
 
+// OutboxKindPrefix is the literal prefix an outbox.kind must start with to
+// count as posted to p -- the ONE definition of the convention, so the SQL
+// that actually does the matching and the ProviderForOutboxKind model below
+// cannot drift apart.
+//
+// That drift is not hypothetical: the matching runs as a LIKE in
+// queries/outbox.sql, and ProviderForOutboxKind was unit-tested while nothing
+// on the live path ever called it -- so its tests described production by
+// resemblance rather than by exercising it. Routing the query's own argument
+// through here puts the tested definition back on the live path; the
+// integration test named for a convention-breaking kind exercises the SQL
+// itself.
+func OutboxKindPrefix(p Provider) string {
+	return string(p)
+}
+
 // ProviderForOutboxKind maps kind (an outbox.kind value, e.g.
 // "slack_digest", "linear_progress", "github_verdict", or a bare
 // "slack"/"linear"/"github") to the Provider it was posted to, ok=false

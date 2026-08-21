@@ -33,6 +33,7 @@ import (
 
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/domain/authz"
 	"github.com/khazaddev/narvi/internal/domain/integrations"
 	"github.com/khazaddev/narvi/internal/platform"
@@ -78,13 +79,23 @@ func GetIntegrations(cfg *platform.Config, outbox *postgres.OutboxStore, deliver
 			// comment), so pgx.ErrNoRows genuinely means "no outbound
 			// attempt on record for this provider yet", left as the DTO's
 			// own all-nil zero value below rather than an error.
-			outboxRow, err := outbox.GetLatestByKindPrefix(ctx, string(p))
+			outboxRow, err := outbox.GetLatestByKindPrefix(ctx, integrations.OutboxKindPrefix(p))
 			switch {
 			case err == nil:
 				row.LastOutboundAt = timestamptzPtr(outboxRow.CreatedAt)
 				status := string(outboxRow.Status)
 				row.LastOutboundStatus = restdtos.IntegrationLastOutboundStatus(&status)
-				row.LastOutboundError = restdtos.IntegrationLastOutboundError(outboxRow.LastError)
+				// last_error is NOT cleared when a row later succeeds:
+				// MarkOutboxDelivered sets status/delivered_at only
+				// (queries/outbox.sql). So a row that failed once and
+				// succeeded on retry still carries the old message, and
+				// reporting it verbatim would render a DELIVERED surface
+				// with an error beside it -- the same fact-versus-verdict
+				// confusion §12.5 forbids, one field down. On a delivered
+				// row the error is history, not state.
+				if outboxRow.Status != sqlcgen.OutboxStatusDelivered {
+					row.LastOutboundError = restdtos.IntegrationLastOutboundError(outboxRow.LastError)
+				}
 			case errors.Is(err, pgx.ErrNoRows):
 				// No outbound attempt on record for this provider --
 				// row.LastOutboundAt/LastOutboundStatus/LastOutboundError

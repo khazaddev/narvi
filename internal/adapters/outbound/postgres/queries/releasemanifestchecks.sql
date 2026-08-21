@@ -23,7 +23,7 @@ RETURNING *;
 -- (repo_full_name, pr_number)'s own most-recently-computed check --
 -- mirrors GetLatestReviewVerdict's own identical "one indexed lookup,
 -- ORDER BY created_at DESC LIMIT 1" shape. pgx.ErrNoRows means no
--- manifest check has ever been persisted for this PR (a pre-Step-84 row,
+-- manifest check has ever been persisted for this PR (a row predating
 -- or a check whose own Run() insert failed and was only ever delivered as
 -- a comment).
 SELECT * FROM release_manifest_checks

@@ -128,20 +128,36 @@ func TestGetIntegrations_PartiallyConfigured_AllThreeReportFalse(t *testing.T) {
 	}
 }
 
-// TestGetIntegrations_NoSecretsInRawResponse proves NO secret value,
-// prefix, length, or masked form appears anywhere in the response --
-// asserted on the RAW response bytes, per this Step's own "Tests that
-// must exist" requirement (a decoded-struct assertion could not tell a
-// leaked value from an absent one the way a raw-bytes scan can).
+// TestGetIntegrations_NoSecretsInRawResponse asserts on the RAW response
+// bytes -- a decoded-struct assertion could not tell a leaked value from an
+// absent one the way a raw scan can.
+//
+// What it proves, precisely: no configured secret appears in full, and no
+// PREFIX of one appears either (every prefix from 4 characters up is
+// searched, which is what would leak a token's recognisable leading segment).
+// It does NOT prove the absence of a length signal or of some other derived
+// form -- a response cannot be scanned for a fact it does not spell out, and
+// claiming otherwise would be the exact defect this codebase names most.
+// What actually rules those out is that this handler never reads a secret's
+// value at all: internal/domain/integrations.ConfiguredX takes the loaded
+// config and returns a bool, and the bool is the only thing that reaches the
+// DTO. The scan below is defence in depth against a future edit breaking
+// that, not the guarantee itself.
 func TestGetIntegrations_NoSecretsInRawResponse(t *testing.T) {
+	// Opaque on purpose: a fixture secret that embeds its own surface name
+	// ("github-bot-token-...") shares a prefix with legitimate response
+	// content (the surface field is literally "github"), so a prefix scan
+	// would fire on the surface name rather than on a leak. Secrets that
+	// share no substring with anything the response may legitimately
+	// contain are what make the scan below mean something.
 	distinctiveSecrets := []string{
-		"slack-signing-secret-4f9a2c",
-		"slack-bot-token-7b1e88",
-		"linear-webhook-secret-9d3f01",
-		"linear-client-id-2a77bc",
-		"linear-client-secret-e05f44",
-		"github-webhook-secret-c81a90",
-		"github-bot-token-33dd12",
+		"zq4f9a2c-signing-Wv71",
+		"zq7b1e88-bottok-Wv72",
+		"zq9d3f01-hookies-Wv73",
+		"zq2a77bc-clid-Wv74",
+		"zqe05f44-clsec-Wv75",
+		"zqc81a90-hooksec-Wv76",
+		"zq33dd12-bottok2-Wv77",
 	}
 	rig := newTestRig(t, func(r *testRig) {
 		r.cfg = &platform.Config{
@@ -161,6 +177,16 @@ func TestGetIntegrations_NoSecretsInRawResponse(t *testing.T) {
 	raw := rig.doRaw(t, http.MethodGet, "/api/integrations", nil, token)
 
 	for _, secret := range distinctiveSecrets {
+		// Every prefix from 4 characters up, not just the whole value: a
+		// leak that truncates is still a leak, and the earlier version of
+		// this test claimed to cover prefixes while only searching for
+		// full values.
+		for n := 4; n <= len(secret); n++ {
+			if bytes.Contains(raw, []byte(secret[:n])) {
+				t.Errorf("raw response body contains a %d-character prefix of the configured secret %q -- no part of a secret may appear: %s", n, secret, raw)
+				break
+			}
+		}
 		if bytes.Contains(raw, []byte(secret)) {
 			t.Errorf("raw response body contains a configured secret value %q -- must NEVER appear, not even shaped: %s", secret, raw)
 		}
@@ -275,5 +301,50 @@ func TestGetIntegrations_OutboxPrefixFragility_ExcludesNonConformingKind(t *test
 		if row.LastOutboundAt != nil {
 			t.Errorf("Integrations (%s).LastOutboundAt = %v, want nil -- the only outbox row present (\"sentinel_auto_fix\") must not attribute to ANY surface by prefix", row.Surface, row.LastOutboundAt)
 		}
+	}
+}
+
+// TestGetIntegrations_DeliveredRowReportsNoStaleError pins the one place this
+// read model could turn a fact into a wrong impression.
+//
+// MarkOutboxDelivered sets status and delivered_at and does NOT clear
+// last_error (queries/outbox.sql), so a row that failed once and succeeded on
+// retry still carries the old message. Reporting it verbatim renders a
+// DELIVERED surface with an error beside it — the same fact-versus-verdict
+// confusion §12.5 forbids, one field down. On a delivered row the error is
+// history, not state.
+func TestGetIntegrations_DeliveredRowReportsNoStaleError(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
+
+	session := rig.createSession(ctx, t)
+	// A row that failed, then succeeded: status delivered, last_error still set.
+	if _, err := rig.pool.Exec(ctx, `
+		INSERT INTO outbox (id, session_id, kind, payload, status, attempts, last_error, delivered_at, created_at)
+		VALUES (gen_random_uuid(), $1, 'slack_digest', '{}'::jsonb, 'delivered', 2, 'channel_not_found: transient', now(), now())`,
+		session.ID); err != nil {
+		t.Fatalf("insert delivered-with-stale-error outbox row: %v", err)
+	}
+
+	var resp restdtos.ListIntegrationsResponse
+	if status := rig.doJSON(t, http.MethodGet, "/api/integrations", nil, &resp, token); status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+
+	var slack *restdtos.Integration
+	for i := range resp.Integrations {
+		if resp.Integrations[i].Surface == restdtos.IntegrationSurfaceSlack {
+			slack = &resp.Integrations[i]
+		}
+	}
+	if slack == nil {
+		t.Fatal("no slack row in the response")
+	}
+	if slack.LastOutboundStatus == nil || string(*slack.LastOutboundStatus) != "delivered" {
+		t.Fatalf("LastOutboundStatus = %v, want delivered (the fixture must actually be the delivered case)", slack.LastOutboundStatus)
+	}
+	if slack.LastOutboundError != nil {
+		t.Errorf("LastOutboundError = %q on a DELIVERED row, want nil -- last_error is history there, not state", *slack.LastOutboundError)
 	}
 }

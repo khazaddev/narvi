@@ -2486,15 +2486,13 @@ export interface Integration {
    */
   surface: 'slack' | 'linear' | 'github';
   /**
-   * Whether every value this surface's own ingress adapter needs is present in platform.Config -- NEVER the secrets themselves, not even shaped: no prefix, no length, no masked form, nothing about WHAT configures it. A surface missing even one required value reads false, never a half-working "connected but broken" state -- see internal/domain/integrations's own ConfiguredSlack/ConfiguredLinear/ConfiguredGitHub doc comments for the exact set each surface checks.
+   * Whether every value this surface's own ingress adapter needs is present in platform.Config -- NEVER the secrets themselves, not even shaped: no prefix, no length, no masked form, nothing about WHAT configures it. A surface missing even one required value reads false, never a half-working "connected but broken" state -- see internal/domain/integrations's own ConfiguredSlack/ConfiguredLinear/ConfiguredGitHub doc comments for the exact set each surface checks. STRUCTURALLY ALWAYS TRUE TODAY: every value checked is required at boot (platform.Load appends a MissingRequiredEnvError and the process refuses to start), so a running deployment has all three surfaces configured by construction and this field cannot read false. It is kept because it is the honest shape for the question, and because the day a surface becomes optional this is where that shows -- but a screen must NOT present it as a live check of anything
    */
   configured: boolean;
   /**
    * When this surface last delivered a webhook Narvi accepted (MAX(webhook_deliveries.received_at) for this exact provider). Null means this deployment has never received one. A dedup/coalescing timestamp only -- webhook_deliveries carries no outcome at all (migrations/000027_webhook_deliveries.up.sql: "(provider, delivery_id, received_at) and NOTHING else"), so this can never be combined with or imply anything about lastOutboundStatus below. goJSONSchema forces the literal *time.Time type -- see Plan.decidedAt's own doc comment for why a named pointer-type wrapper silently breaks encoding/json here.
    */
-  lastInboundAt: {
-    [k: string]: unknown;
-  } | null;
+  lastInboundAt: string | null;
   /**
    * When Narvi last attempted to POST to this surface (the most recently created outbox row whose kind attributes to this provider by prefix -- see internal/domain/integrations.ProviderForOutboxKind's own doc comment for that mapping's own documented fragility). Null means no such attempt is on record. The OTHER direction from lastInboundAt -- a surface can have a recent lastInboundAt and a null/failed lastOutboundAt at the same time, and this response never collapses that into a single verdict. goJSONSchema forces the literal *time.Time type -- see Plan.decidedAt's own doc comment for why a named pointer-type wrapper silently breaks encoding/json here.
    */

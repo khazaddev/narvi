@@ -3257,7 +3257,13 @@ type Integration struct {
 	// even one required value reads false, never a half-working "connected but
 	// broken" state -- see internal/domain/integrations's own
 	// ConfiguredSlack/ConfiguredLinear/ConfiguredGitHub doc comments for the exact
-	// set each surface checks.
+	// set each surface checks. STRUCTURALLY ALWAYS TRUE TODAY: every value checked is
+	// required at boot (platform.Load appends a MissingRequiredEnvError and the
+	// process refuses to start), so a running deployment has all three surfaces
+	// configured by construction and this field cannot read false. It is kept because
+	// it is the honest shape for the question, and because the day a surface becomes
+	// optional this is where that shows -- but a screen must NOT present it as a live
+	// check of anything
 	Configured bool `json:"configured" yaml:"configured" mapstructure:"configured"`
 
 	// When this surface last delivered a webhook Narvi accepted

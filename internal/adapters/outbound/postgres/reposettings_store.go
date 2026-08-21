@@ -239,7 +239,7 @@ func (s *RepoSettingsStore) UpsertPreviewSettings(ctx context.Context, repoFullN
 // §4.1.2-amendment preview-config row -- the write path behind PUT
 // /api/repos/{owner}/{repo}/preview-config (httpapi/previewconfig.go),
 // distinct from UpsertPreviewSettings above (that one is this package's
-// own pre-Step-90 integration-test helper, always overwriting all three
+// own older integration-test helper, always overwriting all three
 // columns together; see its own doc comment). endpointTemplate/orgSlug
 // are ALWAYS written verbatim -- ordinary, full-value semantics.
 //

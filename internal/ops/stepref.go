@@ -55,9 +55,14 @@ import (
 // judged rare and cheap enough to fix on sight that it does not clear the
 // "fights its users" bar the singular narrative-colon case would have.
 //
-// The whitespace after "Step(s)" is REQUIRED (\s+, not \s*): an identifier
-// like builtInPlanStep1ID has no space between "Step" and the digit, and
-// must never be mistaken for a citation.
+// The separator after "Step(s)" is REQUIRED (one or more of space or
+// hyphen, never zero): an identifier like builtInPlanStep1ID has no
+// separator at all and must never be mistaken for a citation. The hyphen
+// is in the class because "pre-Step-90" shipped past this check on a
+// branch that had just been swept -- the fourth distinct way a citation
+// has evaded it (after the file extension, the root list, and the line
+// wrap), and the reason the negative cases below are pinned as carefully
+// as the positive ones.
 //
 // # The same citation wearing a different word
 //
@@ -79,7 +84,7 @@ import (
 // ALL, by Step, by row, or by name. §N.M is the durable reference; the
 // implementation plan is a schedule. planDocRefPattern below enforces that
 // directly.
-var stepRefPattern = regexp.MustCompile(`Steps?\s+\(?\d+`)
+var stepRefPattern = regexp.MustCompile(`Steps?[\s-]+\(?\d+`)
 
 // narrativeStepLine matches a numbered step at the start of a comment line
 // that immediately introduces a local action with a colon -- see this
