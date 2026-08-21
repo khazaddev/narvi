@@ -2492,7 +2492,9 @@ export interface Integration {
   /**
    * When this surface last delivered a webhook Narvi accepted (MAX(webhook_deliveries.received_at) for this exact provider). Null means this deployment has never received one. A dedup/coalescing timestamp only -- webhook_deliveries carries no outcome at all (migrations/000027_webhook_deliveries.up.sql: "(provider, delivery_id, received_at) and NOTHING else"), so this can never be combined with or imply anything about lastOutboundStatus below. goJSONSchema forces the literal *time.Time type -- see Plan.decidedAt's own doc comment for why a named pointer-type wrapper silently breaks encoding/json here.
    */
-  lastInboundAt: string | null;
+  lastInboundAt: {
+    [k: string]: unknown;
+  } | null;
   /**
    * When Narvi last attempted to POST to this surface (the most recently created outbox row whose kind attributes to this provider by prefix -- see internal/domain/integrations.ProviderForOutboxKind's own doc comment for that mapping's own documented fragility). Null means no such attempt is on record. The OTHER direction from lastInboundAt -- a surface can have a recent lastInboundAt and a null/failed lastOutboundAt at the same time, and this response never collapses that into a single verdict. goJSONSchema forces the literal *time.Time type -- see Plan.decidedAt's own doc comment for why a named pointer-type wrapper silently breaks encoding/json here.
    */
