@@ -156,3 +156,19 @@ export const clusterBindingQueryKeys = {
 export const openCodeConfigQueryKeys = {
   detail: (scope: Parameters<typeof scopeKeyParts>[0]) => ['opencode-config', ...scopeKeyParts(scope)] as const,
 }
+
+// workflowDefinitionQueryKeys/workflowBindingQueryKeys (§25.10/§25.12) --
+// the workflow canvas editor's own two data sources. Each is one key, no
+// params: GET /api/workflow-definitions and GET /api/workflow-bindings each
+// return their ENTIRE respective table in one response (no server-side
+// filter param on either route) -- the per-lane/per-definition grouping
+// WorkflowEditorView.tsx renders is a client-side reduction over these two
+// cached lists, mirroring decisionInboxQueryKeys' own single-key shape for
+// an unfiltered, wholesale GET.
+export const workflowDefinitionQueryKeys = {
+  list: () => ['workflow-definitions', 'list'] as const,
+}
+
+export const workflowBindingQueryKeys = {
+  list: () => ['workflow-bindings', 'list'] as const,
+}

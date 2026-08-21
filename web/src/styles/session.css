@@ -1737,3 +1737,267 @@
   align-items: center;
   gap: var(--space-3);
 }
+
+/* ---- workflow canvas editor (§25.12, mockups.html's own v-workflow) ----
+   Ported from mockups.html's own .wf-prefixed and .lockicon rules
+   (colors/text-sizes/spacing mapped onto tokens.css, structural one-off
+   px kept literal --
+   the same convention every earlier port in this file already follows),
+   with real additions this Step's own @xyflow/react-backed canvas needs
+   that the mockup's static, hand-drawn SVG demo never had to express:
+   .wfmain/.wfcanvas-wrap give the ReactFlow root a DEFINITE pixel height
+   (percentage-of-flex-parent, itself anchored by .app's own height:100%
+   chain -- ReactFlow renders nothing useful without one), .wfdefname-input
+   restyles the editable definition-name field to sit flush with the
+   read-only .wfdefname span it replaces, and .wfnode-lock is this file's
+   own read-only indicator (the mockup's canvas never had to draw one). The
+   mockup's own version-history rail (.wfvhist/.wfvrow), repo-scope top
+   selector (.wfrepo/.wfsep/.wfrepo-head), circuit-breaker stepper
+   (.stepper/.stepbtn), and HITL-gate/terminal-node/flow-tag canvas
+   annotations (.hitlnode/.termnode/.flowtag) are NOT ported: none of them
+   are backed by a real field on the wire (WorkflowDefinition.version is an
+   edit counter with no retrievable history, §25.11; there is no
+   loopguard.MaxAttempts DTO to edit) or by anything this screen draws
+   (WorkflowEditorView.tsx renders explicit edges only, never a fabricated
+   HITL/terminal node) -- see that file's own top doc comment. */
+.wftoolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-6) var(--space-9);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  flex-wrap: wrap;
+  flex: none;
+}
+.wfdefname {
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--ink);
+}
+.wfdefname-input {
+  font-size: var(--text-md);
+  font-weight: 600;
+  min-width: 220px;
+}
+.wfshell {
+  display: grid;
+  grid-template-columns: 248px 1fr 272px;
+  flex: 1;
+  min-height: 0;
+}
+@media (max-width: 980px) {
+  .wfshell {
+    grid-template-columns: 1fr;
+  }
+  .wflist,
+  .wfrail {
+    display: none;
+  }
+}
+.wflist {
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+  padding: var(--space-6) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow-y: auto;
+  min-height: 0;
+}
+.wflane {
+  padding: var(--space-1) 0 var(--space-6);
+  margin-bottom: var(--space-5);
+  border-bottom: 1px dashed var(--line);
+}
+.wflane:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+}
+.wflane-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: var(--space-1) var(--space-4) var(--space-3);
+  gap: var(--space-4);
+}
+.wflane-head b {
+  font-size: var(--text-base);
+}
+.wflane-head .wm {
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  white-space: nowrap;
+}
+.wfdup {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--space-3) var(--space-4) 0;
+  color: var(--accent);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-decoration: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+.wfdup:hover {
+  text-decoration: underline;
+}
+.wfitem {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-5) var(--space-5);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.wfitem:hover {
+  background: var(--surface-2);
+}
+.wfitem.active {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.wfitem .wt {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-weight: 600;
+  font-size: var(--text-base);
+}
+.wfitem .wm {
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  color: var(--faint);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+.lockicon {
+  display: inline-flex;
+  color: var(--faint);
+  flex: none;
+}
+.wfmain {
+  position: relative;
+  overflow: hidden;
+  background: var(--ground);
+  min-height: 0;
+}
+.wfcanvas-wrap {
+  width: 100%;
+  height: 100%;
+}
+.wfnode {
+  background: var(--surface);
+  border: 1.5px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow);
+  padding: var(--space-6) var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 168px;
+}
+.wfnode.selected {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent),
+    var(--shadow);
+}
+.wfnode .nh {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.wfnode .nord {
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  flex: none;
+  border: 1.5px solid var(--line-strong);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+.wfnode .nt {
+  font-size: var(--text-base);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.wfnode .nmodel {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-radius: var(--radius-sm);
+  padding: 2px 7px;
+  width: fit-content;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.wfnode .nmeta {
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  color: var(--faint);
+}
+.wfnode .hitl {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  color: var(--warn);
+  width: fit-content;
+}
+.wfnode-lock {
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  color: var(--faint);
+  width: fit-content;
+}
+.wfrail {
+  border-left: 1px solid var(--line);
+  background: var(--surface);
+  padding: var(--space-7);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  overflow-y: auto;
+  min-height: 0;
+}
+.wffield {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-6);
+}
+.wffield:last-child {
+  margin-bottom: 0;
+}
+.wffield label {
+  font-family: var(--mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.wffield.row {
+  flex-direction: row;
+  gap: var(--space-8);
+  align-items: center;
+  flex-wrap: wrap;
+}

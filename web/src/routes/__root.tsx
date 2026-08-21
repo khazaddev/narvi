@@ -40,6 +40,9 @@ function RootLayout() {
         <Link to="/automations" className="header-nav-link">
           Automations
         </Link>
+        <Link to="/workflows" className="header-nav-link">
+          Workflows
+        </Link>
         <Link to="/settings" className="header-nav-link">
           Settings
         </Link>
