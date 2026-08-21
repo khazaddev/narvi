@@ -18,29 +18,59 @@ import type {
   ApplySuggestionResponse,
   Automation,
   ArtifactsResponse,
+  AuditLogEntry,
+  CloudIdentityBinding,
+  ClusterBinding,
   ConfirmUploadResponse,
   CreateAutomationRequest,
   CreateAutomationResponse,
+  CreateCloudIdentityBindingRequest,
+  CreateProviderCredentialRequest,
+  CreateSandboxSecretRequest,
   CreateSessionRequest,
   CreateTurnRequest,
   CreateTurnResponse,
+  Environment,
   EventsResponse,
   FalsePositivePattern,
+  LinkMemberIdentityRequest,
+  ListAuditLogResponse,
   ListAutomationInvocationsResponse,
   ListAutomationsResponse,
+  ListCloudIdentityBindingsResponse,
+  ListEnvironmentsResponse,
   ListFalsePositivePatternsResponse,
+  ListMembersResponse,
   ListPlansResponse,
+  ListPromptTemplatesResponse,
+  ListProviderCredentialsResponse,
+  ListSandboxSecretsResponse,
   ListSessionsResponse,
   Member,
   MintUploadRequest,
   MintUploadResponse,
   ModelCatalog,
+  OpenCodeConfig,
   PlanActionResponse,
+  PreviewIntentTemplateRequest,
+  PreviewIntentTemplateResponse,
+  ProviderCredential,
+  PutClusterBindingRequest,
+  PutOpenCodeConfigRequest,
   RebutFindingRequest,
   ReleaseManifestReadout,
+  RepoDigestScope,
+  ReviewAnalytics,
   ReviewFinding,
   ReviewReadout,
+  RotateCloudIdentitySigningKeyResponse,
+  SandboxSecret,
   Session,
+  UpdateCloudIdentityBindingRequest,
+  UpdateMemberRoleRequest,
+  UpdateProviderCredentialRequest,
+  UpdateSandboxSecretRequest,
+  UpsertIntentTemplateRequest,
   WSTokenResponse,
 } from '@narvi/contracts/rest-dtos'
 
@@ -230,3 +260,202 @@ export function pauseAutomation(automationId: string, signal?: AbortSignal): Pro
 export function resumeAutomation(automationId: string, signal?: AbortSignal): Promise<Automation> {
   return request<Automation>(`/api/automations/${encodeURIComponent(automationId)}/resume`, { method: 'POST', signal })
 }
+
+// -- members & access, audit log (§13.2/§13.3, §12.2 item 5). --
+
+/** listMembers calls GET /api/members -- every user with role/disabled and their own currently-linked identities, plus every system-wide still-pending link prompt. Admin-only server-side (authz.ActionManageMembers). */
+export function listMembers(signal?: AbortSignal): Promise<ListMembersResponse> {
+  return request<ListMembersResponse>('/api/members', { signal })
+}
+
+/** updateMemberRole calls PATCH /api/members/:userId/role -- admin-only server-side. */
+export function updateMemberRole(userId: string, body: UpdateMemberRoleRequest, signal?: AbortSignal): Promise<Member> {
+  return request<Member>(`/api/members/${encodeURIComponent(userId)}/role`, { method: 'PATCH', body, signal })
+}
+
+/** linkMemberIdentity calls POST /api/members/:userId/identities -- admin manual link, admin-only server-side. */
+export function linkMemberIdentity(userId: string, body: LinkMemberIdentityRequest, signal?: AbortSignal): Promise<Member> {
+  return request<Member>(`/api/members/${encodeURIComponent(userId)}/identities`, { method: 'POST', body, signal })
+}
+
+/** unlinkMemberIdentity calls DELETE /api/members/:userId/identities/:identityId -- admin-only server-side. */
+export function unlinkMemberIdentity(userId: string, identityId: string, signal?: AbortSignal): Promise<Member> {
+  return request<Member>(`/api/members/${encodeURIComponent(userId)}/identities/${encodeURIComponent(identityId)}`, { method: 'DELETE', signal })
+}
+
+/** listAuditLog calls GET /api/audit-log -- every audit_log row (members.go's own ListAuditLog). */
+export function listAuditLog(signal?: AbortSignal): Promise<ListAuditLogResponse> {
+  return request<ListAuditLogResponse>('/api/audit-log', { signal })
+}
+
+// -- environments (§14.1, Step 86) --
+
+/** listEnvironments calls GET /api/environments -- every environments row, newest-first. Maintainer+ only server-side (authz.ActionManageEnvironments); see httpapi/environments.go's own doc comment for why this is list-only, no create/update. */
+export function listEnvironments(signal?: AbortSignal): Promise<ListEnvironmentsResponse> {
+  return request<ListEnvironmentsResponse>('/api/environments', { signal })
+}
+
+// -- prompt templates (§18.6, §12.2 item 5). --
+
+/** listPromptTemplates calls GET /api/intent-templates -- every prompt_templates row, ordered by name. Admin-only server-side (authz.ActionActivatePromptTemplate). */
+export function listPromptTemplates(signal?: AbortSignal): Promise<ListPromptTemplatesResponse> {
+  return request<ListPromptTemplatesResponse>('/api/intent-templates', { signal })
+}
+
+/** previewIntentTemplate calls POST /api/intent-templates/preview -- assembles a DRAFT template's text against real variable values, never touching Postgres. Admin-only server-side. */
+export function previewIntentTemplate(body: PreviewIntentTemplateRequest, signal?: AbortSignal): Promise<PreviewIntentTemplateResponse> {
+  return request<PreviewIntentTemplateResponse>('/api/intent-templates/preview', { method: 'POST', body, signal })
+}
+
+/** upsertIntentTemplate calls POST /api/intent-templates -- creates or overwrites a named template's text. Admin-only server-side. */
+export function upsertIntentTemplate(body: UpsertIntentTemplateRequest, signal?: AbortSignal) {
+  return request<{ name: string; template: string; updatedAt: string }>('/api/intent-templates', { method: 'POST', body, signal })
+}
+
+// -- digest scope, review analytics (§21.3/§21.1, §12.2 item 5). --
+
+/** getRepoDigestScope calls GET /api/repos/:owner/:repo/digest-scope -- which Slack channels/Linear organizations would receive this repo's own next daily digest (derived, read-only -- see httpapi/digestscope.go's own doc comment for why there is no editable cadence/scope setting). Every role including viewer (authz.ActionViewAnalytics). */
+export function getRepoDigestScope(owner: string, repo: string, signal?: AbortSignal): Promise<RepoDigestScope> {
+  return request<RepoDigestScope>(`/api/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/digest-scope`, { signal })
+}
+
+/** getReviewAnalytics calls GET /api/repos/:owner/:repo/review-analytics -- the review-risk analytics section's own read model (§21.1), each rollup carrying its own independent "not yet computed" sentinel. Every role including viewer. */
+export function getReviewAnalytics(owner: string, repo: string, signal?: AbortSignal): Promise<ReviewAnalytics> {
+  return request<ReviewAnalytics>(`/api/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/review-analytics`, { signal })
+}
+
+// -- secrets scope resolution (§27.1/§25.1, §12.2 item 5). --
+//
+// sandbox-secrets and provider-credentials both partition into the SAME
+// 3 scopes (repo/environment/global), each its own separately-gated REST
+// route group on the server (environments.go's own doc comment on why
+// this mirrors that split). SecretScope + secretScopePath below name the
+// ONE place that partition is expressed client-side, rather than 6
+// independently-hand-written base-path strings (3 scopes x 2 resources)
+// drifting from each other over time.
+
+export type SecretScope = { kind: 'repo'; owner: string; repo: string } | { kind: 'environment'; environmentId: string } | { kind: 'global' }
+
+function secretScopePath(resource: 'sandbox-secrets' | 'provider-credentials', scope: SecretScope): string {
+  switch (scope.kind) {
+    case 'repo':
+      return `/api/repos/${encodeURIComponent(scope.owner)}/${encodeURIComponent(scope.repo)}/${resource}`
+    case 'environment':
+      return `/api/environments/${encodeURIComponent(scope.environmentId)}/${resource}`
+    case 'global':
+      return `/api/${resource}`
+  }
+}
+
+/** listSandboxSecrets calls GET on the sandbox-secrets route group matching scope -- every row at that (scope, scopeTarget), NEVER the secret value itself (only SandboxSecret.maskedValue, a fixed non-secret placeholder). */
+export function listSandboxSecrets(scope: SecretScope, signal?: AbortSignal): Promise<ListSandboxSecretsResponse> {
+  return request<ListSandboxSecretsResponse>(secretScopePath('sandbox-secrets', scope), { signal })
+}
+
+/** createSandboxSecret calls POST on the sandbox-secrets route group matching scope. body.value is sent once, over this one request, and is never echoed back by any response this client ever reads. */
+export function createSandboxSecret(scope: SecretScope, body: CreateSandboxSecretRequest, signal?: AbortSignal): Promise<SandboxSecret> {
+  return request<SandboxSecret>(secretScopePath('sandbox-secrets', scope), { method: 'POST', body, signal })
+}
+
+/** updateSandboxSecretValue calls PUT on the sandbox-secrets route group matching scope -- rotates ONLY the value; name/scope are immutable once created. */
+export function updateSandboxSecretValue(scope: SecretScope, secretId: string, body: UpdateSandboxSecretRequest, signal?: AbortSignal): Promise<SandboxSecret> {
+  return request<SandboxSecret>(`${secretScopePath('sandbox-secrets', scope)}/${encodeURIComponent(secretId)}`, { method: 'PUT', body, signal })
+}
+
+/** deleteSandboxSecret calls DELETE on the sandbox-secrets route group matching scope. */
+export function deleteSandboxSecret(scope: SecretScope, secretId: string, signal?: AbortSignal): Promise<undefined> {
+  return request<undefined>(`${secretScopePath('sandbox-secrets', scope)}/${encodeURIComponent(secretId)}`, { method: 'DELETE', signal })
+}
+
+/** listProviderCredentials calls GET on the provider-credentials route group matching scope -- every row at that (scope, scopeTarget), one per configured AI provider, NEVER the credential value itself (only ProviderCredential.maskedValue). */
+export function listProviderCredentials(scope: SecretScope, signal?: AbortSignal): Promise<ListProviderCredentialsResponse> {
+  return request<ListProviderCredentialsResponse>(secretScopePath('provider-credentials', scope), { signal })
+}
+
+/** createProviderCredential calls POST on the provider-credentials route group matching scope. */
+export function createProviderCredential(scope: SecretScope, body: CreateProviderCredentialRequest, signal?: AbortSignal): Promise<ProviderCredential> {
+  return request<ProviderCredential>(secretScopePath('provider-credentials', scope), { method: 'POST', body, signal })
+}
+
+/** updateProviderCredentialValue calls PUT on the provider-credentials route group matching scope -- rotates ONLY the value. */
+export function updateProviderCredentialValue(scope: SecretScope, credentialId: string, body: UpdateProviderCredentialRequest, signal?: AbortSignal): Promise<ProviderCredential> {
+  return request<ProviderCredential>(`${secretScopePath('provider-credentials', scope)}/${encodeURIComponent(credentialId)}`, { method: 'PUT', body, signal })
+}
+
+/** deleteProviderCredential calls DELETE on the provider-credentials route group matching scope. */
+export function deleteProviderCredential(scope: SecretScope, credentialId: string, signal?: AbortSignal): Promise<undefined> {
+  return request<undefined>(`${secretScopePath('provider-credentials', scope)}/${encodeURIComponent(credentialId)}`, { method: 'DELETE', signal })
+}
+
+// -- cloud identity: OIDC bindings, cluster binding, signing-key rotation (§27.3/§27.4, §12.2 item 5). --
+
+export type CloudIdentityBindingScope = { kind: 'environment'; environmentId: string } | { kind: 'global' }
+
+function cloudIdentityBindingsPath(scope: CloudIdentityBindingScope): string {
+  return scope.kind === 'environment' ? `/api/environments/${encodeURIComponent(scope.environmentId)}/cloud-identity-bindings` : '/api/cloud-identity-bindings'
+}
+
+/** listCloudIdentityBindings calls GET on the cloud-identity-bindings route group matching scope. A 503 ApiError means the capability is unconfigured (RequireCloudIdentityCapability, fail-closed) -- callers should render "no rotation/binding affordance at all" for that case, never retry it as a transient error. */
+export function listCloudIdentityBindings(scope: CloudIdentityBindingScope, signal?: AbortSignal): Promise<ListCloudIdentityBindingsResponse> {
+  return request<ListCloudIdentityBindingsResponse>(cloudIdentityBindingsPath(scope), { signal })
+}
+
+/** createCloudIdentityBinding calls POST on the cloud-identity-bindings route group matching scope. params carries identifiers only, never a secret (CloudIdentityBinding.params' own doc comment). */
+export function createCloudIdentityBinding(scope: CloudIdentityBindingScope, body: CreateCloudIdentityBindingRequest, signal?: AbortSignal): Promise<CloudIdentityBinding> {
+  return request<CloudIdentityBinding>(cloudIdentityBindingsPath(scope), { method: 'POST', body, signal })
+}
+
+/** updateCloudIdentityBinding calls PUT on the cloud-identity-bindings route group matching scope -- rotates audience/params; kind is immutable once created. */
+export function updateCloudIdentityBinding(scope: CloudIdentityBindingScope, bindingId: string, body: UpdateCloudIdentityBindingRequest, signal?: AbortSignal): Promise<CloudIdentityBinding> {
+  return request<CloudIdentityBinding>(`${cloudIdentityBindingsPath(scope)}/${encodeURIComponent(bindingId)}`, { method: 'PUT', body, signal })
+}
+
+/** deleteCloudIdentityBinding calls DELETE on the cloud-identity-bindings route group matching scope. */
+export function deleteCloudIdentityBinding(scope: CloudIdentityBindingScope, bindingId: string, signal?: AbortSignal): Promise<undefined> {
+  return request<undefined>(`${cloudIdentityBindingsPath(scope)}/${encodeURIComponent(bindingId)}`, { method: 'DELETE', signal })
+}
+
+/** getEnvironmentClusterBinding calls GET /api/environments/:id/cluster-binding -- the (at most one, per-Environment) cluster binding. A 404 ApiError means no binding exists for this Environment yet. */
+export function getEnvironmentClusterBinding(environmentId: string, signal?: AbortSignal): Promise<ClusterBinding> {
+  return request<ClusterBinding>(`/api/environments/${encodeURIComponent(environmentId)}/cluster-binding`, { signal })
+}
+
+/** putEnvironmentClusterBinding calls PUT /api/environments/:id/cluster-binding -- create-or-replace (upsert), the singleton-resource convention every §27 config table here uses. */
+export function putEnvironmentClusterBinding(environmentId: string, body: PutClusterBindingRequest, signal?: AbortSignal): Promise<ClusterBinding> {
+  return request<ClusterBinding>(`/api/environments/${encodeURIComponent(environmentId)}/cluster-binding`, { method: 'PUT', body, signal })
+}
+
+/** deleteEnvironmentClusterBinding calls DELETE /api/environments/:id/cluster-binding. */
+export function deleteEnvironmentClusterBinding(environmentId: string, signal?: AbortSignal): Promise<undefined> {
+  return request<undefined>(`/api/environments/${encodeURIComponent(environmentId)}/cluster-binding`, { method: 'DELETE', signal })
+}
+
+/** rotateCloudIdentitySigningKey calls POST /api/cloud-identity/signing-keys/rotate -- admin-only, destructive-adjacent (§27.3/§27.8): mints a fresh signing key and retires the previous one after the JWKS overlap window. Never call this without an explicit user confirmation first -- see the Settings view's own confirm-before-rotate UI. */
+export function rotateCloudIdentitySigningKey(signal?: AbortSignal): Promise<RotateCloudIdentitySigningKeyResponse> {
+  return request<RotateCloudIdentitySigningKeyResponse>('/api/cloud-identity/signing-keys/rotate', { method: 'POST', signal })
+}
+
+// -- OpenCode config (§27.2, §12.2 item 5). --
+
+export type OpenCodeConfigScope = { kind: 'environment'; environmentId: string } | { kind: 'global' }
+
+function openCodeConfigPath(scope: OpenCodeConfigScope): string {
+  return scope.kind === 'environment' ? `/api/environments/${encodeURIComponent(scope.environmentId)}/opencode-config` : '/api/opencode-config'
+}
+
+/** getOpenCodeConfig calls GET on the opencode-config route matching scope -- returned in FULL, plaintext (this is configuration, not secret material -- OpenCodeConfig's own doc comment). A 404 ApiError means no document has been saved for this scope yet. */
+export function getOpenCodeConfig(scope: OpenCodeConfigScope, signal?: AbortSignal): Promise<OpenCodeConfig> {
+  return request<OpenCodeConfig>(openCodeConfigPath(scope), { signal })
+}
+
+/** putOpenCodeConfig calls PUT on the opencode-config route matching scope -- create-or-replace. */
+export function putOpenCodeConfig(scope: OpenCodeConfigScope, body: PutOpenCodeConfigRequest, signal?: AbortSignal): Promise<OpenCodeConfig> {
+  return request<OpenCodeConfig>(openCodeConfigPath(scope), { method: 'PUT', body, signal })
+}
+
+/** deleteOpenCodeConfig calls DELETE on the opencode-config route matching scope. */
+export function deleteOpenCodeConfig(scope: OpenCodeConfigScope, signal?: AbortSignal): Promise<undefined> {
+  return request<undefined>(openCodeConfigPath(scope), { method: 'DELETE', signal })
+}
+
+export type { Environment, Member, AuditLogEntry, SandboxSecret, ProviderCredential, CloudIdentityBinding, ClusterBinding, OpenCodeConfig, ReviewAnalytics, RepoDigestScope }

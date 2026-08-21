@@ -37,6 +37,16 @@ function RootLayout() {
         <Link to="/automations" className="header-nav-link">
           Automations
         </Link>
+        {/* Settings/Analytics (§12.2 item 5, Step 86): the same minimal,
+            honest placeholder-nav precedent Automations above already
+            established -- a fuller top nav still lands with the
+            decision-inbox home view (§16). */}
+        <Link to="/settings" className="header-nav-link">
+          Settings
+        </Link>
+        <Link to="/analytics" className="header-nav-link">
+          Analytics
+        </Link>
         <ThemeToggle />
       </header>
       <main className="app-main">
