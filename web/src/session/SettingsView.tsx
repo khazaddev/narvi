@@ -22,19 +22,23 @@
 //
 // mockups.html's own Settings nav draws 8 entries (General, Environments,
 // Secrets, Members & access, Integrations, Models, Prompt templates,
-// Image builds). Four of those have no backing surface THIS Step owns:
-// Integrations is row 90's own screen ("ui integrations & provider
-// accounts" -- Slack/Linear/GitHub/ChatGPT/cloud-identity-rotation on one
-// unified screen); General/Models/Image builds name no §-cited data model
-// anywhere in row 86's own citations (§14.1, §14.2, §21, §24, §27) and
-// building one would be inventing scope, not implementing it. All 8 tabs
-// are still drawn (visual parity with the mockup, which the UI phase's
-// own screenshot-review exit criterion requires), but the 4 without a
-// real surface render an explicit, honest "not built here" notice naming where
-// that surface actually lives -- never a fabricated panel.
+// Image builds). Three of those have no backing surface: General/Models/
+// Image builds name no §-cited data model anywhere in this screen's own
+// scope (§14.1, §14.2, §21, §24, §27), and building one would be
+// inventing scope, not implementing it. Integrations (Slack/Linear/GitHub
+// ingress, ChatGPT-account linking, cloud-identity signing-key rotation --
+// §12.5, §29.3/§29.9, §27.3/§27.8) DOES have a real surface, on its own
+// screen (IntegrationsPanel.tsx), because those surfaces share one shape
+// -- connect, verify, show liveness, disconnect -- that nothing else on
+// this Settings screen claims. All 8 tabs are still drawn (visual parity
+// with the mockup, which the UI phase's own screenshot-review exit
+// criterion requires), but the 3 without a real surface render an
+// explicit, honest "not built here" notice naming where that surface
+// actually lives -- never a fabricated panel.
 import { useState } from 'react'
 
 import { EnvironmentsPanel } from './EnvironmentsPanel'
+import { IntegrationsPanel } from './IntegrationsPanel'
 import { MembersPanel } from './MembersPanel'
 import { PromptTemplatesPanel } from './PromptTemplatesPanel'
 import { SecretsPanel } from './SecretsPanel'
@@ -91,7 +95,7 @@ export function SettingsView() {
             {tab === 'environments' && <EnvironmentsPanel />}
             {tab === 'secrets' && <SecretsPanel />}
             {tab === 'members' && <MembersPanel />}
-            {tab === 'integrations' && <NotBuiltYet note="Slack, Linear and GitHub connections, ChatGPT account linking and cloud-identity signing-key rotation will live here. They are not built yet." />}
+            {tab === 'integrations' && <IntegrationsPanel />}
             {tab === 'models' && <NotBuiltYet note="There is nothing to manage: the model catalogue is read from the configured providers, and you choose a model per session in the composer." />}
             {tab === 'prompt-templates' && <PromptTemplatesPanel />}
             {tab === 'image-builds' && <NotBuiltYet note="Image-build history for each environment — fingerprint, duration and retry backoff — is not recorded anywhere yet, so there is nothing to show." />}

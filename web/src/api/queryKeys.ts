@@ -115,6 +115,16 @@ export const environmentQueryKeys = {
   list: () => ['environments', 'list'] as const,
 }
 
+// integrationQueryKeys (§12.5) -- the Integrations screen's own ingress-surface read model. One key, no params: GET /api/integrations always returns one row per surface, deployment-wide.
+export const integrationQueryKeys = {
+  list: () => ['integrations', 'list'] as const,
+}
+
+// chatgptLinkQueryKeys (§29.3/§29.9) -- the Integrations screen's own ChatGPT-account link status, scoped to "the current caller" like authQueryKeys above, not parameterized per user (there is no admin view of another member's link).
+export const chatgptLinkQueryKeys = {
+  status: () => ['chatgpt-link', 'status'] as const,
+}
+
 export const promptTemplateQueryKeys = {
   list: () => ['prompt-templates', 'list'] as const,
 }

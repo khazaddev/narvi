@@ -19,6 +19,7 @@ import type {
   Automation,
   ArtifactsResponse,
   AuditLogEntry,
+  ChatGPTLinkStatus,
   CloudIdentityBinding,
   ClusterBinding,
   ConfirmUploadResponse,
@@ -42,6 +43,7 @@ import type {
   ListDecisionInboxResponse,
   ListEnvironmentsResponse,
   ListFalsePositivePatternsResponse,
+  ListIntegrationsResponse,
   ListMembersResponse,
   ListPlansResponse,
   ListPromptTemplatesResponse,
@@ -340,6 +342,29 @@ export function unlinkMemberIdentity(userId: string, identityId: string, signal?
 export function listAuditLog(params: { limit: number; offset: number }, signal?: AbortSignal): Promise<ListAuditLogResponse> {
   const query = new URLSearchParams({ limit: String(params.limit), offset: String(params.offset) })
   return request<ListAuditLogResponse>(`/api/audit-log?${query.toString()}`, { signal })
+}
+
+// -- integrations & ChatGPT-account (Codex) linking (§12.5, §29.3/§29.9,
+// §12.2 item 5). --
+
+/** getIntegrations calls GET /api/integrations -- one row per ingress surface (Slack/Linear/GitHub, §12.5's own "integrations read model & routes" amendment). Admin-only server-side (authz.ActionManageIntegrations). A DERIVED read: configured plus last-inbound/last-outbound evidence, never a stored connection row and never the secrets themselves in any form -- see restdtos.Integration's own doc comment for why configured/lastOutboundStatus are facts with timestamps, never a health verdict. */
+export function getIntegrations(signal?: AbortSignal): Promise<ListIntegrationsResponse> {
+  return request<ListIntegrationsResponse>('/api/integrations', { signal })
+}
+
+/** startChatGPTLink calls POST /api/me/chatgpt-link (§29.3 step 1: "Connect ChatGPT account") -- begins (or reuses a still-live) device-flow attempt for the authenticated caller. Self-service, own-user only server-side (authz.ActionLinkChatGPTAccount, member+ -- viewers excluded). */
+export function startChatGPTLink(signal?: AbortSignal): Promise<ChatGPTLinkStatus> {
+  return request<ChatGPTLinkStatus>('/api/me/chatgpt-link', { method: 'POST', signal })
+}
+
+/** getChatGPTLinkStatus calls GET /api/me/chatgpt-link (§29.3 step 2) -- the Settings page's own poll loop. There is no background worker driving this flow: the human sitting on the page IS the polling loop, so every call this client makes performs AT MOST one throttled upstream attempt server-side (chatgpt_link_attempts.last_polled_at) -- polling faster than the server's own throttle simply no-ops rather than double-spending attempts. */
+export function getChatGPTLinkStatus(signal?: AbortSignal): Promise<ChatGPTLinkStatus> {
+  return request<ChatGPTLinkStatus>('/api/me/chatgpt-link', { signal })
+}
+
+/** unlinkChatGPTAccount calls DELETE /api/me/chatgpt-link (§29.3: "unlink deletes it") -- idempotent, 204 whether or not an account was actually linked. */
+export function unlinkChatGPTAccount(signal?: AbortSignal): Promise<undefined> {
+  return request<undefined>('/api/me/chatgpt-link', { method: 'DELETE', signal })
 }
 
 // -- environments (§14.1) --

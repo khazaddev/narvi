@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { cloudIdentityBindingSummary, cloudIdentityParamsComplete, environmentSummaryLine, formatDateTime, identityLinkProof, identityProviderLabel, lookbackDaysLabel, roleTone, secretScopeLabel, secretScopeTone } from '../settingsFormat'
+import { chatgptCardPresentation, chatgptLinkStatusPresentation, cloudIdentityBindingSummary, cloudIdentityParamsComplete, environmentSummaryLine, formatDateTime, identityLinkProof, identityProviderLabel, integrationOutboundTone, integrationSurfaceLabel, lookbackDaysLabel, roleTone, secretScopeLabel, secretScopeTone } from '../settingsFormat'
 
 describe('roleTone', () => {
   it('maps every §13.3 role to a chip tone', () => {
@@ -163,5 +163,79 @@ describe('cloudIdentityParamsComplete', () => {
 
   it('refuses an unknown kind rather than defaulting to complete', () => {
     expect(cloudIdentityParamsComplete('nonesuch', { anything: 'x' })).toBe(false)
+  })
+})
+
+describe('integrationSurfaceLabel', () => {
+  it('renders every closed Integration.surface value', () => {
+    expect(integrationSurfaceLabel('slack')).toBe('Slack')
+    expect(integrationSurfaceLabel('linear')).toBe('Linear')
+    expect(integrationSurfaceLabel('github')).toBe('GitHub')
+  })
+})
+
+// integrationOutboundTone must never read a failed/unknown outbound attempt
+// as the SAME tone as a successful one -- §12.5's own "never a health
+// verdict" rule still means the three real outcomes must be visually
+// distinct from each other, just not collapsed into an implied verdict.
+describe('integrationOutboundTone', () => {
+  it('gives delivered the ok tone', () => {
+    expect(integrationOutboundTone('delivered')).toBe('ok')
+  })
+  it('gives pending the warn tone', () => {
+    expect(integrationOutboundTone('pending')).toBe('warn')
+  })
+  it('gives dead_letter the crit tone', () => {
+    expect(integrationOutboundTone('dead_letter')).toBe('crit')
+  })
+  it('falls back to neutral for null or an unrecognised value, never a guessed-favorable tone', () => {
+    expect(integrationOutboundTone(null)).toBe('neutral')
+    expect(integrationOutboundTone('some_future_status')).toBe('neutral')
+  })
+})
+
+// chatgptLinkStatusPresentation's whole job is keeping needs_relink visually
+// DISTINCT from pending: one is "hasn't been confirmed yet" (expected,
+// transient), the other is "the refresh pump gave up and this credential is
+// no longer served to any sandbox" (a silent degradation with no other
+// signal). Collapsing them to the same tone would erase that distinction --
+// the terminal refresh-pump failure §29.5 defines would read as an ordinary
+// mid-flow wait.
+// The case that matters is a failed poll DURING a live device-flow attempt.
+// Keying the card on isSuccess meant one transient failure unmounted it,
+// taking the verification URL and user code away mid-flow. These four cases
+// are the whole contract, and the third is the one a regression would break.
+describe('chatgptCardPresentation', () => {
+  it('shows only the spinner before anything has loaded', () => {
+    expect(chatgptCardPresentation({ isPending: true, isError: false, hasData: false })).toEqual({ card: false, staleNotice: false, loading: true, error: false })
+  })
+
+  it('keeps the card up when a poll fails but a status is already known, and says it is stale', () => {
+    expect(chatgptCardPresentation({ isPending: false, isError: true, hasData: true })).toEqual({ card: true, staleNotice: true, loading: false, error: false })
+  })
+
+  it('shows a bare error only when nothing ever loaded', () => {
+    expect(chatgptCardPresentation({ isPending: false, isError: true, hasData: false })).toEqual({ card: false, staleNotice: false, loading: false, error: true })
+  })
+
+  it('shows the card, with no stale notice, on a healthy read', () => {
+    expect(chatgptCardPresentation({ isPending: false, isError: false, hasData: true })).toEqual({ card: true, staleNotice: false, loading: false, error: false })
+  })
+})
+
+describe('chatgptLinkStatusPresentation', () => {
+  it('marks unlinked neutral', () => {
+    expect(chatgptLinkStatusPresentation('unlinked')).toEqual({ tone: 'neutral', label: 'not connected' })
+  })
+  it('marks pending warn, distinct from needs_relink', () => {
+    expect(chatgptLinkStatusPresentation('pending')).toEqual({ tone: 'warn', label: 'verifying' })
+  })
+  it('marks linked ok', () => {
+    expect(chatgptLinkStatusPresentation('linked')).toEqual({ tone: 'ok', label: 'connected' })
+  })
+  it('marks needs_relink crit -- the refresh pump\'s own terminal-failure signal, never folded into pending\'s warn tone', () => {
+    const result = chatgptLinkStatusPresentation('needs_relink')
+    expect(result.tone).toBe('crit')
+    expect(result.tone).not.toBe(chatgptLinkStatusPresentation('pending').tone)
   })
 })
