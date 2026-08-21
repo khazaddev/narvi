@@ -3,7 +3,7 @@
 // codebase's own established split (automationFormat.ts, planFormat.ts,
 // reviewFormat.ts): render logic that does not need React lives here, so
 // it can be unit-tested without rendering anything.
-import type { CloudIdentityBinding, Environment, Member, ProviderCredential, SandboxSecret } from '@narvi/contracts/rest-dtos'
+import type { ChatGPTLinkStatus, CloudIdentityBinding, Environment, Integration, Member, ProviderCredential, SandboxSecret } from '@narvi/contracts/rest-dtos'
 
 /** roleTone maps a §13.3 role to a chip tone class, matching mockups.html's own chip vocabulary (ok/warn/crit/neutral/run). */
 export function roleTone(role: Member['role']): string {
@@ -139,4 +139,58 @@ export function cloudIdentityParamsComplete(kind: string, params: Record<string,
   const fields = cloudIdentityParamFields[kind]
   if (!fields) return false
   return fields.every((f) => (params[f.key] ?? '').trim().length > 0)
+}
+
+/** integrationSurfaceLabel renders an Integration.surface -- a closed 3-value TS union (slack/linear/github, restdtos.Integration's own doc comment), so this is safe to hard-code like identityProviderLabel above rather than routed through the T/truncateForDisplay plain-text path. */
+export function integrationSurfaceLabel(surface: Integration['surface']): string {
+  switch (surface) {
+    case 'slack':
+      return 'Slack'
+    case 'linear':
+      return 'Linear'
+    case 'github':
+      return 'GitHub'
+    default:
+      return surface
+  }
+}
+
+/** integrationOutboundTone maps Integration.lastOutboundStatus to a mockup chip tone. Left as a plain string on the wire, not a schema enum (Integration.lastOutboundStatus's own doc comment: "matching Postgres outbox_status exactly ... to keep the null case simple"), so an unrecognised value is treated the same conservative way identityLinkProof above treats an unrecognised linked_via -- neutral, never a guessed-favorable tone. null means no outbound attempt is on record at all, a fact this function leaves to the caller to render as its own separate empty state rather than folding into a tone here. */
+export function integrationOutboundTone(status: string | null): string {
+  switch (status) {
+    case 'delivered':
+      return 'ok'
+    case 'pending':
+      return 'warn'
+    case 'dead_letter':
+      return 'crit'
+    default:
+      return 'neutral'
+  }
+}
+
+/**
+ * chatgptLinkStatusPresentation maps ChatGPTLinkStatus.status to the chip
+ * tone/label this screen shows. needs_relink gets its own crit tone,
+ * deliberately distinct from pending's warn: §29.5's own failure taxonomy
+ * draws a hard line between "a device-flow attempt hasn't been confirmed
+ * yet" (transient, expected mid-flow) and "the refresh pump hit a
+ * terminal failure and stopped serving this credential to any sandbox"
+ * (a silent degradation of model availability with no other signal) --
+ * collapsing them into one tone would erase that distinction on the one
+ * screen whose job is to surface it.
+ */
+export function chatgptLinkStatusPresentation(status: ChatGPTLinkStatus['status']): { tone: string; label: string } {
+  switch (status) {
+    case 'unlinked':
+      return { tone: 'neutral', label: 'not connected' }
+    case 'pending':
+      return { tone: 'warn', label: 'verifying' }
+    case 'linked':
+      return { tone: 'ok', label: 'connected' }
+    case 'needs_relink':
+      return { tone: 'crit', label: 'needs reconnect' }
+    default:
+      return { tone: 'neutral', label: status }
+  }
 }

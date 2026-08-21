@@ -34,26 +34,20 @@
 // imports a single call for. NONE of
 // sandbox_secrets/provider_credentials (the actual secret-shaped tables)
 // render here at all -- those live on SecretsPanel.tsx, which never
-// renders a value either (see that file's own doc comment). The ONE
-// destructive-adjacent action here, cloud-identity signing-key rotation,
-// is gated behind an explicit two-step confirm (RotatePanel below) and,
-// on success, shows the JWKS overlap window the rotation response itself
-// returns -- never triggered by a bare button.
+// renders a value either (see that file's own doc comment). Cloud-identity
+// signing-key ROTATION (the one destructive-adjacent §27.3 action) does
+// NOT live here either: it moved to IntegrationsPanel.tsx (Settings ->
+// Integrations), which consolidates every surface that connects this
+// platform to something outside it onto one screen -- see that file's own
+// top doc comment for why bindings (per-Environment/global CONFIG, kept
+// here) and rotation (a platform-wide, connection-shaped action) split
+// that way.
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import type { CloudIdentityBinding, Environment } from '@narvi/contracts/rest-dtos'
 
-import {
-  createCloudIdentityBinding,
-  deleteCloudIdentityBinding,
-  deleteOpenCodeConfig,
-  getOpenCodeConfig,
-  listCloudIdentityBindings,
-  listEnvironments,
-  putOpenCodeConfig,
-  rotateCloudIdentitySigningKey,
-} from '../api/endpoints'
+import { createCloudIdentityBinding, deleteCloudIdentityBinding, deleteOpenCodeConfig, getOpenCodeConfig, listCloudIdentityBindings, listEnvironments, putOpenCodeConfig } from '../api/endpoints'
 import { ApiError } from '../api/http'
 import { cloudIdentityBindingQueryKeys, environmentQueryKeys, openCodeConfigQueryKeys } from '../api/queryKeys'
 import { meQueryOptions } from '../auth/session'
@@ -72,73 +66,6 @@ function isMaintainerPlus(role: string | undefined): boolean {
 
 function isAdmin(role: string | undefined): boolean {
   return role === 'admin'
-}
-
-/** RotatePanel -- cloud-identity signing-key rotation (§27.3/§27.8). Admin-only, destructive-adjacent: rendered behind an explicit two-step confirm, never a bare button, and shows the JWKS overlap window the rotation response returns. Renders NOTHING at all (no affordance) when a 503 proves the capability is unconfigured -- the SAME fail-closed posture RequireCloudIdentityCapability enforces server-side, discovered here by attempting the one read this panel already needs (listCloudIdentityBindings) rather than a second, dedicated status probe. */
-function RotatePanel({ canRotate }: { canRotate: boolean }) {
-  const [confirming, setConfirming] = useState(false)
-  const capabilityQuery = useQuery({
-    queryKey: cloudIdentityBindingQueryKeys.list({ kind: 'global' }),
-    queryFn: ({ signal }) => listCloudIdentityBindings({ kind: 'global' }, signal),
-    retry: false,
-  })
-  const rotateMutation = useMutation({
-    mutationFn: () => rotateCloudIdentitySigningKey(),
-    onSuccess: () => setConfirming(false),
-  })
-
-  const capabilityOff = capabilityQuery.isError && capabilityQuery.error instanceof ApiError && capabilityQuery.error.status === 503
-  if (capabilityOff) {
-    return (
-      <p className="notavailable">
-        Cloud identity federation is not configured on this deployment -- no signing-key rotation affordance is shown (fails closed, matching every other §27.3 surface).
-      </p>
-    )
-  }
-  if (!canRotate) return null
-
-  return (
-    <div>
-      {!confirming && !rotateMutation.isSuccess && (
-        <button type="button" className="btn danger" onClick={() => setConfirming(true)}>
-          Rotate signing key
-        </button>
-      )}
-      {confirming && (
-        <div className="confirmbox">
-          <p>
-            This mints a fresh OIDC signing key and retires the current one after the JWKS overlap window. Every customer cloud federated to this issuer keeps trusting the retired key
-            until then, but no LONGER than that -- this is a platform-wide, admin-only, destructive-adjacent action.
-          </p>
-          <div className="btnrow">
-            <button type="button" className="btn danger" disabled={rotateMutation.isPending} onClick={() => rotateMutation.mutate()}>
-              {rotateMutation.isPending ? 'Rotating…' : 'Confirm rotation'}
-            </button>
-            <button type="button" className="btn" onClick={() => setConfirming(false)}>
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-      {rotateMutation.isError && <p className="sidebar-notice">Rotation failed. Try again.</p>}
-      {rotateMutation.isSuccess && (
-        <div className="overlapwindow">
-          <span>
-            active kid: <b>{rotateMutation.data.activeKid}</b> (since {formatDateTime(rotateMutation.data.activeCreatedAt)})
-          </span>
-          {rotateMutation.data.retiredKid && (
-            <>
-              <span>
-                retired kid: <b>{rotateMutation.data.retiredKid}</b> (at {formatDateTime(rotateMutation.data.retiredAt ?? '')})
-              </span>
-              <span>JWKS overlap window ends: {formatDateTime(rotateMutation.data.publishableUntil ?? '')} -- the retired key verifies tokens minted before then, and no longer after.</span>
-            </>
-          )}
-          {!rotateMutation.data.retiredKid && <span>First-ever rotation -- nothing to retire, no overlap window.</span>}
-        </div>
-      )}
-    </div>
-  )
 }
 
 /** CloudIdentityBindingsList renders every binding at one scope -- params are identifiers, never secrets (CloudIdentityBinding.params' own doc comment), so this renders in full. */
@@ -385,7 +312,6 @@ function EnvironmentDetail({ env, canManage }: { env: Environment; canManage: bo
 export function EnvironmentsPanel() {
   const meQuery = useQuery(meQueryOptions)
   const canManage = isMaintainerPlus(meQuery.data?.role)
-  const canRotate = isAdmin(meQuery.data?.role)
   const [expanded, setExpanded] = useState<string | null>(null)
 
   const listQuery = useQuery({
@@ -418,7 +344,7 @@ export function EnvironmentsPanel() {
 
       <div className="panel">
         <h4>Global OpenCode config &amp; cloud identity</h4>
-        <p className="ph">applies to every session with no more specific environment/repo config -- §27.2/§27.3</p>
+        <p className="ph">applies to every session with no more specific environment/repo config -- §27.2/§27.3. Signing-key rotation lives on Settings -&gt; Integrations, alongside every other surface that connects this platform to something outside it.</p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div>
             <b style={{ fontSize: 'var(--text-sm)' }}>OpenCode config (global)</b>
@@ -427,10 +353,6 @@ export function EnvironmentsPanel() {
           <div>
             <b style={{ fontSize: 'var(--text-sm)' }}>Cloud identity bindings (global)</b>
             <CloudIdentityBindingsList scope={{ kind: 'global' }} canManage={canManage} />
-          </div>
-          <div>
-            <b style={{ fontSize: 'var(--text-sm)' }}>Signing-key rotation</b>
-            <RotatePanel canRotate={canRotate} />
           </div>
         </div>
       </div>
