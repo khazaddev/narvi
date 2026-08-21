@@ -234,3 +234,33 @@ func (s *RepoSettingsStore) UpsertPreviewSettings(ctx context.Context, repoFullN
 		RwxPreviewOrgSlug:          &orgSlug,
 	})
 }
+
+// UpsertPreviewConfig idempotently creates-or-updates repoFullName's own
+// §4.1.2-amendment preview-config row -- the write path behind PUT
+// /api/repos/{owner}/{repo}/preview-config (httpapi/previewconfig.go),
+// distinct from UpsertPreviewSettings above (that one is this package's
+// own older integration-test helper, always overwriting all three
+// columns together; see its own doc comment). endpointTemplate/orgSlug
+// are ALWAYS written verbatim -- ordinary, full-value semantics.
+//
+// dispatchKeyProvided/dispatchKey mirror UpsertPreviewConfig's own two
+// generated params exactly (postgres/queries/reposettings.sql) -- this
+// store does NO interpretation of its own, matching this package's
+// established "thin, pass-through, no business rules" discipline
+// (RepoSettingsStore's own doc comment): dispatchKeyProvided=false leaves
+// the stored rwx_preview_dispatch_key COMPLETELY untouched regardless of
+// dispatchKey's own value ("absent means unchanged", §4.1.2 amendment's
+// own words); dispatchKeyProvided=true writes dispatchKey verbatim,
+// including a nil dispatchKey (a genuine SQL NULL -- httpapi/
+// previewconfig.go's own PutPreviewConfig is the one place that decides
+// an explicit empty string in the wire request means "clear", translating
+// it to (true, nil) before it ever reaches this store).
+func (s *RepoSettingsStore) UpsertPreviewConfig(ctx context.Context, repoFullName, endpointTemplate, orgSlug string, dispatchKeyProvided bool, dispatchKey *string) (sqlcgen.RepoSetting, error) {
+	return s.q.UpsertPreviewConfig(ctx, sqlcgen.UpsertPreviewConfigParams{
+		RepoFullName:               repoFullName,
+		RwxPreviewEndpointTemplate: &endpointTemplate,
+		RwxPreviewOrgSlug:          &orgSlug,
+		DispatchKey:                dispatchKey,
+		DispatchKeyProvided:        dispatchKeyProvided,
+	})
+}

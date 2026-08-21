@@ -139,3 +139,16 @@ func (s *OutboxStore) MarkDeadLetter(ctx context.Context, id pgtype.UUID, lastEr
 		LastError: &lastError,
 	})
 }
+
+// GetLatestByKindPrefix returns the most-recently-created outbox row whose
+// own kind begins with kindPrefix -- §12.5's own ("integrations read
+// model & routes" amendment) GET /api/integrations, "what did Narvi last
+// try to POST to this surface" (see GetLatestOutboxEntryByKindPrefix's
+// own generated doc comment for the full "why a LIKE prefix match, and
+// its own documented fragility" reasoning). Returns pgx.ErrNoRows
+// (unwrapped) if no outbox row has ever matched this prefix -- "no
+// outbound attempt on record for this provider yet", never a store
+// error; callers must not treat it as one.
+func (s *OutboxStore) GetLatestByKindPrefix(ctx context.Context, kindPrefix string) (sqlcgen.Outbox, error) {
+	return s.q.GetLatestOutboxEntryByKindPrefix(ctx, kindPrefix)
+}

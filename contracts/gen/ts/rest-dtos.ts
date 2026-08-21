@@ -2474,3 +2474,82 @@ export interface RepoDigestScope {
    */
   lookbackDays: number;
 }
+/**
+ * One row of GET /api/integrations's own response body (§12.5's own "integrations read model & routes" amendment) -- a DERIVED read, never a stored row: nothing in this shape is persisted for its own sake. surface is one of the three ingress surfaces §12.5 names (Slack/Linear/GitHub); configured is computed from platform.Config's own already-loaded secrets (internal/domain/integrations.ConfiguredSlack/ConfiguredLinear/ConfiguredGitHub), never from a stored flag -- a partially-configured surface reads configured=false, never a half-connected state. lastInboundAt/lastOutboundAt+lastOutboundStatus+lastOutboundError are two INDEPENDENT facts from two different tables (webhook_deliveries vs outbox) and must stay labelled as two -- collapsing them into one "last activity" would make a surface that receives fine but cannot post look healthy, which is exactly what §12.5 warns against.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "Integration".
+ */
+export interface Integration {
+  /**
+   * Matches internal/domain/integrations.Provider exactly -- the same three literal strings webhook_deliveries.provider stores and every outbox.kind is supposed to be prefixed with.
+   */
+  surface: 'slack' | 'linear' | 'github';
+  /**
+   * Whether every value this surface's own ingress adapter needs is present in platform.Config -- NEVER the secrets themselves, not even shaped: no prefix, no length, no masked form, nothing about WHAT configures it. A surface missing even one required value reads false, never a half-working "connected but broken" state -- see internal/domain/integrations's own ConfiguredSlack/ConfiguredLinear/ConfiguredGitHub doc comments for the exact set each surface checks. STRUCTURALLY ALWAYS TRUE TODAY: every value checked is required at boot (platform.Load appends a MissingRequiredEnvError and the process refuses to start), so a running deployment has all three surfaces configured by construction and this field cannot read false. It is kept because it is the honest shape for the question, and because the day a surface becomes optional this is where that shows -- but a screen must NOT present it as a live check of anything
+   */
+  configured: boolean;
+  /**
+   * When this surface last delivered a webhook Narvi accepted (MAX(webhook_deliveries.received_at) for this exact provider). Null means this deployment has never received one. A dedup/coalescing timestamp only -- webhook_deliveries carries no outcome at all (migrations/000027_webhook_deliveries.up.sql: "(provider, delivery_id, received_at) and NOTHING else"), so this can never be combined with or imply anything about lastOutboundStatus below. goJSONSchema forces the literal *time.Time type -- see Plan.decidedAt's own doc comment for why a named pointer-type wrapper silently breaks encoding/json here.
+   */
+  lastInboundAt: string | null;
+  /**
+   * When Narvi last attempted to POST to this surface (the most recently created outbox row whose kind attributes to this provider by prefix -- see internal/domain/integrations.ProviderForOutboxKind's own doc comment for that mapping's own documented fragility). Null means no such attempt is on record. The OTHER direction from lastInboundAt -- a surface can have a recent lastInboundAt and a null/failed lastOutboundAt at the same time, and this response never collapses that into a single verdict. goJSONSchema forces the literal *time.Time type -- see Plan.decidedAt's own doc comment for why a named pointer-type wrapper silently breaks encoding/json here.
+   */
+  lastOutboundAt: string | null;
+  /**
+   * That same outbox row's own status -- one of "pending"/"delivered"/"dead_letter", matching Postgres outbox_status exactly (left a plain string rather than a schema enum to keep the null case simple, the same reasoning RepoSettings.reviewDepthMode's own doc comment already gives). Null iff lastOutboundAt is null. A TIMESTAMPED FACT, never a health verdict: this response does not derive "healthy"/"degraded" from it -- a quiet surface and a broken one can look identical from here, and that is deliberate (§12.5's own explicit words).
+   */
+  lastOutboundStatus: string | null;
+  /**
+   * That same outbox row's own last_error, when lastOutboundStatus reflects a failed attempt still retrying or already dead-lettered. Null whenever the last attempt has no recorded error (including when lastOutboundAt itself is null).
+   */
+  lastOutboundError: string | null;
+}
+/**
+ * GET /api/integrations's own response body (§12.5) -- one Integration row per internal/domain/integrations.Providers entry, in that package's own fixed order (slack, linear, github). Gated by the existing authz.ActionManageIntegrations (admin only, §13.3 row 6) -- this Step's first HTTP consumer of that action; its only prior consumer gated a Linear ingress path, not a route.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ListIntegrationsResponse".
+ */
+export interface ListIntegrationsResponse {
+  integrations: Integration[];
+}
+/**
+ * GET/PUT /api/repos/{owner}/{repo}/preview-config response body (§4.1.2 amendment) -- the three rwx_preview_* repo_settings columns (migrations/000059_repo_settings_rwx_preview.up.sql), previously reachable only by internal/app/sessionactor/previewpr.go reading the row directly, exposed here for the first time. A DEDICATED endpoint and DTO, deliberately separate from RepoSettings/GET .../settings (see UpdatePreviewConfigRequest's own doc comment for the full "why") -- gated by the SAME admin-only authz.ActionConfigurePreviewLinks as the PUT below, mirroring how ProviderCredential/SandboxSecret's own GET routes share their POST/PUT route group's single gate rather than the broader, partially-relaxed authorizeAny RepoSettings' own GET uses -- this is a credential-adjacent settings surface, not an ordinary policy toggle.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "PreviewConfig".
+ */
+export interface PreviewConfig {
+  /**
+   * The natural 'owner/repo' key, matching RepoSettings.repoFullName's own shape.
+   */
+  repoFullName: string;
+  /**
+   * An ordinary, non-secret identifier -- read and written normally, exactly like any other repo_settings field. Null means not configured yet (no repo_settings row, or this column never set) -- previews are OFF for this repo whenever any of the three preview fields is absent (internal/app/sessionactor/previewpr.go's own readPreviewSettings: partial configuration is treated identically to fully absent).
+   */
+  endpointTemplate: string | null;
+  /**
+   * An ordinary, non-secret identifier, the same read/write posture as endpointTemplate. Null means not configured yet.
+   */
+  orgSlug: string | null;
+  /**
+   * A FIXED, non-secret placeholder (mirrors ProviderCredential.maskedValue/SandboxSecret.maskedValue exactly) proving a dispatch key is configured -- null when none is set. The real key is write-only: it is NEVER returned by this or any other route, in any form -- no prefix, no length, no partial reveal, ever.
+   */
+  maskedDispatchKey: string | null;
+}
+/**
+ * PUT /api/repos/{owner}/{repo}/preview-config request body (§4.1.2 amendment). Its OWN endpoint, deliberately NOT folded into the combined PUT .../settings (UpdateRepoSettingsRequest) for two reasons that endpoint's own doc comment already establishes for §21's fields and apply here with even more force: that endpoint demands every permission its fields collectively need, and a request body carrying a CREDENTIAL must not share a shape with ordinary configuration -- a future caller sending "the complete desired state" through a combined endpoint would have to resend the secret or blank it, exactly the leak/footgun this separate shape avoids. endpointTemplate/orgSlug are ordinary identifiers, ALWAYS the full current desired value (never a partial patch, matching UpdateRepoSettingsRequest's own convention) -- both required on every call. dispatchKey is DELIBERATELY different: absent from the request body (or explicit JSON null) leaves the STORED credential completely untouched -- the one place on this surface partial-state semantics are correct, since a caller can never read the current value back to resend it (PreviewConfig.maskedDispatchKey is a fixed placeholder, not the real value). Present as an empty string "" is the explicit CLEAR signal (the stored key is removed; previews for this repo revert to OFF per readPreviewSettings' own all-three-required behavior, internal/app/sessionactor/previewpr.go); present as any non-empty string rotates it. Gated by the NEW admin-only authz.ActionConfigurePreviewLinks (§13.3 row 6) -- arming this makes every future push to this repo trigger a build dispatch on an external provider, unattended, the same reasoning every sibling row-6 automation toggle already carries.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "UpdatePreviewConfigRequest".
+ */
+export interface UpdatePreviewConfigRequest {
+  endpointTemplate: string;
+  orgSlug: string;
+  /**
+   * Absent or JSON null: leave the stored dispatch key completely unchanged. Empty string "": clear it (stored as SQL NULL). Any non-empty string: the new plaintext RWX dispatch key, replacing the old one -- never logged, never echoed back in any response (PreviewConfig.maskedDispatchKey is the fixed placeholder proving one is set). Must not contain a NUL byte (U+0000), mirroring CreateProviderCredentialRequest.value's own identical rule.
+   */
+  dispatchKey?: string | null;
+}

@@ -448,6 +448,17 @@ silently out of this read rather than failing loudly. Say so where the mapping
 is implemented, and prefer a shared, tested prefix helper over a match inlined
 at the query.
 
+**`configured` cannot currently read false, and the section should have said so.**
+Every value each surface needs is required at boot: `platform.Load` appends a
+`MissingRequiredEnvError` and the process refuses to start. So a running
+deployment has all three surfaces configured by construction, and this field is
+structurally always true. It is kept rather than dropped because it is the
+honest shape for the question a reader asks, and because the day a surface
+becomes optional it is where that shows — but nothing may present it as a live
+check, and the screen must not imply it is one. That "a deployment must
+configure all three ingress surfaces to boot at all" is itself a constraint
+worth revisiting, and is filed as a named gap rather than changed here.
+
 **Never the secrets themselves, not even shaped.** The response says *whether* a surface is
 configured and nothing about what configures it — no token prefix, no length, no masked form. This
 is the same rule `SandboxSecret`/`ProviderCredential` follow by carrying no `value` field at all,

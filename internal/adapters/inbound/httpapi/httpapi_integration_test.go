@@ -328,6 +328,22 @@ type testRig struct {
 	// sandbox-facing cloud-identity-config delivery route
 	// (cloudidentityconfigdelivery_integration_test.go).
 	clusterBindings *narvipg.ClusterBindingStore
+
+	// webhookDeliveries (§12.5's own "integrations read model & routes"
+	// amendment) backs this rig's own GET /api/integrations route
+	// (integrations_integration_test.go) -- the inbound half of that read
+	// model (webhook_deliveries.received_at, an exact provider match).
+	webhookDeliveries *narvipg.WebhookDeliveryStore
+
+	// cfg (§12.5 amendment) is the *platform.Config GetIntegrations
+	// reads its own "is this surface configured" secrets from -- defaults
+	// to a fully-configured value for all three surfaces (Slack/Linear/
+	// GitHub), the SAME "everything wired, override the one field a test
+	// specifically cares about" default posture rolloutMode/
+	// cloudIdentityIssuerURL already establish above; a test proving the
+	// partially-configured case overrides individual fields via
+	// newTestRig's own mutate func.
+	cfg *platform.Config
 }
 
 // newTestRig builds the default rig. mutate (variadic so every EXISTING
@@ -408,6 +424,17 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		oidcSigningKeys:        narvipg.NewOIDCSigningKeyStore(pool),
 		cloudIdentityIssuerURL: "https://issuer.narvi.example.test",
 		clusterBindings:        narvipg.NewClusterBindingStore(pool),
+		webhookDeliveries:      narvipg.NewWebhookDeliveryStore(pool),
+		cfg: &platform.Config{
+			SlackSigningSecret:      "test-slack-signing-secret",
+			SlackBotToken:           "test-slack-bot-token",
+			LinearWebhookSecret:     "test-linear-webhook-secret",
+			LinearOAuthClientID:     "test-linear-client-id",
+			LinearOAuthClientSecret: "test-linear-client-secret",
+			GitHubWebhookSecret:     "test-github-webhook-secret",
+			GitHubBotHandle:         "narvi-test-bot",
+			GitHubBotToken:          "test-github-bot-token",
+		},
 	}
 	t.Cleanup(func() { _ = rig.registry.Shutdown() })
 
@@ -627,6 +654,21 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
 		r.Get("/", httpapi.GetRepoSettings(rig.repoSettings, reviewVerdictDeps, rig.prSessions))
 		r.Put("/", httpapi.PutRepoSettings(rig.repoSettings, rig.prSessions))
+	})
+	// /api/repos/{owner}/{repo}/preview-config (§4.1.2 amendment) --
+	// mounted behind auth.Middleware, exactly like cmd/control-plane/
+	// main.go's own wiring (see previewconfig.go's own doc comment).
+	router.Route("/api/repos/{owner}/{repo}/preview-config", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Get("/", httpapi.GetPreviewConfig(rig.repoSettings, rig.prSessions))
+		r.Put("/", httpapi.PutPreviewConfig(rig.repoSettings, rig.prSessions))
+	})
+	// /api/integrations (§12.5 amendment) -- mounted behind
+	// auth.Middleware, exactly like cmd/control-plane/main.go's own
+	// wiring (see integrations.go's own doc comment).
+	router.Route("/api/integrations", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Get("/", httpapi.GetIntegrations(rig.cfg, rig.outbox, rig.webhookDeliveries))
 	})
 	// /api/repos/{owner}/{repo}/false-positive-patterns (§22.4) --
 	// mounted behind auth.Middleware, exactly like cmd/control-plane/

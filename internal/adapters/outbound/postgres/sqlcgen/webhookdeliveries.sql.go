@@ -57,6 +57,38 @@ func (q *Queries) ClaimWebhookDelivery(ctx context.Context, arg ClaimWebhookDeli
 	return i, err
 }
 
+const getLastInboundDeliveryAt = `-- name: GetLastInboundDeliveryAt :one
+SELECT MAX(received_at)::timestamptz AS last_received_at FROM webhook_deliveries
+WHERE provider = $1
+`
+
+// §12.5's own ("integrations read model & routes" amendment) GET
+// /api/integrations: "when did we last hear from this surface" --
+// MAX(received_at) across every (provider, delivery_id) row this
+// provider has ever claimed, an EXACT match on provider (never a prefix
+// match the way outbox.kind needs -- GetLatestOutboxEntryByKindPrefix,
+// postgres/queries/outbox.sql -- since every provider here writes its own
+// CONSTANT, exact string: githubDeliveryProvider "github",
+// internal/adapters/inbound/slack/handler.go's own literal "slack",
+// internal/adapters/inbound/linear/webhook.go's own literal "linear").
+// Deliberately does NOT match internal/adapters/inbound/slack/handler.go's
+// own SECOND, distinct claim namespace "slack-message"
+// (slackMessageClaimProvider) -- that one claims a MESSAGE for
+// coalescing, not a genuine webhook delivery, and an exact "=" comparison
+// (never LIKE) correctly leaves it out.
+//
+// A bare aggregate with no GROUP BY always returns exactly ONE row
+// (MAX of zero matching rows is a genuine SQL NULL, not an absent row),
+// so this is a true :one query -- never pgx.ErrNoRows -- and the Go
+// caller reads pgtype.Timestamptz.Valid to distinguish "never heard from
+// this provider" (false) from a real timestamp.
+func (q *Queries) GetLastInboundDeliveryAt(ctx context.Context, provider string) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, getLastInboundDeliveryAt, provider)
+	var last_received_at pgtype.Timestamptz
+	err := row.Scan(&last_received_at)
+	return last_received_at, err
+}
+
 const releaseWebhookDelivery = `-- name: ReleaseWebhookDelivery :exec
 DELETE FROM webhook_deliveries WHERE provider = $1 AND delivery_id = $2
 `

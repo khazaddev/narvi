@@ -222,6 +222,13 @@ var matrix = map[Action]actionRule{
 	// ActionConfigureReviewDepth immediately above (action.go's own doc
 	// comment).
 	ActionConfigureReviewCostBudget: {allow: roles(RoleAdmin)},
+	// (§4.1.2 amendment): configuring a repo's own RWX preview-link
+	// dispatch (dispatchKey/endpointTemplate/orgSlug) -- same row, same
+	// reasoning as ActionConfigureReviewCostBudget/ActionConfigureReviewDepth/
+	// ActionToggleDescriptionAutofix/ActionToggleAutoRetriggerReview/
+	// ActionToggleAutoMerge/ActionToggleSentinelAutoFix immediately above
+	// (action.go's own doc comment).
+	ActionConfigurePreviewLinks: {allow: roles(RoleAdmin)},
 }
 
 // Authorize renders the §13.3 verdict for actor attempting action against

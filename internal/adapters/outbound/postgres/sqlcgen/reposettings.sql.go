@@ -310,6 +310,83 @@ func (q *Queries) UpsertDescriptionAutofixToggle(ctx context.Context, arg Upsert
 	return i, err
 }
 
+const upsertPreviewConfig = `-- name: UpsertPreviewConfig :one
+INSERT INTO repo_settings (repo_full_name, rwx_preview_endpoint_template, rwx_preview_org_slug, rwx_preview_dispatch_key, updated_at)
+VALUES ($1, $2, $3, $4, now())
+ON CONFLICT (repo_full_name)
+DO UPDATE SET
+    rwx_preview_endpoint_template = EXCLUDED.rwx_preview_endpoint_template,
+    rwx_preview_org_slug = EXCLUDED.rwx_preview_org_slug,
+    rwx_preview_dispatch_key = CASE WHEN $5::boolean THEN $4 ELSE repo_settings.rwx_preview_dispatch_key END,
+    updated_at = now()
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled
+`
+
+type UpsertPreviewConfigParams struct {
+	RepoFullName               string  `json:"repo_full_name"`
+	RwxPreviewEndpointTemplate *string `json:"rwx_preview_endpoint_template"`
+	RwxPreviewOrgSlug          *string `json:"rwx_preview_org_slug"`
+	DispatchKey                *string `json:"dispatch_key"`
+	DispatchKeyProvided        bool    `json:"dispatch_key_provided"`
+}
+
+// §4.1.2 amendment ("PR preview links ... exposure amendment"): backs
+// the NEW admin-facing PUT /api/repos/{owner}/{repo}/preview-config
+// (httpapi/previewconfig.go), which UNLIKE UpsertRWXPreviewSettings
+// immediately above gives rwx_preview_dispatch_key its OWN partial-write
+// semantics -- "absent means unchanged" (§4.1.2 amendment's own words),
+// the one place on this surface partial-state semantics are correct
+// rather than a patch in disguise, since dispatchKey is write-only (never
+// read back by any response, PreviewConfig.maskedDispatchKey) and a
+// caller therefore cannot resend a value it was never given.
+//
+// sqlc.arg('dispatch_key_provided') is the caller's own "was dispatchKey
+// present in the request body at all" bit (httpapi/previewconfig.go:
+// req.DispatchKey != nil): false leaves rwx_preview_dispatch_key
+// completely untouched -- its own CURRENT value on an existing row, or
+// its column DEFAULT (NULL) on a brand-new one, where "unchanged" and
+// "still absent" already coincide. true writes sqlc.narg('dispatch_key')
+// verbatim, which is itself nullable: an explicit empty string clears the
+// key (stored as NULL, mirroring this column's own established "NULL
+// means off" convention, migrations/000059's own doc comment: "absent =
+// off by default"), a non-empty string rotates it.
+//
+// rwx_preview_endpoint_template/rwx_preview_org_slug are ALWAYS written
+// to EXCLUDED's value -- ordinary, full-value semantics (§4.1.2
+// amendment: "ordinary identifiers ... read and write normally"), no
+// partial-write bit for either, unlike dispatch_key.
+func (q *Queries) UpsertPreviewConfig(ctx context.Context, arg UpsertPreviewConfigParams) (RepoSetting, error) {
+	row := q.db.QueryRow(ctx, upsertPreviewConfig,
+		arg.RepoFullName,
+		arg.RwxPreviewEndpointTemplate,
+		arg.RwxPreviewOrgSlug,
+		arg.DispatchKey,
+		arg.DispatchKeyProvided,
+	)
+	var i RepoSetting
+	err := row.Scan(
+		&i.RepoFullName,
+		&i.BlockOnHighRisk,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SentinelAutofixEnabled,
+		&i.RwxPreviewDispatchKey,
+		&i.RwxPreviewEndpointTemplate,
+		&i.RwxPreviewOrgSlug,
+		&i.AutoMergeEnabled,
+		&i.MaxAutoApproveFilesChanged,
+		&i.SensitiveBlastRadiusTags,
+		&i.AutoRetriggerReviewEnabled,
+		&i.DescriptionAutofixEnabled,
+		&i.ReviewDepthMode,
+		&i.ReviewDepthDeepPaths,
+		&i.ReviewCostBudgetLightUsd,
+		&i.ReviewCostBudgetDeepUsd,
+		&i.SessionsEnabled,
+	)
+	return i, err
+}
+
 const upsertRWXPreviewSettings = `-- name: UpsertRWXPreviewSettings :one
 INSERT INTO repo_settings (repo_full_name, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, updated_at)
 VALUES ($1, $2, $3, $4, now())

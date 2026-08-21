@@ -1139,6 +1139,19 @@ func serve() error {
 		r.Delete("/{userID}/identities/{identityID}", httpapi.UnlinkMemberIdentity(pool, identityStore, auditLogStore))
 	})
 
+	// /api/integrations (§12.5's own "integrations read model & routes"
+	// amendment): one row per ingress surface (Slack, Linear, GitHub) --
+	// see httpapi/integrations.go's own doc comment. A DERIVED read, no
+	// connect/disconnect write, so this is a GET-only route group,
+	// deployment-wide like /api/members above (no {owner}/{repo} in the
+	// path -- integrations are not per-repo). Gated by the EXISTING
+	// authz.ActionManageIntegrations (admin only, §13.3 row 6); the
+	// handler itself renders the real verdict.
+	router.Route("/api/integrations", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Get("/", httpapi.GetIntegrations(cfg, outboxStore, webhookDeliveryStore))
+	})
+
 	// /api/me ("web UI: sign-in", §12.2 item 7/§13.1): the
 	// "who am I" endpoint the sign-in view's identity auto-link panel and
 	// already-signed-in state read -- gated behind auth.Middleware only,
@@ -1419,6 +1432,19 @@ func serve() error {
 		r.Use(auth.Middleware(userSessionStore, userStore))
 		r.Get("/", httpapi.GetRepoSettings(repoSettingsStore, reviewVerdictDeps, githubPRSessionStore))
 		r.Put("/", httpapi.PutRepoSettings(repoSettingsStore, githubPRSessionStore))
+	})
+
+	// /api/repos/{owner}/{repo}/preview-config (§4.1.2 amendment): a
+	// FURTHER, separately-gated route -- deliberately NOT folded into
+	// /settings above (a request body carrying a credential must not
+	// share a shape with ordinary configuration) -- see
+	// httpapi/previewconfig.go's own doc comment for the full "why a
+	// dedicated GET too" reasoning. Gated by the NEW admin-only authz.
+	// ActionConfigurePreviewLinks (§13.3 row 6).
+	router.Route("/api/repos/{owner}/{repo}/preview-config", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Get("/", httpapi.GetPreviewConfig(repoSettingsStore, githubPRSessionStore))
+		r.Put("/", httpapi.PutPreviewConfig(repoSettingsStore, githubPRSessionStore))
 	})
 
 	// /api/repos/{owner}/{repo}/false-positive-patterns ("review:

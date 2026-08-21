@@ -249,3 +249,48 @@ func TestCheckStepRefs_CatchesWrappedCitations(t *testing.T) {
 		})
 	}
 }
+
+// TestCheckStepRefs_CatchesHyphenatedCitations pins the fourth evasion form.
+//
+// "pre-Step-90" shipped past this check on a branch that had just been swept
+// clean, because the pattern required whitespace between the word and the
+// number. Hyphenated compounds are ordinary English, so the negatives matter:
+// an identifier with no separator at all must still be exempt.
+func TestCheckStepRefs_CatchesHyphenatedCitations(t *testing.T) {
+	cases := []struct {
+		name       string
+		line       string
+		wantCaught bool
+	}{
+		{"hyphenated citation in a compound", `// that one is this package's own pre-Step-90 test helper.`, true},
+		{"hyphenated citation, plain", `// superseded by Step-59's own resolution table.`, true},
+		{"identifier with no separator", `	builtInPlanStep1ID = "00000000-0000-4000-8000-000000000031"`, false},
+		{"hyphenated ordinary english", `// a two-step-down escalation, not a citation.`, false},
+	}
+
+	dir := t.TempDir()
+	pkgDir := filepath.Join(dir, "internal", "pkg")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := "package pkg\n\n" + c.line + "\nfunc x() {}\n"
+			path := filepath.Join(pkgDir, "fixture.go")
+			if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+			t.Cleanup(func() { _ = os.Remove(path) })
+
+			refs, err := CheckStepRefs(dir, []string{"internal"})
+			if err != nil {
+				t.Fatalf("CheckStepRefs: %v", err)
+			}
+			got := len(refs) > 0
+			if got != c.wantCaught {
+				t.Errorf("line %q: caught = %v, want %v (refs = %+v)", c.line, got, c.wantCaught, refs)
+			}
+		})
+	}
+}

@@ -179,3 +179,39 @@ VALUES ($1, $2, $3, $4, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET rwx_preview_dispatch_key = EXCLUDED.rwx_preview_dispatch_key, rwx_preview_endpoint_template = EXCLUDED.rwx_preview_endpoint_template, rwx_preview_org_slug = EXCLUDED.rwx_preview_org_slug, updated_at = now()
 RETURNING *;
+
+-- name: UpsertPreviewConfig :one
+-- §4.1.2 amendment ("PR preview links ... exposure amendment"): backs
+-- the NEW admin-facing PUT /api/repos/{owner}/{repo}/preview-config
+-- (httpapi/previewconfig.go), which UNLIKE UpsertRWXPreviewSettings
+-- immediately above gives rwx_preview_dispatch_key its OWN partial-write
+-- semantics -- "absent means unchanged" (§4.1.2 amendment's own words),
+-- the one place on this surface partial-state semantics are correct
+-- rather than a patch in disguise, since dispatchKey is write-only (never
+-- read back by any response, PreviewConfig.maskedDispatchKey) and a
+-- caller therefore cannot resend a value it was never given.
+--
+-- sqlc.arg('dispatch_key_provided') is the caller's own "was dispatchKey
+-- present in the request body at all" bit (httpapi/previewconfig.go:
+-- req.DispatchKey != nil): false leaves rwx_preview_dispatch_key
+-- completely untouched -- its own CURRENT value on an existing row, or
+-- its column DEFAULT (NULL) on a brand-new one, where "unchanged" and
+-- "still absent" already coincide. true writes sqlc.narg('dispatch_key')
+-- verbatim, which is itself nullable: an explicit empty string clears the
+-- key (stored as NULL, mirroring this column's own established "NULL
+-- means off" convention, migrations/000059's own doc comment: "absent =
+-- off by default"), a non-empty string rotates it.
+--
+-- rwx_preview_endpoint_template/rwx_preview_org_slug are ALWAYS written
+-- to EXCLUDED's value -- ordinary, full-value semantics (§4.1.2
+-- amendment: "ordinary identifiers ... read and write normally"), no
+-- partial-write bit for either, unlike dispatch_key.
+INSERT INTO repo_settings (repo_full_name, rwx_preview_endpoint_template, rwx_preview_org_slug, rwx_preview_dispatch_key, updated_at)
+VALUES ($1, $2, $3, sqlc.narg('dispatch_key'), now())
+ON CONFLICT (repo_full_name)
+DO UPDATE SET
+    rwx_preview_endpoint_template = EXCLUDED.rwx_preview_endpoint_template,
+    rwx_preview_org_slug = EXCLUDED.rwx_preview_org_slug,
+    rwx_preview_dispatch_key = CASE WHEN sqlc.arg('dispatch_key_provided')::boolean THEN sqlc.narg('dispatch_key') ELSE repo_settings.rwx_preview_dispatch_key END,
+    updated_at = now()
+RETURNING *;
