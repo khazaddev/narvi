@@ -464,6 +464,12 @@ func serve() error {
 	// shared, never a second independently-constructed copy.
 	reviewFindingStore := postgres.NewReviewFindingStore(pool)
 	sentinelFixStore := postgres.NewSentinelFixStore(pool)
+	// releaseManifestCheckStore (§12.2 item 9, "dedicated release-review
+	// screen") persists the release manifest check's own typed result --
+	// see internal/app/releasereview/persist.go's own doc comment. Shared
+	// between releaseManifestWorker's own Deps (below) and the
+	// release-review readout's own GET handler.
+	releaseManifestCheckStore := postgres.NewReleaseManifestCheckStore(pool)
 	// falsePositivePatternStore ("review: learned false-positive
 	// patterns", §22.2/§22.3/§22.4) backs the GitHub capture command, the
 	// advisory-injection fetch (internal/app/reviewcontext), and the
@@ -1325,6 +1331,16 @@ func serve() error {
 		// own GitHub token, never the session creator's.
 		r.Post("/{sessionID}/review/findings/{identityHash}/rebut", httpapi.RebutReviewFinding(sessionStore, githubPRSessionStore, reviewFindingStore, auditLogStore))
 		r.Post("/{sessionID}/review/findings/{identityHash}/apply-suggestion", httpapi.ApplySuggestion(sessionStore, githubPRSessionStore, reviewFindingStore, identityStore, sourceControl, cfg.TokenEncryptionKey, cfg.Timeouts))
+		// review (§26.1's merge readout, §12.2 item 2) -- the code-review
+		// view's own read model, see httpapi/reviewreadout.go's own doc
+		// comment. sourceControl/findingRelocationResolver/cfg.GitHubBotToken
+		// are the SAME instances every other GitHub-facing route above
+		// already uses.
+		r.Get("/{sessionID}/review", httpapi.GetReviewReadout(sessionStore, githubPRSessionStore, reviewVerdictDeps, reviewFindingStore, turnStore, sourceControl, findingRelocationResolver, cfg.GitHubBotToken, cfg.Timeouts))
+		// release-manifest (§15.2/§15.3, §12.2 item 9) -- the dedicated
+		// release-review screen's own read model, see httpapi/
+		// releasemanifestreadout.go's own doc comment.
+		r.Get("/{sessionID}/release-manifest", httpapi.GetReleaseManifestReadout(sessionStore, githubPRSessionStore, releaseManifestCheckStore))
 	})
 
 	// /api/workflow-runs/{runId}/steps/{stepRunId}/decide ("workflow
@@ -1859,9 +1875,10 @@ func serve() error {
 	// persisted onto a release_manifest_pending row itself (see
 	// releasereview.Enqueue's own doc comment).
 	releaseManifestWorker := releasereview.NewWorker(releaseManifestPendingStore, releasereview.Deps{
-		SourceControl: sourceControl,
-		Outbox:        outboxStore,
-		Timeouts:      cfg.Timeouts,
+		SourceControl:         sourceControl,
+		Outbox:                outboxStore,
+		ReleaseManifestChecks: releaseManifestCheckStore,
+		Timeouts:              cfg.Timeouts,
 	}, cfg.GitHubBotToken, cfg.Timeouts)
 
 	srv := &http.Server{

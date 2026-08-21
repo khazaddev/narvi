@@ -1363,6 +1363,331 @@
         }
       }
     },
+    "ReviewReadout": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "200 response body for GET /api/sessions/:id/review (§26.1's merge readout, §12.2 item 2) -- the code-review view's own read model: the PR this session reviews, its latest posted verdict (null if none has ever been posted), every finding ever posted for it (§26.1's own collapsed appendix), and a bounded verdict history (§26.1 item 5). Server-computed throughout; nothing here is ever re-derived client-side.",
+      "required": [
+        "repoFullName",
+        "prNumber",
+        "findings",
+        "history"
+      ],
+      "properties": {
+        "repoFullName": {
+          "type": "string",
+          "description": "owner/repo, resolved server-side from github_pr_sessions."
+        },
+        "prNumber": {
+          "type": "integer"
+        },
+        "prTitle": {
+          "type": ["string", "null"],
+          "description": "The pull request's own current title, fetched live from GitHub -- null when that fetch failed (a degraded, never-fatal read, mirroring internal/app/reviewcontext.Fetch's own established 'a failed fetch degrades gracefully' posture)."
+        },
+        "prState": {
+          "type": ["string", "null"],
+          "description": "One of 'open'/'closed'/'merged' when the live GitHub fetch above succeeded (deliberately modeled as an unconstrained nullable string, mirroring ReviewReadoutVerdict.reviewPath's own identical precedent below) -- null on the same degraded-fetch condition as prTitle."
+        },
+        "latestVerdict": {
+          "anyOf": [
+            { "$ref": "#/$defs/ReviewReadoutVerdict" },
+            { "type": "null" }
+          ],
+          "description": "Null when no verdict has ever been posted for this PR -- an honest 'not reviewed yet' state, never a fabricated placeholder verdict."
+        },
+        "findings": {
+          "type": "array",
+          "description": "Every finding ever posted for this PR, any status, oldest-first -- §26.1's own collapsed appendix. Each finding's startLine/endLine are re-resolved at READ time against the diff at latestVerdict's own headSha (§22.1.1/§22.5), never a stored, potentially-stale line number.",
+          "items": { "$ref": "#/$defs/ReviewReadoutFinding" }
+        },
+        "history": {
+          "type": "array",
+          "description": "This PR's own verdict history, newest first, bounded -- the rail's own 'History' panel (§26.1 item 5).",
+          "items": { "$ref": "#/$defs/ReviewVerdictHistoryEntry" }
+        },
+        "epistemicOutcome": {
+          "type": ["string", "null"],
+          "description": "The authoring session's own most recent non-'none' builder epistemic-check outcome (§20.1/§20.2), when this PR was authored by a Narvi session -- one of 'minor'/'strong' when present (internal/domain/turn.EpistemicOutcome), surfaced as a subtle 'Heads-up' indicator; null when no such outcome was ever recorded, or the reviewed PR was not authored by a Narvi session at all. Never 'none' itself -- a turn that reported 'none' carries nothing worth surfacing, indistinguishable here from never having reported anything."
+        }
+      }
+    },
+    "ReviewReadoutVerdict": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One review_verdicts row's own full REST wire shape (§21.1/§26.1) -- the merge readout's own header + digest content. Mirrors PostReviewVerdictRequest's own fields (the posting shape) plus the persistence-layer facts that request never carries: the AUTHORITATIVE server-computed shippable (never proposedShippable), headSha, postedAt, and sessionId.",
+      "required": [
+        "riskLevel",
+        "premise",
+        "blastRadius",
+        "filesChanged",
+        "testsCoverage",
+        "docsDrift",
+        "proposedShippable",
+        "shippable",
+        "digest",
+        "factCheck",
+        "factCheckKilled",
+        "headSha",
+        "postedAt",
+        "sessionId"
+      ],
+      "properties": {
+        "riskLevel": {
+          "type": "string",
+          "enum": ["low", "medium", "high"]
+        },
+        "premise": {
+          "type": "string",
+          "enum": ["ok", "questionable", "not_a_pr"]
+        },
+        "blastRadius": {
+          "type": "array",
+          "description": "Display data only -- §21.2: 'both are display data and neither may gate anything.' Never used client-side to enable/disable an action.",
+          "items": {
+            "type": "string",
+            "enum": ["auth", "migrations", "contracts", "secrets", "infra", "public_api", "data_layer", "dependencies"]
+          }
+        },
+        "filesChanged": {
+          "type": "integer",
+          "description": "The reviewing agent's own self-reported count -- display data only, §21.1/§21.2: never gates anything client-side; the server's own auto-approval eligibility check uses a SEPARATE, server-computed count, never this field."
+        },
+        "testsCoverage": {
+          "type": "string",
+          "enum": ["adequate", "insufficient", "skipped"]
+        },
+        "docsDrift": {
+          "type": "string",
+          "enum": ["none", "found", "skipped"]
+        },
+        "proposedShippable": {
+          "type": "string",
+          "enum": ["auto", "needs_human", "block"],
+          "description": "The model's own self-report -- advisory only, rendered for audit/transparency. shippable below is the authoritative value."
+        },
+        "shippable": {
+          "type": "string",
+          "enum": ["auto", "needs_human", "block"],
+          "description": "The AUTHORITATIVE, server-computed classification (review.ComputeShippable) -- the verdict badge renders THIS field, never proposedShippable, and is never recomputed or inferred client-side."
+        },
+        "digest": { "$ref": "#/$defs/Digest" },
+        "reviewPath": {
+          "type": ["string", "null"],
+          "description": "One of 'light'/'deep' when resolved (§26.3), unconstrained here for the same reason PostReviewVerdictRequest.counterReview is; null on a pre-§26.3 verdict or one whose turn never resolved a depth."
+        },
+        "counterReview": {
+          "type": ["string", "null"],
+          "description": "One of 'done'/'skipped' when present (§26.4); null on the light path or a pre-§26.4 verdict."
+        },
+        "factCheck": {
+          "type": ["string", "null"],
+          "description": "One of 'done'/'skipped' (§26.6); null only on a pre-§26.6 verdict."
+        },
+        "factCheckKilled": {
+          "type": "integer"
+        },
+        "headSha": {
+          "type": "string",
+          "description": "The commit this verdict was produced against (§21.1)."
+        },
+        "postedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "sessionId": {
+          "type": "string",
+          "format": "uuid"
+        }
+      }
+    },
+    "ReviewReadoutFinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One review_findings row's own full read-side REST wire shape -- extends ReviewFinding (the rebut/apply-suggestion response shape) with startLine/endLine, re-resolved at READ time (§22.1.1/§22.5) rather than stored, so a separate type from ReviewFinding rather than a breaking change to it.",
+      "required": [
+        "identityHash",
+        "sentinelKind",
+        "severity",
+        "filePath",
+        "line",
+        "description",
+        "suggestedFix",
+        "status",
+        "rebuttalText",
+        "startLine",
+        "endLine"
+      ],
+      "properties": {
+        "identityHash": { "type": "string" },
+        "sentinelKind": { "type": ["string", "null"] },
+        "severity": {
+          "type": "string",
+          "enum": ["low", "medium", "high"]
+        },
+        "filePath": { "type": "string" },
+        "line": { "type": ["integer", "null"] },
+        "description": { "type": "string" },
+        "suggestedFix": { "type": ["string", "null"] },
+        "status": {
+          "type": "string",
+          "enum": ["open", "rebutted", "fix_pending", "fix_open", "fix_merged", "fix_applied"]
+        },
+        "rebuttalText": { "type": ["string", "null"] },
+        "startLine": {
+          "type": "integer",
+          "description": "§22.1.1's own content-anchored position, re-resolved at read time against the diff at the latest verdict's own headSha. 0 means explicitly unanchored -- never a guessed line number; a client must render this distinctly from a real match, never silently as line 0."
+        },
+        "endLine": {
+          "type": "integer",
+          "description": "Paired with startLine -- see that field's own description."
+        }
+      }
+    },
+    "ReviewVerdictHistoryEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One prior verdict on this PR, summarized for the merge readout's own 'History' rail (§26.1 item 5) -- never the full ReviewReadoutVerdict shape, which only the latest verdict needs in full.",
+      "required": [
+        "postedAt",
+        "riskLevel",
+        "shippable",
+        "headSha"
+      ],
+      "properties": {
+        "postedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "riskLevel": {
+          "type": "string",
+          "enum": ["low", "medium", "high"]
+        },
+        "shippable": {
+          "type": "string",
+          "enum": ["auto", "needs_human", "block"]
+        },
+        "headSha": {
+          "type": "string"
+        }
+      }
+    },
+    "ReleaseManifestReadout": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "200 response body for GET /api/sessions/:id/release-manifest (§15.2/§15.3, §12.2 item 9's dedicated release-review screen) -- the release manifest check's own persisted, structured result (migrations/000097_release_manifest_checks.up.sql). computed=false when this release PR has never had a check persisted for it (a pre-existing PR, or a check whose own insert failed) -- an explicit sentinel distinct from a real, empty result, mirroring §21.1's own 'not yet computed' rollup convention; every other field is its own zero value in that case.",
+      "required": [
+        "repoFullName",
+        "prNumber",
+        "computed",
+        "constituentPrCount",
+        "coveragePartial",
+        "aggregateReviewTriggered",
+        "aggregateReviewTriggerReasons",
+        "findings",
+        "mergedPrs"
+      ],
+      "properties": {
+        "repoFullName": { "type": "string" },
+        "prNumber": { "type": "integer" },
+        "baseRef": { "type": ["string", "null"] },
+        "headRef": { "type": ["string", "null"] },
+        "computed": {
+          "type": "boolean",
+          "description": "False when no release_manifest_checks row has ever been persisted for this PR -- see this object's own top-level description."
+        },
+        "computedAt": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "When this check ran -- null when computed is false."
+        },
+        "constituentPrCount": {
+          "type": "integer",
+          "description": "How many pull requests this release cut examined -- §15.2: 'always runs', so this is always populated once computed is true, even when findings is empty."
+        },
+        "coveragePartial": {
+          "type": "boolean",
+          "description": "Whether this check's own coverage of the release was partial (a truncated compare range, or per-PR detail that could not be fetched) -- §15.2's own honesty discipline: an absent finding is not a completeness guarantee when true."
+        },
+        "aggregateReviewTriggered": {
+          "type": "boolean",
+          "description": "§15.3's own conditional composition-review trigger decision."
+        },
+        "aggregateReviewTriggerReasons": {
+          "type": "array",
+          "description": "Human-readable reasons the trigger above fired (§15.3's three OR-conditions) -- empty when aggregateReviewTriggered is false.",
+          "items": { "type": "string" }
+        },
+        "findings": {
+          "type": "array",
+          "description": "§15.2's own mechanical manifest findings -- an audit, never a risk verdict.",
+          "items": { "$ref": "#/$defs/ReleaseManifestFinding" }
+        },
+        "mergedPrs": {
+          "type": "array",
+          "description": "Every constituent pull request this check examined -- the manifest table's own row source.",
+          "items": { "$ref": "#/$defs/ReleaseManifestPR" }
+        }
+      }
+    },
+    "ReleaseManifestFinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One review.ManifestFinding's own REST wire shape (§15.2).",
+      "required": ["kind", "prNumber", "prTitle", "detail"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["unreviewed_merge", "red_at_merge", "unreviewed_revert"]
+        },
+        "prNumber": { "type": "integer" },
+        "prTitle": { "type": "string" },
+        "detail": {
+          "type": "string",
+          "description": "Short, optional elaboration specific to kind -- empty string when this finding carries none."
+        }
+      }
+    },
+    "ReleaseManifestPR": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One constituent pull request the release manifest check examined (§15.2/§15.3) -- the manifest table's own row shape.",
+      "required": [
+        "number",
+        "title",
+        "hasApprovingReview",
+        "mergedViaAdminOverride",
+        "ciConclusion",
+        "wasReverted",
+        "revertReviewState",
+        "revertedAfterMergeSeconds",
+        "hadManualConflictResolution",
+        "highRiskFlagged"
+      ],
+      "properties": {
+        "number": { "type": "integer" },
+        "title": { "type": "string" },
+        "hasApprovingReview": { "type": "boolean" },
+        "mergedViaAdminOverride": { "type": "boolean" },
+        "ciConclusion": {
+          "type": "string",
+          "enum": ["success", "failure", "unknown"],
+          "description": "This PR's own CI result AT THE COMMIT THAT MERGED, not its latest SHA (§15.2)."
+        },
+        "wasReverted": { "type": "boolean" },
+        "revertReviewState": {
+          "type": "string",
+          "enum": ["reviewed", "not_reviewed", "unknown"],
+          "description": "Meaningless when wasReverted is false. 'unknown' is a genuinely undetermined state, never treated as 'not_reviewed'."
+        },
+        "revertedAfterMergeSeconds": {
+          "type": ["integer", "null"],
+          "description": "Null when wasReverted is false, or the timing could not be determined."
+        },
+        "hadManualConflictResolution": { "type": "boolean" },
+        "highRiskFlagged": { "type": "boolean" }
+      }
+    },
     "RepoSettings": {
       "type": "object",
       "additionalProperties": false,

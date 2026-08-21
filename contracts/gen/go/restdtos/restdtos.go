@@ -3,6 +3,7 @@
 package restdtos
 
 import "encoding/json"
+import "errors"
 import "fmt"
 import "reflect"
 import "regexp"
@@ -5148,6 +5149,331 @@ func (j *RebutFindingRequest) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// One review.ManifestFinding's own REST wire shape (§15.2).
+type ReleaseManifestFinding struct {
+	// Short, optional elaboration specific to kind -- empty string when this finding
+	// carries none.
+	Detail string `json:"detail" yaml:"detail" mapstructure:"detail"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind ReleaseManifestFindingKind `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// PrNumber corresponds to the JSON schema field "prNumber".
+	PrNumber int `json:"prNumber" yaml:"prNumber" mapstructure:"prNumber"`
+
+	// PrTitle corresponds to the JSON schema field "prTitle".
+	PrTitle string `json:"prTitle" yaml:"prTitle" mapstructure:"prTitle"`
+}
+
+type ReleaseManifestFindingKind string
+
+const ReleaseManifestFindingKindRedAtMerge ReleaseManifestFindingKind = "red_at_merge"
+const ReleaseManifestFindingKindUnreviewedMerge ReleaseManifestFindingKind = "unreviewed_merge"
+const ReleaseManifestFindingKindUnreviewedRevert ReleaseManifestFindingKind = "unreviewed_revert"
+
+var enumValues_ReleaseManifestFindingKind = []interface{}{
+	"unreviewed_merge",
+	"red_at_merge",
+	"unreviewed_revert",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReleaseManifestFindingKind) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ReleaseManifestFindingKind {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ReleaseManifestFindingKind, v)
+	}
+	*j = ReleaseManifestFindingKind(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReleaseManifestFinding) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["detail"]; raw != nil && !ok {
+		return fmt.Errorf("field detail in ReleaseManifestFinding: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in ReleaseManifestFinding: required")
+	}
+	if _, ok := raw["prNumber"]; raw != nil && !ok {
+		return fmt.Errorf("field prNumber in ReleaseManifestFinding: required")
+	}
+	if _, ok := raw["prTitle"]; raw != nil && !ok {
+		return fmt.Errorf("field prTitle in ReleaseManifestFinding: required")
+	}
+	type Plain ReleaseManifestFinding
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ReleaseManifestFinding(plain)
+	return nil
+}
+
+// One constituent pull request the release manifest check examined (§15.2/§15.3)
+// -- the manifest table's own row shape.
+type ReleaseManifestPR struct {
+	// This PR's own CI result AT THE COMMIT THAT MERGED, not its latest SHA (§15.2).
+	CiConclusion ReleaseManifestPRCiConclusion `json:"ciConclusion" yaml:"ciConclusion" mapstructure:"ciConclusion"`
+
+	// HadManualConflictResolution corresponds to the JSON schema field
+	// "hadManualConflictResolution".
+	HadManualConflictResolution bool `json:"hadManualConflictResolution" yaml:"hadManualConflictResolution" mapstructure:"hadManualConflictResolution"`
+
+	// HasApprovingReview corresponds to the JSON schema field "hasApprovingReview".
+	HasApprovingReview bool `json:"hasApprovingReview" yaml:"hasApprovingReview" mapstructure:"hasApprovingReview"`
+
+	// HighRiskFlagged corresponds to the JSON schema field "highRiskFlagged".
+	HighRiskFlagged bool `json:"highRiskFlagged" yaml:"highRiskFlagged" mapstructure:"highRiskFlagged"`
+
+	// MergedViaAdminOverride corresponds to the JSON schema field
+	// "mergedViaAdminOverride".
+	MergedViaAdminOverride bool `json:"mergedViaAdminOverride" yaml:"mergedViaAdminOverride" mapstructure:"mergedViaAdminOverride"`
+
+	// Number corresponds to the JSON schema field "number".
+	Number int `json:"number" yaml:"number" mapstructure:"number"`
+
+	// Meaningless when wasReverted is false. 'unknown' is a genuinely undetermined
+	// state, never treated as 'not_reviewed'.
+	RevertReviewState ReleaseManifestPRRevertReviewState `json:"revertReviewState" yaml:"revertReviewState" mapstructure:"revertReviewState"`
+
+	// Null when wasReverted is false, or the timing could not be determined.
+	RevertedAfterMergeSeconds ReleaseManifestPRRevertedAfterMergeSeconds `json:"revertedAfterMergeSeconds" yaml:"revertedAfterMergeSeconds" mapstructure:"revertedAfterMergeSeconds"`
+
+	// Title corresponds to the JSON schema field "title".
+	Title string `json:"title" yaml:"title" mapstructure:"title"`
+
+	// WasReverted corresponds to the JSON schema field "wasReverted".
+	WasReverted bool `json:"wasReverted" yaml:"wasReverted" mapstructure:"wasReverted"`
+}
+
+type ReleaseManifestPRCiConclusion string
+
+const ReleaseManifestPRCiConclusionFailure ReleaseManifestPRCiConclusion = "failure"
+const ReleaseManifestPRCiConclusionSuccess ReleaseManifestPRCiConclusion = "success"
+const ReleaseManifestPRCiConclusionUnknown ReleaseManifestPRCiConclusion = "unknown"
+
+var enumValues_ReleaseManifestPRCiConclusion = []interface{}{
+	"success",
+	"failure",
+	"unknown",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReleaseManifestPRCiConclusion) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ReleaseManifestPRCiConclusion {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ReleaseManifestPRCiConclusion, v)
+	}
+	*j = ReleaseManifestPRCiConclusion(v)
+	return nil
+}
+
+type ReleaseManifestPRRevertReviewState string
+
+const ReleaseManifestPRRevertReviewStateNotReviewed ReleaseManifestPRRevertReviewState = "not_reviewed"
+const ReleaseManifestPRRevertReviewStateReviewed ReleaseManifestPRRevertReviewState = "reviewed"
+const ReleaseManifestPRRevertReviewStateUnknown ReleaseManifestPRRevertReviewState = "unknown"
+
+var enumValues_ReleaseManifestPRRevertReviewState = []interface{}{
+	"reviewed",
+	"not_reviewed",
+	"unknown",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReleaseManifestPRRevertReviewState) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ReleaseManifestPRRevertReviewState {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ReleaseManifestPRRevertReviewState, v)
+	}
+	*j = ReleaseManifestPRRevertReviewState(v)
+	return nil
+}
+
+// Null when wasReverted is false, or the timing could not be determined.
+type ReleaseManifestPRRevertedAfterMergeSeconds *int
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReleaseManifestPR) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["ciConclusion"]; raw != nil && !ok {
+		return fmt.Errorf("field ciConclusion in ReleaseManifestPR: required")
+	}
+	if _, ok := raw["hadManualConflictResolution"]; raw != nil && !ok {
+		return fmt.Errorf("field hadManualConflictResolution in ReleaseManifestPR: required")
+	}
+	if _, ok := raw["hasApprovingReview"]; raw != nil && !ok {
+		return fmt.Errorf("field hasApprovingReview in ReleaseManifestPR: required")
+	}
+	if _, ok := raw["highRiskFlagged"]; raw != nil && !ok {
+		return fmt.Errorf("field highRiskFlagged in ReleaseManifestPR: required")
+	}
+	if _, ok := raw["mergedViaAdminOverride"]; raw != nil && !ok {
+		return fmt.Errorf("field mergedViaAdminOverride in ReleaseManifestPR: required")
+	}
+	if _, ok := raw["number"]; raw != nil && !ok {
+		return fmt.Errorf("field number in ReleaseManifestPR: required")
+	}
+	if _, ok := raw["revertReviewState"]; raw != nil && !ok {
+		return fmt.Errorf("field revertReviewState in ReleaseManifestPR: required")
+	}
+	if _, ok := raw["revertedAfterMergeSeconds"]; raw != nil && !ok {
+		return fmt.Errorf("field revertedAfterMergeSeconds in ReleaseManifestPR: required")
+	}
+	if _, ok := raw["title"]; raw != nil && !ok {
+		return fmt.Errorf("field title in ReleaseManifestPR: required")
+	}
+	if _, ok := raw["wasReverted"]; raw != nil && !ok {
+		return fmt.Errorf("field wasReverted in ReleaseManifestPR: required")
+	}
+	type Plain ReleaseManifestPR
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ReleaseManifestPR(plain)
+	return nil
+}
+
+// 200 response body for GET /api/sessions/:id/release-manifest (§15.2/§15.3, §12.2
+// item 9's dedicated release-review screen) -- the release manifest check's own
+// persisted, structured result (migrations/000097_release_manifest_checks.up.sql).
+// computed=false when this release PR has never had a check persisted for it (a
+// pre-existing PR, or a check whose own insert failed) -- an explicit sentinel
+// distinct from a real, empty result, mirroring §21.1's own 'not yet computed'
+// rollup convention; every other field is its own zero value in that case.
+type ReleaseManifestReadout struct {
+	// Human-readable reasons the trigger above fired (§15.3's three OR-conditions) --
+	// empty when aggregateReviewTriggered is false.
+	AggregateReviewTriggerReasons []string `json:"aggregateReviewTriggerReasons" yaml:"aggregateReviewTriggerReasons" mapstructure:"aggregateReviewTriggerReasons"`
+
+	// §15.3's own conditional composition-review trigger decision.
+	AggregateReviewTriggered bool `json:"aggregateReviewTriggered" yaml:"aggregateReviewTriggered" mapstructure:"aggregateReviewTriggered"`
+
+	// BaseRef corresponds to the JSON schema field "baseRef".
+	BaseRef ReleaseManifestReadoutBaseRef `json:"baseRef,omitempty,omitzero" yaml:"baseRef,omitempty" mapstructure:"baseRef,omitempty"`
+
+	// False when no release_manifest_checks row has ever been persisted for this PR
+	// -- see this object's own top-level description.
+	Computed bool `json:"computed" yaml:"computed" mapstructure:"computed"`
+
+	// When this check ran -- null when computed is false.
+	ComputedAt ReleaseManifestReadoutComputedAt `json:"computedAt,omitempty,omitzero" yaml:"computedAt,omitempty" mapstructure:"computedAt,omitempty"`
+
+	// How many pull requests this release cut examined -- §15.2: 'always runs', so
+	// this is always populated once computed is true, even when findings is empty.
+	ConstituentPrCount int `json:"constituentPrCount" yaml:"constituentPrCount" mapstructure:"constituentPrCount"`
+
+	// Whether this check's own coverage of the release was partial (a truncated
+	// compare range, or per-PR detail that could not be fetched) -- §15.2's own
+	// honesty discipline: an absent finding is not a completeness guarantee when
+	// true.
+	CoveragePartial bool `json:"coveragePartial" yaml:"coveragePartial" mapstructure:"coveragePartial"`
+
+	// §15.2's own mechanical manifest findings -- an audit, never a risk verdict.
+	Findings []ReleaseManifestFinding `json:"findings" yaml:"findings" mapstructure:"findings"`
+
+	// HeadRef corresponds to the JSON schema field "headRef".
+	HeadRef ReleaseManifestReadoutHeadRef `json:"headRef,omitempty,omitzero" yaml:"headRef,omitempty" mapstructure:"headRef,omitempty"`
+
+	// Every constituent pull request this check examined -- the manifest table's own
+	// row source.
+	MergedPrs []ReleaseManifestPR `json:"mergedPrs" yaml:"mergedPrs" mapstructure:"mergedPrs"`
+
+	// PrNumber corresponds to the JSON schema field "prNumber".
+	PrNumber int `json:"prNumber" yaml:"prNumber" mapstructure:"prNumber"`
+
+	// RepoFullName corresponds to the JSON schema field "repoFullName".
+	RepoFullName string `json:"repoFullName" yaml:"repoFullName" mapstructure:"repoFullName"`
+}
+
+type ReleaseManifestReadoutBaseRef *string
+
+// When this check ran -- null when computed is false.
+type ReleaseManifestReadoutComputedAt *time.Time
+
+type ReleaseManifestReadoutHeadRef *string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReleaseManifestReadout) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["aggregateReviewTriggerReasons"]; raw != nil && !ok {
+		return fmt.Errorf("field aggregateReviewTriggerReasons in ReleaseManifestReadout: required")
+	}
+	if _, ok := raw["aggregateReviewTriggered"]; raw != nil && !ok {
+		return fmt.Errorf("field aggregateReviewTriggered in ReleaseManifestReadout: required")
+	}
+	if _, ok := raw["computed"]; raw != nil && !ok {
+		return fmt.Errorf("field computed in ReleaseManifestReadout: required")
+	}
+	if _, ok := raw["constituentPrCount"]; raw != nil && !ok {
+		return fmt.Errorf("field constituentPrCount in ReleaseManifestReadout: required")
+	}
+	if _, ok := raw["coveragePartial"]; raw != nil && !ok {
+		return fmt.Errorf("field coveragePartial in ReleaseManifestReadout: required")
+	}
+	if _, ok := raw["findings"]; raw != nil && !ok {
+		return fmt.Errorf("field findings in ReleaseManifestReadout: required")
+	}
+	if _, ok := raw["mergedPrs"]; raw != nil && !ok {
+		return fmt.Errorf("field mergedPrs in ReleaseManifestReadout: required")
+	}
+	if _, ok := raw["prNumber"]; raw != nil && !ok {
+		return fmt.Errorf("field prNumber in ReleaseManifestReadout: required")
+	}
+	if _, ok := raw["repoFullName"]; raw != nil && !ok {
+		return fmt.Errorf("field repoFullName in ReleaseManifestReadout: required")
+	}
+	type Plain ReleaseManifestReadout
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ReleaseManifestReadout(plain)
+	return nil
+}
+
 // GET/PUT /api/repos/{owner}/{repo}/settings response body (§8.2/§21.2) -- an
 // admin, per-repo policy-flag row (migrations/000044_repo_settings.up.sql).
 // Deliberately a small, extensible shape: §21's auto-merge toggle, §24's
@@ -5938,6 +6264,830 @@ func (j *ReviewFinding) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = ReviewFinding(plain)
+	return nil
+}
+
+// 200 response body for GET /api/sessions/:id/review (§26.1's merge readout, §12.2
+// item 2) -- the code-review view's own read model: the PR this session reviews,
+// its latest posted verdict (null if none has ever been posted), every finding
+// ever posted for it (§26.1's own collapsed appendix), and a bounded verdict
+// history (§26.1 item 5). Server-computed throughout; nothing here is ever
+// re-derived client-side.
+type ReviewReadout struct {
+	// The authoring session's own most recent non-'none' builder epistemic-check
+	// outcome (§20.1/§20.2), when this PR was authored by a Narvi session -- one of
+	// 'minor'/'strong' when present (internal/domain/turn.EpistemicOutcome), surfaced
+	// as a subtle 'Heads-up' indicator; null when no such outcome was ever recorded,
+	// or the reviewed PR was not authored by a Narvi session at all. Never 'none'
+	// itself -- a turn that reported 'none' carries nothing worth surfacing,
+	// indistinguishable here from never having reported anything.
+	EpistemicOutcome ReviewReadoutEpistemicOutcome `json:"epistemicOutcome,omitempty,omitzero" yaml:"epistemicOutcome,omitempty" mapstructure:"epistemicOutcome,omitempty"`
+
+	// Every finding ever posted for this PR, any status, oldest-first -- §26.1's own
+	// collapsed appendix. Each finding's startLine/endLine are re-resolved at READ
+	// time against the diff at latestVerdict's own headSha (§22.1.1/§22.5), never a
+	// stored, potentially-stale line number.
+	Findings []ReviewReadoutFinding `json:"findings" yaml:"findings" mapstructure:"findings"`
+
+	// This PR's own verdict history, newest first, bounded -- the rail's own
+	// 'History' panel (§26.1 item 5).
+	History []ReviewVerdictHistoryEntry `json:"history" yaml:"history" mapstructure:"history"`
+
+	// Null when no verdict has ever been posted for this PR -- an honest 'not
+	// reviewed yet' state, never a fabricated placeholder verdict.
+	LatestVerdict *ReviewReadoutLatestVerdict `json:"latestVerdict,omitempty,omitzero" yaml:"latestVerdict,omitempty" mapstructure:"latestVerdict,omitempty"`
+
+	// PrNumber corresponds to the JSON schema field "prNumber".
+	PrNumber int `json:"prNumber" yaml:"prNumber" mapstructure:"prNumber"`
+
+	// One of 'open'/'closed'/'merged' when the live GitHub fetch above succeeded
+	// (deliberately modeled as an unconstrained nullable string, mirroring
+	// ReviewReadoutVerdict.reviewPath's own identical precedent below) -- null on the
+	// same degraded-fetch condition as prTitle.
+	PrState ReviewReadoutPrState `json:"prState,omitempty,omitzero" yaml:"prState,omitempty" mapstructure:"prState,omitempty"`
+
+	// The pull request's own current title, fetched live from GitHub -- null when
+	// that fetch failed (a degraded, never-fatal read, mirroring
+	// internal/app/reviewcontext.Fetch's own established 'a failed fetch degrades
+	// gracefully' posture).
+	PrTitle ReviewReadoutPrTitle `json:"prTitle,omitempty,omitzero" yaml:"prTitle,omitempty" mapstructure:"prTitle,omitempty"`
+
+	// owner/repo, resolved server-side from github_pr_sessions.
+	RepoFullName string `json:"repoFullName" yaml:"repoFullName" mapstructure:"repoFullName"`
+}
+
+// The authoring session's own most recent non-'none' builder epistemic-check
+// outcome (§20.1/§20.2), when this PR was authored by a Narvi session -- one of
+// 'minor'/'strong' when present (internal/domain/turn.EpistemicOutcome), surfaced
+// as a subtle 'Heads-up' indicator; null when no such outcome was ever recorded,
+// or the reviewed PR was not authored by a Narvi session at all. Never 'none'
+// itself -- a turn that reported 'none' carries nothing worth surfacing,
+// indistinguishable here from never having reported anything.
+type ReviewReadoutEpistemicOutcome *string
+
+// One review_findings row's own full read-side REST wire shape -- extends
+// ReviewFinding (the rebut/apply-suggestion response shape) with
+// startLine/endLine, re-resolved at READ time (§22.1.1/§22.5) rather than stored,
+// so a separate type from ReviewFinding rather than a breaking change to it.
+type ReviewReadoutFinding struct {
+	// Description corresponds to the JSON schema field "description".
+	Description string `json:"description" yaml:"description" mapstructure:"description"`
+
+	// Paired with startLine -- see that field's own description.
+	EndLine int `json:"endLine" yaml:"endLine" mapstructure:"endLine"`
+
+	// FilePath corresponds to the JSON schema field "filePath".
+	FilePath string `json:"filePath" yaml:"filePath" mapstructure:"filePath"`
+
+	// IdentityHash corresponds to the JSON schema field "identityHash".
+	IdentityHash string `json:"identityHash" yaml:"identityHash" mapstructure:"identityHash"`
+
+	// Line corresponds to the JSON schema field "line".
+	Line ReviewReadoutFindingLine `json:"line" yaml:"line" mapstructure:"line"`
+
+	// RebuttalText corresponds to the JSON schema field "rebuttalText".
+	RebuttalText ReviewReadoutFindingRebuttalText `json:"rebuttalText" yaml:"rebuttalText" mapstructure:"rebuttalText"`
+
+	// SentinelKind corresponds to the JSON schema field "sentinelKind".
+	SentinelKind ReviewReadoutFindingSentinelKind `json:"sentinelKind" yaml:"sentinelKind" mapstructure:"sentinelKind"`
+
+	// Severity corresponds to the JSON schema field "severity".
+	Severity ReviewReadoutFindingSeverity `json:"severity" yaml:"severity" mapstructure:"severity"`
+
+	// §22.1.1's own content-anchored position, re-resolved at read time against the
+	// diff at the latest verdict's own headSha. 0 means explicitly unanchored --
+	// never a guessed line number; a client must render this distinctly from a real
+	// match, never silently as line 0.
+	StartLine int `json:"startLine" yaml:"startLine" mapstructure:"startLine"`
+
+	// Status corresponds to the JSON schema field "status".
+	Status ReviewReadoutFindingStatus `json:"status" yaml:"status" mapstructure:"status"`
+
+	// SuggestedFix corresponds to the JSON schema field "suggestedFix".
+	SuggestedFix ReviewReadoutFindingSuggestedFix `json:"suggestedFix" yaml:"suggestedFix" mapstructure:"suggestedFix"`
+}
+
+type ReviewReadoutFindingLine *int
+
+type ReviewReadoutFindingRebuttalText *string
+
+type ReviewReadoutFindingSentinelKind *string
+
+type ReviewReadoutFindingSeverity string
+
+const ReviewReadoutFindingSeverityHigh ReviewReadoutFindingSeverity = "high"
+const ReviewReadoutFindingSeverityLow ReviewReadoutFindingSeverity = "low"
+const ReviewReadoutFindingSeverityMedium ReviewReadoutFindingSeverity = "medium"
+
+var enumValues_ReviewReadoutFindingSeverity = []interface{}{
+	"low",
+	"medium",
+	"high",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewReadoutFindingSeverity) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ReviewReadoutFindingSeverity {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ReviewReadoutFindingSeverity, v)
+	}
+	*j = ReviewReadoutFindingSeverity(v)
+	return nil
+}
+
+type ReviewReadoutFindingStatus string
+
+const ReviewReadoutFindingStatusFixApplied ReviewReadoutFindingStatus = "fix_applied"
+const ReviewReadoutFindingStatusFixMerged ReviewReadoutFindingStatus = "fix_merged"
+const ReviewReadoutFindingStatusFixOpen ReviewReadoutFindingStatus = "fix_open"
+const ReviewReadoutFindingStatusFixPending ReviewReadoutFindingStatus = "fix_pending"
+const ReviewReadoutFindingStatusOpen ReviewReadoutFindingStatus = "open"
+const ReviewReadoutFindingStatusRebutted ReviewReadoutFindingStatus = "rebutted"
+
+var enumValues_ReviewReadoutFindingStatus = []interface{}{
+	"open",
+	"rebutted",
+	"fix_pending",
+	"fix_open",
+	"fix_merged",
+	"fix_applied",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewReadoutFindingStatus) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ReviewReadoutFindingStatus {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ReviewReadoutFindingStatus, v)
+	}
+	*j = ReviewReadoutFindingStatus(v)
+	return nil
+}
+
+type ReviewReadoutFindingSuggestedFix *string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewReadoutFinding) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["description"]; raw != nil && !ok {
+		return fmt.Errorf("field description in ReviewReadoutFinding: required")
+	}
+	if _, ok := raw["endLine"]; raw != nil && !ok {
+		return fmt.Errorf("field endLine in ReviewReadoutFinding: required")
+	}
+	if _, ok := raw["filePath"]; raw != nil && !ok {
+		return fmt.Errorf("field filePath in ReviewReadoutFinding: required")
+	}
+	if _, ok := raw["identityHash"]; raw != nil && !ok {
+		return fmt.Errorf("field identityHash in ReviewReadoutFinding: required")
+	}
+	if _, ok := raw["line"]; raw != nil && !ok {
+		return fmt.Errorf("field line in ReviewReadoutFinding: required")
+	}
+	if _, ok := raw["rebuttalText"]; raw != nil && !ok {
+		return fmt.Errorf("field rebuttalText in ReviewReadoutFinding: required")
+	}
+	if _, ok := raw["sentinelKind"]; raw != nil && !ok {
+		return fmt.Errorf("field sentinelKind in ReviewReadoutFinding: required")
+	}
+	if _, ok := raw["severity"]; raw != nil && !ok {
+		return fmt.Errorf("field severity in ReviewReadoutFinding: required")
+	}
+	if _, ok := raw["startLine"]; raw != nil && !ok {
+		return fmt.Errorf("field startLine in ReviewReadoutFinding: required")
+	}
+	if _, ok := raw["status"]; raw != nil && !ok {
+		return fmt.Errorf("field status in ReviewReadoutFinding: required")
+	}
+	if _, ok := raw["suggestedFix"]; raw != nil && !ok {
+		return fmt.Errorf("field suggestedFix in ReviewReadoutFinding: required")
+	}
+	type Plain ReviewReadoutFinding
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ReviewReadoutFinding(plain)
+	return nil
+}
+
+// Null when no verdict has ever been posted for this PR -- an honest 'not reviewed
+// yet' state, never a fabricated placeholder verdict.
+type ReviewReadoutLatestVerdict struct {
+	// Display data only -- §21.2: 'both are display data and neither may gate
+	// anything.' Never used client-side to enable/disable an action.
+	BlastRadius []ReviewReadoutVerdictBlastRadiusElem `json:"blastRadius" yaml:"blastRadius" mapstructure:"blastRadius"`
+
+	// One of 'done'/'skipped' when present (§26.4); null on the light path or a
+	// pre-§26.4 verdict.
+	CounterReview ReviewReadoutVerdictCounterReview `json:"counterReview,omitempty,omitzero" yaml:"counterReview,omitempty" mapstructure:"counterReview,omitempty"`
+
+	// Digest corresponds to the JSON schema field "digest".
+	Digest Digest `json:"digest" yaml:"digest" mapstructure:"digest"`
+
+	// DocsDrift corresponds to the JSON schema field "docsDrift".
+	DocsDrift ReviewReadoutVerdictDocsDrift `json:"docsDrift" yaml:"docsDrift" mapstructure:"docsDrift"`
+
+	// One of 'done'/'skipped' (§26.6); null only on a pre-§26.6 verdict.
+	FactCheck ReviewReadoutVerdictFactCheck `json:"factCheck" yaml:"factCheck" mapstructure:"factCheck"`
+
+	// FactCheckKilled corresponds to the JSON schema field "factCheckKilled".
+	FactCheckKilled int `json:"factCheckKilled" yaml:"factCheckKilled" mapstructure:"factCheckKilled"`
+
+	// The reviewing agent's own self-reported count -- display data only,
+	// §21.1/§21.2: never gates anything client-side; the server's own auto-approval
+	// eligibility check uses a SEPARATE, server-computed count, never this field.
+	FilesChanged int `json:"filesChanged" yaml:"filesChanged" mapstructure:"filesChanged"`
+
+	// The commit this verdict was produced against (§21.1).
+	HeadSha string `json:"headSha" yaml:"headSha" mapstructure:"headSha"`
+
+	// PostedAt corresponds to the JSON schema field "postedAt".
+	PostedAt time.Time `json:"postedAt" yaml:"postedAt" mapstructure:"postedAt"`
+
+	// Premise corresponds to the JSON schema field "premise".
+	Premise ReviewReadoutVerdictPremise `json:"premise" yaml:"premise" mapstructure:"premise"`
+
+	// The model's own self-report -- advisory only, rendered for audit/transparency.
+	// shippable below is the authoritative value.
+	ProposedShippable ReviewReadoutVerdictProposedShippable `json:"proposedShippable" yaml:"proposedShippable" mapstructure:"proposedShippable"`
+
+	// One of 'light'/'deep' when resolved (§26.3), unconstrained here for the same
+	// reason PostReviewVerdictRequest.counterReview is; null on a pre-§26.3 verdict
+	// or one whose turn never resolved a depth.
+	ReviewPath ReviewReadoutVerdictReviewPath `json:"reviewPath,omitempty,omitzero" yaml:"reviewPath,omitempty" mapstructure:"reviewPath,omitempty"`
+
+	// RiskLevel corresponds to the JSON schema field "riskLevel".
+	RiskLevel ReviewReadoutVerdictRiskLevel `json:"riskLevel" yaml:"riskLevel" mapstructure:"riskLevel"`
+
+	// SessionId corresponds to the JSON schema field "sessionId".
+	SessionId string `json:"sessionId" yaml:"sessionId" mapstructure:"sessionId"`
+
+	// The AUTHORITATIVE, server-computed classification (review.ComputeShippable) --
+	// the verdict badge renders THIS field, never proposedShippable, and is never
+	// recomputed or inferred client-side.
+	Shippable ReviewReadoutVerdictShippable `json:"shippable" yaml:"shippable" mapstructure:"shippable"`
+
+	// TestsCoverage corresponds to the JSON schema field "testsCoverage".
+	TestsCoverage ReviewReadoutVerdictTestsCoverage `json:"testsCoverage" yaml:"testsCoverage" mapstructure:"testsCoverage"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewReadoutLatestVerdict) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	var reviewReadoutLatestVerdict_0 ReviewReadoutLatestVerdict_0
+	var errs []error
+	if err := reviewReadoutLatestVerdict_0.UnmarshalJSON(value); err != nil {
+		errs = append(errs, err)
+	}
+	if len(errs) == 1 {
+		return fmt.Errorf("all validators failed: %s", errors.Join(errs...))
+	}
+	type Plain ReviewReadoutLatestVerdict
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ReviewReadoutLatestVerdict(plain)
+	return nil
+}
+
+// One of 'open'/'closed'/'merged' when the live GitHub fetch above succeeded
+// (deliberately modeled as an unconstrained nullable string, mirroring
+// ReviewReadoutVerdict.reviewPath's own identical precedent below) -- null on the
+// same degraded-fetch condition as prTitle.
+type ReviewReadoutPrState *string
+
+// The pull request's own current title, fetched live from GitHub -- null when that
+// fetch failed (a degraded, never-fatal read, mirroring
+// internal/app/reviewcontext.Fetch's own established 'a failed fetch degrades
+// gracefully' posture).
+type ReviewReadoutPrTitle *string
+
+// One review_verdicts row's own full REST wire shape (§21.1/§26.1) -- the merge
+// readout's own header + digest content. Mirrors PostReviewVerdictRequest's own
+// fields (the posting shape) plus the persistence-layer facts that request never
+// carries: the AUTHORITATIVE server-computed shippable (never proposedShippable),
+// headSha, postedAt, and sessionId.
+type ReviewReadoutVerdict struct {
+	// Display data only -- §21.2: 'both are display data and neither may gate
+	// anything.' Never used client-side to enable/disable an action.
+	BlastRadius []ReviewReadoutVerdictBlastRadiusElem `json:"blastRadius" yaml:"blastRadius" mapstructure:"blastRadius"`
+
+	// One of 'done'/'skipped' when present (§26.4); null on the light path or a
+	// pre-§26.4 verdict.
+	CounterReview ReviewReadoutVerdictCounterReview `json:"counterReview,omitempty,omitzero" yaml:"counterReview,omitempty" mapstructure:"counterReview,omitempty"`
+
+	// Digest corresponds to the JSON schema field "digest".
+	Digest Digest `json:"digest" yaml:"digest" mapstructure:"digest"`
+
+	// DocsDrift corresponds to the JSON schema field "docsDrift".
+	DocsDrift ReviewReadoutVerdictDocsDrift `json:"docsDrift" yaml:"docsDrift" mapstructure:"docsDrift"`
+
+	// One of 'done'/'skipped' (§26.6); null only on a pre-§26.6 verdict.
+	FactCheck ReviewReadoutVerdictFactCheck `json:"factCheck" yaml:"factCheck" mapstructure:"factCheck"`
+
+	// FactCheckKilled corresponds to the JSON schema field "factCheckKilled".
+	FactCheckKilled int `json:"factCheckKilled" yaml:"factCheckKilled" mapstructure:"factCheckKilled"`
+
+	// The reviewing agent's own self-reported count -- display data only,
+	// §21.1/§21.2: never gates anything client-side; the server's own auto-approval
+	// eligibility check uses a SEPARATE, server-computed count, never this field.
+	FilesChanged int `json:"filesChanged" yaml:"filesChanged" mapstructure:"filesChanged"`
+
+	// The commit this verdict was produced against (§21.1).
+	HeadSha string `json:"headSha" yaml:"headSha" mapstructure:"headSha"`
+
+	// PostedAt corresponds to the JSON schema field "postedAt".
+	PostedAt time.Time `json:"postedAt" yaml:"postedAt" mapstructure:"postedAt"`
+
+	// Premise corresponds to the JSON schema field "premise".
+	Premise ReviewReadoutVerdictPremise `json:"premise" yaml:"premise" mapstructure:"premise"`
+
+	// The model's own self-report -- advisory only, rendered for audit/transparency.
+	// shippable below is the authoritative value.
+	ProposedShippable ReviewReadoutVerdictProposedShippable `json:"proposedShippable" yaml:"proposedShippable" mapstructure:"proposedShippable"`
+
+	// One of 'light'/'deep' when resolved (§26.3), unconstrained here for the same
+	// reason PostReviewVerdictRequest.counterReview is; null on a pre-§26.3 verdict
+	// or one whose turn never resolved a depth.
+	ReviewPath ReviewReadoutVerdictReviewPath `json:"reviewPath,omitempty,omitzero" yaml:"reviewPath,omitempty" mapstructure:"reviewPath,omitempty"`
+
+	// RiskLevel corresponds to the JSON schema field "riskLevel".
+	RiskLevel ReviewReadoutVerdictRiskLevel `json:"riskLevel" yaml:"riskLevel" mapstructure:"riskLevel"`
+
+	// SessionId corresponds to the JSON schema field "sessionId".
+	SessionId string `json:"sessionId" yaml:"sessionId" mapstructure:"sessionId"`
+
+	// The AUTHORITATIVE, server-computed classification (review.ComputeShippable) --
+	// the verdict badge renders THIS field, never proposedShippable, and is never
+	// recomputed or inferred client-side.
+	Shippable ReviewReadoutVerdictShippable `json:"shippable" yaml:"shippable" mapstructure:"shippable"`
+
+	// TestsCoverage corresponds to the JSON schema field "testsCoverage".
+	TestsCoverage ReviewReadoutVerdictTestsCoverage `json:"testsCoverage" yaml:"testsCoverage" mapstructure:"testsCoverage"`
+}
+
+type ReviewReadoutVerdictBlastRadiusElem string
+
+const ReviewReadoutVerdictBlastRadiusElemAuth ReviewReadoutVerdictBlastRadiusElem = "auth"
+const ReviewReadoutVerdictBlastRadiusElemContracts ReviewReadoutVerdictBlastRadiusElem = "contracts"
+const ReviewReadoutVerdictBlastRadiusElemDataLayer ReviewReadoutVerdictBlastRadiusElem = "data_layer"
+const ReviewReadoutVerdictBlastRadiusElemDependencies ReviewReadoutVerdictBlastRadiusElem = "dependencies"
+const ReviewReadoutVerdictBlastRadiusElemInfra ReviewReadoutVerdictBlastRadiusElem = "infra"
+const ReviewReadoutVerdictBlastRadiusElemMigrations ReviewReadoutVerdictBlastRadiusElem = "migrations"
+const ReviewReadoutVerdictBlastRadiusElemPublicApi ReviewReadoutVerdictBlastRadiusElem = "public_api"
+const ReviewReadoutVerdictBlastRadiusElemSecrets ReviewReadoutVerdictBlastRadiusElem = "secrets"
+
+var enumValues_ReviewReadoutVerdictBlastRadiusElem = []interface{}{
+	"auth",
+	"migrations",
+	"contracts",
+	"secrets",
+	"infra",
+	"public_api",
+	"data_layer",
+	"dependencies",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewReadoutVerdictBlastRadiusElem) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ReviewReadoutVerdictBlastRadiusElem {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ReviewReadoutVerdictBlastRadiusElem, v)
+	}
+	*j = ReviewReadoutVerdictBlastRadiusElem(v)
+	return nil
+}
+
+// One of 'done'/'skipped' when present (§26.4); null on the light path or a
+// pre-§26.4 verdict.
+type ReviewReadoutVerdictCounterReview *string
+
+type ReviewReadoutVerdictDocsDrift string
+
+const ReviewReadoutVerdictDocsDriftFound ReviewReadoutVerdictDocsDrift = "found"
+const ReviewReadoutVerdictDocsDriftNone ReviewReadoutVerdictDocsDrift = "none"
+const ReviewReadoutVerdictDocsDriftSkipped ReviewReadoutVerdictDocsDrift = "skipped"
+
+var enumValues_ReviewReadoutVerdictDocsDrift = []interface{}{
+	"none",
+	"found",
+	"skipped",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewReadoutVerdictDocsDrift) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ReviewReadoutVerdictDocsDrift {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ReviewReadoutVerdictDocsDrift, v)
+	}
+	*j = ReviewReadoutVerdictDocsDrift(v)
+	return nil
+}
+
+// One of 'done'/'skipped' (§26.6); null only on a pre-§26.6 verdict.
+type ReviewReadoutVerdictFactCheck *string
+
+type ReviewReadoutVerdictPremise string
+
+const ReviewReadoutVerdictPremiseNotAPr ReviewReadoutVerdictPremise = "not_a_pr"
+const ReviewReadoutVerdictPremiseOk ReviewReadoutVerdictPremise = "ok"
+const ReviewReadoutVerdictPremiseQuestionable ReviewReadoutVerdictPremise = "questionable"
+
+var enumValues_ReviewReadoutVerdictPremise = []interface{}{
+	"ok",
+	"questionable",
+	"not_a_pr",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewReadoutVerdictPremise) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ReviewReadoutVerdictPremise {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ReviewReadoutVerdictPremise, v)
+	}
+	*j = ReviewReadoutVerdictPremise(v)
+	return nil
+}
+
+type ReviewReadoutVerdictProposedShippable string
+
+const ReviewReadoutVerdictProposedShippableAuto ReviewReadoutVerdictProposedShippable = "auto"
+const ReviewReadoutVerdictProposedShippableBlock ReviewReadoutVerdictProposedShippable = "block"
+const ReviewReadoutVerdictProposedShippableNeedsHuman ReviewReadoutVerdictProposedShippable = "needs_human"
+
+var enumValues_ReviewReadoutVerdictProposedShippable = []interface{}{
+	"auto",
+	"needs_human",
+	"block",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewReadoutVerdictProposedShippable) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ReviewReadoutVerdictProposedShippable {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ReviewReadoutVerdictProposedShippable, v)
+	}
+	*j = ReviewReadoutVerdictProposedShippable(v)
+	return nil
+}
+
+// One of 'light'/'deep' when resolved (§26.3), unconstrained here for the same
+// reason PostReviewVerdictRequest.counterReview is; null on a pre-§26.3 verdict or
+// one whose turn never resolved a depth.
+type ReviewReadoutVerdictReviewPath *string
+
+type ReviewReadoutVerdictRiskLevel string
+
+const ReviewReadoutVerdictRiskLevelHigh ReviewReadoutVerdictRiskLevel = "high"
+const ReviewReadoutVerdictRiskLevelLow ReviewReadoutVerdictRiskLevel = "low"
+const ReviewReadoutVerdictRiskLevelMedium ReviewReadoutVerdictRiskLevel = "medium"
+
+var enumValues_ReviewReadoutVerdictRiskLevel = []interface{}{
+	"low",
+	"medium",
+	"high",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewReadoutVerdictRiskLevel) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ReviewReadoutVerdictRiskLevel {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ReviewReadoutVerdictRiskLevel, v)
+	}
+	*j = ReviewReadoutVerdictRiskLevel(v)
+	return nil
+}
+
+type ReviewReadoutVerdictShippable string
+
+const ReviewReadoutVerdictShippableAuto ReviewReadoutVerdictShippable = "auto"
+const ReviewReadoutVerdictShippableBlock ReviewReadoutVerdictShippable = "block"
+const ReviewReadoutVerdictShippableNeedsHuman ReviewReadoutVerdictShippable = "needs_human"
+
+var enumValues_ReviewReadoutVerdictShippable = []interface{}{
+	"auto",
+	"needs_human",
+	"block",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewReadoutVerdictShippable) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ReviewReadoutVerdictShippable {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ReviewReadoutVerdictShippable, v)
+	}
+	*j = ReviewReadoutVerdictShippable(v)
+	return nil
+}
+
+type ReviewReadoutVerdictTestsCoverage string
+
+const ReviewReadoutVerdictTestsCoverageAdequate ReviewReadoutVerdictTestsCoverage = "adequate"
+const ReviewReadoutVerdictTestsCoverageInsufficient ReviewReadoutVerdictTestsCoverage = "insufficient"
+const ReviewReadoutVerdictTestsCoverageSkipped ReviewReadoutVerdictTestsCoverage = "skipped"
+
+var enumValues_ReviewReadoutVerdictTestsCoverage = []interface{}{
+	"adequate",
+	"insufficient",
+	"skipped",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewReadoutVerdictTestsCoverage) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ReviewReadoutVerdictTestsCoverage {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ReviewReadoutVerdictTestsCoverage, v)
+	}
+	*j = ReviewReadoutVerdictTestsCoverage(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewReadoutVerdict) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["blastRadius"]; raw != nil && !ok {
+		return fmt.Errorf("field blastRadius in ReviewReadoutVerdict: required")
+	}
+	if _, ok := raw["digest"]; raw != nil && !ok {
+		return fmt.Errorf("field digest in ReviewReadoutVerdict: required")
+	}
+	if _, ok := raw["docsDrift"]; raw != nil && !ok {
+		return fmt.Errorf("field docsDrift in ReviewReadoutVerdict: required")
+	}
+	if _, ok := raw["factCheck"]; raw != nil && !ok {
+		return fmt.Errorf("field factCheck in ReviewReadoutVerdict: required")
+	}
+	if _, ok := raw["factCheckKilled"]; raw != nil && !ok {
+		return fmt.Errorf("field factCheckKilled in ReviewReadoutVerdict: required")
+	}
+	if _, ok := raw["filesChanged"]; raw != nil && !ok {
+		return fmt.Errorf("field filesChanged in ReviewReadoutVerdict: required")
+	}
+	if _, ok := raw["headSha"]; raw != nil && !ok {
+		return fmt.Errorf("field headSha in ReviewReadoutVerdict: required")
+	}
+	if _, ok := raw["postedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field postedAt in ReviewReadoutVerdict: required")
+	}
+	if _, ok := raw["premise"]; raw != nil && !ok {
+		return fmt.Errorf("field premise in ReviewReadoutVerdict: required")
+	}
+	if _, ok := raw["proposedShippable"]; raw != nil && !ok {
+		return fmt.Errorf("field proposedShippable in ReviewReadoutVerdict: required")
+	}
+	if _, ok := raw["riskLevel"]; raw != nil && !ok {
+		return fmt.Errorf("field riskLevel in ReviewReadoutVerdict: required")
+	}
+	if _, ok := raw["sessionId"]; raw != nil && !ok {
+		return fmt.Errorf("field sessionId in ReviewReadoutVerdict: required")
+	}
+	if _, ok := raw["shippable"]; raw != nil && !ok {
+		return fmt.Errorf("field shippable in ReviewReadoutVerdict: required")
+	}
+	if _, ok := raw["testsCoverage"]; raw != nil && !ok {
+		return fmt.Errorf("field testsCoverage in ReviewReadoutVerdict: required")
+	}
+	type Plain ReviewReadoutVerdict
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ReviewReadoutVerdict(plain)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewReadout) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["findings"]; raw != nil && !ok {
+		return fmt.Errorf("field findings in ReviewReadout: required")
+	}
+	if _, ok := raw["history"]; raw != nil && !ok {
+		return fmt.Errorf("field history in ReviewReadout: required")
+	}
+	if _, ok := raw["prNumber"]; raw != nil && !ok {
+		return fmt.Errorf("field prNumber in ReviewReadout: required")
+	}
+	if _, ok := raw["repoFullName"]; raw != nil && !ok {
+		return fmt.Errorf("field repoFullName in ReviewReadout: required")
+	}
+	type Plain ReviewReadout
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ReviewReadout(plain)
+	return nil
+}
+
+// One prior verdict on this PR, summarized for the merge readout's own 'History'
+// rail (§26.1 item 5) -- never the full ReviewReadoutVerdict shape, which only the
+// latest verdict needs in full.
+type ReviewVerdictHistoryEntry struct {
+	// HeadSha corresponds to the JSON schema field "headSha".
+	HeadSha string `json:"headSha" yaml:"headSha" mapstructure:"headSha"`
+
+	// PostedAt corresponds to the JSON schema field "postedAt".
+	PostedAt time.Time `json:"postedAt" yaml:"postedAt" mapstructure:"postedAt"`
+
+	// RiskLevel corresponds to the JSON schema field "riskLevel".
+	RiskLevel ReviewVerdictHistoryEntryRiskLevel `json:"riskLevel" yaml:"riskLevel" mapstructure:"riskLevel"`
+
+	// Shippable corresponds to the JSON schema field "shippable".
+	Shippable ReviewVerdictHistoryEntryShippable `json:"shippable" yaml:"shippable" mapstructure:"shippable"`
+}
+
+type ReviewVerdictHistoryEntryRiskLevel string
+
+const ReviewVerdictHistoryEntryRiskLevelHigh ReviewVerdictHistoryEntryRiskLevel = "high"
+const ReviewVerdictHistoryEntryRiskLevelLow ReviewVerdictHistoryEntryRiskLevel = "low"
+const ReviewVerdictHistoryEntryRiskLevelMedium ReviewVerdictHistoryEntryRiskLevel = "medium"
+
+var enumValues_ReviewVerdictHistoryEntryRiskLevel = []interface{}{
+	"low",
+	"medium",
+	"high",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewVerdictHistoryEntryRiskLevel) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ReviewVerdictHistoryEntryRiskLevel {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ReviewVerdictHistoryEntryRiskLevel, v)
+	}
+	*j = ReviewVerdictHistoryEntryRiskLevel(v)
+	return nil
+}
+
+type ReviewVerdictHistoryEntryShippable string
+
+const ReviewVerdictHistoryEntryShippableAuto ReviewVerdictHistoryEntryShippable = "auto"
+const ReviewVerdictHistoryEntryShippableBlock ReviewVerdictHistoryEntryShippable = "block"
+const ReviewVerdictHistoryEntryShippableNeedsHuman ReviewVerdictHistoryEntryShippable = "needs_human"
+
+var enumValues_ReviewVerdictHistoryEntryShippable = []interface{}{
+	"auto",
+	"needs_human",
+	"block",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewVerdictHistoryEntryShippable) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ReviewVerdictHistoryEntryShippable {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ReviewVerdictHistoryEntryShippable, v)
+	}
+	*j = ReviewVerdictHistoryEntryShippable(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewVerdictHistoryEntry) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["headSha"]; raw != nil && !ok {
+		return fmt.Errorf("field headSha in ReviewVerdictHistoryEntry: required")
+	}
+	if _, ok := raw["postedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field postedAt in ReviewVerdictHistoryEntry: required")
+	}
+	if _, ok := raw["riskLevel"]; raw != nil && !ok {
+		return fmt.Errorf("field riskLevel in ReviewVerdictHistoryEntry: required")
+	}
+	if _, ok := raw["shippable"]; raw != nil && !ok {
+		return fmt.Errorf("field shippable in ReviewVerdictHistoryEntry: required")
+	}
+	type Plain ReviewVerdictHistoryEntry
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ReviewVerdictHistoryEntry(plain)
 	return nil
 }
 
@@ -8164,6 +9314,8 @@ func (j *WorkflowStepRunStatus) UnmarshalJSON(value []byte) error {
 // sequential turn'). Null while an awaiting_decision (hitlBefore-gated) attempt
 // exists before any turn does.
 type WorkflowStepRunTurnId *string
+
+type ReviewReadoutLatestVerdict_0 = ReviewReadoutVerdict
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (j *WorkflowStepRun) UnmarshalJSON(value []byte) error {

@@ -280,6 +280,72 @@ func (q *Queries) ListLatestAutoApprovedInRepo(ctx context.Context, arg ListLate
 	return items, nil
 }
 
+const listReviewVerdictsForPR = `-- name: ListReviewVerdictsForPR :many
+SELECT id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits, digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body, review_path, counter_review, fact_check, fact_check_killed, digest_contested_points FROM review_verdicts
+WHERE repo_full_name = $1 AND pr_number = $2
+ORDER BY created_at DESC
+LIMIT $3
+`
+
+type ListReviewVerdictsForPRParams struct {
+	RepoFullName string `json:"repo_full_name"`
+	PrNumber     int32  `json:"pr_number"`
+	Limit        int32  `json:"limit"`
+}
+
+// §26.1 item 5's own merge-readout "History" rail (§12.2 item 2): every
+// verdict ever posted for ONE (repo_full_name, pr_number), newest first,
+// bounded by limit -- the SAME "bounded from day one" discipline §21.1
+// requires of every query against this table (ListReviewVerdictsInWindow
+// below is the repo-wide analytics sibling; this is the PR-scoped one no
+// existing caller needed before now).
+func (q *Queries) ListReviewVerdictsForPR(ctx context.Context, arg ListReviewVerdictsForPRParams) ([]ReviewVerdict, error) {
+	rows, err := q.db.Query(ctx, listReviewVerdictsForPR, arg.RepoFullName, arg.PrNumber, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReviewVerdict
+	for rows.Next() {
+		var i ReviewVerdict
+		if err := rows.Scan(
+			&i.ID,
+			&i.RepoFullName,
+			&i.PrNumber,
+			&i.HeadSha,
+			&i.RiskLevel,
+			&i.Premise,
+			&i.BlastRadius,
+			&i.FilesChanged,
+			&i.TestsCoverage,
+			&i.DocsDrift,
+			&i.ProposedShippable,
+			&i.Shippable,
+			&i.SessionID,
+			&i.CreatedAt,
+			&i.DigestSummary,
+			&i.DigestArchDecisions,
+			&i.DigestStackRisks,
+			&i.DigestUnverifiedLimits,
+			&i.DigestDescriptionAdequacy,
+			&i.DigestAdequacyExplanation,
+			&i.DigestProposedBody,
+			&i.ReviewPath,
+			&i.CounterReview,
+			&i.FactCheck,
+			&i.FactCheckKilled,
+			&i.DigestContestedPoints,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listReviewVerdictsInWindow = `-- name: ListReviewVerdictsInWindow :many
 SELECT id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits, digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body, review_path, counter_review, fact_check, fact_check_killed, digest_contested_points FROM review_verdicts
 WHERE repo_full_name = $1 AND created_at > $2

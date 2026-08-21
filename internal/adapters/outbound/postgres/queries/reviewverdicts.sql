@@ -86,6 +86,18 @@ WHERE shippable = 'auto'
 ORDER BY created_at ASC
 LIMIT $3;
 
+-- name: ListReviewVerdictsForPR :many
+-- §26.1 item 5's own merge-readout "History" rail (§12.2 item 2): every
+-- verdict ever posted for ONE (repo_full_name, pr_number), newest first,
+-- bounded by limit -- the SAME "bounded from day one" discipline §21.1
+-- requires of every query against this table (ListReviewVerdictsInWindow
+-- below is the repo-wide analytics sibling; this is the PR-scoped one no
+-- existing caller needed before now).
+SELECT * FROM review_verdicts
+WHERE repo_full_name = $1 AND pr_number = $2
+ORDER BY created_at DESC
+LIMIT $3;
+
 -- name: ListReviewVerdictsInWindow :many
 -- The analytics rollups' own shared bounded scan (§21.1: "every query
 -- against this history is bounded from day one") -- every verdict for

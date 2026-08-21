@@ -75,3 +75,14 @@ func (s *ReviewVerdictStore) ListInWindow(ctx context.Context, repoFullName stri
 		Limit:        limit,
 	})
 }
+
+// ListForPR returns every verdict ever posted for one (repoFullName,
+// prNumber) pair, newest first, bounded by limit -- the merge readout's
+// own "History" rail (§26.1 item 5, §12.2 item 2).
+func (s *ReviewVerdictStore) ListForPR(ctx context.Context, repoFullName string, prNumber int32, limit int32) ([]sqlcgen.ReviewVerdict, error) {
+	return s.q.ListReviewVerdictsForPR(ctx, sqlcgen.ListReviewVerdictsForPRParams{
+		RepoFullName: repoFullName,
+		PrNumber:     prNumber,
+		Limit:        limit,
+	})
+}

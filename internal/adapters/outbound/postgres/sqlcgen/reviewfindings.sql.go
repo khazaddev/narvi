@@ -50,6 +50,63 @@ func (q *Queries) GetReviewFinding(ctx context.Context, arg GetReviewFindingPara
 	return i, err
 }
 
+const listAllReviewFindingsForPR = `-- name: ListAllReviewFindingsForPR :many
+SELECT id, repo_full_name, pr_number, identity_hash, sentinel_kind, severity, file_path, line, description, suggested_fix, status, rebuttal_text, rebutted_by, rebutted_at, fix_child_session_id, fix_pr_number, first_seen_at, last_seen_at FROM review_findings
+WHERE repo_full_name = $1 AND pr_number = $2
+ORDER BY first_seen_at ASC
+`
+
+type ListAllReviewFindingsForPRParams struct {
+	RepoFullName string `json:"repo_full_name"`
+	PrNumber     int32  `json:"pr_number"`
+}
+
+// §26.1 item 5's own merge-readout appendix (§12.2 item 2): EVERY
+// finding ever posted for one PR, regardless of status -- unlike
+// ListOpenAndRebuttedReviewFindings above (which deliberately excludes
+// fix_pending/fix_open/fix_merged/fix_applied for re-review reconciliation
+// purposes), a human reading the merge readout needs to see a finding's
+// full remediation history too, not just the subset still "live". Ordered
+// oldest-first, mirroring that query's own stable ordering.
+func (q *Queries) ListAllReviewFindingsForPR(ctx context.Context, arg ListAllReviewFindingsForPRParams) ([]ReviewFinding, error) {
+	rows, err := q.db.Query(ctx, listAllReviewFindingsForPR, arg.RepoFullName, arg.PrNumber)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReviewFinding
+	for rows.Next() {
+		var i ReviewFinding
+		if err := rows.Scan(
+			&i.ID,
+			&i.RepoFullName,
+			&i.PrNumber,
+			&i.IdentityHash,
+			&i.SentinelKind,
+			&i.Severity,
+			&i.FilePath,
+			&i.Line,
+			&i.Description,
+			&i.SuggestedFix,
+			&i.Status,
+			&i.RebuttalText,
+			&i.RebuttedBy,
+			&i.RebuttedAt,
+			&i.FixChildSessionID,
+			&i.FixPrNumber,
+			&i.FirstSeenAt,
+			&i.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listOpenAndRebuttedReviewFindings = `-- name: ListOpenAndRebuttedReviewFindings :many
 SELECT id, repo_full_name, pr_number, identity_hash, sentinel_kind, severity, file_path, line, description, suggested_fix, status, rebuttal_text, rebutted_by, rebutted_at, fix_child_session_id, fix_pr_number, first_seen_at, last_seen_at FROM review_findings
 WHERE repo_full_name = $1 AND pr_number = $2 AND status IN ('open', 'rebutted')

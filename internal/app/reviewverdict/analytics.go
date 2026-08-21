@@ -2,8 +2,10 @@ package reviewverdict
 
 import (
 	"context"
+	"errors"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/khazaddev/narvi/internal/domain/reviewpost"
@@ -28,6 +30,44 @@ const maxAnalyticsRows = 5000
 // fetch-and-convert logic rather than re-deriving it.
 func ListRecordsSince(ctx context.Context, deps Deps, repoFullName string, sinceTime time.Time) ([]reviewverdict.Record, error) {
 	rows, err := deps.ReviewVerdicts.ListInWindow(ctx, repoFullName, pgtype.Timestamptz{Time: sinceTime, Valid: true}, maxAnalyticsRows)
+	if err != nil {
+		return nil, err
+	}
+	records := make([]reviewverdict.Record, len(rows))
+	for i, row := range rows {
+		records[i] = recordFromRow(row)
+	}
+	return records, nil
+}
+
+// maxHistoryRows bounds the merge readout's own PR-scoped "History" rail
+// (§26.1 item 5, §12.2 item 2) -- generous for any single PR's real
+// verdict volume, mirroring maxAnalyticsRows' own identical "bounded from
+// day one" discipline (§21.1) at a per-PR rather than per-repo scale.
+const maxHistoryRows = 200
+
+// GetLatestRecord fetches (repoFullName, prNumber)'s own most-recently-
+// posted verdict, converted to the pure domain shape -- ok=false (never an
+// error) when no verdict has ever been posted for this PR, mirroring
+// ReviewVerdictStore.GetLatest's own "pgx.ErrNoRows means no verdict yet,
+// never an error condition" contract.
+func GetLatestRecord(ctx context.Context, deps Deps, repoFullName string, prNumber int32) (reviewverdict.Record, bool, error) {
+	row, err := deps.ReviewVerdicts.GetLatest(ctx, repoFullName, prNumber)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return reviewverdict.Record{}, false, nil
+		}
+		return reviewverdict.Record{}, false, err
+	}
+	return recordFromRow(row), true, nil
+}
+
+// ListRecordsForPR fetches every verdict ever posted for ONE
+// (repoFullName, prNumber) pair, newest first, bounded by maxHistoryRows
+// -- the merge readout's own "History" rail (§26.1 item 5), converted to
+// the pure domain shape exactly like ListRecordsSince above.
+func ListRecordsForPR(ctx context.Context, deps Deps, repoFullName string, prNumber int32) ([]reviewverdict.Record, error) {
+	rows, err := deps.ReviewVerdicts.ListForPR(ctx, repoFullName, prNumber, maxHistoryRows)
 	if err != nil {
 		return nil, err
 	}

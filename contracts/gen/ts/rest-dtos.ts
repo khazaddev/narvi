@@ -718,6 +718,216 @@ export interface PostEpistemicOutcomeResponse {
   turnId: string;
 }
 /**
+ * 200 response body for GET /api/sessions/:id/review (§26.1's merge readout, §12.2 item 2) -- the code-review view's own read model: the PR this session reviews, its latest posted verdict (null if none has ever been posted), every finding ever posted for it (§26.1's own collapsed appendix), and a bounded verdict history (§26.1 item 5). Server-computed throughout; nothing here is ever re-derived client-side.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ReviewReadout".
+ */
+export interface ReviewReadout {
+  /**
+   * owner/repo, resolved server-side from github_pr_sessions.
+   */
+  repoFullName: string;
+  prNumber: number;
+  /**
+   * The pull request's own current title, fetched live from GitHub -- null when that fetch failed (a degraded, never-fatal read, mirroring internal/app/reviewcontext.Fetch's own established 'a failed fetch degrades gracefully' posture).
+   */
+  prTitle?: string | null;
+  /**
+   * One of 'open'/'closed'/'merged' when the live GitHub fetch above succeeded (deliberately modeled as an unconstrained nullable string, mirroring ReviewReadoutVerdict.reviewPath's own identical precedent below) -- null on the same degraded-fetch condition as prTitle.
+   */
+  prState?: string | null;
+  /**
+   * Null when no verdict has ever been posted for this PR -- an honest 'not reviewed yet' state, never a fabricated placeholder verdict.
+   */
+  latestVerdict?: ReviewReadoutVerdict | null;
+  /**
+   * Every finding ever posted for this PR, any status, oldest-first -- §26.1's own collapsed appendix. Each finding's startLine/endLine are re-resolved at READ time against the diff at latestVerdict's own headSha (§22.1.1/§22.5), never a stored, potentially-stale line number.
+   */
+  findings: ReviewReadoutFinding[];
+  /**
+   * This PR's own verdict history, newest first, bounded -- the rail's own 'History' panel (§26.1 item 5).
+   */
+  history: ReviewVerdictHistoryEntry[];
+  /**
+   * The authoring session's own most recent non-'none' builder epistemic-check outcome (§20.1/§20.2), when this PR was authored by a Narvi session -- one of 'minor'/'strong' when present (internal/domain/turn.EpistemicOutcome), surfaced as a subtle 'Heads-up' indicator; null when no such outcome was ever recorded, or the reviewed PR was not authored by a Narvi session at all. Never 'none' itself -- a turn that reported 'none' carries nothing worth surfacing, indistinguishable here from never having reported anything.
+   */
+  epistemicOutcome?: string | null;
+}
+/**
+ * One review_verdicts row's own full REST wire shape (§21.1/§26.1) -- the merge readout's own header + digest content. Mirrors PostReviewVerdictRequest's own fields (the posting shape) plus the persistence-layer facts that request never carries: the AUTHORITATIVE server-computed shippable (never proposedShippable), headSha, postedAt, and sessionId.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ReviewReadoutVerdict".
+ */
+export interface ReviewReadoutVerdict {
+  riskLevel: 'low' | 'medium' | 'high';
+  premise: 'ok' | 'questionable' | 'not_a_pr';
+  /**
+   * Display data only -- §21.2: 'both are display data and neither may gate anything.' Never used client-side to enable/disable an action.
+   */
+  blastRadius: (
+    'auth' | 'migrations' | 'contracts' | 'secrets' | 'infra' | 'public_api' | 'data_layer' | 'dependencies'
+  )[];
+  /**
+   * The reviewing agent's own self-reported count -- display data only, §21.1/§21.2: never gates anything client-side; the server's own auto-approval eligibility check uses a SEPARATE, server-computed count, never this field.
+   */
+  filesChanged: number;
+  testsCoverage: 'adequate' | 'insufficient' | 'skipped';
+  docsDrift: 'none' | 'found' | 'skipped';
+  /**
+   * The model's own self-report -- advisory only, rendered for audit/transparency. shippable below is the authoritative value.
+   */
+  proposedShippable: 'auto' | 'needs_human' | 'block';
+  /**
+   * The AUTHORITATIVE, server-computed classification (review.ComputeShippable) -- the verdict badge renders THIS field, never proposedShippable, and is never recomputed or inferred client-side.
+   */
+  shippable: 'auto' | 'needs_human' | 'block';
+  digest: Digest;
+  /**
+   * One of 'light'/'deep' when resolved (§26.3), unconstrained here for the same reason PostReviewVerdictRequest.counterReview is; null on a pre-§26.3 verdict or one whose turn never resolved a depth.
+   */
+  reviewPath?: string | null;
+  /**
+   * One of 'done'/'skipped' when present (§26.4); null on the light path or a pre-§26.4 verdict.
+   */
+  counterReview?: string | null;
+  /**
+   * One of 'done'/'skipped' (§26.6); null only on a pre-§26.6 verdict.
+   */
+  factCheck: string | null;
+  factCheckKilled: number;
+  /**
+   * The commit this verdict was produced against (§21.1).
+   */
+  headSha: string;
+  postedAt: string;
+  sessionId: string;
+}
+/**
+ * One review_findings row's own full read-side REST wire shape -- extends ReviewFinding (the rebut/apply-suggestion response shape) with startLine/endLine, re-resolved at READ time (§22.1.1/§22.5) rather than stored, so a separate type from ReviewFinding rather than a breaking change to it.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ReviewReadoutFinding".
+ */
+export interface ReviewReadoutFinding {
+  identityHash: string;
+  sentinelKind: string | null;
+  severity: 'low' | 'medium' | 'high';
+  filePath: string;
+  line: number | null;
+  description: string;
+  suggestedFix: string | null;
+  status: 'open' | 'rebutted' | 'fix_pending' | 'fix_open' | 'fix_merged' | 'fix_applied';
+  rebuttalText: string | null;
+  /**
+   * §22.1.1's own content-anchored position, re-resolved at read time against the diff at the latest verdict's own headSha. 0 means explicitly unanchored -- never a guessed line number; a client must render this distinctly from a real match, never silently as line 0.
+   */
+  startLine: number;
+  /**
+   * Paired with startLine -- see that field's own description.
+   */
+  endLine: number;
+}
+/**
+ * One prior verdict on this PR, summarized for the merge readout's own 'History' rail (§26.1 item 5) -- never the full ReviewReadoutVerdict shape, which only the latest verdict needs in full.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ReviewVerdictHistoryEntry".
+ */
+export interface ReviewVerdictHistoryEntry {
+  postedAt: string;
+  riskLevel: 'low' | 'medium' | 'high';
+  shippable: 'auto' | 'needs_human' | 'block';
+  headSha: string;
+}
+/**
+ * 200 response body for GET /api/sessions/:id/release-manifest (§15.2/§15.3, §12.2 item 9's dedicated release-review screen) -- the release manifest check's own persisted, structured result (migrations/000097_release_manifest_checks.up.sql). computed=false when this release PR has never had a check persisted for it (a pre-existing PR, or a check whose own insert failed) -- an explicit sentinel distinct from a real, empty result, mirroring §21.1's own 'not yet computed' rollup convention; every other field is its own zero value in that case.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ReleaseManifestReadout".
+ */
+export interface ReleaseManifestReadout {
+  repoFullName: string;
+  prNumber: number;
+  baseRef?: string | null;
+  headRef?: string | null;
+  /**
+   * False when no release_manifest_checks row has ever been persisted for this PR -- see this object's own top-level description.
+   */
+  computed: boolean;
+  /**
+   * When this check ran -- null when computed is false.
+   */
+  computedAt?: string | null;
+  /**
+   * How many pull requests this release cut examined -- §15.2: 'always runs', so this is always populated once computed is true, even when findings is empty.
+   */
+  constituentPrCount: number;
+  /**
+   * Whether this check's own coverage of the release was partial (a truncated compare range, or per-PR detail that could not be fetched) -- §15.2's own honesty discipline: an absent finding is not a completeness guarantee when true.
+   */
+  coveragePartial: boolean;
+  /**
+   * §15.3's own conditional composition-review trigger decision.
+   */
+  aggregateReviewTriggered: boolean;
+  /**
+   * Human-readable reasons the trigger above fired (§15.3's three OR-conditions) -- empty when aggregateReviewTriggered is false.
+   */
+  aggregateReviewTriggerReasons: string[];
+  /**
+   * §15.2's own mechanical manifest findings -- an audit, never a risk verdict.
+   */
+  findings: ReleaseManifestFinding[];
+  /**
+   * Every constituent pull request this check examined -- the manifest table's own row source.
+   */
+  mergedPrs: ReleaseManifestPR[];
+}
+/**
+ * One review.ManifestFinding's own REST wire shape (§15.2).
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ReleaseManifestFinding".
+ */
+export interface ReleaseManifestFinding {
+  kind: 'unreviewed_merge' | 'red_at_merge' | 'unreviewed_revert';
+  prNumber: number;
+  prTitle: string;
+  /**
+   * Short, optional elaboration specific to kind -- empty string when this finding carries none.
+   */
+  detail: string;
+}
+/**
+ * One constituent pull request the release manifest check examined (§15.2/§15.3) -- the manifest table's own row shape.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ReleaseManifestPR".
+ */
+export interface ReleaseManifestPR {
+  number: number;
+  title: string;
+  hasApprovingReview: boolean;
+  mergedViaAdminOverride: boolean;
+  /**
+   * This PR's own CI result AT THE COMMIT THAT MERGED, not its latest SHA (§15.2).
+   */
+  ciConclusion: 'success' | 'failure' | 'unknown';
+  wasReverted: boolean;
+  /**
+   * Meaningless when wasReverted is false. 'unknown' is a genuinely undetermined state, never treated as 'not_reviewed'.
+   */
+  revertReviewState: 'reviewed' | 'not_reviewed' | 'unknown';
+  /**
+   * Null when wasReverted is false, or the timing could not be determined.
+   */
+  revertedAfterMergeSeconds: number | null;
+  hadManualConflictResolution: boolean;
+  highRiskFlagged: boolean;
+}
+/**
  * GET/PUT /api/repos/{owner}/{repo}/settings response body (§8.2/§21.2) -- an admin, per-repo policy-flag row (migrations/000044_repo_settings.up.sql). Deliberately a small, extensible shape: §21's auto-merge toggle, §24's automatic-re-review opt-in (§24.5), and §26.2's description-autofix toggle (§26.2) each added a further boolean property here, never a bespoke DTO of their own -- future toggles are expected to follow the same pattern.
  *
  * This interface was referenced by `RestDtos`'s JSON-Schema
