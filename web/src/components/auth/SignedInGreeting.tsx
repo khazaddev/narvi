@@ -1,4 +1,4 @@
-// SignedInGreeting (Step 81) is the sign-in view's own "already signed
+// SignedInGreeting (§12.2 item 7) is the sign-in view's own "already signed
 // in" headline -- split into its own presentational, hook-free component
 // (rather than inlined in routes/sign-in.tsx) specifically so it has a
 // direct render test with no QueryClientProvider/RouterProvider needed

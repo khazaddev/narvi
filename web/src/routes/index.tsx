@@ -6,11 +6,11 @@ import { requireAuth } from '../auth/requireAuth'
 // embed) with none of the nine real views (§12.2) built yet. Replaced by
 // the decision-inbox home view later, not extended in place.
 //
-// beforeLoad: requireAuth (Step 81) -- "/" is this app's only real deep
-// link today, and Step 87's own decision-inbox home view that eventually
+// beforeLoad: requireAuth (§13.1) -- "/" is this app's only real deep
+// link today, and the decision-inbox home view (§16) that eventually
 // replaces this placeholder is unambiguously an authenticated-only
-// screen, so gating it now (rather than leaving it open until that Step
-// remembers to) is the safe default: an unauthenticated visitor hitting
+// screen, so gating it now (rather than leaving it open until whoever
+// builds that remembers to) is the safe default: an unauthenticated visitor hitting
 // "/" lands on /sign-in?next=%2F instead of this shell, and a signed-in
 // one sees the placeholder exactly as before.
 export const Route = createFileRoute('/')({

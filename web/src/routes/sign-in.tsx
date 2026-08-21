@@ -1,4 +1,4 @@
-// The sign-in view (Step 81, §12.2 item 7/§13.1, mockups.html's own
+// The sign-in view (§12.2 item 7/§13.1, mockups.html's own
 // `v-signin`): GitHub OAuth as the primary login, SSO (OIDC) rendered as
 // a configuration-gated secondary (see the ssobtn block below for why it
 // is disabled today), the identity auto-link status panel for an
@@ -178,7 +178,7 @@ function SignInView() {
                 exists yet. A disabled, honestly-captioned button is the
                 correct rendering of "unconfigured" (matches this codebase's
                 own "no X affordance at all when the capability is
-                unconfigured" convention elsewhere, e.g. Step 90's
+                unconfigured" convention elsewhere, e.g. the §27.3
                 signing-key-rotation UI) -- not a live link to a route that
                 would 404, and not silently omitting the affordance the
                 visual spec calls for. */}

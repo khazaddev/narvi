@@ -1,4 +1,4 @@
-// SettingsView.tsx -- §12.2 item 5's own Settings screen (Step 86):
+// SettingsView.tsx -- §12.2 item 5's own Settings screen:
 // Environments, Secrets, Members & access, Prompt templates, plus the
 // §27 enterprise-glue surfaces the row's own text calls out (cloud
 // identity & cluster bindings, per-Environment docker/egress display,
@@ -31,9 +31,9 @@
 // unified screen); General/Models/Image builds name no §-cited data model
 // anywhere in row 86's own citations (§14.1, §14.2, §21, §24, §27) and
 // building one would be inventing scope, not implementing it. All 8 tabs
-// are still drawn (visual parity with the mockup for Step 92's own
-// screenshot-review exit criterion), but the 4 without a real surface
-// render an explicit, honest "not part of this Step" notice naming where
+// are still drawn (visual parity with the mockup, which the UI phase's
+// own screenshot-review exit criterion requires), but the 4 without a
+// real surface render an explicit, honest "not built here" notice naming where
 // that surface actually lives -- never a fabricated panel.
 import { useState } from 'react'
 

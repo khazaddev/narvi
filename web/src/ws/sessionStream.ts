@@ -11,10 +11,10 @@ import { isPlainObject } from './util'
 
 // SessionStream composes §12.1's full pipeline ("WS transport -> event log
 // -> reducer -> query invalidation") into one object per viewed session.
-// No view consumes this yet (Steps 81+ do, most likely via a
+// No view consumes this yet -- when one does, most likely via a
 // `useSyncExternalStore(stream.subscribe, stream.getSnapshot)` hook built
-// on top of subscribe()/getSnapshot() below) -- this Step's own job is
-// making the pipeline itself real and correct, not rendering it.
+// on top of subscribe()/getSnapshot() below. The job here is making the
+// pipeline itself real and correct, not rendering it.
 //
 // # Why a live broadcast triggers a fetch_history round-trip instead of
 // being appended directly
@@ -112,7 +112,7 @@ export class SessionStream {
   private readonly listeners = new Set<() => void>()
   private backfillInFlight = false
   private backfillDirty = false
-  // cachedSnapshot -- Step 82's own fix, discovered wiring this class into
+  // cachedSnapshot -- fixed on first wiring this class into
   // React's useSyncExternalStore for the first time (this file's own top
   // comment already anticipated that exact hook shape, but getSnapshot()
   // below used to allocate a fresh object -- and a fresh `this.log.

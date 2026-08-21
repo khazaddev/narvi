@@ -1,5 +1,5 @@
 // Proves auth/returnTo.ts's own isSafeReturnTo -- the client-side half of
-// Step 81's "redirect handling" (defense in depth; the backend's
+// §13.1's redirect handling (defense in depth; the backend's
 // internal/adapters/inbound/auth/login.go isSafeRedirectNext is the real
 // authority and is proved separately by that package's own Go tests).
 import { describe, expect, it } from 'vitest'

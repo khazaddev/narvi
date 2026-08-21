@@ -12,8 +12,8 @@
 // create a session, read it back, mint a client WS token, and page
 // through its REST event history. The remaining ~15 routes under
 // /api/sessions (uploads, plans, review, ...) are exactly as typeable
-// through this SAME request<T> + rest-dtos.ts pattern -- Steps 81+ add
-// them as each view needs one, not speculatively here.
+// through this SAME request<T> + rest-dtos.ts pattern -- later views add
+// them as each one needs a route, not speculatively here.
 import type {
   ApplySuggestionResponse,
   Automation,
@@ -84,7 +84,7 @@ export function getSession(sessionId: string, signal?: AbortSignal): Promise<Ses
   return request<Session>(`/api/sessions/${encodeURIComponent(sessionId)}`, { signal })
 }
 
-// -- Step 82 (§12.2 item 1): the session workspace sidebar's own list. --
+// -- §12.2 item 1: the session workspace sidebar's own list. --
 
 /**
  * listSessions calls GET /api/sessions?filter=mine|all -- the sidebar's
@@ -113,7 +113,7 @@ export function createTurn(sessionId: string, body: CreateTurnRequest, signal?: 
   return request<CreateTurnResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/turns`, { method: 'POST', body, signal })
 }
 
-// -- Step 81 (§12.2 item 7, §13.1): sign-in view's own two endpoints. --
+// -- §12.2 item 7, §13.1: the sign-in view's own two endpoints. --
 
 /**
  * getMe calls GET /api/me -- the authenticated caller's own role +
@@ -301,7 +301,7 @@ export function listAuditLog(params: { limit: number; offset: number }, signal?:
   return request<ListAuditLogResponse>(`/api/audit-log?${query.toString()}`, { signal })
 }
 
-// -- environments (§14.1, Step 86) --
+// -- environments (§14.1) --
 
 /** listEnvironments calls GET /api/environments -- every environments row, newest-first. Maintainer+ only server-side (authz.ActionManageEnvironments); see httpapi/environments.go's own doc comment for why this is list-only, no create/update. */
 export function listEnvironments(signal?: AbortSignal): Promise<ListEnvironmentsResponse> {

@@ -1,4 +1,4 @@
-// loginLinks.ts (Step 81, "redirect handling") is routes/sign-in.tsx's
+// loginLinks.ts (§13.1's own post-sign-in redirect handling) is routes/sign-in.tsx's
 // own pure logic for the two places a validated `next` destination is
 // actually used -- split out (rather than inlined in that route file) so
 // each has a direct unit test, and so sign-in.tsx's own file stays

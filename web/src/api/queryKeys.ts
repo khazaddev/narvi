@@ -3,9 +3,8 @@
 // of truth for these keys -- a view's own useQuery call and a reducer's
 // own invalidateQueries call independently constructing "the same" key by
 // hand is exactly the kind of drift this factory exists to make
-// impossible). No views consume this yet (Steps 81+ do); it lands here
-// because the WS pipeline (ws/invalidation.ts) is this Step's own first
-// consumer.
+// impossible). No view consumes this yet; it lands here because the WS
+// pipeline (ws/invalidation.ts) is its first consumer.
 //
 // Keys are plain arrays, not objects, and namespaced by the REST resource
 // they mirror (api/endpoints.ts) -- `sessionQueryKeys.detail(id)` names
@@ -18,7 +17,7 @@ export const sessionQueryKeys = {
   artifacts: (sessionId: string) => ['session', sessionId, 'artifacts'] as const,
 }
 
-// sessionListQueryKeys (Step 82, §12.2 item 1) -- the sidebar's own list
+// sessionListQueryKeys (§12.2 item 1) -- the sidebar's own list
 // query, namespaced separately from sessionQueryKeys above (which is
 // always parameterized per single session id): the list is parameterized
 // per FILTER instead ("mine"/"all"), a completely different axis.
@@ -26,7 +25,7 @@ export const sessionListQueryKeys = {
   list: (filter: 'mine' | 'all') => ['sessions', 'list', filter] as const,
 }
 
-// authQueryKeys (Step 81, §13.1) -- the sign-in view's own "am I signed
+// authQueryKeys (§13.1) -- the sign-in view's own "am I signed
 // in, and as whom" query (GET /api/me). One key, no params: there is only
 // ever one meaningful "current caller" per browser session, unlike
 // sessionQueryKeys above (which is parameterized per session id).
@@ -73,7 +72,7 @@ export const automationQueryKeys = {
   invocations: (automationId: string) => ['automations', automationId, 'invocations'] as const,
 }
 
-// settingsQueryKeys (§12.2 item 5, Step 86) -- the Settings/Analytics
+// settingsQueryKeys (§12.2 item 5) -- the Settings/Analytics
 // views' own data sources: members & audit log (§13.2/§13.3),
 // environments (§14.1), prompt templates (§18.6), the 3 secret-scope
 // resources (§27.1/§25.1), cloud identity (§27.3/§27.4), OpenCode config

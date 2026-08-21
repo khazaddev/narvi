@@ -77,6 +77,17 @@ var stepRefCheckExemptFiles = map[string]bool{
 	"internal/ops/stepref_test.go":    true,
 }
 
+// stepRefScanExtensions are the source extensions CheckStepRefs walks.
+// The convention is about what the SOURCE says, not what language it is
+// written in: a "Step 62" citation rendered into a settings screen misleads
+// an operator exactly as much as one in a Go comment, and .ts/.tsx use the
+// same "//" comment marker narrativeStepLine already keys on.
+var stepRefScanExtensions = map[string]bool{
+	".go":  true,
+	".ts":  true,
+	".tsx": true,
+}
+
 // StepRef is one disallowed "Step N" citation this check found.
 type StepRef struct {
 	File string
@@ -84,12 +95,23 @@ type StepRef struct {
 	Text string
 }
 
-// CheckStepRefs scans every .go file under the given roots for a "Step N"
-// citation that is not local test-scenario narration (narrativeStepLine)
-// and not inside one of stepRefCheckExemptFiles, returning one StepRef per
-// occurrence, sorted for a stable failure message. A nil/empty result means
-// the tree cites only technical-plan sections, never implementation Steps
-// -- the CI-passing state.
+// CheckStepRefs scans every source file under the given roots for a
+// "Step N" citation that is not local test-scenario narration
+// (narrativeStepLine) and not inside one of stepRefCheckExemptFiles,
+// returning one StepRef per occurrence, sorted for a stable failure
+// message. A nil/empty result means the scanned roots cite only
+// technical-plan sections, never implementation Steps -- the CI-passing
+// state.
+//
+// "Source file" means the extensions in stepRefScanExtensions, and the
+// scanned roots are whatever the caller passes -- both matter, and both
+// have been wrong here. This check shipped scanning only ".go", under
+// roots that did not include the SPA at all, while its own doc comment
+// claimed a clean result meant "the tree" cited only sections. It did not:
+// web/src had accumulated dozens of Step citations, one of them rendered
+// on screen to operators, all of them invisible to CI and all of them
+// green. A check validates exactly what it scans, so the claim next to it
+// must never describe more than that.
 func CheckStepRefs(root string, scanDirs []string) ([]StepRef, error) {
 	var out []StepRef
 	for _, dir := range scanDirs {
@@ -101,7 +123,7 @@ func CheckStepRefs(root string, scanDirs []string) ([]StepRef, error) {
 			if err != nil {
 				return err
 			}
-			if d.IsDir() || !strings.HasSuffix(path, ".go") {
+			if d.IsDir() || !stepRefScanExtensions[filepath.Ext(path)] {
 				return nil
 			}
 			rel, relErr := filepath.Rel(root, path)

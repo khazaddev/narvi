@@ -12,7 +12,7 @@
 // construction) or through safeJsonPreview (textSafety.ts, which caps
 // length before the DOM ever sees it). Nothing in this file ever calls
 // dangerouslySetInnerHTML, and no event-sourced string is ever built into
-// a URL (artifact links live in the rail, Step 83 -- this file renders no
+// a URL (artifact links live in the rail -- this file renders no
 // href from event content at all).
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
@@ -22,8 +22,8 @@ import { sessionListQueryKeys, sessionQueryKeys } from '../api/queryKeys'
 import { safeJsonPreview } from './textSafety'
 import type { StepNode, SubTaskNode, ToolCallNode, TurnNode } from './timelineModel'
 
-// The composer (Step 83) is what lets a person type their own follow-up;
-// this Step's own "one-click Resume" (decision 3) has no text box to draw
+// The composer is what lets a person type their own follow-up; the
+// "one-click Resume" here (decision 3) has no text box to draw
 // a prompt from, so it sends this fixed, honestly-generic continuation
 // instead -- CreateTurnRequest.prompt is required/non-null (unlike
 // CreateSessionRequest.prompt), and the OpenCode conversation itself is

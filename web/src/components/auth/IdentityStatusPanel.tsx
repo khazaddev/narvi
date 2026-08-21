@@ -1,4 +1,4 @@
-// IdentityStatusPanel (Step 81, §12.2 item 7's "identity auto-link status
+// IdentityStatusPanel (§12.2 item 7's "identity auto-link status
 // panel", mockups.html's own `.linknote`/`.idrow`/`.idchip`) renders the
 // SIGNED-IN caller's own identity graph, straight off GET /api/me's
 // restdtos.Member (Member.identities, contracts/gen/ts/rest-dtos.ts) --

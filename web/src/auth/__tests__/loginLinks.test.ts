@@ -1,7 +1,7 @@
 // Proves auth/loginLinks.ts -- the two actual call sites where a
 // validated `next`/return-to value is placed into a URL this app
 // constructs. "if you implemented a return-to, an off-origin destination
-// is refused" (Step 81's own verification list).
+// is refused" -- §13.1's own requirement on redirect handling.
 import { describe, expect, it } from 'vitest'
 
 import { githubLoginHref, safeContinueTarget } from '../loginLinks'

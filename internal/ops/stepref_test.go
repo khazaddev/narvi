@@ -14,10 +14,17 @@ import (
 //
 // docs/ is deliberately not scanned -- the plan documents legitimately
 // reference their own Steps.
+//
+// web/src is scanned for the same reason internal/ and cmd/ are: it is
+// source, it cites the plan in comments, and one of its citations was being
+// rendered to operators on the analytics screen. It was originally left out
+// on both axes at once (not in this root list, and .ts/.tsx not in
+// CheckStepRefs's extension filter), which is why the SPA drifted while CI
+// stayed green -- see stepref.go's own CheckStepRefs doc comment.
 func TestNoStepRefInSource(t *testing.T) {
 	root := repoRoot(t)
 
-	refs, err := CheckStepRefs(root, []string{"internal", "cmd", "contracts"})
+	refs, err := CheckStepRefs(root, []string{"internal", "cmd", "contracts", "web/src"})
 	if err != nil {
 		t.Fatalf("CheckStepRefs: %v", err)
 	}
@@ -80,6 +87,57 @@ func TestCheckStepRefs_MutationBoundary(t *testing.T) {
 			got := len(refs) > 0
 			if got != c.wantCaught {
 				t.Errorf("line %q: caught = %v, want %v (refs = %+v)", c.line, got, c.wantCaught, refs)
+			}
+		})
+	}
+}
+
+// TestCheckStepRefs_ScansTypeScript pins the extension half of this check's
+// coverage, the half that was missing.
+//
+// CheckStepRefs originally walked only ".go", under roots that did not
+// include web/src at all, while its doc comment claimed a clean result meant
+// the tree cited only sections. It did not: the SPA had accumulated dozens of
+// Step citations, one of them rendered on screen to operators, every one of
+// them green in CI. Both axes are fixed, and both are pinned here -- a
+// citation in a .ts or .tsx file must be caught, and the narrative-colon
+// exemption must survive the crossing (TypeScript uses the same "//" marker,
+// so a test author writing "// Step 1: ..." in a .ts scenario comment must
+// not be flagged any more than a Go one is).
+func TestCheckStepRefs_ScansTypeScript(t *testing.T) {
+	cases := []struct {
+		name       string
+		file       string
+		line       string
+		wantCaught bool
+	}{
+		{"citation in .ts", "fixture.ts", `// see Step 59's own resolution table.`, true},
+		{"citation in .tsx", "fixture.tsx", `// Settings/Analytics (§12.2 item 5, Step 86): the same shell.`, true},
+		{"narrative step in .ts is exempt", "fixture.ts", `  // Step 1: the stream emits its first frame.`, false},
+		{"unscanned extension is ignored", "fixture.css", `/* Step 86's own panel styles. */`, false},
+	}
+
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "web", "src")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			path := filepath.Join(srcDir, c.file)
+			if err := os.WriteFile(path, []byte(c.line+"\n"), 0o644); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+			t.Cleanup(func() { _ = os.Remove(path) })
+
+			refs, err := CheckStepRefs(dir, []string{"web/src"})
+			if err != nil {
+				t.Fatalf("CheckStepRefs: %v", err)
+			}
+			got := len(refs) > 0
+			if got != c.wantCaught {
+				t.Errorf("%s line %q: caught = %v, want %v (refs = %+v)", c.file, c.line, got, c.wantCaught, refs)
 			}
 		})
 	}

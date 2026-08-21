@@ -1,5 +1,5 @@
-// session.ts (Step 81, §13.1/§13.2) is the sign-in view's own small
-// "who is the current caller" layer, built on Step 80's data layer
+// session.ts (§13.1/§13.2) is the sign-in view's own small
+// "who is the current caller" layer, built on the §12.1 data layer
 // (src/api/) rather than growing a parallel one: GET /api/me IS this
 // app's only session-state signal -- there is no separate client-side
 // "am I logged in" flag anywhere, by design (see this file's own

@@ -1,4 +1,4 @@
-// EnvironmentsPanel.tsx -- Settings -> Environments (§14.1, §27, Step 86).
+// EnvironmentsPanel.tsx -- Settings -> Environments (§14.1, §27).
 //
 // # What this panel declines to render, and why
 //
@@ -16,7 +16,7 @@
 // fiction" this Step's own instructions rule out. What this panel DOES
 // render is every column that is real (path scope, mock-configured,
 // docker-required, egress policy, createdAt) via GET /api/environments
-// (environments.go, Step 86's own new read endpoint -- see that file's
+// (environments.go -- see that file's
 // doc comment for why a list-only endpoint, not full CRUD, closes the
 // real gap: every environment-scoped §27 sub-resource below needs a
 // valid id to target, and there was previously no way to discover one).

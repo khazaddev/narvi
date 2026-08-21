@@ -1,4 +1,4 @@
-// requireAuth.ts (Step 81, "an unauthenticated visitor hitting a deep
+// requireAuth.ts (§13.1: "an unauthenticated visitor hitting a deep
 // link should land somewhere sensible rather than a blank shell") is a
 // `beforeLoad` guard any route can attach to require a valid session --
 // see routes/index.tsx for this codebase's first real use of it (gating

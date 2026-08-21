@@ -1,4 +1,4 @@
-// returnTo.ts (Step 81, "redirect handling") validates a post-sign-in
+// returnTo.ts (§13.1's own post-sign-in redirect handling) validates a post-sign-in
 // destination BEFORE it is ever placed in a URL this app constructs (a
 // <Link>/redirect() target, or the `next` query param handed to
 // GET /auth/github/login). This is client-side defense in depth, not the

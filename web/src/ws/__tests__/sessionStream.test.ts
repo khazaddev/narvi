@@ -52,7 +52,7 @@ function newStream(sessionId: string, queryClient: QueryClient): SessionStream {
 }
 
 describe('SessionStream', () => {
-  // Step 82's own regression test: getSnapshot() must return the SAME
+  // Regression test: getSnapshot() must return the SAME
   // object reference across repeated calls between two real state changes
   // -- React's useSyncExternalStore (web/src/session/useSessionStream.ts)
   // compares successive snapshots with Object.is, and a snapshot whose

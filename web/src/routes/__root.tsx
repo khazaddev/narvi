@@ -3,7 +3,7 @@ import { createRootRouteWithContext, Link, Outlet } from '@tanstack/react-router
 
 import { ThemeToggle } from '../components/ThemeToggle'
 
-// RouterContext (Step 81, §13.1) -- queryClient is the one thing every
+// RouterContext (§13.1) -- queryClient is the one thing every
 // route's own beforeLoad guard needs to share the SAME TanStack Query
 // cache main.tsx's QueryClientProvider already renders with (auth/
 // requireAuth.ts's own queryClient.ensureQueryData(meQueryOptions) call),
@@ -37,7 +37,7 @@ function RootLayout() {
         <Link to="/automations" className="header-nav-link">
           Automations
         </Link>
-        {/* Settings/Analytics (§12.2 item 5, Step 86): the same minimal,
+        {/* Settings/Analytics (§12.2 item 5): the same minimal,
             honest placeholder-nav precedent Automations above already
             established -- a fuller top nav still lands with the
             decision-inbox home view (§16). */}

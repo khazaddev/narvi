@@ -1,6 +1,6 @@
 // Proves DeniedNotice renders the ONE fixed, honest, non-leaking message
 // -- "a denied response renders the honest message and does not echo
-// back allowlist contents" (Step 81's own verification list). Uses
+// back allowlist contents" -- §13.1's own requirement. Uses
 // react-dom/server's renderToStaticMarkup, not a jsdom-based renderer:
 // this is a static string-rendering proof, no interaction/hooks needed,
 // and adds no new dependency (react-dom is already this app's own
@@ -35,9 +35,9 @@ describe('DeniedNotice', () => {
     expect(html).not.toMatch(/\b[a-z0-9-]+\.[a-z]{2,}\b/i)
   })
 
-  // Named mutation-test target (Step 81's own verification list): make
-  // the denial message echo the backend's raw detail -> this test must
-  // fail. Performed manually during this Step's own verification pass
+  // Named mutation-test target (§13.1's own requirement): make the
+  // denial message echo the backend's raw detail -> this test must
+  // fail. Performed manually during that verification pass
   // (temporarily threading a fake "detail" prop through and
   // interpolating it here, confirming THIS test goes red, then
   // reverting byte-identical) -- not encoded as a permanent toggle in
