@@ -242,8 +242,8 @@ function ReviewLinksPanel({ sessionId }: { sessionId: string }) {
   )
 }
 
-// PlanLinkPanel: entry point into the plan-mode view (§12.2 item 3, Step
-// 85) -- always rendered, mirroring ReviewLinksPanel's own identical
+// PlanLinkPanel: entry point into the plan-mode view (§12.2 item 3) --
+// always rendered, mirroring ReviewLinksPanel's own identical
 // precedent immediately above and its own doc comment's reasoning: the
 // session DTO carries no "does this session have a plan" signal to gate
 // on cheaply, so a session with no plan simply gets PlanModeView's own

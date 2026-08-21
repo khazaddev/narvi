@@ -41,8 +41,8 @@
 //
 // An EARLIER version of this doc comment claimed Slack/Linear verdicts
 // would stay unauthenticated-per-user "until identity auto-linking exists,
-// which is out of this Step's own scope" -- that was wrong: THIS Step
-// (39) is exactly the one that supplies identity auto-linking (§13.2), so
+// which is out of this Step's own scope" -- that was wrong: the work that
+// supplies identity auto-linking (§13.2) is exactly this one, so
 // it is also the one that closes this gap, not a future one. A confirmed
 // security review caught the contradiction: Slack's interactive.go
 // (decideAndUpdateMessage) and Linear's webhook.go (handlePlanVerdict)

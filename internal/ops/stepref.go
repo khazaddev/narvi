@@ -86,6 +86,18 @@ var stepRefPattern = regexp.MustCompile(`Steps?\s+\(?\d+`)
 // file's own top doc comment for why that shape is exempt.
 var narrativeStepLine = regexp.MustCompile(`^\s*//\s*(?:-{2,}\s*)?Step\s+\d+[a-z]?:\s`)
 
+// wrappedStepRefHead/wrappedStepRefTail catch a citation the line-based
+// stepRefPattern above cannot see, because a comment wrapped between the word
+// and its number. The head must END with Step/Steps (nothing after it on that
+// line); the tail must BEGIN with an optional comment marker and then the
+// number. Deliberately narrow: a line merely ending in the English word "step"
+// followed by an unrelated numbered line is the false positive to avoid, so the
+// head requires the capitalised form the citation convention actually uses.
+var (
+	wrappedStepRefHead = regexp.MustCompile(`\bSteps?\s*$`)
+	wrappedStepRefTail = regexp.MustCompile(`^\s*(?://+|\*)?\s*\(?\d`)
+)
+
 // planDocRefPattern matches any mention of the implementation plan's own
 // filename in source. Deliberately the whole name and nothing cleverer:
 // there is no legitimate reason for code to point at the schedule, so the
@@ -165,14 +177,26 @@ func CheckStepRefs(root string, scanDirs []string) ([]StepRef, error) {
 			if readErr != nil {
 				return readErr
 			}
-			for i, line := range strings.Split(string(raw), "\n") {
-				if !stepRefPattern.MatchString(line) {
+			lines := strings.Split(string(raw), "\n")
+			for i, line := range lines {
+				if stepRefPattern.MatchString(line) {
+					if narrativeStepLine.MatchString(line) {
+						continue
+					}
+					out = append(out, StepRef{File: rel, Line: i + 1, Text: strings.TrimSpace(line)})
 					continue
 				}
-				if narrativeStepLine.MatchString(line) {
-					continue
+				// A citation split across a line break: "Step" ends one line
+				// and "88)" begins the next. Matching line by line sees
+				// neither half, and comments in this repo wrap at 80 columns
+				// constantly, so this is the common way a citation survives
+				// rather than an exotic one -- ten of them were found repo-wide
+				// after every single-line citation had been swept, including
+				// three the SPA sweep had reported as complete. Reported at the
+				// line carrying the word, which is where a reader looks.
+				if i+1 < len(lines) && wrappedStepRefHead.MatchString(line) && wrappedStepRefTail.MatchString(lines[i+1]) {
+					out = append(out, StepRef{File: rel, Line: i + 1, Text: strings.TrimSpace(line) + " " + strings.TrimSpace(lines[i+1])})
 				}
-				out = append(out, StepRef{File: rel, Line: i + 1, Text: strings.TrimSpace(line)})
 			}
 			for i, line := range strings.Split(string(raw), "\n") {
 				if !planDocRefPattern.MatchString(line) {

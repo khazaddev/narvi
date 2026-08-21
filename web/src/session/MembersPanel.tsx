@@ -1,5 +1,5 @@
-// MembersPanel.tsx -- Settings -> Members & access (§13.2/§13.3, Step
-// 86): role management, linked-identity chips, and the audit log.
+// MembersPanel.tsx -- Settings -> Members & access (§13.2/§13.3): role
+// management, linked-identity chips, and the audit log.
 //
 // # A real shape difference from the mockup, stated here rather than
 // # silently reproduced

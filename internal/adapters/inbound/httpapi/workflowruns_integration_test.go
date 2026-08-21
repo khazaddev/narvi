@@ -1,7 +1,7 @@
 //go:build integration
 
-// Integration tests for §25.10's ("workflow definition & run API", Step
-// 88) own two run-read routes -- workflowruns.go -- against a real
+// Integration tests for §25.10's own two run-read routes --
+// workflowruns.go -- against a real
 // Postgres instance, sharing this package's own testRig,
 // createUserWithRole/createSessionForUser (planapprove_integration_test.go),
 // and createCustomDefinition (workflowdefinitions_integration_test.go).
