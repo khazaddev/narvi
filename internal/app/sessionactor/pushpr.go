@@ -325,8 +325,8 @@ func (a *Actor) completeProcessingTurn(ctx context.Context, tx pgx.Tx, sandboxRo
 	return &pushSignal{gen: int(sandboxRow.Gen), repos: repos}, nil
 }
 
-// recordFalseFailureIfApplicable implements IMPLEMENTATION_PLAN.md row
-// 77's own "false failures" instrument (§5.3's metric list itself names
+// recordFalseFailureIfApplicable implements the "false failures"
+// instrument (§5.3's metric list itself names
 // no precise definition -- this is the derived semantics, reasoned from
 // this codebase's own already-modelled §3.2/§9.3-scenario-#4 "late-
 // success reconciliation" concept).

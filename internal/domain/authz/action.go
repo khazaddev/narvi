@@ -138,9 +138,8 @@ const (
 
 	// -- Row 4: "Manage automations, environments, repo/env secrets" —
 	// admin, maintainer only. No caller exists yet for any of these three
-	// (automations land in a later Phase 3.5 Step per
-	// docs/IMPLEMENTATION_PLAN.md; environments/secrets management UI is
-	// Phase 7) — reserved names only.
+	// (automations, §8.4, and the environments/secrets management UI,
+	// §12.2 item 5, are both built later) — reserved names only.
 
 	// ActionManageAutomations covers creating/editing/deleting automation
 	// rules.

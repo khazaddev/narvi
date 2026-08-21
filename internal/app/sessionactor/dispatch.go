@@ -1366,8 +1366,8 @@ func (a *Actor) planResume(
 // sequencing.
 //
 // This was a known, documented limitation pending §5.3's reconciler
-// (docs/IMPLEMENTATION_PLAN.md row 25, "reconciler + GC ... orphan
-// reaping"), which now exists (internal/app/reconciler): if CreateSandbox
+// (§5.3's own "reconciler + GC ... orphan reaping"), which now exists
+// (internal/app/reconciler): if CreateSandbox
 // above genuinely succeeds (createErr == nil, a real cloud resource now
 // exists under ref.ProviderID) but this actor's own epoch has gone stale
 // by the time the transact below runs (a legitimate pod-handoff race -- a

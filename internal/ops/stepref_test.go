@@ -142,3 +142,55 @@ func TestCheckStepRefs_ScansTypeScript(t *testing.T) {
 		})
 	}
 }
+
+// TestCheckStepRefs_CatchesPlanDocReferences pins planDocRefPattern.
+//
+// The Step-worded pattern cannot see "IMPLEMENTATION_PLAN.md row 87", which is
+// the same non-durable reference in different words. Widening stepRefPattern to
+// `row\s+\d+` looks like the fix and is not: it matches the TECHNICAL plan's own
+// §13.3 RBAC table rows ("§13.3 row 1", "row 6, admin-only") that this
+// convention actively wants cited. The rule that separates them does not count
+// rows at all -- source has no business naming the schedule.
+//
+// Both directions are exercised, because the second is what keeps this check
+// from fighting its users.
+func TestCheckStepRefs_CatchesPlanDocReferences(t *testing.T) {
+	cases := []struct {
+		name       string
+		line       string
+		wantCaught bool
+	}{
+		{"row citation by filename", `// see docs/IMPLEMENTATION_PLAN.md row 87 for the requirement.`, true},
+		{"bare filename, no row", `// confirmed against IMPLEMENTATION_PLAN.md before starting.`, true},
+		{"inside a shipped string, not a comment", `	metric.WithDescription("... IMPLEMENTATION_PLAN.md row 77: 'false failures'")`, true},
+		{"technical-plan RBAC table row", `// ActionViewAnalytics (§13.3 row 1: every role, including viewer).`, false},
+		{"technical-plan row, possessive", `// reusing ActionManageMembers (row 6, admin-only) instead of a new action.`, false},
+		{"an ordinary sentence about a table row", `// skip the header and read row 2 onward.`, false},
+	}
+
+	dir := t.TempDir()
+	pkgDir := filepath.Join(dir, "internal", "pkg")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := "package pkg\n\n" + c.line + "\nfunc x() {}\n"
+			path := filepath.Join(pkgDir, "fixture.go")
+			if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+			t.Cleanup(func() { _ = os.Remove(path) })
+
+			refs, err := CheckStepRefs(dir, []string{"internal"})
+			if err != nil {
+				t.Fatalf("CheckStepRefs: %v", err)
+			}
+			got := len(refs) > 0
+			if got != c.wantCaught {
+				t.Errorf("line %q: caught = %v, want %v (refs = %+v)", c.line, got, c.wantCaught, refs)
+			}
+		})
+	}
+}

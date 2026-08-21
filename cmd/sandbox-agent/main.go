@@ -66,7 +66,7 @@
 // events across a reconnect independently of whether the turn itself is
 // still running). git_sync_complete remains the EXACT log-only stub
 // originally shipped -- §3.4 (gitstate in-sandbox) is that command's own job,
-// per docs/IMPLEMENTATION_PLAN.md's own Phase 2 row assignment; leave it
+// per §3.4's own assignment of that work; leave it
 // exactly as it is.
 //
 // §9.3 ("e2e happy path") gives push its own real behavior:
@@ -274,7 +274,7 @@ func runCredentialHelper(args []string) error {
 // implementation. It started as an empty, log-only struct for all
 // 5 commands; HandlePrompt/HandleStop now have their real behavior
 // (push/snapshot/git_sync_complete are untouched, still unimplemented,
-// confirmed against docs/IMPLEMENTATION_PLAN.md rather
+// confirmed against the plan rather
 // than guessed).
 //
 // A *commandHandler (pointer receiver, unlike §6.1's value-receiver

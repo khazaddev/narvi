@@ -57,8 +57,8 @@
 // state.go's own top comment for why that package needed no change to
 // make this true. The THIRD clause -- "automation run counters
 // corrected" -- is honestly NOT addressed by this Step: automations are
-// not a built feature anywhere in this codebase yet (IMPLEMENTATION_PLAN.md
-// row 31+, Phase 3) -- there is no automation_runs table, no automation
+// not a built feature anywhere in this codebase yet (§8.4's own work,
+// not yet done) -- there is no automation_runs table, no automation
 // domain package, nothing to correct. This is a genuine, currently-
 // inapplicable gap in this Step's own delivery of §3.2's full sentence,
 // not a silent omission: whichever future Step first builds automation

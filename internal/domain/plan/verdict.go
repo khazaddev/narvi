@@ -23,7 +23,7 @@ import (
 // substring of a longer sentence ("I don't think we should reject this
 // early, let's approve it once X is fixed") is exactly the kind of
 // ambiguity a DETERMINISTIC keyword match (§8.1's own explicit
-// requirement, IMPLEMENTATION_PLAN.md row 38) must refuse to guess at --
+// requirement) must refuse to guess at --
 // MatchVerdict below only ever matches the WHOLE (trimmed, case-folded)
 // reply against one of these exact words, never a substring/contains
 // check.

@@ -14,8 +14,8 @@
 //
 // NOTE (§5.1, "webhook toolkit"): "webhook ingress" in that §5.2
 // sentence means Narvi's OWN webhook-shaped internal use (e.g. a future
-// generic user-configured automation trigger, IMPLEMENTATION_PLAN.md's
-// §8.2), NOT real third-party provider webhooks (GitHub/Slack/Linear).
+// generic user-configured automation trigger, §8.4), NOT real
+// third-party provider webhooks (GitHub/Slack/Linear).
 // Those providers sign their payloads in their own provider-defined
 // formats, structurally incompatible with this file's "{ts}.{sig}" bearer
 // wire format -- see internal/platform/webhooksig.go's own doc comment

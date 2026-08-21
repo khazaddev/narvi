@@ -58,12 +58,39 @@ import (
 // The whitespace after "Step(s)" is REQUIRED (\s+, not \s*): an identifier
 // like builtInPlanStep1ID has no space between "Step" and the digit, and
 // must never be mistaken for a citation.
+//
+// # The same citation wearing a different word
+//
+// The implementation plan's Step table is a table, so its rows also get
+// cited as rows: "docs/IMPLEMENTATION_PLAN.md row 87", "row 90's own
+// screen". That is the identical non-durable reference -- a position in a
+// table this project has renumbered before -- and stepRefPattern cannot see
+// any of it. Seven such citations were found in the SPA after every
+// Step-worded one had been swept, one of them rendered on screen to
+// operators ("Not part of this Step. ... is docs/IMPLEMENTATION_PLAN.md
+// row 90's own screen"), which is how the blind spot surfaced.
+//
+// Widening stepRefPattern to `row\s+\d+` is the obvious fix and it is the
+// wrong one: it matched 222 lines, and almost every one of them cites a row
+// of the TECHNICAL plan's own §13.3 RBAC table ("§13.3 row 1", "row 6,
+// admin-only") -- exactly the durable citation this convention asks for.
+// The rule that actually separates the two is simpler and needs no counting
+// of rows: source code has no business citing the implementation plan AT
+// ALL, by Step, by row, or by name. §N.M is the durable reference; the
+// implementation plan is a schedule. planDocRefPattern below enforces that
+// directly.
 var stepRefPattern = regexp.MustCompile(`Steps?\s+\(?\d+`)
 
 // narrativeStepLine matches a numbered step at the start of a comment line
 // that immediately introduces a local action with a colon -- see this
 // file's own top doc comment for why that shape is exempt.
 var narrativeStepLine = regexp.MustCompile(`^\s*//\s*(?:-{2,}\s*)?Step\s+\d+[a-z]?:\s`)
+
+// planDocRefPattern matches any mention of the implementation plan's own
+// filename in source. Deliberately the whole name and nothing cleverer:
+// there is no legitimate reason for code to point at the schedule, so the
+// check does not have to distinguish a row citation from a bare reference.
+var planDocRefPattern = regexp.MustCompile(`IMPLEMENTATION_PLAN`)
 
 // stepRefCheckExemptFiles names the files that document this very
 // convention (and the historical incident that motivated it,
@@ -143,6 +170,12 @@ func CheckStepRefs(root string, scanDirs []string) ([]StepRef, error) {
 					continue
 				}
 				if narrativeStepLine.MatchString(line) {
+					continue
+				}
+				out = append(out, StepRef{File: rel, Line: i + 1, Text: strings.TrimSpace(line)})
+			}
+			for i, line := range strings.Split(string(raw), "\n") {
+				if !planDocRefPattern.MatchString(line) {
 					continue
 				}
 				out = append(out, StepRef{File: rel, Line: i + 1, Text: strings.TrimSpace(line)})

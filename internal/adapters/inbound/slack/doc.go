@@ -148,8 +148,8 @@
 // internal/app/ports has no Notifier port yet, and the outbox table
 // (migrations/000010_outbox.up.sql) has no delivery-worker consumer --
 // both are explicitly §5.1's ("outbox delivery") own job, confirmed
-// against IMPLEMENTATION_PLAN.md before this Step started. Building
-// either here would be scope creep into that Step's own territory. An
+// against the plan before this work started. Building either here
+// would be scope creep into that territory. An
 // in-thread ack is also a latency-sensitive UX signal ("a mention was
 // received") that Slack's own redelivery behavior means must happen
 // synchronously, inside THIS request, well before a general outbox/

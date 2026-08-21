@@ -212,7 +212,7 @@ func newOpsMetrics(meter metric.Meter) (opsMetrics, error) {
 
 	falseFailure, err := meter.Int64Counter(
 		"turn_false_failure_total",
-		metric.WithDescription("Count of every late, real execution_complete{outcome:completed} that arrived for a session already terminalized Failed with failure_reason=timeout (§9.3 scenario #4's own late-execution_complete class; IMPLEMENTATION_PLAN.md row 77: 'false failures') -- the control plane's own turn_deadline inference, contradicted after the fact by the sandbox genuinely finishing."),
+		metric.WithDescription("Count of every late, real execution_complete{outcome:completed} that arrived for a session already terminalized Failed with failure_reason=timeout (§9.3 scenario #4's own late-execution_complete class; §5.3's 'false failures' instrument) -- the control plane's own turn_deadline inference, contradicted after the fact by the sandbox genuinely finishing."),
 		metric.WithUnit("{turn}"),
 	)
 	if err != nil {

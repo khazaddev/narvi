@@ -19,8 +19,8 @@
 //
 // Nothing here or in git history suggests per-TEST container isolation
 // was ever a deliberate correctness requirement for THIS package
-// specifically -- docs/TECHNICAL_PLAN.md and docs/IMPLEMENTATION_PLAN.md
-// say nothing about it, and git blame traces the pattern back to this
+// specifically -- neither plan document says anything about it, and
+// git blame traces the pattern back to this
 // repo's very first testcontainers-Postgres helper (internal/adapters/
 // outbound/postgres's own original), copied forward mechanically into
 // every new DB-touching test file/package ever since (see e.g. this

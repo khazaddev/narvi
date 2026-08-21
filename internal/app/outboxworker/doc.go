@@ -45,8 +45,8 @@
 //
 // Three OTel instruments are constructed once, at NewBuilder time
 // (mirroring app/imagebuild's own image_build_failure_streak precedent):
-// the outbox_lag gauge (IMPLEMENTATION_PLAN.md row 35's own explicit
-// requirement, §5.3's "outbox lag" observability item) observes, once per
+// the outbox_lag gauge (§5.3's own "outbox lag" observability item,
+// an explicit requirement there) observes, once per
 // tick, the age (in seconds) of the oldest still-due pending row at the
 // START of that tick's own claim step -- zero when nothing is overdue;
 // the outbox_due_backlog_count gauge (audit fix M15/M17) observes, once
