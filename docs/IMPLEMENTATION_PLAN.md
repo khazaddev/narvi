@@ -179,7 +179,18 @@ phase, seeds exactly what they build.
 | 77 | ops | Dashboards/alerts (false failures, outbox lag, orphans, boot p95), runbooks from the resilience catalog (§9.3) | §5.3 |
 | 78 | launch readiness | Production checklist, SLO alerts wired, on-call runbook; a per-surface user guide (web/Slack/Linear/GitHub) documenting what each surface accepts AND its honest negatives, shipped behavior only — a CI check ties every documented command to the `/contracts` route or classifier routing record (§18.4) that actually implements it, so the guide can never drift into aspirational text | §10-P6 |
 
-## Phase 7 — UI (16 Steps, visual spec = nine-view mockups)
+## Phase 7 — UI, and the backend surfaces it needs (16 Steps, visual spec = nine-view mockups)
+
+Fourteen UI Steps and two backend ones. The two (88, 90) are here rather than in an earlier phase
+because nothing before Phase 7 needed them, and rather than in Phase 11 because they **block**
+scheduled work — 88 is what 91 and 93 call, 90 is what 92 calls. Phase 11 is explicitly for gaps
+that block nothing, and a prerequisite filed there would both violate that rule and sit at a higher
+Step number than its own consumer, breaking the property that a Step's number states its position.
+
+They exist because three of the four UI rows after 87 turned out to assume a REST surface that was
+never built: the DTOs, the RBAC actions and the engines all shipped, and no handler reached any of
+them. Checking a row against the surface it assumes, before starting it, is cheap and was not being
+done.
 
 | Step | Title | Content | Ref. |
 |---|---|---|---|
@@ -325,7 +336,8 @@ A holding place for work that is real, is not speculative, and is **not blocking
 scheduled**. The rule that keeps it honest: a gap goes here only if the Step that found it shipped
 correctly without it, having said on screen or in its own docs what is missing. A gap that blocks a
 scheduled Step is not filed here — it becomes a Step of its own, immediately before its consumer,
-the way Steps 88 and 90 did.
+the way Steps 88 and 90 did — which is also why those two sit in Phase 7 despite being backend
+work, and why that phase's own title says so.
 
 This phase has no exit criterion of its own and gates nothing. Items are pulled from it when
 something starts needing them, or deleted when the need turns out never to arrive. Nothing here may
