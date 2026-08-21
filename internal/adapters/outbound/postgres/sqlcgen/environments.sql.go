@@ -100,3 +100,44 @@ func (q *Queries) GetEnvironment(ctx context.Context, id pgtype.UUID) (Environme
 	)
 	return i, err
 }
+
+const listEnvironments = `-- name: ListEnvironments :many
+SELECT id, path_scope, mock_configured, created_at, contracts_path, docker_required, egress_policy_mode, egress_policy_allowlist FROM environments
+ORDER BY created_at DESC
+`
+
+// §12.2 item 5: the first standalone READ over every environments
+// row that exists, newest-first -- this table's own doc comment above is
+// explicit that create/update stay inline-at-session-creation-time only;
+// this query adds no write path, only the discoverability a "Settings ->
+// Environments" screen and every environment-scoped §27 sub-screen
+// (sandbox-secrets/opencode-config/cloud-identity-bindings/cluster-binding,
+// all already keyed by environments.id) need to enumerate valid ids at all.
+func (q *Queries) ListEnvironments(ctx context.Context) ([]Environment, error) {
+	rows, err := q.db.Query(ctx, listEnvironments)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Environment
+	for rows.Next() {
+		var i Environment
+		if err := rows.Scan(
+			&i.ID,
+			&i.PathScope,
+			&i.MockConfigured,
+			&i.CreatedAt,
+			&i.ContractsPath,
+			&i.DockerRequired,
+			&i.EgressPolicyMode,
+			&i.EgressPolicyAllowlist,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

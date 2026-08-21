@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 )
 
@@ -307,5 +308,52 @@ func TestUpsertIntentTemplate_ExistingName_OverwritesInPlace(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("rows for %q = %d, want exactly 1 (overwrite in place, never a second row/version)", seededTemplateName, count)
+	}
+}
+
+// TestListPromptTemplates_MemberDenied proves the real server-side gate:
+// a member (below authz.ActionActivatePromptTemplate's admin-only floor,
+// the SAME gate preview/upsert above already use) gets a genuine 403 from
+// the list endpoint itself.
+func TestListPromptTemplates_MemberDenied(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMember)
+
+	status := rig.doJSON(t, http.MethodGet, "/api/intent-templates", nil, nil, token)
+	if status != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", status, http.StatusForbidden)
+	}
+}
+
+// TestListPromptTemplates_AdminAllowed_RendersSeededRow proves an admin
+// sees the migration-seeded "intent_classifier_system" row back through
+// the NEW /contracts-generated restdtos.PromptTemplate shape -- proving
+// this list endpoint and the pre-existing hand-written upsert response
+// (intentTemplateDTOForTest above) describe the SAME wire shape, even
+// though only one of the two is contracts-generated.
+func TestListPromptTemplates_AdminAllowed_RendersSeededRow(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
+
+	var resp restdtos.ListPromptTemplatesResponse
+	status := rig.doJSON(t, http.MethodGet, "/api/intent-templates", nil, &resp, token)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+
+	found := false
+	for _, tpl := range resp.PromptTemplates {
+		if tpl.Name != seededTemplateName {
+			continue
+		}
+		found = true
+		if tpl.Template == "" {
+			t.Errorf("Template is empty for seeded row %q", seededTemplateName)
+		}
+	}
+	if !found {
+		t.Fatalf("seeded template %q not present in response: %+v", seededTemplateName, resp.PromptTemplates)
 	}
 }

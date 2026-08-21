@@ -1262,6 +1262,22 @@ func serve() error {
 		r.Use(auth.Middleware(userSessionStore, userStore))
 		r.Post("/preview", httpapi.PreviewIntentTemplate())
 		r.Post("/", httpapi.UpsertIntentTemplate(pool, promptTemplateStore, auditLogStore))
+		// GET / ("ui settings + analytics", §12.2 item 5): the
+		// Settings -> Prompt templates screen's own list data source --
+		// see httpapi/classifiertemplates.go's own ListPromptTemplates doc
+		// comment for why this reuses the SAME admin-only gate as
+		// preview/upsert above.
+		r.Get("/", httpapi.ListPromptTemplates(promptTemplateStore))
+	})
+
+	// /api/environments ("ui settings + analytics", §12.2 item 5):
+	// the first standalone read over the environments table -- see
+	// httpapi/environments.go's own doc comment for the full "why a list
+	// endpoint, why not full CRUD" design. Mounted behind auth.Middleware
+	// like every other browser-facing REST route in this package.
+	router.Route("/api/environments", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Get("/", httpapi.ListEnvironments(environmentStore))
 	})
 
 	// REST routes the UI needs (§6.3, §6.2's own plan row: "create/get/
@@ -1443,6 +1459,18 @@ func serve() error {
 	router.Route("/api/repos/{owner}/{repo}/review-analytics", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
 		r.Get("/", httpapi.GetReviewAnalytics(reviewVerdictDeps, githubPRSessionStore))
+	})
+
+	// /api/repos/{owner}/{repo}/digest-scope ("ui settings +
+	// analytics", §12.2 item 5, §21.3): read-only derived view of which
+	// Slack channels/Linear organizations would receive this repo's own
+	// next daily digest -- see httpapi/digestscope.go's own doc comment
+	// for why this is read-only (§21.3's scope is computed, never stored).
+	// Gated by the SAME authz.ActionViewAnalytics as review-analytics
+	// immediately above.
+	router.Route("/api/repos/{owner}/{repo}/digest-scope", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Get("/", httpapi.GetRepoDigestScope(digestChannelStore, githubPRSessionStore, cfg.Timeouts))
 	})
 
 	// /api/repos/{owner}/{repo}/provider-credentials,

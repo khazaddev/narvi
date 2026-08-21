@@ -37,3 +37,14 @@ RETURNING *;
 -- MockConfigured and read ContractsPath.
 SELECT * FROM environments
 WHERE id = $1;
+
+-- name: ListEnvironments :many
+-- §12.2 item 5: the first standalone READ over every environments
+-- row that exists, newest-first -- this table's own doc comment above is
+-- explicit that create/update stay inline-at-session-creation-time only;
+-- this query adds no write path, only the discoverability a "Settings ->
+-- Environments" screen and every environment-scoped §27 sub-screen
+-- (sandbox-secrets/opencode-config/cloud-identity-bindings/cluster-binding,
+-- all already keyed by environments.id) need to enumerate valid ids at all.
+SELECT * FROM environments
+ORDER BY created_at DESC;

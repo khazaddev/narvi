@@ -69,6 +69,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/app/auditlog"
 	"github.com/khazaddev/narvi/internal/domain/authz"
@@ -324,5 +325,46 @@ func UpsertIntentTemplate(pool *pgxpool.Pool, templates *postgres.PromptTemplate
 			Template:  row.Template,
 			UpdatedAt: row.UpdatedAt.Time,
 		})
+	}
+}
+
+// ListPromptTemplates backs GET /api/intent-templates (§12.2 item 5): the
+// Settings -> Prompt templates screen's own list data source, closing the
+// same "the write side had no way to be discovered" gap
+// PreviewIntentTemplate/UpsertIntentTemplate above already exist for the
+// write side of this table. Admin-only (authz.
+// ActionActivatePromptTemplate), the SAME action Preview/Upsert already
+// use -- one action gates every endpoint of this table's own small
+// management surface. Unlike UpsertIntentTemplate's own hand-written
+// intentTemplateDTO response shape (this file's own top doc comment: "no
+// /contracts codegen migration this batch"), this NEW endpoint returns
+// the /contracts-generated restdtos.PromptTemplate -- structurally
+// identical (name/template/updatedAt), so both endpoints stay
+// wire-compatible with the SAME frontend type despite one predating the
+// other's schema entry.
+func ListPromptTemplates(templates *postgres.PromptTemplateStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authz.ActionActivatePromptTemplate, authz.Resource{}) {
+			return
+		}
+		ctx := r.Context()
+		logger := platform.Logger(ctx)
+
+		rows, err := templates.List(ctx)
+		if err != nil {
+			logger.Error("httpapi: list prompt templates failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		wire := make([]restdtos.PromptTemplate, len(rows))
+		for i, row := range rows {
+			wire[i] = restdtos.PromptTemplate{
+				Name:      row.Name,
+				Template:  row.Template,
+				UpdatedAt: row.UpdatedAt.Time,
+			}
+		}
+		writeJSON(w, http.StatusOK, restdtos.ListPromptTemplatesResponse{PromptTemplates: wire})
 	}
 }

@@ -33,6 +33,35 @@ func (q *Queries) GetPromptTemplate(ctx context.Context, name string) (PromptTem
 	return i, err
 }
 
+const listPromptTemplates = `-- name: ListPromptTemplates :many
+SELECT name, template, updated_at FROM prompt_templates
+ORDER BY name
+`
+
+// §12.2 item 5: the first standalone READ over every
+// prompt_templates row, ordered by name -- the Settings -> Prompt
+// templates screen's own list data source. Adds no write path; Upsert
+// above is unchanged.
+func (q *Queries) ListPromptTemplates(ctx context.Context) ([]PromptTemplate, error) {
+	rows, err := q.db.Query(ctx, listPromptTemplates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PromptTemplate
+	for rows.Next() {
+		var i PromptTemplate
+		if err := rows.Scan(&i.Name, &i.Template, &i.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertPromptTemplate = `-- name: UpsertPromptTemplate :one
 INSERT INTO prompt_templates (name, template)
 VALUES ($1, $2)
