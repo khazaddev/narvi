@@ -8,6 +8,13 @@
 /control-plane
 /sandbox-agent
 
+# `make dist`'s own output (Makefile's own dist target comment) -- the
+# single self-contained binary built from cmd/control-plane under the
+# web_assets tag, named `narvi` rather than `control-plane` to match
+# TECHNICAL_PLAN.md §12.1's "narvi serve". A build artifact like the two
+# above, never committed.
+/narvi
+
 # Web UI build output (§12.1): `make web-build`/`vite build` writes directly
 # here -- see web/vite.config.ts's own comment for why the frontend
 # bundler's outDir points inside this Go package instead of the more
