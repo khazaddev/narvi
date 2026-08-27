@@ -106,6 +106,65 @@ func TestTurnStore_RecordStepCostUSD_ConcurrentSameTurn_SumsAllIncrements(t *tes
 // exactly 0.00. A cost column that reports free is worse than no column,
 // and it reports free most confidently for the cheap high-step-count turns
 // the figure matters most for.
+// TestTurnStore_RecordStepCostUSD_ReplayAcrossTurnBoundary_ChargesOnce is
+// the case the first key could not see. §6.1's sender buffers events and
+// re-sends them on reconnect, and that replay can arrive after the turn it
+// was emitted for has ended and the next one has begun. Keyed on
+// (turn_id, step_id), the replay resolved a DIFFERENT turn, did not
+// conflict, and charged the same step a second time -- measured at $10.00
+// for one $5.00 step. An idempotency key derived from state that moves
+// between the two deliveries it exists to tell apart is not one.
+func TestTurnStore_RecordStepCostUSD_ReplayAcrossTurnBoundary_ChargesOnce(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+	turnStore := narvipg.NewTurnStore(pool)
+
+	first, err := turnStore.Create(ctx, sqlcgen.CreateTurnParams{SessionID: sessionID, Status: sqlcgen.TurnStatusProcessing})
+	if err != nil {
+		t.Fatalf("create first turn: %v", err)
+	}
+
+	const stepID = "prt_step_replayed"
+	const cost = 5.00
+	if _, err := turnStore.RecordStepCostUSD(ctx, sessionID, stepID, cost); err != nil {
+		t.Fatalf("first delivery: %v", err)
+	}
+
+	// The turn boundary: the first turn terminalizes and the next one starts.
+	if _, err := pool.Exec(ctx, `UPDATE turns SET status = 'completed' WHERE id = $1`, first.ID); err != nil {
+		t.Fatalf("terminalize first turn: %v", err)
+	}
+	second, err := turnStore.Create(ctx, sqlcgen.CreateTurnParams{SessionID: sessionID, Status: sqlcgen.TurnStatusProcessing})
+	if err != nil {
+		t.Fatalf("create second turn: %v", err)
+	}
+
+	// The reconnect replay of the SAME step_finish, now landing mid-second-turn.
+	if _, err := turnStore.RecordStepCostUSD(ctx, sessionID, stepID, cost); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+
+	var total float64
+	if err := pool.QueryRow(ctx,
+		`SELECT COALESCE(SUM(cost_usd), 0)::float8 FROM turns WHERE session_id = $1`, sessionID,
+	).Scan(&total); err != nil {
+		t.Fatalf("sum session cost: %v", err)
+	}
+	if total != cost {
+		t.Errorf("session charged %v in total for ONE $%v step delivered twice across a turn boundary; want %v", total, cost, cost)
+	}
+
+	// And it stayed on the turn that actually ran the step, not the new one.
+	got, err := turnStore.Get(ctx, second.ID)
+	if err != nil {
+		t.Fatalf("get second turn: %v", err)
+	}
+	if v, ok := appreviewtriage.NumericToFloat64(got.CostUsd); ok {
+		t.Errorf("the replay landed %v on the turn that started AFTER the step ran; want that turn untouched", v)
+	}
+}
+
 func TestTurnStore_RecordStepCostUSD_SubCentIncrementsAccumulate(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)

@@ -323,6 +323,16 @@ function SigningKeyRotationSection({ canRotate }: { canRotate: boolean }) {
     onSuccess: () => setConfirming(false),
   })
 
+  // Fail closed means the affordance appears only once the probe has
+  // AFFIRMATIVELY answered, not merely when it has failed to say no. Keyed
+  // on "is this an explicit 503", the button rendered while the probe was
+  // still in flight and on every non-503 failure -- a network drop, a 500,
+  // a timeout -- which is the state where least is known and the button is
+  // least defensible. The server would still refuse the rotation, so this
+  // was never an escalation; it is the affordance itself that §27.3 says
+  // must not be there, because offering an operator a destructive-adjacent
+  // action for a capability that may not exist is its own defect.
+  const capabilityOn = capabilityQuery.isSuccess
   const capabilityOff = capabilityQuery.isError && capabilityQuery.error instanceof ApiError && capabilityQuery.error.status === 503
   if (capabilityOff) {
     return (
@@ -335,6 +345,21 @@ function SigningKeyRotationSection({ canRotate }: { canRotate: boolean }) {
     )
   }
   if (!canRotate) return null
+  if (!capabilityOn) {
+    // Still asking, or asked and could not find out. Either way this
+    // deployment has not been shown to have the capability, so it gets no
+    // rotation control -- only a line saying which of the two it is.
+    return (
+      <div className="panel">
+        <h4>Cloud-identity signing-key rotation</h4>
+        <p className="rail-empty">
+          {capabilityQuery.isPending
+            ? 'Checking whether cloud identity federation is configured…'
+            : "Couldn't check whether cloud identity federation is configured, so no rotation is offered."}
+        </p>
+      </div>
+    )
+  }
 
   return (
     <div className="panel">

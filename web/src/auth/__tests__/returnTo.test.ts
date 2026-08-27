@@ -45,3 +45,31 @@ describe('isSafeReturnTo', () => {
     expect(isSafeReturnTo('/sign-in-evil')).toBe(false)
   })
 })
+
+describe('isSafeReturnTo -- the allowlist must cover the routes that actually exist', () => {
+  // It stopped at '/' and '/sign-in' while eleven more routes shipped, so a
+  // signed-out operator following a deep link lost their destination. These
+  // pin the two properties that matter together: a real route is kept, and
+  // the guard is still an exact match rather than a prefix test.
+  it.each(['/sessions', '/automations', '/workflows', '/settings', '/repo-settings', '/analytics'])(
+    'keeps %s, a route this app really has',
+    (route) => {
+      expect(isSafeReturnTo(route)).toBe(true)
+    },
+  )
+
+  it('keeps a session route and its children, id and all', () => {
+    const id = '3f2504e0-4f89-11d3-9a0c-0305e82c3301'
+    expect(isSafeReturnTo(`/session/${id}`)).toBe(true)
+    expect(isSafeReturnTo(`/session/${id}/review`)).toBe(true)
+    expect(isSafeReturnTo(`/session/${id}/runs`)).toBe(true)
+  })
+
+  it('still refuses anything that merely looks like one', () => {
+    expect(isSafeReturnTo('/session/not-a-uuid')).toBe(false)
+    expect(isSafeReturnTo('/settings/../../evil')).toBe(false)
+    expect(isSafeReturnTo('/settingsevil')).toBe(false)
+    expect(isSafeReturnTo('//evil.example')).toBe(false)
+    expect(isSafeReturnTo('/session/3f2504e0-4f89-11d3-9a0c-0305e82c3301/evil')).toBe(false)
+  })
+})

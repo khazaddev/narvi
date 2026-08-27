@@ -12,6 +12,7 @@
 // would start failing (a raw "<img" tag would appear in the output
 // instead of the escaped "&lt;img"), which is the whole point.
 import { describe, expect, it } from 'vitest'
+import { buildCostRollup } from '../costRollup'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
@@ -123,11 +124,35 @@ describe('Timeline rendering -- adversarial content stays text, never markup', (
   })
 })
 
+// The header and the rail sat a few hundred pixels apart on the same screen
+// showing two different totals for one session's cost, because the header
+// summed the TIMELINE's per-step costs and the timeline deliberately routes
+// sub-task spend out of the main lane. The header reads the cost rollup now
+// -- the same value the rail reads -- and this pins it: a session whose only
+// spend is inside a sub-task must not render as having spent nothing.
+describe('SessionHeader cost -- one session, one total', () => {
+  it('includes sub-task spend, which the timeline model deliberately excludes', () => {
+    const session = baseSession({})
+    const model = buildTimelineModel([])
+    const cost = buildCostRollup([])
+    const html = renderToStaticMarkup(<SessionHeader session={session} model={model} cost={{ ...cost, sessionUsd: 0.75 }} />)
+    expect(html).toContain('$0.75')
+  })
+
+  it('renders a null total as an absence, never as free', () => {
+    const session = baseSession({})
+    const model = buildTimelineModel([])
+    const cost = buildCostRollup([])
+    const html = renderToStaticMarkup(<SessionHeader session={session} model={model} cost={{ ...cost, sessionUsd: null }} />)
+    expect(html).not.toContain('$0.00')
+  })
+})
+
 describe('SessionHeader rendering -- a hostile session title stays text', () => {
   it('escapes a hostile session title', () => {
     const session = baseSession({ title: XSS_PAYLOAD })
     const model = buildTimelineModel([])
-    const html = renderToStaticMarkup(<SessionHeader session={session} model={model} />)
+    const html = renderToStaticMarkup(<SessionHeader session={session} model={model} cost={buildCostRollup([])} />)
     expect(html).not.toContain('<img')
     expect(html).toContain('&lt;img')
   })
@@ -135,7 +160,7 @@ describe('SessionHeader rendering -- a hostile session title stays text', () => 
   it('escapes a hostile repo name', () => {
     const session = baseSession({ repos: [{ name: SCRIPT_PAYLOAD, url: 'https://example.invalid/x.git', branch: null }] })
     const model = buildTimelineModel([])
-    const html = renderToStaticMarkup(<SessionHeader session={session} model={model} />)
+    const html = renderToStaticMarkup(<SessionHeader session={session} model={model} cost={buildCostRollup([])} />)
     expect(html).not.toContain('<script>')
     expect(html).toContain('&lt;script&gt;')
   })

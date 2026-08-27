@@ -22,10 +22,29 @@
 // substring/prefix check (`path.startsWith('/')`) is exactly the
 // weakened form this file's own tests prove insufficient -- see
 // __tests__/returnTo.test.ts's own mutation-test block.
+// Every top-level route this app has. It stopped at '/' and '/sign-in'
+// while eleven more shipped around it, so a signed-out operator following
+// a deep link -- the normal way one arrives, from a digest or a mention --
+// had their destination silently dropped and landed on the home view.
+// The failure was closed rather than open, which is why nothing noticed.
+//
+// Session-scoped routes are matched by shape rather than listed, since
+// they carry an id: the guard is still an exact match against a known
+// route, with the id segment validated, never a prefix test.
 const KNOWN_RETURN_TO_ROUTES: readonly string[] = [
   '/',
   '/sign-in',
+  '/sessions',
+  '/automations',
+  '/workflows',
+  '/settings',
+  '/repo-settings',
+  '/analytics',
 ]
+
+// A session route and its children: /session/<uuid>[/plan|review|release-review|runs].
+const SESSION_ROUTE_PATTERN =
+  /^\/session\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(\/(plan|review|release-review|runs))?$/
 
 /**
  * isSafeReturnTo reports whether path is one of this app's own known,
@@ -38,7 +57,7 @@ const KNOWN_RETURN_TO_ROUTES: readonly string[] = [
  * bug to route around with a looser check.
  */
 export function isSafeReturnTo(path: string): boolean {
-  return KNOWN_RETURN_TO_ROUTES.includes(path)
+  return KNOWN_RETURN_TO_ROUTES.includes(path) || SESSION_ROUTE_PATTERN.test(path)
 }
 
 export { KNOWN_RETURN_TO_ROUTES }

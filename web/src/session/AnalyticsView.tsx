@@ -100,7 +100,7 @@ function ReviewRiskSection({ owner, repo }: { owner: string; repo: string }) {
     <div className="charts2">
       <div className="chart">
         <h4>Shippable classification, per day</h4>
-        <p className="ch">§21.1's own timeseries rollup</p>
+        <p className="ch">the timeseries rollup</p>
         {!data.timeseriesComputed && <p className="notavailable">Not available yet -- no review verdicts posted for this repo in the analytics window.</p>}
         {data.timeseriesComputed && data.timeseries && (
           <>
@@ -134,7 +134,7 @@ function ReviewRiskSection({ owner, repo }: { owner: string; repo: string }) {
 
       <div className="chart">
         <h4>Top risk drivers</h4>
-        <p className="ch">§21.1's own top-risk-driver breakdown</p>
+        <p className="ch">the top-risk-driver breakdown</p>
         {!data.topRiskDriversComputed && <p className="notavailable">Not available yet -- no review verdicts posted for this repo in the analytics window.</p>}
         {data.topRiskDriversComputed && data.topRiskDrivers && data.topRiskDrivers.length === 0 && <p style={{ color: 'var(--faint)', fontSize: 'var(--text-sm)' }}>Verdicts exist, but none tagged a risk driver.</p>}
         {data.topRiskDriversComputed && data.topRiskDrivers && data.topRiskDrivers.length > 0 && (
@@ -154,7 +154,7 @@ function ReviewRiskSection({ owner, repo }: { owner: string; repo: string }) {
 
       <div className="chart">
         <h4>Review · finding outcomes</h4>
-        <p className="ch">§21.1's own "Review finding outcomes" KPI</p>
+        <p className="ch">the "Review finding outcomes" KPI</p>
         {!data.findingOutcomesComputed && <p className="notavailable">Not available yet -- no review findings reported for this repo in the analytics window.</p>}
         {data.findingOutcomesComputed && data.findingOutcomes && data.findingOutcomes.length > 0 && (
           <>
@@ -177,7 +177,7 @@ function ReviewRiskSection({ owner, repo }: { owner: string; repo: string }) {
 
       <div className="chart">
         <h4>Digest contestation rate</h4>
-        <p className="ch">§26.5's own "digest precision" KPI -- deep-path arch recaps only</p>
+        <p className="ch">the "digest precision" KPI -- deep-path arch recaps only</p>
         {!data.digestContestationRateComputed && <p className="notavailable">Not available yet -- no deep-path verdicts posted for this repo in the analytics window.</p>}
         {data.digestContestationRateComputed && data.digestContestationRatePercent !== null && <div className="tile" style={{ border: 'none', padding: 0 }}>
           <span className="big">{data.digestContestationRatePercent.toFixed(1)}%</span>
@@ -268,7 +268,7 @@ export function AnalyticsView() {
 
           <div className="panel">
             <h4>Review-risk analytics &amp; digest scope</h4>
-            <p className="ph">Live per-repository figures (§21.1, §21.3).</p>
+            <p className="ph">Live per-repository figures.</p>
             <div className="formrow">
               <input placeholder="owner" value={owner} onChange={(e) => setOwner(e.target.value)} />
               <input placeholder="repo" value={repo} onChange={(e) => setRepo(e.target.value)} />

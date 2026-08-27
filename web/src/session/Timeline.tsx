@@ -15,6 +15,7 @@
 // a URL (artifact links live in the rail -- this file renders no
 // href from event content at all).
 import { useState } from 'react'
+import { formatUsd } from './money'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 
 import { createTurn } from '../api/endpoints'
@@ -139,7 +140,7 @@ function StepCard({ step, live }: { step: StepNode; live: boolean }) {
         {step.cost && (
           <div className="step-sum">
             {step.toolCalls.length} call{step.toolCalls.length === 1 ? '' : 's'} · {step.cost.inputTokens + step.cost.outputTokens} tokens
-            {step.cost.usd !== null ? ` · $${step.cost.usd.toFixed(2)}` : ''}
+            {step.cost.usd !== null ? ` · ${formatUsd(step.cost.usd)}` : ''}
           </div>
         )}
       </div>
