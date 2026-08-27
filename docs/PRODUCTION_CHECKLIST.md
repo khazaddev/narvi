@@ -155,3 +155,33 @@ whatever paging rotation this organization uses, and that engineer has
 actually read [`docs/ONCALL.md`](ONCALL.md) — the entry point this
 checklist's own item 7 above, and every alert's own `runbook` field
 (`deploy/observability/alerts/*.json`), point at.
+
+## 9. `NARVI_SHADOW_MODE` is unset on this fleet, and no rolling change to it is planned
+
+**Why this is here.** `platform.Config.ShadowMode` (`NARVI_SHADOW_MODE`)
+is `docs/TECHNICAL_PLAN.md` §30.8's own deployment-level master switch
+for platform shadow mode — read once per process at boot, forcing every
+repository's egress shadow for the whole process regardless of what any
+individual repository's own settings say. It is built for a
+purpose-stood-up evaluation deployment that never serves real customer
+traffic, not for a normal production fleet, and it is per-**process**
+while a real fleet is multi-pod: changing it with a rolling restart
+produces a mixed fleet in which a pod that has already picked up the new
+value coexists, for the whole rollout window, with a pod still running
+the old one. A shadow-to-live change made that way means a still-live pod
+can really deliver an effect a shadow pod already enqueued — the exact
+customer-visible leak this whole capability exists to prevent.
+
+**Check.** On every process in this deployment's fleet: `NARVI_SHADOW_MODE`
+is unset (or explicitly `false`) — confirm this on the actual running
+environment, not merely a config template. If a shadow evaluation is
+genuinely needed, it runs on its own, separately provisioned deployment
+(§30.10's "minimal safe subset", `NARVI_SHADOW_MODE=1` plus the
+credential-starvation and read-only-token work its own Steps add), never
+as a value toggled on this one. A boot with an unparseable value never
+reaches this point at all — `platform.InvalidShadowModeError` fails
+startup outright — so, as with item 1's own `NARVI_ROLLOUT_MODE` check,
+"the process is running" already rules out that failure mode; this item
+is about the two values `strconv.ParseBool` DOES accept, `true` and
+`false`, neither of which boot itself can distinguish from a deliberate
+production choice.

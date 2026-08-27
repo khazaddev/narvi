@@ -209,6 +209,21 @@ func (s *RepoSettingsStore) UpsertSessionsEnabled(ctx context.Context, repoFullN
 	})
 }
 
+// UpsertLiveEgressEnabled idempotently creates-or-updates repoFullName's
+// §30.8 egress-mode authority -- COLUMN-SCOPED (mirrors
+// UpsertSessionsEnabled's own identical shape): touches ONLY
+// live_egress_enabled, leaving every other repo_settings column
+// completely untouched. Called by the seed tool only in v1 (internal/
+// app/seed/reposettings.go) -- no REST route calls this yet; see that
+// file's own doc comment for the full "why" and for how this write is
+// journaled to audit_log.
+func (s *RepoSettingsStore) UpsertLiveEgressEnabled(ctx context.Context, repoFullName string, liveEgressEnabled bool) (sqlcgen.RepoSetting, error) {
+	return s.q.UpsertLiveEgressEnabled(ctx, sqlcgen.UpsertLiveEgressEnabledParams{
+		RepoFullName:      repoFullName,
+		LiveEgressEnabled: liveEgressEnabled,
+	})
+}
+
 // ListAutoMergeEnabled returns every repo_settings row with
 // auto_merge_enabled = true -- internal/app/automerge's own per-tick
 // repo enumeration (see ListAutoMergeEnabledRepos' own generated doc

@@ -516,6 +516,51 @@ func TestRun_RepoSettings_ReconcileToDeclared_PreservesUndeclaredFields(t *testi
 	}
 }
 
+// TestRun_RepoSettings_LiveEgressEnabled_JournaledToAuditLog is §30.8's
+// own "flag flips journaled to audit_log" requirement, exercised through
+// this tool -- the ONE writer of repo_settings.live_egress_enabled in v1
+// (internal/domain/seedmanifest.RepoSetting.LiveEgressEnabled's own doc
+// comment names why: no REST route exists for this column yet, unlike
+// every sibling toggle that already has one). Declaring the field must
+// actually flip the column (not merely report success) AND produce an
+// audit_log row naming the exact field/value that changed -- the second
+// half is the part a naive "Upsert succeeded" assertion alone would miss.
+func TestRun_RepoSettings_LiveEgressEnabled_JournaledToAuditLog(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	deps := newTestDeps(t, nil)
+	const repo = "example-org/shadow-repo"
+
+	trueVal := true
+	m := &seedmanifest.Manifest{RepoSettings: []seedmanifest.RepoSetting{
+		{RepoFullName: repo, LiveEgressEnabled: &trueVal},
+	}}
+	report, err := seed.Run(ctx, deps, m, false)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	requireNoItemErrors(t, report)
+
+	row, err := deps.RepoSettings.Get(ctx, repo)
+	if err != nil {
+		t.Fatalf("get repo settings: %v", err)
+	}
+	if !row.LiveEgressEnabled {
+		t.Error("live_egress_enabled = false, want true (declared by manifest)")
+	}
+
+	var detailJSON []byte
+	if err := deps.Pool.QueryRow(ctx,
+		"SELECT detail_json FROM audit_log WHERE action = 'seed.repo_setting_upserted' AND resource_id = $1",
+		repo,
+	).Scan(&detailJSON); err != nil {
+		t.Fatalf("query audit_log for the live-egress flip: %v", err)
+	}
+	if !strings.Contains(string(detailJSON), "liveEgressEnabled=true") {
+		t.Errorf("audit_log detail_json = %s, want it to name liveEgressEnabled=true", detailJSON)
+	}
+}
+
 func TestRun_RWXPreview_ReconcilesEveryRun(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

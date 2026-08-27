@@ -865,6 +865,30 @@ func (e *InvalidEpistemicCheckDefaultError) Error() string {
 	return fmt.Sprintf("invalid %s=%q: must be a boolean (true/false/1/0/T/F/...)", epistemicCheckDefaultEnvVarName, e.Value)
 }
 
+// shadowModeEnvVarName configures §30.8's own deployment-level master
+// switch for platform shadow mode, read from NARVI_SHADOW_MODE. Optional,
+// default false -- mirrors epistemicCheckDefaultEnvVarName's own
+// "optional boolean, safe default" precedent immediately above. Unlike
+// EVERY other boolean/enum switch in this file, true here is NOT a
+// deployment's steady-state configuration: §30.8 reserves it for
+// dedicated evaluation deployments, evaluated once at process start and
+// never intended to change on a running fleet -- see Config.ShadowMode's
+// own doc comment for the full "why", and docs/PRODUCTION_CHECKLIST.md
+// for the operator-facing form of the same warning.
+const shadowModeEnvVarName = "NARVI_SHADOW_MODE"
+
+// InvalidShadowModeError is returned by Load when NARVI_SHADOW_MODE is
+// set to a value strconv.ParseBool does not recognize -- mirrors
+// InvalidEpistemicCheckDefaultError's own identical shape immediately
+// above, one boolean env var over.
+type InvalidShadowModeError struct {
+	Value string
+}
+
+func (e *InvalidShadowModeError) Error() string {
+	return fmt.Sprintf("invalid %s=%q: must be a boolean (true/false/1/0/T/F/...)", shadowModeEnvVarName, e.Value)
+}
+
 // RolloutMode is a type ALIAS (not a new, parallel type) for
 // internal/domain/rollout.Mode -- Config.RolloutMode below is spelled
 // platform.RolloutMode purely so every one of this Step's own call sites
@@ -1217,6 +1241,41 @@ type Config struct {
 	// both gate on this value -- see internal/domain/rollout's own doc
 	// comment for the shared pure decision both sites call.
 	RolloutMode rollout.Mode
+
+	// ShadowMode is §30.8's own deployment-level master switch for
+	// platform shadow mode (§30, "zero-trace evaluation on live customer
+	// repositories"), read from NARVI_SHADOW_MODE. Optional: defaults to
+	// false when unset, matching EpistemicCheckDefault's own "off by
+	// default" shape immediately above.
+	//
+	// Effective per-repo egress mode is "ShadowMode OR NOT
+	// repo_settings.live_egress_enabled" (internal/app/egressmode.
+	// Resolve, the ONE place that formula is evaluated) -- true here
+	// forces EVERY repo shadow for the whole process regardless of what
+	// any individual repo_settings row says, exactly like RolloutMode's
+	// own "master switch overrides the per-repo flag" shape above, one
+	// section over.
+	//
+	// The sharp edge, named because an operator WILL meet it: this
+	// switch is per-PROCESS, and the fleet is multi-pod (the same reason
+	// the outbox worker's own claim uses `FOR UPDATE SKIP LOCKED` rather
+	// than trusting a single process). Changing this value with a
+	// ROLLING restart produces a mixed fleet in which a pod that has
+	// already picked up the new value coexists, for the whole rollout
+	// window, with a pod still running the old one -- and if the change
+	// is shadow-to-live, that still-live pod really delivers outbox rows
+	// a shadow pod enqueued (§30.8's own "born-shadow is terminally
+	// shadow" epoch stamp closes THAT specific race once the outbox's own
+	// enqueue-time stamp lands, but nothing about a bare env var flip is
+	// safe to assume closes every other one). This switch is therefore
+	// reserved for DEDICATED EVALUATION deployments stood up
+	// already-configured -- never a value flipped on an existing running
+	// fleet. The per-repo Postgres
+	// flag (repo_settings.live_egress_enabled) remains the transactional
+	// authority every pod in a real fleet actually shares; see
+	// docs/PRODUCTION_CHECKLIST.md for the operator-facing checklist
+	// item this backs.
+	ShadowMode bool
 
 	// ModalBaseURL and ModalAuthToken configure the real
 	// internal/adapters/outbound/modal.Provider cmd/control-plane/main.go
@@ -1614,6 +1673,20 @@ func Load() (*Config, error) {
 		}
 	}
 
+	// shadowMode (§30.8): optional, default false -- mirrors
+	// epistemicCheckDefault's own identical "empty means unset, parse
+	// only when present, reject anything ParseBool doesn't recognize"
+	// idiom above.
+	shadowMode := false
+	if raw := os.Getenv(shadowModeEnvVarName); raw != "" {
+		parsed, parseErr := strconv.ParseBool(raw)
+		if parseErr != nil {
+			errs = append(errs, &InvalidShadowModeError{Value: raw})
+		} else {
+			shadowMode = parsed
+		}
+	}
+
 	modalBaseURL := os.Getenv(modalBaseURLEnvVarName)
 	if modalBaseURL == "" {
 		errs = append(errs, &MissingRequiredEnvError{EnvVar: modalBaseURLEnvVarName})
@@ -1846,6 +1919,7 @@ func Load() (*Config, error) {
 		InitialAdminEmails:         initialAdminEmails,
 		EpistemicCheckDefault:      epistemicCheckDefault,
 		RolloutMode:                rolloutMode,
+		ShadowMode:                 shadowMode,
 		ModalBaseURL:               modalBaseURL,
 		ModalAuthToken:             modalAuthToken,
 		ModalEgressProxyURL:        modalEgressProxyURL,

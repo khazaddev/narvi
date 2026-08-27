@@ -1,0 +1,37 @@
+-- live_egress_enabled: §30.8's own per-repo authority for whether this
+-- repo's customer-visible egress is LIVE (writes really reach GitHub/
+-- Slack/Linear) or SHADOW (every write suppressed and recorded instead,
+-- §30.2/§30.6). One further column on repo_settings (migrations/
+-- 000044_repo_settings.up.sql's own "ADDED as further columns on this
+-- SAME table" design) -- not a new table.
+--
+-- The polarity is the entire point, and it is the opposite of the
+-- convention every SIBLING boolean on this table follows. Every other
+-- repo_settings flag defaults to "today's existing behavior, unchanged"
+-- (an absent row means false, and false means live/unmodified for
+-- block_on_high_risk, sentinel_autofix_enabled, auto_merge_enabled, ...).
+-- Here, DEFAULT false means SHADOW: a repo Narvi has never explicitly
+-- promoted starts fully suppressed. Combined with this codebase's own
+-- established repo-settings read idiom -- internal/app/reviewverdict.
+-- AutoMergeEnabled and internal/app/sessionactor/reviewretrigger.go's own
+-- auto-retrigger read both treat pgx.ErrNoRows AND any other read error
+-- as false -- a missing row or a transient Postgres error resolve to
+-- shadow for free, which is exactly the fail-closed direction §30.8
+-- requires ("suppress-on-error for free"). The inverted spelling
+-- (shadow_mode bool, defaulting false) would resolve every one of those
+-- same cases toward LIVE instead -- the one direction this flag must
+-- never fail in, which is why that spelling is rejected by name in
+-- §30.8 and here.
+--
+-- No REST route writes this column yet (§30.8: "no per-session go-live
+-- override" -- and no admin-facing toggle at all, until Step 104's
+-- "Activate" gesture, which additionally applies the promotion fence and
+-- shadow-era-artifact quarantine before it may flip this bit for real).
+-- In the meantime the seed tool is this column's one writer
+-- (internal/app/seed/reposettings.go, extended alongside
+-- sessions_enabled's own identical precedent, migrations/
+-- 000096_repo_settings_sessions_enabled.up.sql) -- every write already
+-- goes through that tool's own "seed.repo_setting_upserted" audit_log
+-- entry, satisfying §30.8's "flag flips journaled to audit_log"
+-- requirement without a bespoke call site.
+ALTER TABLE repo_settings ADD COLUMN live_egress_enabled BOOLEAN NOT NULL DEFAULT false;
