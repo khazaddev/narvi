@@ -1,5 +1,5 @@
 // sandboxRail.ts -- decision 6 ("'What happened?' as self-service") /
-// row 83's own "sandbox rail (transitions, gen, fingerprint, boot phases,
+// §12.2's own "sandbox rail (transitions, gen, fingerprint, boot phases,
 // artifacts, cost incl. sub-task roll-up)": the pure model builder behind
 // SessionRail.tsx's "Sandbox" and "Boot progress" panels. Combines
 // sandboxSnapshot.ts's own one-shot WS snapshot (real, authoritative, but

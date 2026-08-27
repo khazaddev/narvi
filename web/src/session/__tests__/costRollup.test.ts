@@ -1,4 +1,4 @@
-// costRollup.test.ts -- row 83's own "cost incl. sub-task roll-up" (§7.1).
+// costRollup.test.ts -- §12.2's own "cost incl. sub-task roll-up" (§7.1).
 // The defining property under test: a step_finish tagged with a subTaskId
 // (sub-task spend) is included in the totals here, unlike
 // timelineModel.ts's own per-step cost, which deliberately EXCLUDES it
@@ -43,7 +43,7 @@ describe('buildCostRollup', () => {
     expect(rollup.turnOutputTokens).toBe(125)
   })
 
-  // THE defining property row 83 names: sub-task-tagged step_finish
+  // THE defining property §12.2 names: sub-task-tagged step_finish
   // events roll up into cost too -- unlike timelineModel.ts's own main-
   // lane-only per-step cost. MUTATION TEST: change buildCostRollup to
   // reuse timelineModel.ts's own step-attribution logic (or add a

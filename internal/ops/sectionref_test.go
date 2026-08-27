@@ -1,6 +1,7 @@
 package ops
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -76,5 +77,50 @@ func TestScanPlanSections_FindsBothHeadingLevelsAndTheNumberedList(t *testing.T)
 
 	if defined[farPastEnd] {
 		t.Errorf("ScanPlanSections resolved section %s; the scan is matching too broadly to catch a real dangling citation", farPastEnd)
+	}
+}
+
+// TestCheckSectionRefs_ReportsACitationTheSpecDoesNotDefine feeds the checker
+// input it MUST reject, which nothing else here does.
+//
+// TestNoSectionRefDrift above runs it over the real tree, where it currently
+// finds nothing -- so a green run proves the tree is clean and says nothing
+// about whether the checker can still see a violation. A check nobody has
+// watched fail is a check nobody has verified, and this one has a specific
+// way to fail silently: `defined` is built by scanning the plan, and a scan
+// that started matching everything would make every citation resolve and
+// every run pass. The sibling test pins the scan's shapes; this pins the
+// check's own verdict.
+func TestCheckSectionRefs_ReportsACitationTheSpecDoesNotDefine(t *testing.T) {
+	dir := t.TempDir()
+	pkg := filepath.Join(dir, "internal", "example")
+	if err := os.MkdirAll(pkg, 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// The citations are ASSEMBLED rather than written as literals. This file
+	// lives under internal/, which TestNoSectionRefDrift above scans over the
+	// real tree -- a literal "\u00a799.7" here would be a real, unresolvable
+	// citation in real source, and the fixture for the failing case would
+	// itself fail the passing case.
+	const sectionMark = "\u00a7"
+	body := "package example\n\n// Implements " + sectionMark + "12.2, and also " +
+		sectionMark + "99.7 which does not exist.\nconst A = 1\n"
+
+	src := filepath.Join(pkg, "example.go")
+	if err := os.WriteFile(src, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	defined := map[string]bool{"12.2": true}
+
+	unresolved, err := CheckSectionRefs(dir, []string{"internal"}, defined)
+	if err != nil {
+		t.Fatalf("CheckSectionRefs: %v", err)
+	}
+	if len(unresolved) != 1 {
+		t.Fatalf("got %d unresolved citations, want exactly 1 (the undefined one): %+v", len(unresolved), unresolved)
+	}
+	if unresolved[0].Section != "99.7" {
+		t.Errorf("reported section %s; want 99.7 -- 12.2 is defined and must not be reported", unresolved[0].Section)
 	}
 }

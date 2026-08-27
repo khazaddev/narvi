@@ -1,4 +1,4 @@
-// canSubmit.test.ts -- row 83's own "one shared can-submit predicate" and
+// canSubmit.test.ts -- §12.2's own "one shared can-submit predicate" and
 // "IME composition guard" requirements, both pinned here at the pure-
 // function level (this repo's vitest config runs in plain Node, no jsdom/
 // @testing-library/react -- see web/vitest.config.ts's own top comment --
@@ -63,7 +63,7 @@ describe('shouldSubmitOnKeyDown / canSubmitComposer parity (mutation-tested)', (
   }
 })
 
-describe('Enter sends, Shift+Enter inserts a newline (day one, row 83)', () => {
+describe('Enter sends, Shift+Enter inserts a newline (day one, §12.2)', () => {
   it('a plain Enter (no Shift, no IME) submits when canSubmitComposer allows it', () => {
     expect(shouldSubmitOnKeyDown({ key: 'Enter', shiftKey: false, isComposing: false }, BASE)).toBe(true)
   })
@@ -80,7 +80,7 @@ describe('Enter sends, Shift+Enter inserts a newline (day one, row 83)', () => {
 // MUTATION TEST: remove shouldSubmitOnKeyDown's own `if (event.isComposing)
 // return false` line and re-run -- 'confirming an IME composition never
 // sends' below fails (it would return true instead).
-describe('IME composition guard (row 83: "confirming an IME composition never sends")', () => {
+describe('IME composition guard (§12.2: "confirming an IME composition never sends")', () => {
   it('an Enter that fires WHILE a composition is in progress never submits, even with a sendable prompt', () => {
     expect(shouldSubmitOnKeyDown({ key: 'Enter', shiftKey: false, isComposing: true }, BASE)).toBe(false)
   })
