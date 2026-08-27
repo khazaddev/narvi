@@ -32,6 +32,10 @@
 -- sessions_enabled's own identical precedent, migrations/
 -- 000096_repo_settings_sessions_enabled.up.sql) -- every write already
 -- goes through that tool's own "seed.repo_setting_upserted" audit_log
--- entry, satisfying §30.8's "flag flips journaled to audit_log"
--- requirement without a bespoke call site.
+-- entry, satisfying §30.6's "a flag flip is an audit_log entry"
+-- requirement without a bespoke call site. (§30.6, not §30.8: §30.8
+-- specifies the flag and its resolution and says nothing about
+-- journalling. A citation pointing at the wrong section is the same
+-- defect as one pointing at a Step -- it sends the next reader somewhere
+-- that does not say what it was quoted as saying.)
 ALTER TABLE repo_settings ADD COLUMN live_egress_enabled BOOLEAN NOT NULL DEFAULT false;

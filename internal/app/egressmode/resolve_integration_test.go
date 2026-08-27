@@ -24,6 +24,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"github.com/jackc/pgx/v5"
 	"testing"
 	"time"
 
@@ -137,6 +138,19 @@ func TestResolve_AbsentRow_ResolvesShadow(t *testing.T) {
 	repoSettings := narvipg.NewRepoSettingsStore(pool)
 
 	const repoFullName = "acme/never-seeded-repo"
+
+	// The sentinel first, because the comment above this test claims the
+	// production path really surfaces pgx.ErrNoRows and the shadow
+	// assertions below cannot show it: Resolve maps EVERY error to shadow,
+	// so they pass identically whatever the store returns. Without this,
+	// the comment promised a proof the body did not perform -- and if a
+	// future change wrapped the sentinel, the resolver would keep failing
+	// closed (harmless) while logging an infrastructure warning on every
+	// ordinary never-seeded repo (not harmless, and invisible here).
+	// Same assertion the store's own sibling integration tests make.
+	if _, err := repoSettings.Get(ctx, repoFullName); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("RepoSettingsStore.Get for an absent row returned %v; want an error matching pgx.ErrNoRows -- Resolve's own branch distinguishes them with errors.Is", err)
+	}
 
 	got := egressmode.Resolve(ctx, egressmode.Deps{RepoSettings: repoSettings}, repoFullName)
 

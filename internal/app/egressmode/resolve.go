@@ -21,11 +21,14 @@ import (
 //
 // # Why this returns no error
 //
-// Every other repo_settings read in this codebase that must fail closed
-// returns a bare bool, never (bool, error) -- internal/app/reviewverdict.
-// AutoMergeEnabled and internal/app/sessionactor/reviewretrigger.go's own
-// auto-retrigger read both follow this shape already. Resolve follows the
-// SAME shape for the SAME reason, deliberately: there is no second return
+// The two reads §30.8 names as the precedent for this polarity --
+// internal/app/reviewverdict.AutoMergeEnabled and internal/app/
+// sessionactor/reviewretrigger.go's auto-retrigger read -- both return a
+// bare bool rather than (bool, error), and Resolve follows them for the
+// same reason. This is NOT a claim about every fail-closed read in the
+// codebase: others do return an error, and the shape is a judgement about
+// what a caller can do wrong here, not a house rule. What makes it right
+// here specifically: there is no second return
 // value for a careless caller to discard on the way to accidentally
 // observing "live" on a degraded read (`cap, _ := Resolve(...)` is not a
 // sentence Go lets anyone write against this signature, because there is
