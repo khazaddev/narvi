@@ -77,6 +77,9 @@ func seedRepoSetting(ctx context.Context, deps Deps, s seedmanifest.RepoSetting,
 	if s.SessionsEnabled != nil {
 		changed = append(changed, fmt.Sprintf("sessionsEnabled=%v", *s.SessionsEnabled))
 	}
+	if s.LiveEgressEnabled != nil {
+		changed = append(changed, fmt.Sprintf("liveEgressEnabled=%v", *s.LiveEgressEnabled))
+	}
 	if len(changed) == 0 {
 		return Item{Kind: "repo_setting", Key: key, Outcome: OutcomeSkipped, Detail: "no fields declared"}
 	}
@@ -124,6 +127,11 @@ func seedRepoSetting(ctx context.Context, deps Deps, s seedmanifest.RepoSetting,
 	if s.SessionsEnabled != nil {
 		if _, err := store.UpsertSessionsEnabled(ctx, s.RepoFullName, *s.SessionsEnabled); err != nil {
 			return Item{Kind: "repo_setting", Key: key, Outcome: OutcomeError, Detail: "upsert sessions-enabled: " + err.Error()}
+		}
+	}
+	if s.LiveEgressEnabled != nil {
+		if _, err := store.UpsertLiveEgressEnabled(ctx, s.RepoFullName, *s.LiveEgressEnabled); err != nil {
+			return Item{Kind: "repo_setting", Key: key, Outcome: OutcomeError, Detail: "upsert live-egress-enabled: " + err.Error()}
 		}
 	}
 

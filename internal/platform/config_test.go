@@ -1088,6 +1088,67 @@ func TestLoadEpistemicCheckDefault(t *testing.T) {
 	})
 }
 
+// TestLoadShadowMode covers §30.8's own deployment-level master switch --
+// mirrors TestLoadEpistemicCheckDefault's own shape exactly (optional
+// boolean env var, off by default, InvalidXError on an unparseable
+// value): before this test existed, flipping ShadowMode's own default
+// false->true in Load, or breaking the invalid-value branch, would have
+// shipped green.
+func TestLoadShadowMode(t *testing.T) {
+	t.Run("unset defaults to false (§30.8: dark until a deployment opts in)", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_SHADOW_MODE", "")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil (this switch is optional)", err)
+		}
+		if cfg.ShadowMode {
+			t.Errorf("Load().ShadowMode = true, want false when unset")
+		}
+	})
+
+	t.Run("set true carries the real value through", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_SHADOW_MODE", "true")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil", err)
+		}
+		if !cfg.ShadowMode {
+			t.Errorf("Load().ShadowMode = false, want true")
+		}
+	})
+
+	t.Run("set false explicitly carries through", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_SHADOW_MODE", "false")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil", err)
+		}
+		if cfg.ShadowMode {
+			t.Errorf("Load().ShadowMode = true, want false")
+		}
+	})
+
+	t.Run("invalid value fails", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_SHADOW_MODE", "not-a-bool")
+
+		_, err := platform.Load()
+		if err == nil {
+			t.Fatal("Load() error = nil, want error")
+		}
+		var shadowErr *platform.InvalidShadowModeError
+		if !errors.As(err, &shadowErr) {
+			t.Fatalf("Load() error = %v, want *platform.InvalidShadowModeError", err)
+		}
+	})
+}
+
 // TestLoadRolloutMode covers §10's own master switch (§10 Phase 6,
 // §32) -- mirrors TestLoadEpistemicCheckDefault's own shape exactly,
 // with an explicit two-value enum in place of a boolean: unset defaults

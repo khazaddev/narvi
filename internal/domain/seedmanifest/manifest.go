@@ -181,6 +181,25 @@ type RepoSetting struct {
 	// rollout needs to enroll (see internal/app/seed/reposettings.go's
 	// own doc comment for the full "why").
 	SessionsEnabled *bool `yaml:"sessionsEnabled,omitempty"`
+	// LiveEgressEnabled (§30.8) is platform shadow mode's own per-repo
+	// egress-mode authority -- repo_settings.live_egress_enabled,
+	// migrations/000101_repo_settings_live_egress_enabled.up.sql. Nil
+	// (the default) is left completely untouched, exactly like every
+	// sibling field on this struct. Unlike SessionsEnabled immediately
+	// above, this is not seed-manifest-only because REST enrollment is
+	// structurally impossible -- it is seed-manifest-only because no
+	// admin-facing surface for it exists YET: §30.6's own "Activate"
+	// graduation gesture is the eventual REST path, and it does
+	// substantially more than a bare column write (§30.8's promotion
+	// fence, shadow-era-artifact quarantine) before it may flip this bit
+	// for real. Until that surface ships, this is the one way to move a
+	// repo out of shadow at all -- e.g. for an evaluation deployment's own
+	// pre-seeded fixture repos -- and every write here already goes
+	// through this tool's own "seed.repo_setting_upserted" audit_log
+	// entry (internal/app/seed/reposettings.go), satisfying §30.8's
+	// "flag flips journaled to audit_log" requirement without a bespoke
+	// call site.
+	LiveEgressEnabled *bool `yaml:"liveEgressEnabled,omitempty"`
 }
 
 // RWXPreview is one repo's RWX preview integration config (repo_settings.

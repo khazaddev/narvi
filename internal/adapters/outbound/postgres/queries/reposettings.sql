@@ -153,6 +153,23 @@ ON CONFLICT (repo_full_name)
 DO UPDATE SET sessions_enabled = EXCLUDED.sessions_enabled, updated_at = now()
 RETURNING *;
 
+-- name: UpsertLiveEgressEnabled :one
+-- §30.8's own per-repo egress-mode authority (migrations/
+-- 000101_repo_settings_live_egress_enabled.up.sql) -- idempotent
+-- create-or-update of ONLY live_egress_enabled, mirroring
+-- UpsertSessionsEnabled's own identical column-scoped shape immediately
+-- above (the same independently-gated-toggle pattern): every other
+-- repo_settings column is left COMPLETELY untouched, so a concurrent
+-- write to any of them can never race with this one at the database
+-- level. Written ONLY by the seed tool in v1 (internal/app/seed/
+-- reposettings.go) -- no REST route calls this yet; see that file's own
+-- doc comment for why, and for how this write is journaled to audit_log.
+INSERT INTO repo_settings (repo_full_name, live_egress_enabled, updated_at)
+VALUES ($1, $2, now())
+ON CONFLICT (repo_full_name)
+DO UPDATE SET live_egress_enabled = EXCLUDED.live_egress_enabled, updated_at = now()
+RETURNING *;
+
 -- name: ListAutoMergeEnabledRepos :many
 -- internal/app/automerge's own per-tick repo enumeration (§21.2 stage
 -- 2): every repo an admin has armed -- mirrors this table's own
