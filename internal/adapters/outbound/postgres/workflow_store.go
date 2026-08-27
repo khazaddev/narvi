@@ -457,7 +457,10 @@ func (s *WorkflowStore) ListRunsForSession(ctx context.Context, sessionID pgtype
 // ListStepRunsForRun fetches every workflow_step_runs row for runID,
 // oldest first -- GET /api/workflow-runs/{runId}: the chronological
 // execution/re-attempt sequence a run detail view renders (§25.10: "a run
-// without its steps answers no question anybody asks").
-func (s *WorkflowStore) ListStepRunsForRun(ctx context.Context, runID pgtype.UUID) ([]sqlcgen.WorkflowStepRun, error) {
+// without its steps answers no question anybody asks"). Each row also
+// carries its own turn's model_id/cost_usd via a LEFT JOIN (§25.15) --
+// see ListWorkflowStepRunsForRun's own generated doc comment for why a
+// join, not a per-row extra query.
+func (s *WorkflowStore) ListStepRunsForRun(ctx context.Context, runID pgtype.UUID) ([]sqlcgen.ListWorkflowStepRunsForRunRow, error) {
 	return s.q.ListWorkflowStepRunsForRun(ctx, runID)
 }

@@ -1693,7 +1693,7 @@ export interface WorkflowRun {
   finishedAt: string | null;
 }
 /**
- * One workflow_step_runs row (§25.10) -- READ-ONLY on the wire, one row per ATTEMPT of one step within a run (a retry/revise re-execution is a NEW row, never an update-in-place -- §25.5's COUNT(*) iteration read depends on exactly that). Deliberately omits two persisted columns, mirroring Plan's own documented omissions: outcome_payload (the §25.6 typed step-to-step handoff, internal plumbing the engine consumes -- never re-parsed presentation data) and decision_text (write-side input, carried by WorkflowStepDecideRequest.text and folded into the NEXT attempt's re-execution).
+ * One workflow_step_runs row (§25.10) -- READ-ONLY on the wire, one row per ATTEMPT of one step within a run (a retry/revise re-execution is a NEW row, never an update-in-place -- §25.5's COUNT(*) iteration read depends on exactly that). Deliberately omits two persisted columns, mirroring Plan's own documented omissions: outcome_payload (the §25.6 typed step-to-step handoff, internal plumbing the engine consumes -- never re-parsed presentation data) and decision_text (write-side input, carried by WorkflowStepDecideRequest.text and folded into the NEXT attempt's re-execution). modelId/costUsd (§25.15) are neither of them columns on this table -- both are joined through turnId onto the ordinary turn this attempt dispatched as (turns.model_id/turns.cost_usd), since §25.6 makes a workflow step exactly that turn.
  *
  * This interface was referenced by `RestDtos`'s JSON-Schema
  * via the `definition` "WorkflowStepRun".
@@ -1735,6 +1735,14 @@ export interface WorkflowStepRun {
    * Null while this attempt is live (running/awaiting_decision).
    */
   finishedAt: string | null;
+  /**
+   * §25.15: this attempt's own dispatched model, joined from turns.model_id through turnId -- not a new fact, since §25.6 makes a workflow step an ordinary turn and turns.model_id has persisted the dispatched model since migration 000018. Null means 'inherited whatever the session would use today' (the step definition's own model_id was NULL, §25.8's zero-config default), or that turnId itself is still null -- never a placeholder for 'not loaded yet'.
+   */
+  modelId: string | null;
+  /**
+   * §25.15: this attempt's own running cost total in USD, joined from turns.cost_usd through turnId -- accumulated onto the turn as its own step_finish events land (internal/app/sessionactor's own "step_finish" case), in the same transaction that persists each event. Null means NO cost has arrived for this attempt YET -- an unfinished or just-dispatched step -- and must never be rendered as a free ($0) step; a genuine, already-observed $0.00 step_finish is a real, distinct 0, not null. Deliberately NOT internal/adapters/outbound/opencode's own adapter-local turnState.spentUSD (§7.1/§26.7): that accumulator is sandbox-process-local and answers a different, live-turn-only question; this is an independent, Postgres-durable total computed from the same wire signal.
+   */
+  costUsd: number | null;
 }
 /**
  * Request body for POST /api/workflow-runs/:runId/steps/:stepRunId/decide (§25.9/§25.10) -- the same shape discipline as decideplan.go's approve/reject. NO handler is registered for this route yet: §25.4 ships the contract only (dark); §25.9 mounts the endpoint, gated by authz.ActionDecideWorkflowStep (own/joined-aware, same row as plan approval, §25.11). verdict is a schema-level enum (matching Postgres workflow_step_decision exactly) because the vocabulary is a closed domain enum, the same modeling choice as PostReviewVerdictRequest.riskLevel -- not the deliberately-unconstrained UpdateMemberRoleRequest.role shape.

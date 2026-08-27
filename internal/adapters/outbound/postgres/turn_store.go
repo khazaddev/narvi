@@ -95,3 +95,24 @@ func (s *TurnStore) SetEpistemicOutcome(ctx context.Context, id pgtype.UUID, out
 		EpistemicOutcome: &outcome,
 	})
 }
+
+// RecordStepCostUSD adds one step's cost onto sessionID's currently
+// processing turn, exactly once per stepID (§25.15) -- see
+// RecordTurnStepCost's own generated doc comment (sqlcgen/turns.sql.go,
+// sourced from queries/turns.sql) for why the whole thing is one
+// statement, and migrations/000099_turn_step_costs.up.sql for why the
+// idempotency key is the step id rather than the raw event row's own
+// insert flag.
+//
+// Returns the number of turns rows actually updated (0 or 1). 0 means
+// EITHER this stepID was already counted (a redelivery) OR sessionID has
+// no turn currently processing; the two are deliberately not
+// distinguished here, because both are states where adding the money a
+// second time would be the worse error.
+func (s *TurnStore) RecordStepCostUSD(ctx context.Context, sessionID pgtype.UUID, stepID string, amountUSD float64) (int64, error) {
+	return s.q.RecordTurnStepCost(ctx, sqlcgen.RecordTurnStepCostParams{
+		SessionID: sessionID,
+		StepID:    stepID,
+		CostUsd:   Float64ToNumeric(&amountUSD),
+	})
+}

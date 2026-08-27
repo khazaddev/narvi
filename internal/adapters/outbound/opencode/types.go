@@ -246,11 +246,22 @@ type textPart struct {
 // stepFinishPart is a `"type":"step-finish"` part — VERIFIED live:
 // {"id","reason","messageID","type":"step-finish","tokens":{"total",
 // "input","output","reasoning","cache":{"read","write"}},"cost"}.
+//
+// Cost is *float64, not float64 (§25.15) -- deliberately, so a "cost"
+// key genuinely ABSENT from OpenCode's own JSON (a version bump dropping
+// or renaming it) decodes to nil, distinguishable from an explicit
+// "cost":0 (a real, priced-at-zero step -- e.g. no catalog pricing entry
+// for the resolved model), which decodes to a non-nil pointer to 0. A
+// plain float64 here would collapse both cases onto the identical zero
+// value, making "cost stopped arriving" silently indistinguishable from
+// "this step genuinely cost nothing" -- exactly the failure §25.15 (and
+// the pinned-binary contract test, realturn_test.go's own
+// TestRealTurn_PlainTextPrompt) exists to catch.
 type stepFinishPart struct {
 	ID        string           `json:"id"`
 	MessageID string           `json:"messageID"`
 	Tokens    stepFinishTokens `json:"tokens"`
-	Cost      float64          `json:"cost"`
+	Cost      *float64         `json:"cost"`
 }
 
 type stepFinishTokens struct {

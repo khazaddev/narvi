@@ -388,4 +388,25 @@ RETURNING *;
 SELECT * FROM workflow_runs WHERE session_id = $1 ORDER BY created_at DESC;
 
 -- name: ListWorkflowStepRunsForRun :many
-SELECT * FROM workflow_step_runs WHERE workflow_run_id = $1 ORDER BY created_at ASC, id ASC;
+-- §25.15: carries the two facts a run view needs that live on the
+-- ordinary turn each attempt dispatched as, not on workflow_step_runs
+-- itself -- turn_model_id (the join through turn_id that IS a step's
+-- model, turns.model_id, persisted since migration 000018; §25.6 makes
+-- every workflow step an ordinary sequential turn, so no new column was
+-- needed) and turn_cost_usd (turns.cost_usd, migration 000098's own
+-- running total, accumulated as this attempt's own step_finish events
+-- land). A LEFT JOIN, not INNER: turn_id is nullable (an
+-- awaiting_decision attempt has no turn yet), and a step run with no
+-- turn must still be listed, with both extra columns simply absent --
+-- mirrors ListWorkflowDefinitions' own "carries the extra columns a
+-- caller would otherwise have to derive itself... a list endpoint
+-- issuing extra round trips per row is the N+1 this avoids" reasoning
+-- exactly, one join away from an EXISTS subquery.
+SELECT
+    sr.*,
+    t.model_id AS turn_model_id,
+    t.cost_usd AS turn_cost_usd
+FROM workflow_step_runs sr
+LEFT JOIN turns t ON t.id = sr.turn_id
+WHERE sr.workflow_run_id = $1
+ORDER BY sr.created_at ASC, sr.id ASC;

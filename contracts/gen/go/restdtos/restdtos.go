@@ -10628,8 +10628,24 @@ func (j *WorkflowStepDefinition) UnmarshalJSON(value []byte) error {
 // omissions: outcome_payload (the §25.6 typed step-to-step handoff, internal
 // plumbing the engine consumes -- never re-parsed presentation data) and
 // decision_text (write-side input, carried by WorkflowStepDecideRequest.text and
-// folded into the NEXT attempt's re-execution).
+// folded into the NEXT attempt's re-execution). modelId/costUsd (§25.15) are
+// neither of them columns on this table -- both are joined through turnId onto the
+// ordinary turn this attempt dispatched as (turns.model_id/turns.cost_usd), since
+// §25.6 makes a workflow step exactly that turn.
 type WorkflowStepRun struct {
+	// §25.15: this attempt's own running cost total in USD, joined from
+	// turns.cost_usd through turnId -- accumulated onto the turn as its own
+	// step_finish events land (internal/app/sessionactor's own "step_finish" case),
+	// in the same transaction that persists each event. Null means NO cost has
+	// arrived for this attempt YET -- an unfinished or just-dispatched step -- and
+	// must never be rendered as a free ($0) step; a genuine, already-observed $0.00
+	// step_finish is a real, distinct 0, not null. Deliberately NOT
+	// internal/adapters/outbound/opencode's own adapter-local turnState.spentUSD
+	// (§7.1/§26.7): that accumulator is sandbox-process-local and answers a
+	// different, live-turn-only question; this is an independent, Postgres-durable
+	// total computed from the same wire signal.
+	CostUsd WorkflowStepRunCostUsd `json:"costUsd" yaml:"costUsd" mapstructure:"costUsd"`
+
 	// CreatedAt corresponds to the JSON schema field "createdAt".
 	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
 
@@ -10651,6 +10667,14 @@ type WorkflowStepRun struct {
 
 	// Id corresponds to the JSON schema field "id".
 	Id string `json:"id" yaml:"id" mapstructure:"id"`
+
+	// §25.15: this attempt's own dispatched model, joined from turns.model_id through
+	// turnId -- not a new fact, since §25.6 makes a workflow step an ordinary turn
+	// and turns.model_id has persisted the dispatched model since migration 000018.
+	// Null means 'inherited whatever the session would use today' (the step
+	// definition's own model_id was NULL, §25.8's zero-config default), or that
+	// turnId itself is still null -- never a placeholder for 'not loaded yet'.
+	ModelId WorkflowStepRunModelId `json:"modelId" yaml:"modelId" mapstructure:"modelId"`
 
 	// Matches Postgres workflow_step_outcome_status exactly. Null until this
 	// attempt's own typed outcome is posted (§25.6).
@@ -10676,6 +10700,18 @@ type WorkflowStepRun struct {
 	// WorkflowRunId corresponds to the JSON schema field "workflowRunId".
 	WorkflowRunId string `json:"workflowRunId" yaml:"workflowRunId" mapstructure:"workflowRunId"`
 }
+
+// §25.15: this attempt's own running cost total in USD, joined from turns.cost_usd
+// through turnId -- accumulated onto the turn as its own step_finish events land
+// (internal/app/sessionactor's own "step_finish" case), in the same transaction
+// that persists each event. Null means NO cost has arrived for this attempt YET --
+// an unfinished or just-dispatched step -- and must never be rendered as a free
+// ($0) step; a genuine, already-observed $0.00 step_finish is a real, distinct 0,
+// not null. Deliberately NOT internal/adapters/outbound/opencode's own
+// adapter-local turnState.spentUSD (§7.1/§26.7): that accumulator is
+// sandbox-process-local and answers a different, live-turn-only question; this is
+// an independent, Postgres-durable total computed from the same wire signal.
+type WorkflowStepRunCostUsd *float64
 
 // The user who decided this attempt's HITL verdict. Null until decided, or for a
 // decision attributed to no direct human user -- mirrors Plan.decidedBy.
@@ -10718,6 +10754,14 @@ func (j *WorkflowStepRunDecision) UnmarshalJSON(value []byte) error {
 	*j = WorkflowStepRunDecision(v)
 	return nil
 }
+
+// §25.15: this attempt's own dispatched model, joined from turns.model_id through
+// turnId -- not a new fact, since §25.6 makes a workflow step an ordinary turn and
+// turns.model_id has persisted the dispatched model since migration 000018. Null
+// means 'inherited whatever the session would use today' (the step definition's
+// own model_id was NULL, §25.8's zero-config default), or that turnId itself is
+// still null -- never a placeholder for 'not loaded yet'.
+type WorkflowStepRunModelId *string
 
 type WorkflowStepRunOutcomeStatus struct {
 	Value interface{}
@@ -10808,6 +10852,9 @@ func (j *WorkflowStepRun) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
+	if _, ok := raw["costUsd"]; raw != nil && !ok {
+		return fmt.Errorf("field costUsd in WorkflowStepRun: required")
+	}
 	if _, ok := raw["createdAt"]; raw != nil && !ok {
 		return fmt.Errorf("field createdAt in WorkflowStepRun: required")
 	}
@@ -10825,6 +10872,9 @@ func (j *WorkflowStepRun) UnmarshalJSON(value []byte) error {
 	}
 	if _, ok := raw["id"]; raw != nil && !ok {
 		return fmt.Errorf("field id in WorkflowStepRun: required")
+	}
+	if _, ok := raw["modelId"]; raw != nil && !ok {
+		return fmt.Errorf("field modelId in WorkflowStepRun: required")
 	}
 	if _, ok := raw["outcomeStatus"]; raw != nil && !ok {
 		return fmt.Errorf("field outcomeStatus in WorkflowStepRun: required")

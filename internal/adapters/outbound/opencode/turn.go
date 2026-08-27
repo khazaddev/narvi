@@ -569,10 +569,20 @@ func (ts *turnState) markSawToolCall() {
 // (reviewtriage/costbudget.go) already clamps a negative spentUSD to 0 at
 // the one place that actually matters (its own decision), so a defensive
 // guard here would only duplicate that, never add real safety.
-func (ts *turnState) addCost(cost float64) {
+//
+// cost is *float64 (§25.15, types.go's own stepFinishPart.Cost doc
+// comment): nil means OpenCode's own "cost" key was genuinely absent from
+// this step-finish, and is a no-op here -- adding a fabricated 0 would
+// silently understate this SAME sandbox-local total exactly as it would
+// the control-plane's own turns.cost_usd (internal/app/sessionactor's own
+// stepcost.go, which skips an absent cost.usd the identical way).
+func (ts *turnState) addCost(cost *float64) {
+	if cost == nil {
+		return
+	}
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
-	ts.spentUSD += cost
+	ts.spentUSD += *cost
 }
 
 // spentUSDTotal returns this turn's own running spentUSD total (addCost's

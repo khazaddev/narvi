@@ -25,7 +25,22 @@ import (
 // TestRealTurn_PlainTextPrompt: a plain-text prompt translates into the
 // correct wire event sequence -- token(s) with cumulative text, step_start/
 // step_finish with the object-shaped cost.tokens, execution_complete
-// {completed}.
+// {completed}. §25.15 also makes this the pinned-binary contract test for
+// cost ITSELF still arriving, not merely for its shape: a step_finish
+// whose cost.usd silently stops showing up (an OpenCode version bump
+// dropping or renaming the "cost" field) would, before this Step's own
+// types.go fix (stepFinishPart.Cost is now *float64, not float64), read
+// to every downstream consumer as a free ($0) step, indistinguishable
+// from a genuinely free-tier model that legitimately costs $0 -- exactly
+// the failure this Step exists to prevent. sawCostUSD below asserts
+// cost.usd was PRESENT (non-nil) on at least one step_finish, deliberately
+// NOT that it was strictly positive: a real step can legitimately cost
+// exactly $0 (no pricing entry for the resolved model), so requiring a
+// positive figure would make this test flaky against that legitimate
+// case. Presence is now a meaningful bar precisely because the internal
+// decode can finally tell "OpenCode said $0" apart from "OpenCode said
+// nothing" -- before that fix both collapsed to the same wire value and
+// no assertion here could have told them apart either.
 func TestRealTurn_PlainTextPrompt(t *testing.T) {
 	skipIfNoProvider(t)
 	// Deliberately NOT t.Parallel(): these are the tests that make a REAL
@@ -61,7 +76,7 @@ func TestRealTurn_PlainTextPrompt(t *testing.T) {
 		t.Fatal("no events observed at all")
 	}
 
-	var sawToken, sawStepStart, sawStepFinish bool
+	var sawToken, sawStepStart, sawStepFinish, sawCostUSD bool
 	var lastCumulativeText string
 	var final *sandboxws.ExecutionComplete
 
@@ -77,6 +92,21 @@ func TestRealTurn_PlainTextPrompt(t *testing.T) {
 			sawStepStart = true
 		case sandboxws.StepFinish:
 			sawStepFinish = true
+			// §25.15: cost must ITSELF arrive, not just decode without
+			// error -- see this test's own top doc comment for the full
+			// reasoning. v.Cost.Usd is *float64 (§6.1: optional/nullable
+			// on the wire) -- present (non-nil) is the right bar, not
+			// "> 0": a real step can legitimately cost exactly $0 (a
+			// free-tier/no-pricing-entry model), and requiring a
+			// strictly positive figure would make this test flaky
+			// against that legitimate case while adding no real
+			// protection over a plain non-nil check, now that
+			// stepFinishPart.Cost (types.go) is itself a *float64 --
+			// nil only when OpenCode's own JSON genuinely omits "cost",
+			// never merely because the value happens to be zero.
+			if v.Cost.Usd != nil {
+				sawCostUSD = true
+			}
 		case sandboxws.ExecutionComplete:
 			ec := v
 			final = &ec
@@ -97,6 +127,18 @@ func TestRealTurn_PlainTextPrompt(t *testing.T) {
 	}
 	if !sawStepFinish {
 		t.Error("never observed a step_finish event")
+	}
+	if !sawCostUSD {
+		// PRESENT, not positive -- see sawCostUSD's own note above for why
+		// the bar is non-nil: this environment's default model genuinely
+		// bills $0, so asserting "> 0" would fail for a reason that has
+		// nothing to do with the wire. Reaching here means cost.usd was
+		// ABSENT from every step_finish, which is the failure that matters:
+		// downstream, absent must stay distinguishable from zero, or an
+		// unknown step reads as a free one (§25.15).
+		t.Error("never observed a step_finish event carrying cost.usd at all -- " +
+			"the field was absent or null on every step, so downstream cannot tell " +
+			"an unknown cost from a genuine $0")
 	}
 	if final == nil {
 		t.Fatal("never observed an execution_complete event")

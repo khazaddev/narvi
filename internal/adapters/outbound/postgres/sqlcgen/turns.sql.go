@@ -15,7 +15,7 @@ const createTurn = `-- name: CreateTurn :one
 
 INSERT INTO turns (session_id, status, prompt, model_id, plan_mode, effort, review_head_sha, answer_only, review_depth, review_depth_decision)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision, dispatched_event_id
+RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision, dispatched_event_id, cost_usd
 `
 
 type CreateTurnParams struct {
@@ -108,12 +108,13 @@ func (q *Queries) CreateTurn(ctx context.Context, arg CreateTurnParams) (Turn, e
 		&i.ReviewDepth,
 		&i.ReviewDepthDecision,
 		&i.DispatchedEventID,
+		&i.CostUsd,
 	)
 	return i, err
 }
 
 const getProcessingTurnForSession = `-- name: GetProcessingTurnForSession :one
-SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision, dispatched_event_id FROM turns
+SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision, dispatched_event_id, cost_usd FROM turns
 WHERE session_id = $1 AND status = 'processing'
 `
 
@@ -149,12 +150,13 @@ func (q *Queries) GetProcessingTurnForSession(ctx context.Context, sessionID pgt
 		&i.ReviewDepth,
 		&i.ReviewDepthDecision,
 		&i.DispatchedEventID,
+		&i.CostUsd,
 	)
 	return i, err
 }
 
 const getTurn = `-- name: GetTurn :one
-SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision, dispatched_event_id FROM turns
+SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision, dispatched_event_id, cost_usd FROM turns
 WHERE id = $1
 `
 
@@ -181,12 +183,13 @@ func (q *Queries) GetTurn(ctx context.Context, id pgtype.UUID) (Turn, error) {
 		&i.ReviewDepth,
 		&i.ReviewDepthDecision,
 		&i.DispatchedEventID,
+		&i.CostUsd,
 	)
 	return i, err
 }
 
 const listTurnsForSession = `-- name: ListTurnsForSession :many
-SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision, dispatched_event_id FROM turns
+SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision, dispatched_event_id, cost_usd FROM turns
 WHERE session_id = $1
 ORDER BY created_at ASC
 `
@@ -223,6 +226,7 @@ func (q *Queries) ListTurnsForSession(ctx context.Context, sessionID pgtype.UUID
 			&i.ReviewDepth,
 			&i.ReviewDepthDecision,
 			&i.DispatchedEventID,
+			&i.CostUsd,
 		); err != nil {
 			return nil, err
 		}
@@ -258,6 +262,77 @@ type MarkTurnProgressNotifiedParams struct {
 // notification (see internal/app/sessionactor/progressnotify.go).
 func (q *Queries) MarkTurnProgressNotified(ctx context.Context, arg MarkTurnProgressNotifiedParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markTurnProgressNotified, arg.ID, arg.ProgressNotifiedAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const recordTurnStepCost = `-- name: RecordTurnStepCost :execrows
+WITH target AS (
+    SELECT t.id FROM turns AS t WHERE t.session_id = $1 AND t.status = 'processing'
+), claimed AS (
+    INSERT INTO turn_step_costs (turn_id, step_id, cost_usd)
+    SELECT target.id, $2, $3 FROM target
+    ON CONFLICT (turn_id, step_id) DO NOTHING
+    RETURNING turn_id, cost_usd
+)
+UPDATE turns
+SET cost_usd = COALESCE(turns.cost_usd, 0) + claimed.cost_usd
+FROM claimed
+WHERE turns.id = claimed.turn_id
+`
+
+type RecordTurnStepCostParams struct {
+	SessionID pgtype.UUID    `json:"session_id"`
+	StepID    string         `json:"step_id"`
+	CostUsd   pgtype.Numeric `json:"cost_usd"`
+}
+
+// §25.15's per-step cost accumulation, made idempotent on the key the wire
+// actually gives us for that: step_finish.stepId (§6.1), one per step.
+//
+// ONE statement, three jobs. The CTE resolves the turn this event belongs
+// to from the sandbox-authenticated session id alone, with no preceding
+// read -- turns_one_processing_per_session (migrations/000005) guarantees
+// at most one row can match. The INSERT claims (turn_id, step_id) or
+// conflicts away to nothing. The UPDATE runs ONLY over rows the INSERT
+// actually produced, so a redelivered step_finish moves no dollars and a
+// genuinely new one moves exactly its own.
+//
+// This replaces an earlier version gated on whether appendRawEvent had
+// INSERTED the raw event row. That flag answers "was this (session_id,
+// message_id) new to the events table", which is not the same question --
+// step_start and step_finish are two parts of one assistant message and
+// share its id, so step_start always claimed the row first and every
+// production step_finish was discarded before its cost was ever read. See
+// migrations/000099_turn_step_costs.up.sql for the full account.
+//
+// Concurrency: "SET cost_usd = COALESCE(cost_usd, 0) + ..." is computed IN
+// SQL over a row Postgres locks for the duration, so two step_finish events
+// for the same turn always sum and never clobber -- unlike a Go-side
+// read-then-write, which can lose a sibling's increment. COALESCE, never a
+// bare "+", because turns.cost_usd's own migration (000098) keeps NULL as
+// the ONLY representation of "no cost has arrived yet", and a bare sum
+// against NULL stays NULL forever -- the exact "no cost yet reads as free"
+// failure §25.15 exists to prevent.
+//
+// Returns rows updated (0 or 1). 0 means either a redelivery (already
+// counted) or no turn currently processing for this session -- the caller
+// distinguishes them only by logging, never by retrying: both are states
+// where adding money again would be the worse error.
+//
+// KNOWN LIMIT, stated rather than implied: this attributes cost to
+// whichever turn is processing WHEN THE EVENT LANDS, not to the turn the
+// event was emitted for. They are the same turn in every ordinary case,
+// because step_finish only arrives mid-turn. They are not the same if a
+// turn terminalizes (timeout, cancel) while one of its step_finish events
+// is still in flight and the next turn has already started -- those
+// dollars land on the newer turn. Closing that needs a turn id on the
+// event itself, which §6.1 does not carry today; it is recorded here so
+// the next reader does not mistake the current behaviour for a guarantee.
+func (q *Queries) RecordTurnStepCost(ctx context.Context, arg RecordTurnStepCostParams) (int64, error) {
+	result, err := q.db.Exec(ctx, recordTurnStepCost, arg.SessionID, arg.StepID, arg.CostUsd)
 	if err != nil {
 		return 0, err
 	}
@@ -304,7 +379,7 @@ SET status = $2,
     dispatched_sandbox_gen = COALESCE($5, dispatched_sandbox_gen),
     dispatched_event_id = COALESCE($6, dispatched_event_id)
 WHERE id = $1
-RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision, dispatched_event_id
+RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision, dispatched_event_id, cost_usd
 `
 
 type UpdateTurnStatusParams struct {
@@ -372,6 +447,7 @@ func (q *Queries) UpdateTurnStatus(ctx context.Context, arg UpdateTurnStatusPara
 		&i.ReviewDepth,
 		&i.ReviewDepthDecision,
 		&i.DispatchedEventID,
+		&i.CostUsd,
 	)
 	return i, err
 }

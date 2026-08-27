@@ -502,6 +502,15 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 			if err := a.maybeEnqueueLinearProgress(ctx, tx, inserted, pgtype.Timestamptz{Time: now, Valid: true}); err != nil {
 				return err
 			}
+		case "step_finish":
+			// §25.15: sum this step's own cost.usd (when present) onto
+			// whichever turn is currently processing for this session --
+			// see stepcost.go's own top comment for the full design and
+			// why this is independent of internal/adapters/outbound/
+			// opencode's own turnState.spentUSD accumulator.
+			if err := a.recordStepFinishCost(ctx, tx, cmd.Raw); err != nil {
+				return err
+			}
 		}
 
 		outcome.Persisted = true

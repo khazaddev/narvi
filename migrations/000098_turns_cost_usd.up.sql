@@ -1,0 +1,54 @@
+-- turns.cost_usd: §25.15's own "cost does need persistence" half. A
+-- running total in USD, accumulated onto the turn as step_finish events
+-- land (internal/app/sessionactor's own "step_finish" case,
+-- sandboxevent.go, via queries/turns.sql's new AddTurnCostUSD), in the
+-- SAME transaction that persists each event -- never step_finish.cost
+-- re-stored verbatim (that already lives, per step, inside
+-- events.payload, migrations/000008_events.up.sql; events carries no
+-- turn_id, so that per-step figure alone cannot be summed into an
+-- honest per-turn total without correlating on payload fields, which is
+-- a derivation, not a fact).
+--
+-- This is an independent, Postgres-durable running total, computed from
+-- the SAME wire events internal/adapters/outbound/opencode's own
+-- adapter-local turnState.spentUSD accumulator (§7.1/§26.7) already
+-- sums -- but it is NOT that accumulator, does not read from it, and
+-- does not replace it. turnState.spentUSD stays exactly what it always
+-- was: a sandbox-process-local answer to one live-turn budget question
+-- that dies with the turn. Making it authoritative for a control-plane
+-- read would give one number two owners, which §25.15 explicitly rules
+-- out.
+--
+-- Model needs no equivalent column: turns.model_id already persists the
+-- dispatched model (migration 000018), and §25.6 makes every workflow
+-- step an ordinary sequential turn on the same session, so a step's
+-- model is already a join through workflow_step_runs.turn_id. Cost
+-- works the same way, one column over -- no workflow_step_runs column
+-- of its own, no new wire field.
+--
+-- NULLABLE NUMERIC(14, 6). NUMERIC rather than FLOAT/DOUBLE PRECISION
+-- for the same reason review_cost_budget_light_usd/..._deep_usd chose it
+-- (migrations/000085): a repeating-binary-fraction error compounding
+-- across many additions is a real risk for a dollar figure a human
+-- reads, and NUMERIC does not have it.
+--
+-- The SCALE, though, is six places and deliberately NOT that column's
+-- two. Those two are CEILINGS a person types -- $0.50, $5.00 -- read
+-- once and never added to anything. This one is an accumulator of
+-- machine-reported per-step figures, and a single agent step routinely
+-- costs a fraction of a cent. At scale 2 every increment is rounded to
+-- cents BEFORE it lands, so the additions never accumulate at all:
+-- measured against real Postgres, fifty steps at $0.004 -- twenty cents
+-- of genuine spend -- summed to exactly 0.00. A column whose whole
+-- purpose is making cost visible would have reported free, and reported
+-- it most confidently for the cheap high-step-count turns it matters
+-- most for. Six places is micro-dollar resolution, which is the
+-- granularity providers themselves bill at.
+--
+-- NULL (never 0.000000) stays the ONLY representation of "no cost has
+-- arrived yet for this turn" -- §25.15's run view must never render an
+-- unfinished or unknown step as a free one -- which is why the
+-- accumulating write (AddTurnCostUSD) is COALESCE(cost_usd, 0) + $2 and
+-- not a plain cost_usd + $2 that would stay NULL forever once summed
+-- against its own unset value.
+ALTER TABLE turns ADD COLUMN cost_usd NUMERIC(14, 6);

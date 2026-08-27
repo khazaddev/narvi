@@ -1109,18 +1109,59 @@ func (q *Queries) ListWorkflowStepDefinitions(ctx context.Context, workflowDefin
 }
 
 const listWorkflowStepRunsForRun = `-- name: ListWorkflowStepRunsForRun :many
-SELECT id, workflow_run_id, step_definition_id, turn_id, status, outcome_status, outcome_summary, outcome_payload, decision, decision_text, decided_at, decided_by, created_at, updated_at, finished_at FROM workflow_step_runs WHERE workflow_run_id = $1 ORDER BY created_at ASC, id ASC
+SELECT
+    sr.id, sr.workflow_run_id, sr.step_definition_id, sr.turn_id, sr.status, sr.outcome_status, sr.outcome_summary, sr.outcome_payload, sr.decision, sr.decision_text, sr.decided_at, sr.decided_by, sr.created_at, sr.updated_at, sr.finished_at,
+    t.model_id AS turn_model_id,
+    t.cost_usd AS turn_cost_usd
+FROM workflow_step_runs sr
+LEFT JOIN turns t ON t.id = sr.turn_id
+WHERE sr.workflow_run_id = $1
+ORDER BY sr.created_at ASC, sr.id ASC
 `
 
-func (q *Queries) ListWorkflowStepRunsForRun(ctx context.Context, workflowRunID pgtype.UUID) ([]WorkflowStepRun, error) {
+type ListWorkflowStepRunsForRunRow struct {
+	ID               pgtype.UUID                `json:"id"`
+	WorkflowRunID    pgtype.UUID                `json:"workflow_run_id"`
+	StepDefinitionID pgtype.UUID                `json:"step_definition_id"`
+	TurnID           pgtype.UUID                `json:"turn_id"`
+	Status           WorkflowStepRunStatus      `json:"status"`
+	OutcomeStatus    *WorkflowStepOutcomeStatus `json:"outcome_status"`
+	OutcomeSummary   *string                    `json:"outcome_summary"`
+	OutcomePayload   []byte                     `json:"outcome_payload"`
+	Decision         *WorkflowStepDecision      `json:"decision"`
+	DecisionText     *string                    `json:"decision_text"`
+	DecidedAt        pgtype.Timestamptz         `json:"decided_at"`
+	DecidedBy        pgtype.UUID                `json:"decided_by"`
+	CreatedAt        pgtype.Timestamptz         `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz         `json:"updated_at"`
+	FinishedAt       pgtype.Timestamptz         `json:"finished_at"`
+	TurnModelID      *string                    `json:"turn_model_id"`
+	TurnCostUsd      pgtype.Numeric             `json:"turn_cost_usd"`
+}
+
+// §25.15: carries the two facts a run view needs that live on the
+// ordinary turn each attempt dispatched as, not on workflow_step_runs
+// itself -- turn_model_id (the join through turn_id that IS a step's
+// model, turns.model_id, persisted since migration 000018; §25.6 makes
+// every workflow step an ordinary sequential turn, so no new column was
+// needed) and turn_cost_usd (turns.cost_usd, migration 000098's own
+// running total, accumulated as this attempt's own step_finish events
+// land). A LEFT JOIN, not INNER: turn_id is nullable (an
+// awaiting_decision attempt has no turn yet), and a step run with no
+// turn must still be listed, with both extra columns simply absent --
+// mirrors ListWorkflowDefinitions' own "carries the extra columns a
+// caller would otherwise have to derive itself... a list endpoint
+// issuing extra round trips per row is the N+1 this avoids" reasoning
+// exactly, one join away from an EXISTS subquery.
+func (q *Queries) ListWorkflowStepRunsForRun(ctx context.Context, workflowRunID pgtype.UUID) ([]ListWorkflowStepRunsForRunRow, error) {
 	rows, err := q.db.Query(ctx, listWorkflowStepRunsForRun, workflowRunID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []WorkflowStepRun
+	var items []ListWorkflowStepRunsForRunRow
 	for rows.Next() {
-		var i WorkflowStepRun
+		var i ListWorkflowStepRunsForRunRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.WorkflowRunID,
@@ -1137,6 +1178,8 @@ func (q *Queries) ListWorkflowStepRunsForRun(ctx context.Context, workflowRunID 
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.FinishedAt,
+			&i.TurnModelID,
+			&i.TurnCostUsd,
 		); err != nil {
 			return nil, err
 		}

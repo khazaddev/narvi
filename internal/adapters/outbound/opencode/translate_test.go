@@ -104,8 +104,9 @@ func TestTranslateStepFinish_CostTokensIsObjectShaped(t *testing.T) {
 	t.Parallel()
 
 	cmd := sandboxws.Prompt{SessionId: testSessionID, Gen: 1}
+	usd := 0.0042
 	part := stepFinishPart{
-		ID: "prt_step1", MessageID: "msg_1", Cost: 0.0042,
+		ID: "prt_step1", MessageID: "msg_1", Cost: &usd,
 		Tokens: stepFinishTokens{Input: 100, Output: 50, Cache: stepFinishCache{Read: 12}},
 	}
 
@@ -137,6 +138,42 @@ func TestTranslateStepFinish_CostTokensIsObjectShaped(t *testing.T) {
 	}
 	if _, ok := cost["tokens"].(map[string]any); !ok {
 		t.Fatalf("cost.tokens is not an object: %#v", cost["tokens"])
+	}
+}
+
+// TestTranslateStepFinish_NilCost_UsdStaysNil proves §25.15's own fix to
+// stepFinishPart.Cost (types.go: *float64, not float64): a step-finish
+// part decoded with NO "cost" key at all (OpenCode's own JSON genuinely
+// omitting it -- simulated here directly at the struct level, since that
+// is exactly what json.Unmarshal into stepFinishPart would produce for a
+// missing key) must translate to a NIL wire Cost.Usd, never a fabricated
+// 0 -- the distinction the whole point of the *float64 change is to
+// preserve through to the wire.
+func TestTranslateStepFinish_NilCost_UsdStaysNil(t *testing.T) {
+	t.Parallel()
+
+	cmd := sandboxws.Prompt{SessionId: testSessionID, Gen: 1}
+	part := stepFinishPart{
+		ID: "prt_step1", MessageID: "msg_1", Cost: nil,
+		Tokens: stepFinishTokens{Input: 100, Output: 50},
+	}
+
+	got := translateStepFinish(cmd, part, "")
+	if got.Cost.Usd != nil {
+		t.Errorf("Cost.Usd = %v, want nil (no \"cost\" key on the underlying part)", *got.Cost.Usd)
+	}
+
+	// And prove this is not vacuous by also checking the explicit-zero
+	// case decodes distinctly: a real "cost":0 must NOT collapse onto the
+	// same nil result.
+	zero := 0.0
+	partZero := part
+	partZero.Cost = &zero
+	gotZero := translateStepFinish(cmd, partZero, "")
+	if gotZero.Cost.Usd == nil {
+		t.Error("Cost.Usd = nil for an explicit cost:0 part, want a non-nil pointer to 0 -- nil must mean 'absent', not 'zero'")
+	} else if *gotZero.Cost.Usd != 0 {
+		t.Errorf("Cost.Usd = %v, want 0", *gotZero.Cost.Usd)
 	}
 }
 
