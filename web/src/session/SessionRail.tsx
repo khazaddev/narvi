@@ -260,7 +260,7 @@ function PlanLinkPanel({ sessionId }: { sessionId: string }) {
 }
 
 // WorkflowRunsLinkPanel: entry point into the workflow run view + human
-// decision gate (§25.9/§25.10, §12.2's own workflow-runs Step) -- always
+// decision gate (§25.9/§25.10) -- always
 // rendered, mirroring PlanLinkPanel's own identical precedent immediately
 // above: the session DTO carries no "does this session have a workflow
 // run" signal to gate on cheaply, so a session with none simply gets

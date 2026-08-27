@@ -242,8 +242,12 @@ export interface EdgeTaken {
  * field). Three cases, checked in this order because a decision='revise'
  * attempt is defined to ALWAYS target the same step regardless of its own
  * outcomeStatus (§25.9: revise never consults workflow.NextStep at all), so
- * that check must win before the same-step-id check below would otherwise
- * also fire and get the label right for the wrong reason:
+ * that check must win. Not because the same-step-id check below would
+ * otherwise reach the right answer by luck -- it would reach the WRONG one:
+ * a revise always re-runs the same step, so that check matches too, and
+ * whichever runs first decides the label. Ordered the other way, every
+ * human revise would be presented to the operator as an automatic retry,
+ * which is a different event with a different cause:
  *   - decision === 'revise' on `from` -- a human's revise verdict; `to` is
  *     guaranteed the SAME stepDefinitionId (DispatchSameStepRevision never
  *     resolves via an edge), rendered distinctly from an automatic retry.

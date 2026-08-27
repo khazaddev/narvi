@@ -269,18 +269,38 @@ function DecisionGate({ sessionId, runId, stepRun, canAct }: { sessionId: string
   )
 }
 
-function RunHistoryPanel({ runs, featuredId }: { runs: WorkflowRun[]; featuredId: string | null }) {
+/**
+ * WORKFLOW_RUN_POLL_MS is how often a live run is re-read. Matches the
+ * cadence the other live surfaces in this app already use, so an operator
+ * watching two screens does not see them disagree about how current they
+ * are. Deliberately a plain client-side interval and not a websocket
+ * subscription: the run read model changes on the order of a turn, not a
+ * token, and a second realtime channel is a mechanism this screen does not
+ * need to justify.
+ */
+const WORKFLOW_RUN_POLL_MS = 15_000
+
+function RunHistoryPanel({ runs, featuredId, onSelect }: { runs: WorkflowRun[]; featuredId: string | null; onSelect: (runId: string) => void }) {
   if (runs.length === 0) return null
   return (
     <div>
       <h3>Run history</h3>
+      {/*
+        Selectable, not a read-only list. Which run the main panel opens on
+        is a heuristic -- it prefers one that still needs attention -- and a
+        heuristic that cannot be overridden is a trap: a run parked for
+        review outranks newer runs, and without a way to click past it the
+        newer ones are unreachable rather than merely not-default.
+      */}
       <ul className="transitions">
         {runs.map((r) => (
           <li key={r.id} className={r.id === featuredId ? 'now' : undefined}>
-            <b>
-              {laneLabel(r.lane)} · {runStatusLabel(r.status)}
-            </b>{' '}
-            · {new Date(r.createdAt).toLocaleString()}
+            <button type="button" className="linklike" onClick={() => onSelect(r.id)} aria-current={r.id === featuredId ? 'true' : undefined}>
+              <b>
+                {laneLabel(r.lane)} · {runStatusLabel(r.status)}
+              </b>{' '}
+              · {new Date(r.createdAt).toLocaleString()}
+            </button>
           </li>
         ))}
       </ul>
@@ -291,14 +311,38 @@ function RunHistoryPanel({ runs, featuredId }: { runs: WorkflowRun[]; featuredId
 export function WorkflowRunsView({ sessionId }: { sessionId: string }) {
   const meQuery = useQuery(meQueryOptions)
   const sessionQuery = useQuery({ queryKey: sessionQueryKeys.detail(sessionId), queryFn: ({ signal }) => getSession(sessionId, signal) })
-  const runsQuery = useQuery({ queryKey: workflowRunQueryKeys.listForSession(sessionId), queryFn: ({ signal }) => listSessionWorkflowRuns(sessionId, signal) })
+  const runsQuery = useQuery({
+    queryKey: workflowRunQueryKeys.listForSession(sessionId),
+    queryFn: ({ signal }) => listSessionWorkflowRuns(sessionId, signal),
+    // This screen's whole job is watching a run advance and answering it
+    // when it stops. Without a refresh it shows whatever was true when the
+    // tab was opened: a step that finished never finishes, and a decision
+    // gate that opens after load never appears -- the operator waits at a
+    // screen that will not tell them it is their turn. Same cadence as the
+    // other live surfaces in this app.
+    refetchInterval: WORKFLOW_RUN_POLL_MS,
+  })
 
-  const featured = runsQuery.isSuccess ? featuredRun(runsQuery.data.runs) : null
+  // A run the operator picked out of the history list, if any. Null means
+  // "follow the heuristic", which is what an operator who has not chosen
+  // wants: land on whatever still needs attention.
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+
+  const runs = runsQuery.isSuccess ? runsQuery.data.runs : []
+  const featured = runsQuery.isSuccess
+    ? (selectedRunId === null ? featuredRun(runs) : (runs.find((r) => r.id === selectedRunId) ?? featuredRun(runs)))
+    : null
 
   const runDetailQuery = useQuery({
     queryKey: workflowRunQueryKeys.detail(featured?.id ?? ''),
     queryFn: ({ signal }) => getWorkflowRun(featured?.id ?? '', signal),
     enabled: featured !== null,
+    // Only while the run can still move. A completed, failed or cancelled
+    // run is finished changing, and polling one forever would be a request
+    // every few seconds for a document that is now immutable. needs_review
+    // KEEPS polling: it is exactly the state a human is expected to resolve,
+    // and its step attempts change when they do.
+    refetchInterval: featured !== null && (featured.status === 'running' || featured.status === 'needs_review') ? WORKFLOW_RUN_POLL_MS : false,
   })
 
   if (sessionQuery.isPending || runsQuery.isPending) {
@@ -317,7 +361,6 @@ export function WorkflowRunsView({ sessionId }: { sessionId: string }) {
   }
 
   const session = sessionQuery.data
-  const runs = runsQuery.data.runs
   const canAct = canActOnWorkflowStep(meQuery.data?.role, meQuery.data?.id, session.createdBy)
 
   const detail = runDetailQuery.isSuccess ? runDetailQuery.data : null
@@ -383,7 +426,20 @@ export function WorkflowRunsView({ sessionId }: { sessionId: string }) {
           {featured && detail && featured.status === 'needs_review' && !decidable && <div className="banner banner-warn">{NEEDS_REVIEW_EXPLANATION}</div>}
         </div>
 
-        {featured && detail && decidable && <DecisionGate sessionId={sessionId} runId={featured.id} stepRun={decidable} canAct={canAct} />}
+        {/*
+          Keyed on the attempt id, which is load-bearing rather than tidy.
+          decidableStepRun returns WHICHEVER attempt is currently parked, and
+          a run advances within itself, so a background refetch can swap the
+          gate's target from one attempt to another without this element ever
+          unmounting. Unkeyed, an open revise draft written about attempt A
+          would ride that swap and be submitted against attempt B -- which is
+          genuinely awaiting a decision, so the server accepts it and re-runs
+          the wrong step with instructions meant for another one. The key
+          forces a remount, discarding a draft that no longer has a target.
+        */}
+        {featured && detail && decidable && (
+          <DecisionGate key={decidable.id} sessionId={sessionId} runId={featured.id} stepRun={decidable} canAct={canAct} />
+        )}
       </section>
 
       <aside className="rail" aria-label="Workflow run details">
@@ -422,8 +478,13 @@ export function WorkflowRunsView({ sessionId }: { sessionId: string }) {
             </dl>
           </div>
         )}
-        <RunHistoryPanel runs={runs} featuredId={featured?.id ?? null} />
-        {runs.length === 0 && <p className="rail-empty">No workflow runs yet.</p>}
+        {/*
+          No empty-state line here. The main panel already says there are no
+          runs; the rail repeating it in different words made the screen tell
+          the operator the same thing twice, in two places, as though they
+          were two facts.
+        */}
+        <RunHistoryPanel runs={runs} featuredId={featured?.id ?? null} onSelect={setSelectedRunId} />
       </aside>
     </div>
   )
