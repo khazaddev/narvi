@@ -182,3 +182,16 @@ export const workflowDefinitionQueryKeys = {
 export const workflowBindingQueryKeys = {
   list: () => ['workflow-bindings', 'list'] as const,
 }
+
+// workflowRunQueryKeys (§25.10/§25.15, §25.9) -- the run view's own two
+// data sources. listForSession is scoped by session id like
+// sessionQueryKeys above (GET /api/sessions/:id/workflow-runs); detail is
+// scoped by the run's own id -- unlike every other per-session key above,
+// GET /api/workflow-runs/{runId}'s own URL carries no sessionId at all
+// (§25.10: it resolves the owning session from the run row itself), so the
+// key cannot be nested under ['session', sessionId, ...] the way
+// planQueryKeys/reviewQueryKeys are.
+export const workflowRunQueryKeys = {
+  listForSession: (sessionId: string) => ['session', sessionId, 'workflow-runs'] as const,
+  detail: (runId: string) => ['workflow-run', runId, 'detail'] as const,
+}

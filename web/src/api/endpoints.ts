@@ -52,6 +52,7 @@ import type {
   ListSessionsResponse,
   ListWorkflowBindingsResponse,
   ListWorkflowDefinitionsResponse,
+  ListWorkflowRunsResponse,
   Member,
   MergePullRequestRequest,
   MergePullRequestResponse,
@@ -91,6 +92,9 @@ import type {
   UpsertIntentTemplateRequest,
   WorkflowBinding,
   WorkflowDefinition,
+  WorkflowRunDetail,
+  WorkflowStepDecideRequest,
+  WorkflowStepDecideResponse,
   WSTokenResponse,
 } from '@narvi/contracts/rest-dtos'
 
@@ -651,6 +655,39 @@ export function listWorkflowBindings(signal?: AbortSignal): Promise<ListWorkflow
  */
 export function putWorkflowBinding(body: PutWorkflowBindingRequest, signal?: AbortSignal): Promise<WorkflowBinding> {
   return request<WorkflowBinding>('/api/workflow-bindings', { method: 'PUT', body, signal })
+}
+
+// -- workflow runs & the human decision gate (§25.9/§25.10, §25.15): the
+// run view's own two reads plus the HITL decide endpoint. --
+
+/** listSessionWorkflowRuns calls GET /api/sessions/:id/workflow-runs -- this session's own workflow_runs rows, newest first (§25.10). Same session-read gate as every other /api/sessions/:id/... route in this file (every role including viewer, mirrors listArtifacts/listPlans' own identical precedent) -- unlike listWorkflowDefinitions/listWorkflowBindings above, there is no separate maintainer+ gate on this read. */
+export function listSessionWorkflowRuns(sessionId: string, signal?: AbortSignal): Promise<ListWorkflowRunsResponse> {
+  return request<ListWorkflowRunsResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/workflow-runs`, { signal })
+}
+
+/** getWorkflowRun calls GET /api/workflow-runs/:runId -- the run WITH its ordered step runs (§25.10: "a run without its steps answers no question anybody asks"). Same session-read gate as listSessionWorkflowRuns above, resolved server-side via this run's own sessionId -- the URL itself carries no sessionId. */
+export function getWorkflowRun(runId: string, signal?: AbortSignal): Promise<WorkflowRunDetail> {
+  return request<WorkflowRunDetail>(`/api/workflow-runs/${encodeURIComponent(runId)}`, { signal })
+}
+
+/**
+ * decideWorkflowStep calls POST /api/workflow-runs/:runId/steps/:stepRunId/decide
+ * (§25.9) -- approve/reject/revise the human decision gate the engine parks
+ * a run's own attempt on. Own/joined-aware server-side
+ * (authz.ActionDecideWorkflowStep, the SAME matrix row as
+ * ActionApprovePlan, §25.11) -- sent unconditionally regardless of what the
+ * calling component's own client-side approximation rendered enabled,
+ * mirroring approvePlan/rejectPlan's own identical "the client always sends
+ * the real request" precedent above; a caller not actually authorized gets
+ * a real 403 back. A 409 means the target attempt was already decided (by
+ * this verdict or another), or stepRunId/runId named a stale/mismatched
+ * pair -- the server's own guarded UPDATE (decideworkflowstep.go). verdict
+ * 'revise' requires body.text non-empty; the server rejects a blank one
+ * with its own 400 regardless of what this call is given, so any
+ * client-side check is a courtesy, never the real guarantee.
+ */
+export function decideWorkflowStep(runId: string, stepRunId: string, body: WorkflowStepDecideRequest, signal?: AbortSignal): Promise<WorkflowStepDecideResponse> {
+  return request<WorkflowStepDecideResponse>(`/api/workflow-runs/${encodeURIComponent(runId)}/steps/${encodeURIComponent(stepRunId)}/decide`, { method: 'POST', body, signal })
 }
 
 export type { Environment, Member, AuditLogEntry, SandboxSecret, ProviderCredential, CloudIdentityBinding, ClusterBinding, OpenCodeConfig, ReviewAnalytics, RepoDigestScope, WorkflowDefinition, WorkflowBinding }
