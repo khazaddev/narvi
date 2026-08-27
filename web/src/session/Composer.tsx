@@ -1,4 +1,4 @@
-// Composer.tsx -- decision 5 ("A composer that pre-warms") / row 83's own
+// Composer.tsx -- decision 5 ("A composer that pre-warms") / §12.2's own
 // prescriptive list: model/effort/plan-mode, warm-on-type INDICATOR
 // (§12.2 item 1's own exact wording -- see this file's own "Warm-on-type"
 // section below for why this ships an indicator, not a live pre-warm
@@ -7,7 +7,7 @@
 // mobile decision, and file attachment on the composer itself
 // (ActionUploadToSession, §28).
 //
-// # Touch/mobile decision (§12.3, explicit per row 83's own requirement)
+// # Touch/mobile decision (§12.3, explicit per §12.3's own requirement)
 //
 // §12.3's own "Composer send semantics" text already makes this decision,
 // verbatim: Enter-sends/Shift+Enter-newline ships UNCHANGED across every

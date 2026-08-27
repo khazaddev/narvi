@@ -49,10 +49,14 @@ export function modelLabel(modelId: string | null): string {
  * on a session they created OR JOINED; a viewer never.
  *
  * This function can only ever check "created" -- "joined" (a participants
- * row) has no REST/WS surface exposed to this client anywhere in this
- * codebase yet (multiplayer presence is a named, tracked gap -- grep the
- * whole web/src tree for "participant" and there is exactly one, in a WS
- * test fixture never wired to any React state). So this is a
+ * row) reaches no React state anywhere in this client. The WS subscribed
+ * payload does carry a real participants array and the transport validates
+ * its shape, but nothing consumes it: multiplayer presence is a named,
+ * tracked gap. (An earlier version of this comment justified itself with a
+ * grep count instead -- "exactly one, in a WS test fixture". The count went
+ * stale the moment the transport gained its validation, while the claim it
+ * supported stayed true. A justification should rest on the property, not
+ * on a number that moves.) So this is a
  * CONSERVATIVE under-approximation: it can wrongly HIDE the approval
  * affordance from a genuinely-joined member (who the server would in fact
  * allow), but can never wrongly SHOW it to someone the server would

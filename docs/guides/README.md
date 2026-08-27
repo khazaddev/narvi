@@ -97,13 +97,25 @@ semantics.**
   describes what the route actually does with its request body, its
   response shape, or its authorization rules — only that the route
   exists. A reviewer still has to read the diff.
-- A confirmed review finding against an earlier draft of this section:
-  it claimed a complete accounting of real routes outside every guide's
-  scope, and wasn't — it silently dropped five real routes, one pair of
-  them genuinely human-facing and wrongly left out of any guide entirely
-  (fixed below; [linear.md](linear.md) now documents it). The list below
-  is the corrected, actually-complete accounting as of this fix — three
-  categories, each excluded for a different, explicit reason:
+- **This list does not claim to be complete, and the claim is the thing
+  that keeps breaking.** An earlier draft asserted a complete accounting
+  of the routes outside every guide's scope and had dropped five, one
+  pair of them human-facing and in no guide at all. It was corrected, the
+  corrected version asserted completeness in turn, and a later phase
+  audit found it short by twenty routes — twelve of them a single phase's
+  new API. A hand-maintained inventory that declares itself complete goes
+  stale on the next Step that adds a route, and says nothing while it
+  does.
+
+  What IS enforced lives in `internal/ops`: `TestNoGuideDrift` scans the
+  real route wiring and fails when a guide documents a route the code
+  does not implement. That guard runs the direction that matters — no
+  guide may lie about a route. The reverse direction, every route being
+  either documented or deliberately excluded, is not enforced, and this
+  list is a reading aid for it rather than a guarantee.
+
+  The categories below are the reasons a route is deliberately outside a
+  guide, and remain accurate as reasons even when the enumeration lags:
 
   1. **Per-automation, admin-configured inbound trigger** —
      `POST /webhooks/automations/{automationID}` — not one of the four

@@ -1,4 +1,4 @@
-// attachments.ts -- the composer's own file-attachment flow (row 83:
+// attachments.ts -- the composer's own file-attachment flow (§12.2:
 // "file attachment on the composer itself (ActionUploadToSession, §28) --
 // an upload belongs where the prompt is written"). §28.4's real lifecycle
 // is mint -> transfer -> confirm, verified server-side; this module is the
@@ -7,7 +7,7 @@
 //
 // Two upload endpoints exist for the SAME lifecycle (§28.5): a
 // sandbox-bearer variant for the agent-produced direction, and this
-// module's own browser (/api) variant for the direction row 83 actually
+// module's own browser (/api) variant for the direction §12.2 actually
 // asks for -- a human attaching a file to their own prompt.
 import type { ConfirmUploadResponse, MintUploadResponse } from '@narvi/contracts/rest-dtos'
 

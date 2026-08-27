@@ -1,5 +1,5 @@
 // SessionRail.tsx -- decision 6 ("'What happened?' as self-service") /
-// row 83's own "sandbox rail (transitions, gen, fingerprint, boot phases,
+// §12.2's own "sandbox rail (transitions, gen, fingerprint, boot phases,
 // artifacts, cost incl. sub-task roll-up)". Four panels, each sourced from
 // real data only -- see sandboxRail.ts's own top comment for the full
 // accounting of what IS and is NOT available on the wire today (runtime

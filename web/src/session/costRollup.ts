@@ -1,4 +1,4 @@
-// costRollup.ts -- row 83's own "cost incl. sub-task roll-up" (§7.1: the
+// costRollup.ts -- §12.2's own "cost incl. sub-task roll-up" (§7.1: the
 // OpenCode adapter's own turnState.spentUSD sums every step_finish this
 // turn observes, "main lane and every sub-task alike", but that running
 // total is scoped to the adapter's own in-memory turn state and NEVER

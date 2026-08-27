@@ -1,4 +1,4 @@
-// sessionRailRendering.test.tsx -- row 83's own explicit verification
+// sessionRailRendering.test.tsx -- §12.2's own explicit verification
 // requirement: "an artifact URL with a `javascript:` scheme is not
 // rendered as a link; a filename containing markup renders as text."
 // Uses react-dom/server's renderToStaticMarkup, the SAME no-jsdom pattern

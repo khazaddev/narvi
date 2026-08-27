@@ -1,4 +1,4 @@
-// canSubmit.ts -- decision 5 / row 83 / §12.3's own named requirement:
+// canSubmit.ts -- decision 5, §12.3's own named requirement:
 // "one shared can-submit predicate driving both the Send button and the
 // keydown handler". The row names this because the classic defect in this
 // class of UI is a Send button and a keydown handler that quietly drift
@@ -45,8 +45,7 @@ export interface ComposerKeyDownEvent {
    * own onKeyDown wiring uses both, belt and suspenders, since some
    * browsers are known to report isComposing inconsistently on the exact
    * keydown that confirms a composition). Never a heuristic over the text
-   * itself -- always the browser's own composition state, per row 83's
-   * own explicit requirement.
+   * itself -- always the browser's own composition state, per §12.3's * own explicit requirement.
    */
   isComposing: boolean
 }

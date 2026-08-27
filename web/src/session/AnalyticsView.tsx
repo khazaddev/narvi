@@ -19,7 +19,7 @@
 // model, WITH the "not available yet" states that model's own
 // TimeseriesComputed/TopRiskDriversComputed/FindingOutcomesComputed/
 // DigestContestationRateComputed sentinels are specifically designed to
-// carry -- row 86's own explicit instruction. The digest-scope section
+// carry -- §12.2's own explicit instruction. The digest-scope section
 // (§21.3) is likewise real, read-only, and derived rather than a
 // fabricated "cadence" setting -- see api/endpoints.ts's own
 // getRepoDigestScope doc comment.
