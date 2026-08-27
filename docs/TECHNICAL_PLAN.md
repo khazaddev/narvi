@@ -1469,7 +1469,22 @@ to attribute by. A workflow step is not a sub-task; it is a turn, and the turn a
 written to `events.payload`, but `events` carries only `session_id` — there is no `turn_id` on that
 table, so no honest per-step figure can be recovered from it without correlating on payload fields,
 which is a derivation, not a fact. A running total is accumulated onto the turn as those events land,
-in the same transaction that persists the event. The adapter-local `turnState.spentUSD` accumulator
+in the same transaction that persists the event.
+
+**The idempotency key is `step_finish.stepId`, and this is load-bearing.** The wire replays: §6.1's
+sender buffers events and re-sends on reconnect, so the cost write must be idempotent or a forced
+reconnect inflates the bill. `stepId` is one per step and is the only key on the wire that identifies
+*this step's* cost. It is specifically NOT the `inserted` flag the raw-event upsert returns — that
+flag answers "was this `(session_id, message_id)` row new to the events table", which is a different
+question and is false for every `step_finish` ever sent, because `step_start` and `step_finish` are
+two parts of one assistant message and share its id. An implementation gated on it records nothing at
+all, and every test passes if its fixture invents a fresh message id per event instead of sending the
+`step_start` that always precedes the `step_finish`. Per-step rows are kept rather than discarded
+after summing: a total nobody can recompute is a number nobody can check.
+
+**Attribution is by "the turn processing when the event lands"**, not by a turn id on the event,
+because §6.1 does not carry one. Same turn in every ordinary case; not the same if a turn terminalizes
+while one of its `step_finish` events is in flight. Stated here so it is not mistaken for a guarantee. The adapter-local `turnState.spentUSD` accumulator
 (§26.7) is NOT extended or reused: it exists to answer one sandbox-local question inside a live turn,
 it never leaves that process, and making it authoritative for a control-plane read would give one
 number two owners.

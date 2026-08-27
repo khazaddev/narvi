@@ -129,9 +129,16 @@ func TestRealTurn_PlainTextPrompt(t *testing.T) {
 		t.Error("never observed a step_finish event")
 	}
 	if !sawCostUSD {
-		t.Error("never observed a step_finish event carrying a real, positive cost.usd -- " +
-			"§25.15: a silently-absent or zeroed cost must fail this test, since it would " +
-			"otherwise read downstream as a free step rather than an unknown one")
+		// PRESENT, not positive -- see sawCostUSD's own note above for why
+		// the bar is non-nil: this environment's default model genuinely
+		// bills $0, so asserting "> 0" would fail for a reason that has
+		// nothing to do with the wire. Reaching here means cost.usd was
+		// ABSENT from every step_finish, which is the failure that matters:
+		// downstream, absent must stay distinguishable from zero, or an
+		// unknown step reads as a free one (§25.15).
+		t.Error("never observed a step_finish event carrying cost.usd at all -- " +
+			"the field was absent or null on every step, so downstream cannot tell " +
+			"an unknown cost from a genuine $0")
 	}
 	if final == nil {
 		t.Fatal("never observed an execution_complete event")

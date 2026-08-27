@@ -34,29 +34,27 @@ import (
 
 // recordStepFinishCost adds this step_finish event's own cost.usd (when
 // present) onto the running total of whichever turn is currently
-// processing for this session -- see AddTurnCostUSD's own generated doc
-// comment (sqlcgen/turns.sql.go) for why that accumulation is one
-// guarded SQL UPDATE and never a Go-side read-modify-write.
+// processing for this session -- see RecordTurnStepCost's own generated
+// doc comment (sqlcgen/turns.sql.go) for why that is one statement, and
+// migrations/000099_turn_step_costs.up.sql for why it is idempotent on
+// the step id.
 //
-// inserted is handleSandboxEvent's own appendRawEvent result for THIS
-// event, threaded through for the SAME reason recordBootTiming's own
-// inserted parameter is gated (boottiming.go): step_finish is not one of
-// §6.1's 6 critical acked types, but the sender's own reconnect-resend
-// buffer (§6.1: "buffers (1000 events, evict oldest non-critical) and
-// re-sends on reconnect") can still replay an already-processed
-// step_finish verbatim on a forced reconnect, and CreateEvent's own
-// upsert-on-(session_id, message_id) dedup (queries/events.sql) is what
-// tells this event apart from that replay. Recording cost unconditionally
-// would double-count every buffered step_finish on such a replay.
-func (a *Actor) recordStepFinishCost(ctx context.Context, tx pgx.Tx, raw json.RawMessage, inserted bool) error {
-	if !inserted {
-		// A wire-level redelivery of an already-processed step_finish (see
-		// this function's own doc comment above) -- its cost was already
-		// added to the running total once, on the first delivery; adding
-		// it again here would double-count the same dollar figure.
-		return nil
-	}
-
+// The wire's own reconnect-resend buffer (§6.1: "buffers (1000 events,
+// evict oldest non-critical) and re-sends on reconnect") can replay an
+// already-processed step_finish verbatim, so the write MUST be idempotent
+// or a forced reconnect inflates the bill. The key for that is
+// step_finish.stepId (§6.1), which is one per step.
+//
+// It is deliberately NOT the `inserted` flag appendRawEvent returns, which
+// this function used to gate on. That flag answers "was this
+// (session_id, message_id) row new to the events table" -- a different
+// question, and one that is false for every step_finish ever sent:
+// step_start and step_finish are two parts of the same assistant message
+// and carry that message's id (translate.go: the token event is the sole
+// part-derived event that uses its own part id), so step_start always
+// claims the row first. Gated that way, no production step_finish reached
+// the cost write at all.
+func (a *Actor) recordStepFinishCost(ctx context.Context, tx pgx.Tx, raw json.RawMessage) error {
 	var evt sandboxws.StepFinish
 	if err := json.Unmarshal(raw, &evt); err != nil {
 		// Defensive, not fatal -- mirrors recordBootTiming/
@@ -82,18 +80,28 @@ func (a *Actor) recordStepFinishCost(ctx context.Context, tx pgx.Tx, raw json.Ra
 		return nil
 	}
 
-	affected, err := a.stores.turn.WithTx(tx).AddCostUSD(ctx, a.sessionID, *usd)
+	if evt.StepId == "" {
+		// §6.1 makes stepId required on step_finish, so an empty one is a
+		// malformed event, not a shape this code should quietly absorb.
+		// Without it there is no key to be idempotent on, and counting
+		// money that a reconnect could count again is the worse of the two
+		// errors -- so this drops the figure and says so.
+		a.logger.Warn("sessionactor: step_finish carries no stepId; cost not recorded (no idempotency key)")
+		return nil
+	}
+
+	affected, err := a.stores.turn.WithTx(tx).RecordStepCostUSD(ctx, a.sessionID, evt.StepId, *usd)
 	if err != nil {
-		return fmt.Errorf("sessionactor: add turn cost: %w", err)
+		return fmt.Errorf("sessionactor: record step cost: %w", err)
 	}
 	if affected == 0 {
-		// Defensive only: a step_finish is only ever emitted mid-turn, by
-		// construction of the OpenCode adapter's own event stream, so the
-		// session's own turn should always still be Processing when this
-		// arrives. Logged, not fatal -- exactly like
-		// maybeEnqueueLinearProgress's own identical "no turn in
-		// processing" defensive branch (progressnotify.go).
-		a.logger.Warn("sessionactor: step_finish arrived with no turn in processing; cost not recorded")
+		// Either this stepId was already counted (a reconnect replay --
+		// the intended, healthy path) or the session has no turn in
+		// processing. Both are ordinary; neither is worth an error, and
+		// the two are not worth distinguishing, because the response to
+		// each is the same: do not add the money again.
+		a.logger.Debug("sessionactor: step_finish cost not applied; already counted or no turn processing",
+			"step_id", evt.StepId)
 	}
 	return nil
 }

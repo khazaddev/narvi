@@ -508,7 +508,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 			// see stepcost.go's own top comment for the full design and
 			// why this is independent of internal/adapters/outbound/
 			// opencode's own turnState.spentUSD accumulator.
-			if err := a.recordStepFinishCost(ctx, tx, cmd.Raw, inserted); err != nil {
+			if err := a.recordStepFinishCost(ctx, tx, cmd.Raw); err != nil {
 				return err
 			}
 		}

@@ -32,6 +32,16 @@ import (
 // usd is a pointer so the nil case (§6.1: cost.usd is optional/nullable)
 // can be exercised directly, mirroring StepFinishCost.Usd's own
 // *float64-shaped generated type.
+//
+// NOTE the fresh message id per call: that is what the SUMMATION tests
+// need (two step_finish events must be two distinct events), and it is
+// NOT what production sends -- a real step_finish shares its message id
+// with the step_start that preceded it. Relying on this helper alone once
+// hid a bug that made every production cost write a no-op, so the
+// production shape has its own test above
+// (TestHandleSandboxEvent_StepStartThenStepFinish_SharedMessageID_
+// StillRecordsCost). Do not treat a green run of the tests below as
+// evidence that the wire path works.
 func stepFinishRaw(t *testing.T, sessionID string, gen int, usd *float64) (json.RawMessage, string) {
 	t.Helper()
 	messageID := uuid.NewString()
@@ -98,6 +108,71 @@ func TestHandleSandboxEvent_StepFinish_AddsCostToProcessingTurn(t *testing.T) {
 	v, ok := appreviewtriage.NumericToFloat64(got.CostUsd)
 	if !ok {
 		t.Fatal("turn cost_usd is NULL after a step_finish with a real cost.usd, want 1.23")
+	}
+	if v != 1.23 {
+		t.Errorf("turn cost_usd = %v, want 1.23", v)
+	}
+}
+
+// TestHandleSandboxEvent_StepStartThenStepFinish_SharedMessageID_StillRecordsCost
+// is the shape production ACTUALLY sends, and the one every other test in
+// this file was missing.
+//
+// OpenCode emits step-start and step-finish as two parts of the SAME
+// assistant message, and both wire events carry that enclosing message's
+// id (translate.go -- the token event is the only part-derived event that
+// uses its own part id). The step_start therefore claims the
+// (session_id, message_id) row in the events table, and the step_finish
+// upserts onto it and comes back inserted=false.
+//
+// An earlier version of the cost write gated on exactly that flag, so no
+// production step_finish ever reached it and turns.cost_usd was NULL for
+// every turn that had ever run. Every test here passed anyway, because the
+// fixture minted a fresh message id per step_finish and never sent the
+// step_start that always precedes it. This test sends both, in order, with
+// the shared id -- if the cost write ever goes back to keying on anything
+// but the step id, this is what fails.
+func TestHandleSandboxEvent_StepStartThenStepFinish_SharedMessageID_StillRecordsCost(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+	if _, err := narvipg.NewSandboxStore(pool).Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	turnStore := narvipg.NewTurnStore(pool)
+	turn := createProcessingTurn(ctx, t, turnStore, sessionID)
+
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil, false)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown() })
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	raw, messageID := stepFinishRaw(t, sessionID.String(), 1, costUSDf64(1.23))
+
+	// The step_start that precedes it in every real turn, carrying the
+	// SAME message id -- this is what claims the events row first.
+	startRaw, err := json.Marshal(map[string]any{
+		"type": "step_start", "messageId": messageID,
+		"sessionId": sessionID.String(), "gen": 1, "stepId": "start-" + messageID,
+	})
+	if err != nil {
+		t.Fatalf("marshal step_start: %v", err)
+	}
+	sendSandboxEventForTest(ctx, t, a, SandboxEvent{Type: "step_start", Gen: 1, MessageID: messageID, Raw: startRaw})
+	sendSandboxEventForTest(ctx, t, a, SandboxEvent{Type: "step_finish", Gen: 1, MessageID: messageID, Raw: raw})
+
+	got, err := turnStore.Get(ctx, turn.ID)
+	if err != nil {
+		t.Fatalf("get turn: %v", err)
+	}
+	v, ok := appreviewtriage.NumericToFloat64(got.CostUsd)
+	if !ok {
+		t.Fatal("turn cost_usd is NULL after step_start + step_finish sharing one messageId -- the production shape; want 1.23")
 	}
 	if v != 1.23 {
 		t.Errorf("turn cost_usd = %v, want 1.23", v)

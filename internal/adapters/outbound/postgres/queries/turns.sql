@@ -142,41 +142,59 @@ UPDATE turns
 SET epistemic_outcome = $2
 WHERE id = $1 AND status = 'processing';
 
--- name: AddTurnCostUSD :execrows
--- §25.15's own per-step cost accumulation: called from
--- internal/app/sessionactor's own "step_finish" case (sandboxevent.go),
--- inside the SAME transact that already persisted this event via
--- appendRawEvent moments ago, for every step_finish that carries a
--- non-null cost.usd. COALESCE(cost_usd, 0) + $2, never a plain
--- cost_usd + $2 -- turns.cost_usd's own migration (000098) doc comment:
--- NULL must stay the ONLY representation of "no cost has arrived yet",
--- and a bare "+ $2" against a NULL column would silently stay NULL
--- forever once summed against its own unset value, which is the exact
--- "no cost yet reads as free" failure §25.15 exists to prevent.
+-- name: RecordTurnStepCost :execrows
+-- §25.15's per-step cost accumulation, made idempotent on the key the wire
+-- actually gives us for that: step_finish.stepId (§6.1), one per step.
 --
--- This single guarded UPDATE is the WHOLE concurrency story: Postgres
--- serializes concurrent UPDATEs of the same row via its own row lock, and
--- "SET x = x + $1" computed IN SQL is what makes that serialization
--- sufficient to never lose an increment -- unlike a Go-side
--- read-then-write, which reads a value, adds to it in the application,
--- and writes it back, and can lose a concurrent sibling's own increment
--- to exactly that race. Two step_finish events for the SAME turn
--- (main lane and a sub-task lane both routing through §7.1's fan-out, or
--- simply two step-finish parts in one long turn) therefore always sum,
--- never clobber.
+-- ONE statement, three jobs. The CTE resolves the turn this event belongs
+-- to from the sandbox-authenticated session id alone, with no preceding
+-- read -- turns_one_processing_per_session (migrations/000005) guarantees
+-- at most one row can match. The INSERT claims (turn_id, step_id) or
+-- conflicts away to nothing. The UPDATE runs ONLY over rows the INSERT
+-- actually produced, so a redelivered step_finish moves no dollars and a
+-- genuinely new one moves exactly its own.
 --
--- WHERE session_id = $1 AND status = 'processing' resolves "the turn
--- THIS event belongs to" directly from the sandbox-authenticated session
--- id alone, with no preceding read: turns_one_processing_per_session
--- (migrations/000005_turns.up.sql) guarantees at most one row can ever
--- match. Returns the number of rows actually updated (0 or 1): 0 means
--- this session has no turn currently processing -- a step_finish
--- arriving for a turn that already terminalized (should not happen in
--- practice; step_finish only ever arrives mid-turn) or, more likely, a
--- redelivery reaching this call site is already guarded against
--- upstream (the caller only invokes this for a genuinely fresh
--- appendRawEvent insert, never a resend) -- logged by the caller, not
--- treated as an error here.
+-- This replaces an earlier version gated on whether appendRawEvent had
+-- INSERTED the raw event row. That flag answers "was this (session_id,
+-- message_id) new to the events table", which is not the same question --
+-- step_start and step_finish are two parts of one assistant message and
+-- share its id, so step_start always claimed the row first and every
+-- production step_finish was discarded before its cost was ever read. See
+-- migrations/000099_turn_step_costs.up.sql for the full account.
+--
+-- Concurrency: "SET cost_usd = COALESCE(cost_usd, 0) + ..." is computed IN
+-- SQL over a row Postgres locks for the duration, so two step_finish events
+-- for the same turn always sum and never clobber -- unlike a Go-side
+-- read-then-write, which can lose a sibling's increment. COALESCE, never a
+-- bare "+", because turns.cost_usd's own migration (000098) keeps NULL as
+-- the ONLY representation of "no cost has arrived yet", and a bare sum
+-- against NULL stays NULL forever -- the exact "no cost yet reads as free"
+-- failure §25.15 exists to prevent.
+--
+-- Returns rows updated (0 or 1). 0 means either a redelivery (already
+-- counted) or no turn currently processing for this session -- the caller
+-- distinguishes them only by logging, never by retrying: both are states
+-- where adding money again would be the worse error.
+--
+-- KNOWN LIMIT, stated rather than implied: this attributes cost to
+-- whichever turn is processing WHEN THE EVENT LANDS, not to the turn the
+-- event was emitted for. They are the same turn in every ordinary case,
+-- because step_finish only arrives mid-turn. They are not the same if a
+-- turn terminalizes (timeout, cancel) while one of its step_finish events
+-- is still in flight and the next turn has already started -- those
+-- dollars land on the newer turn. Closing that needs a turn id on the
+-- event itself, which §6.1 does not carry today; it is recorded here so
+-- the next reader does not mistake the current behaviour for a guarantee.
+WITH target AS (
+    SELECT t.id FROM turns AS t WHERE t.session_id = $1 AND t.status = 'processing'
+), claimed AS (
+    INSERT INTO turn_step_costs (turn_id, step_id, cost_usd)
+    SELECT target.id, $2, $3 FROM target
+    ON CONFLICT (turn_id, step_id) DO NOTHING
+    RETURNING turn_id, cost_usd
+)
 UPDATE turns
-SET cost_usd = COALESCE(cost_usd, 0) + sqlc.arg('amount_usd')
-WHERE session_id = $1 AND status = 'processing';
+SET cost_usd = COALESCE(turns.cost_usd, 0) + claimed.cost_usd
+FROM claimed
+WHERE turns.id = claimed.turn_id;
+

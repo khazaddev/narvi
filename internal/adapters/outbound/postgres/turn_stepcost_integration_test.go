@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for TurnStore.AddCostUSD (§25.15's own per-step cost
+// Integration tests for TurnStore.RecordStepCostUSD (§25.15's own per-step cost
 // accumulation) against a REAL Postgres instance under genuine concurrent
 // transactions -- mirrors session_store_integration_test.go's own
 // TestSessionStore_UpdateIntentDecisionIfNull_ConcurrentSameSession_
@@ -13,6 +13,7 @@ package postgres_test
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -23,17 +24,22 @@ import (
 	appreviewtriage "github.com/khazaddev/narvi/internal/app/reviewtriage"
 )
 
-// TestTurnStore_AddCostUSD_ConcurrentSameTurn_SumsAllIncrements proves the
+// stepID gives each increment its own idempotency key, which is what a
+// real step_finish carries (§6.1's stepId, one per step). Two increments
+// sharing a key are the SAME step redelivered and must sum to one.
+func stepID(i int) string { return "prt_step_" + strconv.Itoa(i) }
+
+// TestTurnStore_RecordStepCostUSD_ConcurrentSameTurn_SumsAllIncrements proves the
 // accumulation is genuinely concurrency-safe at the real-SQL level (-race,
 // real testcontainers Postgres, N real goroutines): N concurrent
-// AddCostUSD calls for the SAME processing turn must all land -- the
+// RecordStepCostUSD calls for the SAME processing turn must all land -- the
 // turn's own final cost_usd must equal the exact sum of every increment,
 // never fewer, which is what a Go-side read-modify-write (read cost_usd,
 // add in Go, write it back) would silently produce under real
 // concurrency by losing sibling increments to the read/write race that
 // "SET x = x + $1", computed IN SQL and serialized by Postgres's own row
 // lock, cannot lose.
-func TestTurnStore_AddCostUSD_ConcurrentSameTurn_SumsAllIncrements(t *testing.T) {
+func TestTurnStore_RecordStepCostUSD_ConcurrentSameTurn_SumsAllIncrements(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
 	sessionID := createTestSession(ctx, t, pool)
@@ -49,7 +55,7 @@ func TestTurnStore_AddCostUSD_ConcurrentSameTurn_SumsAllIncrements(t *testing.T)
 	const n = 20
 	const increment = 0.01
 
-	// start gates every goroutine's own AddCostUSD call so they all arrive
+	// start gates every goroutine's own RecordStepCostUSD call so they all arrive
 	// at the guarded UPDATE roughly together -- proving genuine
 	// concurrency, not an accidental sequential ordering. Mirrors
 	// TestSessionStore_UpdateIntentDecisionIfNull_ConcurrentSameSession_
@@ -61,13 +67,13 @@ func TestTurnStore_AddCostUSD_ConcurrentSameTurn_SumsAllIncrements(t *testing.T)
 	for i := 0; i < n; i++ {
 		g.Go(func() error {
 			<-start
-			_, err := turnStore.AddCostUSD(ctx, sessionID, increment)
+			_, err := turnStore.RecordStepCostUSD(ctx, sessionID, stepID(i), increment)
 			return err
 		})
 	}
 	close(start)
 	if err := g.Wait(); err != nil {
-		t.Fatalf("concurrent AddCostUSD: %v", err)
+		t.Fatalf("concurrent RecordStepCostUSD: %v", err)
 	}
 
 	// Compared as a NUMBER, never as the string Postgres happens to render.
@@ -90,13 +96,7 @@ func TestTurnStore_AddCostUSD_ConcurrentSameTurn_SumsAllIncrements(t *testing.T)
 	}
 }
 
-// TestTurnStore_AddCostUSD_FirstCallSetsFromNullNeverFromZero proves the
-// COALESCE(cost_usd, 0) half of the guard: a freshly created turn's own
-// cost_usd starts genuinely NULL (never a fabricated 0.00, §25.15's own
-// "no cost yet must never render as free"), and the FIRST AddCostUSD call
-// sets it from that NULL starting point -- not from an implicit zero the
-// column never actually held.
-// TestTurnStore_AddCostUSD_SubCentIncrementsAccumulate pins the COLUMN
+// TestTurnStore_RecordStepCostUSD_SubCentIncrementsAccumulate pins the COLUMN
 // SCALE, which is a different property from the concurrency test above and
 // fails for a completely different reason. A single agent step routinely
 // costs a fraction of a cent, and Postgres rounds each addition to the
@@ -106,7 +106,7 @@ func TestTurnStore_AddCostUSD_ConcurrentSameTurn_SumsAllIncrements(t *testing.T)
 // exactly 0.00. A cost column that reports free is worse than no column,
 // and it reports free most confidently for the cheap high-step-count turns
 // the figure matters most for.
-func TestTurnStore_AddCostUSD_SubCentIncrementsAccumulate(t *testing.T) {
+func TestTurnStore_RecordStepCostUSD_SubCentIncrementsAccumulate(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
 	sessionID := createTestSession(ctx, t, pool)
@@ -125,7 +125,7 @@ func TestTurnStore_AddCostUSD_SubCentIncrementsAccumulate(t *testing.T) {
 	const want = steps * increment // $0.20, and not one cent of it is representable at scale 2
 
 	for i := 0; i < steps; i++ {
-		if _, err := turnStore.AddCostUSD(ctx, sessionID, increment); err != nil {
+		if _, err := turnStore.RecordStepCostUSD(ctx, sessionID, stepID(i), increment); err != nil {
 			t.Fatalf("add cost %d: %v", i, err)
 		}
 	}
@@ -146,7 +146,13 @@ func TestTurnStore_AddCostUSD_SubCentIncrementsAccumulate(t *testing.T) {
 	}
 }
 
-func TestTurnStore_AddCostUSD_FirstCallSetsFromNullNeverFromZero(t *testing.T) {
+// TestTurnStore_RecordStepCostUSD_FirstCallSetsFromNullNeverFromZero proves the
+// COALESCE(cost_usd, 0) half of the guard: a freshly created turn's own
+// cost_usd starts genuinely NULL (never a fabricated 0.00, §25.15's own
+// "no cost yet must never render as free"), and the FIRST AddCostUSD call
+// sets it from that NULL starting point -- not from an implicit zero the
+// column never actually held.
+func TestTurnStore_RecordStepCostUSD_FirstCallSetsFromNullNeverFromZero(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
 	sessionID := createTestSession(ctx, t, pool)
@@ -163,9 +169,9 @@ func TestTurnStore_AddCostUSD_FirstCallSetsFromNullNeverFromZero(t *testing.T) {
 		t.Fatalf("freshly created turn's cost_usd = %v (valid), want NULL", v)
 	}
 
-	affected, err := turnStore.AddCostUSD(ctx, sessionID, 1.23)
+	affected, err := turnStore.RecordStepCostUSD(ctx, sessionID, "step-1", 1.23)
 	if err != nil {
-		t.Fatalf("AddCostUSD: %v", err)
+		t.Fatalf("RecordStepCostUSD: %v", err)
 	}
 	if affected != 1 {
 		t.Fatalf("affected = %d, want 1", affected)
@@ -177,26 +183,26 @@ func TestTurnStore_AddCostUSD_FirstCallSetsFromNullNeverFromZero(t *testing.T) {
 	}
 	v, ok := appreviewtriage.NumericToFloat64(got.CostUsd)
 	if !ok {
-		t.Fatal("cost_usd is still NULL after AddCostUSD, want 1.23")
+		t.Fatal("cost_usd is still NULL after RecordStepCostUSD, want 1.23")
 	}
 	if v != 1.23 {
 		t.Errorf("cost_usd = %v, want 1.23", v)
 	}
 }
 
-// TestTurnStore_AddCostUSD_NoProcessingTurn_ZeroRowsAffected proves the
+// TestTurnStore_RecordStepCostUSD_NoProcessingTurn_ZeroRowsAffected proves the
 // guard's own "0 rows means no live target" contract: a session with no
 // turn currently processing (none created at all here) must report 0
 // rows affected, never an error and never a fabricated row.
-func TestTurnStore_AddCostUSD_NoProcessingTurn_ZeroRowsAffected(t *testing.T) {
+func TestTurnStore_RecordStepCostUSD_NoProcessingTurn_ZeroRowsAffected(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
 	sessionID := createTestSession(ctx, t, pool)
 
 	turnStore := narvipg.NewTurnStore(pool)
-	affected, err := turnStore.AddCostUSD(ctx, sessionID, 1.00)
+	affected, err := turnStore.RecordStepCostUSD(ctx, sessionID, "step-1", 1.00)
 	if err != nil {
-		t.Fatalf("AddCostUSD: %v", err)
+		t.Fatalf("RecordStepCostUSD: %v", err)
 	}
 	if affected != 0 {
 		t.Errorf("affected = %d, want 0 (no turn currently processing for this session)", affected)

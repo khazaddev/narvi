@@ -96,18 +96,23 @@ func (s *TurnStore) SetEpistemicOutcome(ctx context.Context, id pgtype.UUID, out
 	})
 }
 
-// AddCostUSD atomically adds amountUSD onto sessionID's own currently
-// processing turn's own running cost_usd total (§25.15) -- see
-// AddTurnCostUSD's own generated doc comment (sqlcgen/turns.sql.go,
-// sourced from queries/turns.sql) for why the accumulation is a single
-// guarded "SET cost_usd = COALESCE(cost_usd, 0) + $2" UPDATE rather than
-// a Go-side read-modify-write: that is what makes two concurrent
-// step_finish events for the SAME turn sum instead of racing. Returns
-// the number of rows actually updated (0 or 1): 0 means sessionID has no
-// turn currently processing.
-func (s *TurnStore) AddCostUSD(ctx context.Context, sessionID pgtype.UUID, amountUSD float64) (int64, error) {
-	return s.q.AddTurnCostUSD(ctx, sqlcgen.AddTurnCostUSDParams{
+// RecordStepCostUSD adds one step's cost onto sessionID's currently
+// processing turn, exactly once per stepID (§25.15) -- see
+// RecordTurnStepCost's own generated doc comment (sqlcgen/turns.sql.go,
+// sourced from queries/turns.sql) for why the whole thing is one
+// statement, and migrations/000099_turn_step_costs.up.sql for why the
+// idempotency key is the step id rather than the raw event row's own
+// insert flag.
+//
+// Returns the number of turns rows actually updated (0 or 1). 0 means
+// EITHER this stepID was already counted (a redelivery) OR sessionID has
+// no turn currently processing; the two are deliberately not
+// distinguished here, because both are states where adding the money a
+// second time would be the worse error.
+func (s *TurnStore) RecordStepCostUSD(ctx context.Context, sessionID pgtype.UUID, stepID string, amountUSD float64) (int64, error) {
+	return s.q.RecordTurnStepCost(ctx, sqlcgen.RecordTurnStepCostParams{
 		SessionID: sessionID,
-		AmountUsd: Float64ToNumeric(&amountUSD),
+		StepID:    stepID,
+		CostUsd:   Float64ToNumeric(&amountUSD),
 	})
 }
