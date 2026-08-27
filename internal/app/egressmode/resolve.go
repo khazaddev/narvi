@@ -80,3 +80,30 @@ func Resolve(ctx context.Context, deps Deps, repoFullName string) Capability {
 	}
 	return liveCapability()
 }
+
+// ResolvePlatform reports the effective Capability for a durable artifact
+// that has no single customer repository to check §30.8's per-repo flag
+// against -- an outbox row whose owning session names no single repo (a
+// multi-repo session, or one with none at all), or any other decision
+// artifact where the per-repo axis simply does not apply. With no repo
+// identified, there is nothing for repo_settings.live_egress_enabled to
+// say one way or the other, so the only question that CAN still be asked
+// is whether this whole deployment is itself a shadow evaluation
+// deployment (platformShadow, NARVI_SHADOW_MODE) -- exactly the first
+// half of Resolve's own formula, never re-implemented here.
+//
+// This is deliberately NOT "when in doubt, shadow": a repo-less/
+// multi-repo notification on an ordinary, non-shadow deployment (every
+// existing repo, today, before this Step) must keep behaving exactly as
+// it always has -- Resolve's own per-repo fail-closed default
+// (repo_settings.live_egress_enabled defaults to false, migrations/
+// 000101_repo_settings_live_egress_enabled.up.sql) exists to make a
+// NEWLY-CONNECTED repo start safe, not to retroactively silence every
+// notification this codebase already sends whenever it cannot name one
+// specific repo to check that column against.
+func ResolvePlatform(platformShadow bool) Capability {
+	if platformShadow {
+		return shadowCapability()
+	}
+	return liveCapability()
+}

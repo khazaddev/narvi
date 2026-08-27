@@ -210,7 +210,7 @@ func seedOutboxEntry(ctx context.Context, t *testing.T, store *narvipg.OutboxSto
 func TestPumpOnce_SuccessfulDelivery_MarksDelivered(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
-	store := narvipg.NewOutboxStore(pool)
+	store := narvipg.NewOutboxStore(pool, false)
 
 	row := seedOutboxEntry(ctx, t, store, "slack", map[string]any{"channel_id": "C1", "thread_ts": "1.1", "text": "hi"})
 
@@ -252,7 +252,7 @@ func TestPumpOnce_SuccessfulDelivery_MarksDelivered(t *testing.T) {
 func TestPumpOnce_FailedDelivery_BacksOffAndNotRetriedBeforeNextAttemptAt(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
-	store := narvipg.NewOutboxStore(pool)
+	store := narvipg.NewOutboxStore(pool, false)
 
 	seedOutboxEntry(ctx, t, store, "slack", map[string]any{"channel_id": "C1", "thread_ts": "1.1", "text": "hi"})
 
@@ -301,7 +301,7 @@ func TestPumpOnce_FailedDelivery_BacksOffAndNotRetriedBeforeNextAttemptAt(t *tes
 func TestPumpOnce_DeadLettersAfterMaxAttempts(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
-	store := narvipg.NewOutboxStore(pool)
+	store := narvipg.NewOutboxStore(pool, false)
 
 	row := seedOutboxEntry(ctx, t, store, "slack", map[string]any{"channel_id": "C1", "thread_ts": "1.1", "text": "hi"})
 
@@ -383,7 +383,7 @@ func TestPumpOnce_DeadLettersAfterMaxAttempts(t *testing.T) {
 func TestPumpOnce_PerRowIsolation(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
-	store := narvipg.NewOutboxStore(pool)
+	store := narvipg.NewOutboxStore(pool, false)
 
 	failingRow := seedOutboxEntry(ctx, t, store, "slack", map[string]any{"channel_id": "C1", "thread_ts": "1.1", "text": "hi"})
 	okRow := seedOutboxEntry(ctx, t, store, "github", map[string]any{"owner": "acme", "repo": "widgets", "pr_number": 1, "text": "hi"})
@@ -428,7 +428,7 @@ func TestPumpOnce_PerRowIsolation(t *testing.T) {
 func TestPumpOnce_ConcurrentTicksNeverDoubleClaim(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
-	store := narvipg.NewOutboxStore(pool)
+	store := narvipg.NewOutboxStore(pool, false)
 
 	seedOutboxEntry(ctx, t, store, "slack", map[string]any{"channel_id": "C1", "thread_ts": "1.1", "text": "hi"})
 
@@ -468,7 +468,7 @@ func TestPumpOnce_ConcurrentTicksNeverDoubleClaim(t *testing.T) {
 func TestPumpOnce_NoNotifierRegistered_TreatedAsFailure(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
-	store := narvipg.NewOutboxStore(pool)
+	store := narvipg.NewOutboxStore(pool, false)
 
 	row := seedOutboxEntry(ctx, t, store, "linear", map[string]any{"agent_session_id": "as1", "organization_id": "org1", "text": "hi", "success": true})
 
@@ -566,7 +566,7 @@ func TestPumpOnce_NoNotifierRegistered_TreatedAsFailure(t *testing.T) {
 func TestPumpOnce_SlowSequentialDelivery_ConcurrentTickNeverStealsRowMidDelivery(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
-	store := narvipg.NewOutboxStore(pool)
+	store := narvipg.NewOutboxStore(pool, false)
 
 	row1 := seedOutboxEntry(ctx, t, store, "slack", map[string]any{"channel_id": "C1", "thread_ts": "1.1", "text": "row1"})
 	row2 := seedOutboxEntry(ctx, t, store, "slack", map[string]any{"channel_id": "C1", "thread_ts": "1.1", "text": "row2"})
@@ -688,7 +688,7 @@ func TestPumpOnce_SlowSequentialDelivery_ConcurrentTickNeverStealsRowMidDelivery
 func TestPumpOnce_OutboxDueBacklogCount_ReflectsBacklogIndependentOfCurrentTickClaim(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
-	store := narvipg.NewOutboxStore(pool)
+	store := narvipg.NewOutboxStore(pool, false)
 
 	const backlogSize = 3
 	for i := 0; i < backlogSize; i++ {
@@ -751,7 +751,7 @@ func TestPumpOnce_OutboxDueBacklogCount_ReflectsBacklogIndependentOfCurrentTickC
 func TestPumpOnce_AttemptLogsCorrelationIDAndSessionID(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
-	store := narvipg.NewOutboxStore(pool)
+	store := narvipg.NewOutboxStore(pool, false)
 
 	var sessionID pgtype.UUID
 	if err := pool.QueryRow(ctx, `INSERT INTO sessions (spawn_source) VALUES ('slack') RETURNING id`).Scan(&sessionID); err != nil {

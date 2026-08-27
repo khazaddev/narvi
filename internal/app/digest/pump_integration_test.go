@@ -46,7 +46,7 @@ func newDigestTestRig(t *testing.T) *digestTestRig {
 		prSessions:     narvipg.NewGitHubPRSessionStore(pool),
 		slackThreads:   narvipg.NewSlackThreadSessionStore(pool),
 		reviewVerdicts: narvipg.NewReviewVerdictStore(pool),
-		outbox:         narvipg.NewOutboxStore(pool),
+		outbox:         narvipg.NewOutboxStore(pool, false),
 	}
 }
 

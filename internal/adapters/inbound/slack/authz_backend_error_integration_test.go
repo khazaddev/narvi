@@ -210,7 +210,7 @@ func TestInteractivityHandler_BlockActions_ApprovePlan_AuthzBackendError(t *test
 		Sessions:            brokenSessions, // the deliberately-broken store
 		Turns:               turns,
 		Plans:               plans,
-		Outbox:              narvipg.NewOutboxStore(pool),
+		Outbox:              narvipg.NewOutboxStore(pool, false),
 		LinearAgentSessions: narvipg.NewLinearAgentSessionStore(pool),
 		Registry:            registry,
 		SlackClient:         slackClient,
@@ -325,7 +325,7 @@ func TestInteractivityHandler_ViewSubmission_AuthzBackendError(t *testing.T) {
 		Sessions:            brokenSessions, // the deliberately-broken store
 		Turns:               turns,
 		Plans:               plans,
-		Outbox:              narvipg.NewOutboxStore(pool),
+		Outbox:              narvipg.NewOutboxStore(pool, false),
 		LinearAgentSessions: narvipg.NewLinearAgentSessionStore(pool),
 		Registry:            registry,
 		SlackClient:         slackClient,

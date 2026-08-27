@@ -72,7 +72,7 @@ func TestWebhookHandler_Prompted_RevisePrefix_EmptyFeedback_BlockedNoTurnCreated
 			pool := newTestPool(t)
 			deps := newHandlerDeps(t, pool)
 			deps.Plans = narvipg.NewPlanStore(pool)
-			deps.Outbox = narvipg.NewOutboxStore(pool)
+			deps.Outbox = narvipg.NewOutboxStore(pool, false)
 			deps.Participants = narvipg.NewParticipantStore(pool)
 
 			ctx := context.Background()
@@ -159,7 +159,7 @@ func TestWebhookHandler_Prompted_RevisePrefix_NonEmptyFeedback_LogsPlanModeTrueO
 	pool := newTestPool(t)
 	deps := newHandlerDeps(t, pool)
 	deps.Plans = narvipg.NewPlanStore(pool)
-	deps.Outbox = narvipg.NewOutboxStore(pool)
+	deps.Outbox = narvipg.NewOutboxStore(pool, false)
 	deps.Participants = narvipg.NewParticipantStore(pool)
 
 	ctx := context.Background()
@@ -243,7 +243,7 @@ func TestWebhookHandler_Prompted_RevisePrefix_EmptyFeedback_LogsAtInfoNotWarn(t 
 	pool := newTestPool(t)
 	deps := newHandlerDeps(t, pool)
 	deps.Plans = narvipg.NewPlanStore(pool)
-	deps.Outbox = narvipg.NewOutboxStore(pool)
+	deps.Outbox = narvipg.NewOutboxStore(pool, false)
 	deps.Participants = narvipg.NewParticipantStore(pool)
 
 	ctx := context.Background()

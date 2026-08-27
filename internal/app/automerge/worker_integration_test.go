@@ -163,7 +163,7 @@ func (rs *automergeTestRig) deps(sourceControl ports.SourceControl) automerge.De
 			Sessions:       narvipg.NewSessionStore(rs.pool),
 			Participants:   narvipg.NewParticipantStore(rs.pool),
 			Automations:    narvipg.NewAutomationStore(rs.pool),
-			Outbox:         narvipg.NewOutboxStore(rs.pool),
+			Outbox:         narvipg.NewOutboxStore(rs.pool, false),
 			ReviewFindings: narvipg.NewReviewFindingStore(rs.pool),
 			SentinelFixes:  narvipg.NewSentinelFixStore(rs.pool),
 			Artifacts:      narvipg.NewArtifactStore(rs.pool),

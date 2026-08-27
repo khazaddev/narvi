@@ -129,7 +129,7 @@ func TestResilienceScenario9_Outbox_SlackAPI500sThenRecovers_EventuallyDelivered
 
 	slackNotifier := slackapi.New(server.Client(), server.URL, "test-bot-token")
 
-	outboxStore := narvipg.NewOutboxStore(h.Pool)
+	outboxStore := narvipg.NewOutboxStore(h.Pool, false)
 
 	payload, err := json.Marshal(slackapi.Payload{
 		ChannelID: "C-scenario9",

@@ -15,7 +15,7 @@ const claimOutboxEntry = `-- name: ClaimOutboxEntry :one
 UPDATE outbox
 SET attempts = attempts + 1, next_attempt_at = $2
 WHERE id = $1 AND status = 'pending'
-RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id
+RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id, suppressed_in_shadow, delivered_to_ledger
 `
 
 type ClaimOutboxEntryParams struct {
@@ -49,6 +49,8 @@ func (q *Queries) ClaimOutboxEntry(ctx context.Context, arg ClaimOutboxEntryPara
 		&i.LastError,
 		&i.CreatedAt,
 		&i.CorrelationID,
+		&i.SuppressedInShadow,
+		&i.DeliveredToLedger,
 	)
 	return i, err
 }
@@ -83,16 +85,17 @@ func (q *Queries) CountPendingOutboxEntries(ctx context.Context) (int64, error) 
 
 const createOutboxEntry = `-- name: CreateOutboxEntry :one
 
-INSERT INTO outbox (session_id, kind, payload, correlation_id)
-VALUES ($1, $2, $3, $4)
-RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id
+INSERT INTO outbox (session_id, kind, payload, correlation_id, suppressed_in_shadow)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id, suppressed_in_shadow, delivered_to_ledger
 `
 
 type CreateOutboxEntryParams struct {
-	SessionID     pgtype.UUID `json:"session_id"`
-	Kind          string      `json:"kind"`
-	Payload       []byte      `json:"payload"`
-	CorrelationID *string     `json:"correlation_id"`
+	SessionID          pgtype.UUID `json:"session_id"`
+	Kind               string      `json:"kind"`
+	Payload            []byte      `json:"payload"`
+	CorrelationID      *string     `json:"correlation_id"`
+	SuppressedInShadow bool        `json:"suppressed_in_shadow"`
 }
 
 // Queries backing Outbox (§4.3, §5.1). CreateOutboxEntry/GetOutboxEntry
@@ -124,12 +127,20 @@ type CreateOutboxEntryParams struct {
 // platform.CorrelationIDFromContext(ctx)'s value when the enclosing
 // request/webhook context carried one, else NULL -- no id is ever invented
 // at enqueue time for a row created outside such a context.
+//
+// suppressed_in_shadow (migrations/000103_outbox_shadow_epoch.up.sql,
+// §30.8) is ALWAYS computed by postgres.OutboxStore.Create itself, never
+// left to a caller -- this is the single choke point every enqueue site
+// shares (there is exactly one INSERT INTO outbox in this codebase), so
+// the stamp cannot be forgotten one call site at a time. See that
+// method's own doc comment for the resolution formula.
 func (q *Queries) CreateOutboxEntry(ctx context.Context, arg CreateOutboxEntryParams) (Outbox, error) {
 	row := q.db.QueryRow(ctx, createOutboxEntry,
 		arg.SessionID,
 		arg.Kind,
 		arg.Payload,
 		arg.CorrelationID,
+		arg.SuppressedInShadow,
 	)
 	var i Outbox
 	err := row.Scan(
@@ -144,12 +155,14 @@ func (q *Queries) CreateOutboxEntry(ctx context.Context, arg CreateOutboxEntryPa
 		&i.LastError,
 		&i.CreatedAt,
 		&i.CorrelationID,
+		&i.SuppressedInShadow,
+		&i.DeliveredToLedger,
 	)
 	return i, err
 }
 
 const getLatestOutboxEntryByKindPrefix = `-- name: GetLatestOutboxEntryByKindPrefix :one
-SELECT id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id FROM outbox
+SELECT id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id, suppressed_in_shadow, delivered_to_ledger FROM outbox
 WHERE kind LIKE $1::text || '%'
 ORDER BY created_at DESC
 LIMIT 1
@@ -189,12 +202,14 @@ func (q *Queries) GetLatestOutboxEntryByKindPrefix(ctx context.Context, kindPref
 		&i.LastError,
 		&i.CreatedAt,
 		&i.CorrelationID,
+		&i.SuppressedInShadow,
+		&i.DeliveredToLedger,
 	)
 	return i, err
 }
 
 const getOutboxEntry = `-- name: GetOutboxEntry :one
-SELECT id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id FROM outbox
+SELECT id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id, suppressed_in_shadow, delivered_to_ledger FROM outbox
 WHERE id = $1
 `
 
@@ -213,12 +228,14 @@ func (q *Queries) GetOutboxEntry(ctx context.Context, id pgtype.UUID) (Outbox, e
 		&i.LastError,
 		&i.CreatedAt,
 		&i.CorrelationID,
+		&i.SuppressedInShadow,
+		&i.DeliveredToLedger,
 	)
 	return i, err
 }
 
 const listDeadLetterOutboxEntries = `-- name: ListDeadLetterOutboxEntries :many
-SELECT id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id FROM outbox
+SELECT id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id, suppressed_in_shadow, delivered_to_ledger FROM outbox
 WHERE status = 'dead_letter'
 ORDER BY created_at DESC
 LIMIT $1
@@ -270,6 +287,8 @@ func (q *Queries) ListDeadLetterOutboxEntries(ctx context.Context, limit int32) 
 			&i.LastError,
 			&i.CreatedAt,
 			&i.CorrelationID,
+			&i.SuppressedInShadow,
+			&i.DeliveredToLedger,
 		); err != nil {
 			return nil, err
 		}
@@ -282,7 +301,7 @@ func (q *Queries) ListDeadLetterOutboxEntries(ctx context.Context, limit int32) 
 }
 
 const listDuePendingOutboxEntries = `-- name: ListDuePendingOutboxEntries :many
-SELECT id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id FROM outbox
+SELECT id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id, suppressed_in_shadow, delivered_to_ledger FROM outbox
 WHERE status = 'pending' AND next_attempt_at <= now()
 ORDER BY next_attempt_at
 LIMIT $1
@@ -317,6 +336,8 @@ func (q *Queries) ListDuePendingOutboxEntries(ctx context.Context, limit int32) 
 			&i.LastError,
 			&i.CreatedAt,
 			&i.CorrelationID,
+			&i.SuppressedInShadow,
+			&i.DeliveredToLedger,
 		); err != nil {
 			return nil, err
 		}
@@ -332,7 +353,7 @@ const markOutboxEntryDeadLetter = `-- name: MarkOutboxEntryDeadLetter :one
 UPDATE outbox
 SET status = 'dead_letter', last_error = $2
 WHERE id = $1 AND status = 'pending'
-RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id
+RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id, suppressed_in_shadow, delivered_to_ledger
 `
 
 type MarkOutboxEntryDeadLetterParams struct {
@@ -359,6 +380,8 @@ func (q *Queries) MarkOutboxEntryDeadLetter(ctx context.Context, arg MarkOutboxE
 		&i.LastError,
 		&i.CreatedAt,
 		&i.CorrelationID,
+		&i.SuppressedInShadow,
+		&i.DeliveredToLedger,
 	)
 	return i, err
 }
@@ -367,7 +390,7 @@ const markOutboxEntryDelivered = `-- name: MarkOutboxEntryDelivered :one
 UPDATE outbox
 SET status = 'delivered', delivered_at = now()
 WHERE id = $1 AND status = 'pending'
-RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id
+RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id, suppressed_in_shadow, delivered_to_ledger
 `
 
 // Records a successful delivery: status='delivered', delivered_at=now().
@@ -388,6 +411,48 @@ func (q *Queries) MarkOutboxEntryDelivered(ctx context.Context, id pgtype.UUID) 
 		&i.LastError,
 		&i.CreatedAt,
 		&i.CorrelationID,
+		&i.SuppressedInShadow,
+		&i.DeliveredToLedger,
+	)
+	return i, err
+}
+
+const markOutboxEntryDeliveredToLedger = `-- name: MarkOutboxEntryDeliveredToLedger :one
+UPDATE outbox
+SET status = 'delivered', delivered_at = now(), delivered_to_ledger = true
+WHERE id = $1 AND status = 'pending'
+RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id, suppressed_in_shadow, delivered_to_ledger
+`
+
+// §30.6/§30.8's own terminal mark: records that this row's own effective
+// egress mode was shadow at the moment outboxworker.Builder.attempt
+// would otherwise have called notifier.Deliver, so it delivered the row
+// into the suppression ledger instead of the world -- status='delivered'
+// (the SAME terminal status a genuine delivery reaches; §30.6 is explicit
+// this is "a flag column, deliberately not a new status enum"), plus
+// delivered_to_ledger=true so a later reader (Step 104's own UNION read
+// model) can tell the two apart. Same "AND status = 'pending'" guard as
+// MarkOutboxEntryDelivered, for the identical reason -- and the same
+// pgx.ErrNoRows-means-superseded handling: a caller must not proceed to
+// treat this row as terminal if some other builder already raced ahead
+// of it.
+func (q *Queries) MarkOutboxEntryDeliveredToLedger(ctx context.Context, id pgtype.UUID) (Outbox, error) {
+	row := q.db.QueryRow(ctx, markOutboxEntryDeliveredToLedger, id)
+	var i Outbox
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.Kind,
+		&i.Payload,
+		&i.Status,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.DeliveredAt,
+		&i.LastError,
+		&i.CreatedAt,
+		&i.CorrelationID,
+		&i.SuppressedInShadow,
+		&i.DeliveredToLedger,
 	)
 	return i, err
 }
@@ -396,7 +461,7 @@ const recordOutboxEntryFailure = `-- name: RecordOutboxEntryFailure :one
 UPDATE outbox
 SET next_attempt_at = $2, last_error = $3
 WHERE id = $1 AND status = 'pending'
-RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id
+RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id, suppressed_in_shadow, delivered_to_ledger
 `
 
 type RecordOutboxEntryFailureParams struct {
@@ -427,6 +492,8 @@ func (q *Queries) RecordOutboxEntryFailure(ctx context.Context, arg RecordOutbox
 		&i.LastError,
 		&i.CreatedAt,
 		&i.CorrelationID,
+		&i.SuppressedInShadow,
+		&i.DeliveredToLedger,
 	)
 	return i, err
 }
@@ -435,7 +502,7 @@ const renewOutboxClaim = `-- name: RenewOutboxClaim :one
 UPDATE outbox
 SET next_attempt_at = $2
 WHERE id = $1 AND status = 'pending' AND next_attempt_at = $3
-RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id
+RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id, suppressed_in_shadow, delivered_to_ledger
 `
 
 type RenewOutboxClaimParams struct {
@@ -505,6 +572,8 @@ func (q *Queries) RenewOutboxClaim(ctx context.Context, arg RenewOutboxClaimPara
 		&i.LastError,
 		&i.CreatedAt,
 		&i.CorrelationID,
+		&i.SuppressedInShadow,
+		&i.DeliveredToLedger,
 	)
 	return i, err
 }

@@ -191,7 +191,7 @@ func TestPlanSlackNotifier_DeliverApproval_RejectedBetweenEnqueueAndDelivery_Ski
 	ctx := context.Background()
 	pool := newTestPool(t)
 	plans := narvipg.NewPlanStore(pool)
-	outbox := narvipg.NewOutboxStore(pool)
+	outbox := narvipg.NewOutboxStore(pool, false)
 
 	plan := seedPlanForApprovalTest(ctx, t, pool, sqlcgen.PlanStatusAwaitingApproval)
 

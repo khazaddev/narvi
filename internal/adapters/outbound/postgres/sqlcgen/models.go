@@ -1850,17 +1850,19 @@ type OpencodeConfig struct {
 }
 
 type Outbox struct {
-	ID            pgtype.UUID        `json:"id"`
-	SessionID     pgtype.UUID        `json:"session_id"`
-	Kind          string             `json:"kind"`
-	Payload       []byte             `json:"payload"`
-	Status        OutboxStatus       `json:"status"`
-	Attempts      int32              `json:"attempts"`
-	NextAttemptAt pgtype.Timestamptz `json:"next_attempt_at"`
-	DeliveredAt   pgtype.Timestamptz `json:"delivered_at"`
-	LastError     *string            `json:"last_error"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	CorrelationID *string            `json:"correlation_id"`
+	ID                 pgtype.UUID        `json:"id"`
+	SessionID          pgtype.UUID        `json:"session_id"`
+	Kind               string             `json:"kind"`
+	Payload            []byte             `json:"payload"`
+	Status             OutboxStatus       `json:"status"`
+	Attempts           int32              `json:"attempts"`
+	NextAttemptAt      pgtype.Timestamptz `json:"next_attempt_at"`
+	DeliveredAt        pgtype.Timestamptz `json:"delivered_at"`
+	LastError          *string            `json:"last_error"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	CorrelationID      *string            `json:"correlation_id"`
+	SuppressedInShadow bool               `json:"suppressed_in_shadow"`
+	DeliveredToLedger  bool               `json:"delivered_to_ledger"`
 }
 
 type Participant struct {
@@ -1952,6 +1954,7 @@ type RepoSetting struct {
 	ReviewCostBudgetDeepUsd    pgtype.Numeric     `json:"review_cost_budget_deep_usd"`
 	SessionsEnabled            bool               `json:"sessions_enabled"`
 	LiveEgressEnabled          bool               `json:"live_egress_enabled"`
+	LiveEgressPromotedAt       pgtype.Timestamptz `json:"live_egress_promoted_at"`
 }
 
 type ReviewDigestSectionFeedback struct {
@@ -2029,6 +2032,7 @@ type ReviewVerdict struct {
 	FactCheck                 *string            `json:"fact_check"`
 	FactCheckKilled           *int32             `json:"fact_check_killed"`
 	DigestContestedPoints     *string            `json:"digest_contested_points"`
+	SuppressedInShadow        bool               `json:"suppressed_in_shadow"`
 }
 
 type Sandbox struct {

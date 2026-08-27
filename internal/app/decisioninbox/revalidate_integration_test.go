@@ -49,7 +49,7 @@ func newRevalidateStores(pool *pgxpool.Pool) *revalidateStores {
 			Sessions:       narvipg.NewSessionStore(pool),
 			Participants:   narvipg.NewParticipantStore(pool),
 			Automations:    narvipg.NewAutomationStore(pool),
-			Outbox:         narvipg.NewOutboxStore(pool),
+			Outbox:         narvipg.NewOutboxStore(pool, false),
 			ReviewFindings: narvipg.NewReviewFindingStore(pool),
 			SentinelFixes:  narvipg.NewSentinelFixStore(pool),
 			Artifacts:      narvipg.NewArtifactStore(pool),

@@ -384,7 +384,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		provider:              &fakeSnapshotProvider{},
 		plans:                 narvipg.NewPlanStore(pool),
 		participants:          narvipg.NewParticipantStore(pool),
-		outbox:                narvipg.NewOutboxStore(pool),
+		outbox:                narvipg.NewOutboxStore(pool, false),
 		linearAgentSessions:   narvipg.NewLinearAgentSessionStore(pool),
 		auditLog:              narvipg.NewAuditLogStore(pool),
 		linkPrompts:           narvipg.NewIdentityLinkPromptStore(pool),

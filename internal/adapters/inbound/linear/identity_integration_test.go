@@ -457,7 +457,7 @@ func TestWebhookHandler_PlanVerdict_DeniedForUnownedMember(t *testing.T) {
 	pool := newTestPool(t)
 	deps := newHandlerDeps(t, pool)
 	deps.Plans = narvipg.NewPlanStore(pool)
-	deps.Outbox = narvipg.NewOutboxStore(pool)
+	deps.Outbox = narvipg.NewOutboxStore(pool, false)
 	deps.Participants = narvipg.NewParticipantStore(pool)
 
 	organizationID := "org-plan-unowned-1"
@@ -556,7 +556,7 @@ func TestWebhookHandler_Prompted_DeniedForUnownedMember(t *testing.T) {
 	pool := newTestPool(t)
 	deps := newHandlerDeps(t, pool)
 	deps.Plans = narvipg.NewPlanStore(pool)
-	deps.Outbox = narvipg.NewOutboxStore(pool)
+	deps.Outbox = narvipg.NewOutboxStore(pool, false)
 	deps.Participants = narvipg.NewParticipantStore(pool)
 
 	organizationID := "org-prompt-unowned-1"

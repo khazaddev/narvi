@@ -167,7 +167,7 @@ func TestGitHubIntegration_WorkerPumpOnce_ClaimsPendingCheckAndEnqueuesOutboxRow
 	ctx := context.Background()
 	pool := newTestPool(t)
 	pendingStore := narvipg.NewReleaseManifestPendingStore(pool)
-	outboxStore := narvipg.NewOutboxStore(pool)
+	outboxStore := narvipg.NewOutboxStore(pool, false)
 
 	rig := newTestRig(t, func(cfg *githubingress.Config) {
 		cfg.PullRequests = &fakePullRequestResolver{pr: githubapi.PullRequest{HeadRef: "release/8.8", BaseRef: "main"}}
@@ -267,7 +267,7 @@ func TestGitHubIntegration_WorkerPumpOnce_ConcurrentPodsNeverDoubleProcess(t *te
 	ctx := context.Background()
 	pool := newTestPool(t)
 	pendingStore := narvipg.NewReleaseManifestPendingStore(pool)
-	outboxStore := narvipg.NewOutboxStore(pool)
+	outboxStore := narvipg.NewOutboxStore(pool, false)
 
 	const numPRs = 12
 	const commenterID = 80000304

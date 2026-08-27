@@ -56,7 +56,7 @@ func newSlackPlanGateTestRig(t *testing.T, pool *pgxpool.Pool, recordingSlackSer
 	deliveries := narvipg.NewWebhookDeliveryStore(pool)
 	threads := narvipg.NewSlackThreadSessionStore(pool)
 	plans := narvipg.NewPlanStore(pool)
-	outbox := narvipg.NewOutboxStore(pool)
+	outbox := narvipg.NewOutboxStore(pool, false)
 	linearAgentSessions := narvipg.NewLinearAgentSessionStore(pool)
 
 	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil, false)

@@ -313,6 +313,14 @@ func serve() error {
 			// "fail-closed, twice" pair -- consults this on every
 			// Spawn/Restore/Resume attempt.
 			RolloutMode: cfg.RolloutMode,
+			// PlatformShadow (§30.8): this Registry's own storeBundle
+			// constructs its OWN *postgres.OutboxStore (newStoreBundle,
+			// registry.go), separate from the outboxStore variable below --
+			// every sessionactor-internal enqueue call site (outboxenqueue.go,
+			// reviewretrigger.go, handoffsentinel.go, planrecord.go,
+			// previewpr.go, progressnotify.go) writes through THIS one, so it
+			// needs the SAME cfg.ShadowMode outboxStore itself receives below.
+			PlatformShadow: cfg.ShadowMode,
 		})
 	if err != nil {
 		return fmt.Errorf("construct session actor registry: %w", err)
@@ -367,7 +375,7 @@ func serve() error {
 	// reject routes immediately below AND by internal/adapters/inbound/
 	// {slack,linear}'s own new plan-decision entry points -- needs both, to
 	// enqueue this Step's own cross-channel-notify outbox rows.
-	outboxStore := postgres.NewOutboxStore(pool)
+	outboxStore := postgres.NewOutboxStore(pool, cfg.ShadowMode)
 	// releaseManifestPendingStore (blocking-finding fix #1, "release PR
 	// review", §15.2) is the durable release_manifest_pending queue --
 	// the github Config below writes to it inline (a single, fast

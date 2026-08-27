@@ -273,7 +273,7 @@ func TestBuild_FullScenario(t *testing.T) {
 	turns := narvipg.NewTurnStore(pool)
 	plans := narvipg.NewPlanStore(pool)
 	automations := narvipg.NewAutomationStore(pool)
-	outbox := narvipg.NewOutboxStore(pool)
+	outbox := narvipg.NewOutboxStore(pool, false)
 	reviewFindings := narvipg.NewReviewFindingStore(pool)
 	sentinelFixes := narvipg.NewSentinelFixStore(pool)
 	artifacts := narvipg.NewArtifactStore(pool)
@@ -558,7 +558,7 @@ func TestBuild_NoLinkedGitHubIdentity(t *testing.T) {
 		Sessions:           narvipg.NewSessionStore(pool),
 		Participants:       narvipg.NewParticipantStore(pool),
 		Automations:        narvipg.NewAutomationStore(pool),
-		Outbox:             narvipg.NewOutboxStore(pool),
+		Outbox:             narvipg.NewOutboxStore(pool, false),
 		ReviewFindings:     narvipg.NewReviewFindingStore(pool),
 		SentinelFixes:      narvipg.NewSentinelFixStore(pool),
 		Artifacts:          narvipg.NewArtifactStore(pool),
@@ -660,7 +660,7 @@ func TestBuild_PlanOwnershipScoping(t *testing.T) {
 
 	deps := decisioninbox.Deps{
 		Plans: plans, Sessions: sessions, Participants: participants,
-		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool),
+		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool, false),
 		ReviewFindings: narvipg.NewReviewFindingStore(pool), SentinelFixes: narvipg.NewSentinelFixStore(pool),
 		Artifacts: narvipg.NewArtifactStore(pool), Identities: narvipg.NewIdentityStore(pool),
 		SCMCache:           decisioninbox.NewSCMCache(&fakeDecisionInboxSourceControl{}, platform.DefaultTimeouts()),
@@ -778,7 +778,7 @@ func TestBuild_PRLabelVariations(t *testing.T) {
 
 	deps := decisioninbox.Deps{
 		Plans: narvipg.NewPlanStore(pool), Sessions: narvipg.NewSessionStore(pool), Participants: narvipg.NewParticipantStore(pool),
-		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool),
+		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool, false),
 		ReviewFindings: narvipg.NewReviewFindingStore(pool), SentinelFixes: narvipg.NewSentinelFixStore(pool),
 		Artifacts: artifacts, Identities: identities,
 		SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
@@ -902,7 +902,7 @@ func TestBuild_HasChangesRequestedDemotesFromReadyToMerge(t *testing.T) {
 
 	deps := decisioninbox.Deps{
 		Plans: narvipg.NewPlanStore(pool), Sessions: narvipg.NewSessionStore(pool), Participants: narvipg.NewParticipantStore(pool),
-		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool),
+		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool, false),
 		ReviewFindings: narvipg.NewReviewFindingStore(pool), SentinelFixes: narvipg.NewSentinelFixStore(pool),
 		Artifacts: artifacts, Identities: narvipg.NewIdentityStore(pool),
 		SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
@@ -986,7 +986,7 @@ func TestBuild_ChangedFilesListDegraded_NeverReadyToMerge(t *testing.T) {
 
 	deps := decisioninbox.Deps{
 		Plans: narvipg.NewPlanStore(pool), Sessions: narvipg.NewSessionStore(pool), Participants: narvipg.NewParticipantStore(pool),
-		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool),
+		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool, false),
 		ReviewFindings: narvipg.NewReviewFindingStore(pool), SentinelFixes: narvipg.NewSentinelFixStore(pool),
 		Artifacts: artifacts, Identities: narvipg.NewIdentityStore(pool),
 		SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
@@ -1049,7 +1049,7 @@ func TestBuild_CodeOwnersResolvedAgainstBaseRefNeverHead(t *testing.T) {
 
 	deps := decisioninbox.Deps{
 		Plans: narvipg.NewPlanStore(pool), Sessions: narvipg.NewSessionStore(pool), Participants: narvipg.NewParticipantStore(pool),
-		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool),
+		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool, false),
 		ReviewFindings: narvipg.NewReviewFindingStore(pool), SentinelFixes: narvipg.NewSentinelFixStore(pool),
 		Artifacts: narvipg.NewArtifactStore(pool), Identities: narvipg.NewIdentityStore(pool),
 		SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
@@ -1097,7 +1097,7 @@ func TestBuild_SCMFetchFailedSignal(t *testing.T) {
 		}
 		deps := decisioninbox.Deps{
 			Plans: narvipg.NewPlanStore(pool), Sessions: narvipg.NewSessionStore(pool), Participants: narvipg.NewParticipantStore(pool),
-			Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool),
+			Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool, false),
 			ReviewFindings: narvipg.NewReviewFindingStore(pool), SentinelFixes: narvipg.NewSentinelFixStore(pool),
 			Artifacts: narvipg.NewArtifactStore(pool), Identities: narvipg.NewIdentityStore(pool),
 			SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
@@ -1125,7 +1125,7 @@ func TestBuild_SCMFetchFailedSignal(t *testing.T) {
 		fakeSCM := &fakeDecisionInboxSourceControl{openPRsErr: errors.New("boom: github is down")}
 		deps := decisioninbox.Deps{
 			Plans: narvipg.NewPlanStore(pool), Sessions: narvipg.NewSessionStore(pool), Participants: narvipg.NewParticipantStore(pool),
-			Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool),
+			Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool, false),
 			ReviewFindings: narvipg.NewReviewFindingStore(pool), SentinelFixes: narvipg.NewSentinelFixStore(pool),
 			Artifacts: narvipg.NewArtifactStore(pool), Identities: narvipg.NewIdentityStore(pool),
 			SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
@@ -1195,7 +1195,7 @@ func TestBuild_SentinelFixStoreErrorDegradesTheReadButNeverPanics(t *testing.T) 
 
 	deps := decisioninbox.Deps{
 		Plans: narvipg.NewPlanStore(pool), Sessions: narvipg.NewSessionStore(pool), Participants: narvipg.NewParticipantStore(pool),
-		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool),
+		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool, false),
 		ReviewFindings: narvipg.NewReviewFindingStore(pool), SentinelFixes: brokenSentinelFixes,
 		Artifacts: narvipg.NewArtifactStore(pool), Identities: narvipg.NewIdentityStore(pool),
 		SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
@@ -1245,7 +1245,7 @@ func TestBuild_CredentialResolutionErrorDegradesRatherThanRenderingNoGitHub(t *t
 
 	deps := decisioninbox.Deps{
 		Plans: narvipg.NewPlanStore(pool), Sessions: narvipg.NewSessionStore(pool), Participants: narvipg.NewParticipantStore(pool),
-		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool),
+		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool, false),
 		ReviewFindings: narvipg.NewReviewFindingStore(pool), SentinelFixes: narvipg.NewSentinelFixStore(pool),
 		Artifacts: narvipg.NewArtifactStore(pool), Identities: brokenIdentities,
 		SCMCache:           decisioninbox.NewSCMCache(&fakeDecisionInboxSourceControl{}, platform.DefaultTimeouts()),
@@ -1358,7 +1358,7 @@ func TestBuild_EligibilityConfigStoreError_DemotesFromReadyToMerge(t *testing.T)
 
 	deps := decisioninbox.Deps{
 		Plans: narvipg.NewPlanStore(pool), Sessions: narvipg.NewSessionStore(pool), Participants: narvipg.NewParticipantStore(pool),
-		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool),
+		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool, false),
 		ReviewFindings: narvipg.NewReviewFindingStore(pool), SentinelFixes: narvipg.NewSentinelFixStore(pool),
 		Artifacts: narvipg.NewArtifactStore(pool), Identities: narvipg.NewIdentityStore(pool),
 		SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
@@ -1407,7 +1407,7 @@ func TestBuild_ReviewDecisionDegraded_DemotesFromReadyToMerge(t *testing.T) {
 
 	deps := decisioninbox.Deps{
 		Plans: narvipg.NewPlanStore(pool), Sessions: narvipg.NewSessionStore(pool), Participants: narvipg.NewParticipantStore(pool),
-		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool),
+		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool, false),
 		ReviewFindings: narvipg.NewReviewFindingStore(pool), SentinelFixes: narvipg.NewSentinelFixStore(pool),
 		Artifacts: narvipg.NewArtifactStore(pool), Identities: narvipg.NewIdentityStore(pool),
 		SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
@@ -1481,7 +1481,7 @@ func TestBuild_Contested_HasChangesRequestedHalf_RecordsOverridden(t *testing.T)
 
 	deps := decisioninbox.Deps{
 		Plans: narvipg.NewPlanStore(pool), Sessions: narvipg.NewSessionStore(pool), Participants: narvipg.NewParticipantStore(pool),
-		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool),
+		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool, false),
 		ReviewFindings: narvipg.NewReviewFindingStore(pool), SentinelFixes: narvipg.NewSentinelFixStore(pool),
 		Artifacts: narvipg.NewArtifactStore(pool), Identities: narvipg.NewIdentityStore(pool),
 		SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
@@ -1536,7 +1536,7 @@ func TestBuild_Contested_NeedsHumanLabelHalf_RecordsOverridden(t *testing.T) {
 
 	deps := decisioninbox.Deps{
 		Plans: narvipg.NewPlanStore(pool), Sessions: narvipg.NewSessionStore(pool), Participants: narvipg.NewParticipantStore(pool),
-		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool),
+		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool, false),
 		ReviewFindings: narvipg.NewReviewFindingStore(pool), SentinelFixes: narvipg.NewSentinelFixStore(pool),
 		Artifacts: narvipg.NewArtifactStore(pool), Identities: narvipg.NewIdentityStore(pool),
 		SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
@@ -1593,7 +1593,7 @@ func TestBuild_NotContested_WhenEngineWouldNotHaveApprovedAnyway(t *testing.T) {
 
 	deps := decisioninbox.Deps{
 		Plans: narvipg.NewPlanStore(pool), Sessions: narvipg.NewSessionStore(pool), Participants: narvipg.NewParticipantStore(pool),
-		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool),
+		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool, false),
 		ReviewFindings: narvipg.NewReviewFindingStore(pool), SentinelFixes: narvipg.NewSentinelFixStore(pool),
 		Artifacts: narvipg.NewArtifactStore(pool), Identities: narvipg.NewIdentityStore(pool),
 		SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),

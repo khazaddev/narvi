@@ -193,7 +193,7 @@ func TestSchemaSqlcStoresPipeline(t *testing.T) {
 		t.Fatalf("SandboxStore.Get returned id %v, want %v", gotSandbox.ID, createdSandbox.ID)
 	}
 
-	outboxStore := narvipg.NewOutboxStore(pool)
+	outboxStore := narvipg.NewOutboxStore(pool, false)
 	createdEntry, err := outboxStore.Create(ctx, sqlcgen.CreateOutboxEntryParams{
 		SessionID: createdSession.ID,
 		Kind:      "slack_notify",

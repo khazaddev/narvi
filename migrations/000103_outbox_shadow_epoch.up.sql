@@ -1,0 +1,35 @@
+-- §30.8's own epoch discipline, applied to the outbox: "stamp the
+-- effective egress mode onto every durable decision artifact, and
+-- suppress if the stamp OR the current flag says shadow". Two columns,
+-- both written by the single INSERT INTO outbox choke point
+-- (postgres.OutboxStore.Create, queries/outbox.sql's own
+-- CreateOutboxEntry -- there is exactly one) plus the worker's own
+-- terminal-delivery queries.
+--
+-- suppressed_in_shadow: the enqueue-time stamp (§30.6: "one column on
+-- OutboxStore.Create -- a single choke point for every enqueue site").
+-- DEFAULT true, not false -- mirroring live_egress_enabled's own
+-- inverted-from-every-sibling-column polarity (migrations/
+-- 000101_repo_settings_live_egress_enabled.up.sql): a row inserted by
+-- some future write path that forgets to pass this column explicitly
+-- fails closed (stays suppressed) rather than silently leaking live.
+-- OutboxStore.Create always supplies a real, computed value -- this
+-- default is defense in depth for a write path that does not exist yet,
+-- never the value a caller is expected to rely on. A row stamped true
+-- here is TERMINALLY shadow (§30.8): whatever repo_settings.
+-- live_egress_enabled says by the time the worker actually attempts
+-- delivery, a born-shadow row can only ever end in the ledger.
+--
+-- delivered_to_ledger: the terminal mark (§30.6) written by the worker
+-- when it "delivers" a suppressed row into the ledger instead of the
+-- world, so a later reader (Step 104's own UNION read model over marked
+-- outbox rows + shadow_scm_writes) can tell a ledger-terminal row
+-- (status='delivered', delivered_to_ledger=true) apart from a genuinely-
+-- delivered one (status='delivered', delivered_to_ledger=false) -- both
+-- reuse the EXISTING outbox_status enum's own 'delivered' value
+-- (migrations/000010_outbox.up.sql), deliberately not a new status:
+-- §30.6 is explicit that this is "a flag column, deliberately not a new
+-- status enum -- the worker's claim/backoff state machine stays
+-- untouched".
+ALTER TABLE outbox ADD COLUMN suppressed_in_shadow BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE outbox ADD COLUMN delivered_to_ledger BOOLEAN NOT NULL DEFAULT false;
