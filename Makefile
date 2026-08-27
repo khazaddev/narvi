@@ -1,7 +1,7 @@
 .PHONY: build vet fmt tidy lint test test-integration \
 	test-integration-group-1 test-integration-group-2 test-integration-group-3 test-integration-group-4 \
 	contracts-generate contracts-check dev \
-	web-typecheck web-lint web-check-dto-types web-test web-build web-check
+	web-typecheck web-lint web-check-dto-types web-test web-build web-check dist
 
 build:
 	go build ./...
@@ -286,3 +286,28 @@ web-build:
 # separate steps instead, for per-concern failure attribution in the
 # Actions UI rather than one opaque `make` invocation.
 web-check: web-typecheck web-lint web-check-dto-types web-test web-build
+
+# dist is the single-binary recipe web-build's own comment and
+# assets_embed.go/doc.go (internal/adapters/inbound/webui) both name and
+# defer: wiring `make web-build` and `go build -tags web_assets` together
+# end to end (§12.1: "one binary + Postgres", §12.4: "make dist produces
+# the single self-contained binary"). Depends on web-build so `make dist`
+# alone -- from a checkout with only `cd web && npm ci` already run --
+# produces a complete binary with no separate step; web-build's own `vite
+# build` empties and rewrites its outDir every run (vite.config.ts's
+# default emptyOutDir), so this never silently embeds a stale dist/ left
+# over from a previous branch or build. Only cmd/control-plane is built:
+# cmd/sandbox-agent embeds no web assets and is not the "single self-
+# contained binary" §12.4 means -- it stays on plain `go build` outside
+# this target, unaffected by the web_assets tag. Output is `narvi` at the
+# repo root (IMPLEMENTATION_PLAN.md's own "make dist produces the
+# standalone narvi binary"; TECHNICAL_PLAN.md §12.1's "narvi serve" is
+# this same binary invoking cmd/control-plane/main.go's own "serve"
+# subcommand) -- gitignored the same way /control-plane and
+# /sandbox-agent already are. No stripping or version-stamping: no
+# build-time version pipeline exists anywhere in this repo yet (see
+# internal/sandboxagent/boot/config.go's own defaultAgentVersion comment),
+# so inventing one only for this target would be its own, un-asked-for
+# scope rather than something §12.4 requires.
+dist: web-build
+	go build -tags web_assets -o narvi ./cmd/control-plane
