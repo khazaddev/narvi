@@ -354,6 +354,36 @@ func MergePullRequest(deps decisioninbox.Deps, sourceControl ports.SourceControl
 			Owner: owner, Repo: repo, Number: req.PrNumber, HeadSHA: headSHA, Token: token,
 		})
 		cancel()
+		if errors.Is(err, ports.ErrShadowSuppressed) {
+			// §30.7: recorded, not merged. The operator clicked Merge and
+			// the platform did not merge, which is neither an error nor a
+			// success and must not be presented as either -- a 500 would
+			// tell them something broke, and a 200 would tell them the
+			// pull request is merged when it is open.
+			//
+			// Its own audit action, and deliberately no RecordConfirmed:
+			// this path is one of the two producers feeding the
+			// contradiction-rate metric, and a confirmation the world
+			// never saw would corrupt the instrument that justifies
+			// arming auto-merge for real.
+			if auditErr := auditlog.Record(ctx, auditLog, actorUserID, "shadow.would_have_merged", "pull_request", fmt.Sprintf("%s/%s#%d", owner, repo, req.PrNumber), map[string]any{
+				"repo_full_name": owner + "/" + repo,
+				"pr_number":      req.PrNumber,
+				"head_sha":       headSHA,
+			}); auditErr != nil {
+				logger.Error("httpapi: record audit log for suppressed merge failed", "error", auditErr)
+			}
+			// Merged stays FALSE, which is the whole point: the response
+			// says what is true. §30.6 requires a synthetic result to be
+			// impossible to mistake for a real one, and "Merged: true"
+			// with no SHA would be exactly that mistake.
+			writeJSON(w, http.StatusOK, restdtos.MergePullRequestResponse{
+				Merged:         false,
+				MergeCommitSha: "",
+				Message:        "Recorded, not merged: this repository's outgoing changes are suppressed on this deployment.",
+			})
+			return
+		}
 		if err != nil {
 			var mergeErr *ports.MergePRError
 			if errors.As(err, &mergeErr) {

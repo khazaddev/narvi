@@ -376,6 +376,64 @@ func TestMergePullRequest_HappyPath(t *testing.T) {
 	}
 }
 
+// TestMergePullRequest_ShadowSuppressed_RecordedNotMerged pins §30.7's
+// mapping for the human path. An operator who clicks Merge on a repository
+// whose egress is suppressed must be told what happened -- not shown an
+// error, which would say the platform broke, and not shown a success,
+// which would say the pull request is merged when it is open.
+//
+// The review that found this had the endpoint returning HTTP 500
+// "internal error", because the sentinel fell through to the generic
+// branch. The sentinel existed and no caller handled it.
+func TestMergePullRequest_ShadowSuppressed_RecordedNotMerged(t *testing.T) {
+	const htmlURL = "https://github.com/acme/widgets/pull/1204"
+	fakeSCM := &fakeMergeSourceControl{
+		openPRs: []ports.OpenPR{
+			{
+				Owner: "acme", Repo: "widgets", Number: 1204, Title: "low risk", HTMLURL: htmlURL,
+				HeadSHA: "headsha1204", Assignees: []ports.PRPerson{{ExternalID: "9001", Login: "octocat"}},
+				CIConclusion: ports.CIConclusionSuccess, Labels: []string{"review:low-risk"},
+			},
+		},
+		mergeErr: ports.ErrShadowSuppressed,
+	}
+	rig := newDecisionInboxTestRig(t, fakeSCM)
+	ctx := context.Background()
+
+	user, token := rig.createAuthenticatedUser(ctx, t, sqlcgen.UserRoleMember)
+	rig.linkGitHub(ctx, t, user.ID, "9001")
+	rig.markPlatformAuthored(ctx, t, user.ID, htmlURL)
+	rig.seedAutoApprovedVerdict(ctx, t, "acme/widgets", 1204, "headsha1204")
+
+	body, err := json.Marshal(restdtos.MergePullRequestRequest{RepoFullName: "acme/widgets", PrNumber: 1204})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	var got restdtos.MergePullRequestResponse
+	status := rig.doJSON(t, http.MethodPost, "/api/decision-inbox/merge", body, &got, token)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d -- a suppressed merge is neither an error nor a failure of the merge", status, http.StatusOK)
+	}
+	if got.Merged {
+		t.Error("response says Merged=true for a suppressed merge; the pull request is still open")
+	}
+	if got.MergeCommitSha != "" {
+		t.Errorf("response carries a merge SHA %q for a merge that never happened", got.MergeCommitSha)
+	}
+
+	// And deliberately NO confirmed outcome: feeding a confirmation the
+	// world never saw into the contradiction-rate read model would corrupt
+	// the instrument whose evidence justifies arming auto-merge for real.
+	total, contested, err := narvipg.NewAutoApprovalOutcomeStore(rig.pool).CountInWindow(ctx, "acme/widgets", pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true})
+	if err != nil {
+		t.Fatalf("count auto-approval outcomes: %v", err)
+	}
+	if total != 0 || contested != 0 {
+		t.Errorf("outcome counts = (total=%d, contested=%d), want (0, 0) -- a suppressed merge must not record a confirmation", total, contested)
+	}
+}
+
 func TestMergePullRequest_NotAssignedToCaller(t *testing.T) {
 	fakeSCM := &fakeMergeSourceControl{} // no open PRs for anyone
 	rig := newDecisionInboxTestRig(t, fakeSCM)

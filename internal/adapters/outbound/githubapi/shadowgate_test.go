@@ -179,9 +179,12 @@ func TestShadowGate_UnrecognisedPathResolvesShadow(t *testing.T) {
 	store := &recordingStore{}
 	client := &http.Client{Transport: &shadowRoundTripper{
 		next: http.DefaultTransport, ledger: store,
-		// A resolver that would say "live" for the empty repo name, to
-		// prove the gate does not consult it into a pass-through here.
-		resolve: func(context.Context, string) bool { return false },
+		// A resolver that says LIVE for everything, including the empty
+		// repository name. If the gate consulted it here, this request
+		// would go out -- which is exactly what the previous version of
+		// this test could not detect, because it passed a resolver that
+		// said shadow and would have passed either way.
+		resolve: func(context.Context, string) bool { return true },
 	}}
 
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+"/graphql", strings.NewReader("{}"))

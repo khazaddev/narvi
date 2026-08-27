@@ -53,8 +53,11 @@ type Entry struct {
 	// target.
 	Target string
 
-	// Spec is one of this package's own token-free spec types.
-	Spec any
+	// Spec is one of this package's own token-free spec types, and the
+	// type is the enforcement: see Spec's own doc comment. A ports spec
+	// does not implement it, so a credential cannot be handed to the
+	// ledger even by a caller who never thought about credentials.
+	Spec Spec
 
 	// Result is the synthetic result handed back to the caller, or nil
 	// where none was synthesized. Nil is the honest value for MergePR

@@ -288,13 +288,14 @@ func serve() error {
 	// NewRegistry fallible (constructs the contract_drift_detected OTel
 	// counter), mirroring recon/builder's own identical error handling
 	// immediately below. §14.4 ("handoff-readiness sentinel") adds
-	// diffFetcher -- the SAME sourceControl *githubapi.Adapter instance
+	// diffFetcher -- the SAME sourceControl instance (the shadow decorator,
+	// which forwards diff reads to the adapter beneath it)
 	// passed a second time, satisfying sessionactor.PRDiffFetcher exactly
 	// like it already satisfies the github inbound handler's own
 	// reviewcontext.Fetcher below (DiffFetcher: sourceControl) -- never a
 	// second, independently-constructed client. §24 ("review:
 	// automatic re-review on new commits") adds ReviewDiffFetcher --
-	// the SAME sourceControl instance a THIRD time, satisfying
+	// the SAME sourceControl decorator a THIRD time, satisfying
 	// reviewcontext.Fetcher directly (GetPullRequest/GetCompareDiff are
 	// both real *githubapi.Adapter methods) -- plus GitHubBotHandle/
 	// GitHubBotToken, bundled into sessionactor.RegistryOptions (see that
@@ -1051,7 +1052,7 @@ func serve() error {
 			BotHandle:     cfg.GitHubBotHandle,
 			// ReReviewLabel/DiffFetcher ("review sessions", §8.2):
 			// the manual re-trigger-via-label lane's own configured label
-			// name, and the SAME *githubapi.Adapter instance already
+			// name, and the SAME instance already
 			// constructed above (sourceControl) as PullRequests/Comments --
 			// never a second, independently-constructed copy -- now ALSO
 			// wired as this Step's own diff/stack pre-fetch source.
@@ -1080,7 +1081,7 @@ func serve() error {
 			// correctness, H5 audit fix): resolve an issue_comment
 			// mention's TRUE head branch/repo via one authenticated
 			// GET /repos/{owner}/{repo}/pulls/{number} call. sourceControl
-			// is the SAME *githubapi.Adapter instance already constructed
+			// is the SAME instance already constructed
 			// above for CreatePR/ResolveBranchSHA/ResolveContractsFingerprint
 			// -- never a second, independently-constructed copy -- and
 			// cfg.GitHubBotToken is the SAME bot credential githubNotifier
@@ -1091,8 +1092,11 @@ func serve() error {
 			// Comments (a follow-up fix, Finding 1; also posts
 			// batch fix/deny-unlinked-github-actors' own "please sign in"
 			// reply): the SAME *githubapi.Adapter instance as
-			// PullRequests/sourceControl above -- never a second,
-			// independently-constructed copy.
+			// PullRequests above -- never a second, independently-
+			// constructed copy. It is liveSourceControl rather than the
+			// decorator because PostIssueComment lives outside the port;
+			// its suppression comes from the transport gate underneath,
+			// which is why that layer exists (§30.2).
 			Comments: liveSourceControl,
 			Timeouts: cfg.Timeouts,
 			// PublicBaseURL/LinkNotices (batch fix/deny-unlinked-github-

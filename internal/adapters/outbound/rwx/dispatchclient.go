@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -49,7 +50,17 @@ type DispatchClient struct {
 // Dispatches API host when empty.
 func NewDispatchClient(httpClient *http.Client, baseURL, accessToken string) *DispatchClient {
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		// Not http.DefaultClient. §30.2 calls that default an attractive
+		// nuisance and removes it from all four outbound constructors:
+		// New(nil, ...) in a new package used to produce a WORKING client
+		// that no egress layer could see. It now produces one that can
+		// make no request at all -- the omission is useless rather than
+		// dangerous, and the zero value fails closed.
+		//
+		// This surface's own gate is a later Step's work; the default had
+		// to go now regardless, because a gate installed later cannot
+		// reach a client somebody already constructed around it.
+		httpClient = &http.Client{Transport: refusingTransport{}}
 	}
 	if baseURL == "" {
 		baseURL = defaultDispatchBaseURL
@@ -117,4 +128,14 @@ func (c *DispatchClient) Dispatch(ctx context.Context, key, ref, title string, p
 		return "", fmt.Errorf("rwx: decode dispatch response: %w", err)
 	}
 	return parsed.DispatchID, nil
+}
+
+// refusingTransport answers every request with an error naming the cause,
+// so a construction site built without a transport fails at its first call
+// with something a reader can act on -- rather than silently reaching a
+// customer's systems, which is what the removed default did.
+type refusingTransport struct{}
+
+func (refusingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("rwx: this client was built with no HTTP client, so it can make no requests")
 }

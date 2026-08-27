@@ -62,6 +62,16 @@ func (rt *shadowRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 	}
 
 	repoFullName := repoFromPath(req.URL.Path)
+	if repoFullName == "" {
+		// Unattributable: a mutating request whose path names no
+		// repository cannot be resolved against a per-repo flag, and it
+		// must NOT be handed to the resolver to decide -- that would make
+		// the gate's safety depend on how some other component answers
+		// for the empty string. It cannot be recorded usefully either,
+		// since the ledger is read per repository. So it fails, loudly,
+		// with a message that says which request and why.
+		return nil, fmt.Errorf("githubapi: refusing a %s to %q: no repository in the path, so this platform's egress mode for it cannot be resolved", req.Method, req.URL.Path)
+	}
 	if rt.resolve != nil && rt.resolve(req.Context(), repoFullName) {
 		return rt.next.RoundTrip(req)
 	}
@@ -100,10 +110,10 @@ func (rt *shadowRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 // from the URL alone -- which is what lets the gate resolve the flag for
 // the RIGHT repository without the typed layer telling it.
 //
-// A path that does not match yields an empty string, and an empty
-// repository resolves to shadow: the resolver treats an unknown repo as
-// never-promoted, and the ledger write then refuses an unattributable row.
-// Both directions of that are the safe one.
+// A path that does not match yields an empty string, and the caller
+// refuses the request outright rather than asking the resolver about it.
+// Delegating would make this gate's safety a property of how another
+// component answers for "", which is not a property anyone stated.
 func repoFromPath(p string) string {
 	parts := strings.Split(strings.TrimPrefix(p, "/"), "/")
 	if len(parts) < 3 || parts[0] != "repos" {

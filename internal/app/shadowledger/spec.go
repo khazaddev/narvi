@@ -22,6 +22,31 @@
 
 package shadowledger
 
+// Spec is what may be recorded as a suppressed write's intention, and it
+// is a SEALED interface: the unexported method means only this package's
+// own types can satisfy it. Nothing outside can add a new one, and --
+// this is the point -- nothing outside can pass a ports spec here, because
+// every one of those carries a plaintext Token and none of them implements
+// this method.
+//
+// The first version of this file declared the token-free types and then
+// accepted them through a field typed `any`. That made the exclusion a
+// convention: the right types existed, and a caller could hand over
+// ports.MergePRSpec instead and marshal a live credential straight into
+// the column. Verified by writing that call and watching "ghp_..." land in
+// spec_json. §30.6 asks for a compile error, and `any` cannot be one.
+type Spec interface {
+	isShadowSpec()
+}
+
+func (CreatePR) isShadowSpec()          {}
+func (UpdateFileContent) isShadowSpec() {}
+func (UpdatePRBody) isShadowSpec()      {}
+func (RegisterPRStack) isShadowSpec()   {}
+func (CreateBranch) isShadowSpec()      {}
+func (MergePR) isShadowSpec()           {}
+func (Transport) isShadowSpec()         {}
+
 // CreatePR mirrors ports.CreatePRSpec without its Token.
 type CreatePR struct {
 	Owner string `json:"owner"`
@@ -103,3 +128,17 @@ type Transport struct {
 	Host   string `json:"host"`
 	Body   string `json:"body"`
 }
+
+// These assertions pin the sealed set. Removing isShadowSpec from any of
+// them, or forgetting it on a type added later, is a build failure at the
+// point where someone would otherwise have widened the ledger's input
+// silently.
+var (
+	_ Spec = CreatePR{}
+	_ Spec = UpdateFileContent{}
+	_ Spec = UpdatePRBody{}
+	_ Spec = RegisterPRStack{}
+	_ Spec = CreateBranch{}
+	_ Spec = MergePR{}
+	_ Spec = Transport{}
+)
