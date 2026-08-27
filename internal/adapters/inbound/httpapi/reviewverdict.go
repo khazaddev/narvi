@@ -175,6 +175,12 @@ func PostReviewVerdict(
 	diffFetcher reviewcontext.Fetcher,
 	positionResolver *findingposition.Resolver,
 	timeouts platform.Timeouts,
+	// platformShadow (§30.8) is platform.Config.ShadowMode
+	// (NARVI_SHADOW_MODE) -- threaded through to appreviewverdict.
+	// Insert's own egressmode.Resolve call below, exactly like
+	// cmd/control-plane/main.go's own outboxStore/registry construction
+	// already receives it.
+	platformShadow bool,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -629,7 +635,7 @@ func PostReviewVerdict(
 		// an unpersisted verdict.
 		if verdictHeadSHA == "" {
 			logger.Warn("httpapi: review-verdict: no review head sha on record, skipping review_verdicts insert", "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
-		} else if _, insertErr := appreviewverdict.Insert(ctx, reviewVerdicts.WithTx(tx), prSession.RepoFullName, prSession.PrNumber, verdictHeadSHA, sessionID, verdict, input.Digest, reviewDepth, input.CounterReview, input.FactCheck, input.FactCheckKilled); insertErr != nil {
+		} else if _, insertErr := appreviewverdict.Insert(ctx, reviewVerdicts.WithTx(tx), repoSettings.WithTx(tx), platformShadow, prSession.RepoFullName, prSession.PrNumber, verdictHeadSHA, sessionID, verdict, input.Digest, reviewDepth, input.CounterReview, input.FactCheck, input.FactCheckKilled); insertErr != nil {
 			logger.Error("httpapi: review-verdict: insert review_verdicts row failed", "error", insertErr)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return

@@ -400,6 +400,7 @@ func TestGitHubIntegration_SensitiveGlobDiff_RoutesDeep_PersistsThroughVerdict(t
 		nil,
 		nil,
 		platform.DefaultTimeouts(),
+		false,
 	))
 	verdictServer := httptest.NewServer(verdictMux)
 	t.Cleanup(verdictServer.Close)

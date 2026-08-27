@@ -239,6 +239,7 @@ func strPtr(s string) *string { return &s }
 func seedAutoApprovedVerdict(ctx context.Context, t *testing.T, pool *pgxpool.Pool, repoFullName string, prNumber int32, headSHA string) {
 	t.Helper()
 	store := narvipg.NewReviewVerdictStore(pool)
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
 	verdict := review.Verdict{
 		RiskLevel:         review.RiskLevelLow,
 		Premise:           review.PremiseStateOK,
@@ -248,7 +249,12 @@ func seedAutoApprovedVerdict(ctx context.Context, t *testing.T, pool *pgxpool.Po
 		FilesChanged:      3,
 	}
 	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise, review.DescriptionAdequacyOK, review.CounterReviewDone)
-	if _, err := appreviewverdict.Insert(ctx, store, repoFullName, prNumber, headSHA, pgtype.UUID{}, verdict, reviewpost.Digest{Summary: "Test-seeded verdict."}, "", review.CounterReviewDone, reviewpost.FactCheckDone, 0); err != nil {
+	// §30.8: decisioninbox's own classification deliberately reads the
+	// SAME unfiltered GetLatest every other internal, operator-facing
+	// caller uses (migrations/000105's own doc comment) -- this fixture
+	// does not need to promote repoFullName to live for that read to see
+	// it, unlike internal/app/automerge's own seedEligiblePR.
+	if _, err := appreviewverdict.Insert(ctx, store, repoSettings, false, repoFullName, prNumber, headSHA, pgtype.UUID{}, verdict, reviewpost.Digest{Summary: "Test-seeded verdict."}, "", review.CounterReviewDone, reviewpost.FactCheckDone, 0); err != nil {
 		t.Fatalf("seed auto-approved review_verdicts row for %s#%d: %v", repoFullName, prNumber, err)
 	}
 }

@@ -205,7 +205,18 @@ func (rs *automergeTestRig) seedEligiblePR(ctx context.Context, t *testing.T, re
 		FilesChanged:      3,
 	}
 	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise, review.DescriptionAdequacyOK, review.CounterReviewDone)
-	if _, err := appreviewverdict.Insert(ctx, rs.reviewVerdict.ReviewVerdicts, repoFullName, prNumber, headSHA, pgtype.UUID{}, verdict, reviewpost.Digest{Summary: "Test-seeded verdict."}, "", review.CounterReviewDone, reviewpost.FactCheckDone, 0); err != nil {
+
+	// §30.8: ListLatestAutoApprovedInRepo now excludes any verdict whose
+	// own repo has not been promoted past the live_egress_promoted_at
+	// fence -- this fixture means "a real, would-really-have-happened
+	// candidate", so it promotes the repo first, exactly like a real
+	// operator's Step 104 "Activate" gesture would before this repo could
+	// ever have a real merge candidate.
+	repoSettings := narvipg.NewRepoSettingsStore(rs.pool)
+	if _, err := repoSettings.UpsertLiveEgressEnabled(ctx, repoFullName, true); err != nil {
+		t.Fatalf("promote repo to live egress: %v", err)
+	}
+	if _, err := appreviewverdict.Insert(ctx, rs.reviewVerdict.ReviewVerdicts, repoSettings, false, repoFullName, prNumber, headSHA, pgtype.UUID{}, verdict, reviewpost.Digest{Summary: "Test-seeded verdict."}, "", review.CounterReviewDone, reviewpost.FactCheckDone, 0); err != nil {
 		t.Fatalf("seed review_verdicts row: %v", err)
 	}
 	return htmlURL
