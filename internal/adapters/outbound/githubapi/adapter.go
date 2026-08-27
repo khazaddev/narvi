@@ -66,14 +66,28 @@ type Adapter struct {
 // signature drift a build error, not a runtime surprise.
 var _ ports.SourceControl = (*Adapter)(nil)
 
-// New builds an Adapter. httpClient is accepted (rather than constructed
-// internally) so a caller can control its own timeout/transport, matching
-// this port's own doc comment on testability; a nil httpClient defaults to
-// http.DefaultClient. apiBaseURL defaults to defaultAPIBaseURL when empty
-// -- production wiring should still pass it explicitly (see doc.go).
+// New builds an Adapter. httpClient should come from NewGatedClient,
+// which is the only way to obtain one carrying the shadow gate.
+//
+// It used to default to http.DefaultClient, and §30.2 names why that
+// default had to go: a developer writing New(nil, baseURL) in a new
+// package got a working, gate-free instance, invisible to every layer
+// above it. Every egress guarantee this platform makes runs through the
+// injected transport, so a constructor that silently supplies an ungated
+// one is an attractive nuisance rather than a convenience -- the zero
+// value must fail closed, and now it refuses to build at all.
+//
+// apiBaseURL still defaults to defaultAPIBaseURL when empty; production
+// wiring should pass it explicitly (see doc.go).
 func New(httpClient *http.Client, apiBaseURL string) *Adapter {
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		// Not http.DefaultClient, which is what this used to be and what
+		// §30.2 calls an attractive nuisance: it made New(nil, base) a
+		// WORKING, gate-free adapter that no layer above could see. A
+		// refusing transport keeps the signature convenient for the many
+		// tests that pass a real client, while making the omission
+		// useless rather than dangerous -- the zero value fails closed.
+		httpClient = &http.Client{Transport: refusingTransport{}}
 	}
 	if apiBaseURL == "" {
 		apiBaseURL = defaultAPIBaseURL
@@ -82,6 +96,17 @@ func New(httpClient *http.Client, apiBaseURL string) *Adapter {
 		httpClient: httpClient,
 		apiBaseURL: strings.TrimSuffix(apiBaseURL, "/"),
 	}
+}
+
+// refusingTransport is what an adapter built without a transport gets. It
+// answers every request with an error naming the cause, so a construction
+// site that forgot the gate fails at its first call with something a
+// reader can act on -- rather than silently reaching a customer's
+// repository, which is what the old http.DefaultClient default did.
+type refusingTransport struct{}
+
+func (refusingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("githubapi: this adapter was built with no HTTP client, so it can make no requests -- build it with NewGatedClient, which is the only way to obtain one")
 }
 
 // createPRRequest is the body POSTed to /repos/{owner}/{repo}/pulls (real

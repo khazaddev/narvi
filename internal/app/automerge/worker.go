@@ -14,6 +14,7 @@ package automerge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -150,6 +151,35 @@ func (w *Worker) mergeCandidate(ctx context.Context, repoFullName string, prNumb
 		Owner: owner, Repo: repo, Number: prNumber, HeadSHA: headSHA, Token: w.deps.BotToken,
 	})
 	cancel()
+	if errors.Is(err, ports.ErrShadowSuppressed) {
+		// §30.7: a suppressed merge is "recorded, not merged" -- neither a
+		// success nor a failure of the merge. Its own distinct audit
+		// action, and deliberately NOT RecordConfirmed: feeding a
+		// confirmation the world never saw into the contradiction-rate
+		// read model would corrupt the very instrument whose evidence is
+		// supposed to justify arming auto-merge for real.
+		//
+		// Logged at Info, not Error. In a shadow deployment this is the
+		// expected path for every candidate, and an error stream that is
+		// entirely expected trains an operator to ignore it.
+		logger.Info("automerge: merge recorded, not performed -- this repository's egress is suppressed",
+			"repo_full_name", repoFullName, "pr_number", prNumber)
+		// Known and bounded: this candidate is still returned by the
+		// candidate query, so it re-enters here on the next tick and
+		// records again. §30.8 closes that at the query level -- an
+		// egress-mode stamp on the verdict row, excluded inside
+		// ListLatestAutoApproved -- and says explicitly that it must be a
+		// query exclusion and "never call-site checks", so a shadow guard
+		// added here instead would be building the thing the spec refuses.
+		if err := auditlog.Record(ctx, w.deps.AuditLog, pgtype.UUID{}, "shadow.would_have_merged", "pull_request", fmt.Sprintf("%s#%d", repoFullName, prNumber), map[string]any{
+			"repo_full_name": repoFullName,
+			"pr_number":      prNumber,
+			"head_sha":       headSHA,
+		}); err != nil {
+			logger.Error("automerge: record audit log for suppressed merge failed", "error", err, "repo_full_name", repoFullName, "pr_number", prNumber)
+		}
+		return
+	}
 	if err != nil {
 		logger.Error("automerge: merge pr failed", "error", err, "repo_full_name", repoFullName, "pr_number", prNumber)
 		return

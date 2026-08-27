@@ -52,6 +52,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/chatgptrefresh"
 	"github.com/khazaddev/narvi/internal/app/decisioninbox"
 	"github.com/khazaddev/narvi/internal/app/digest"
+	"github.com/khazaddev/narvi/internal/app/egressmode"
 	"github.com/khazaddev/narvi/internal/app/findingposition"
 	"github.com/khazaddev/narvi/internal/app/identitylink"
 	"github.com/khazaddev/narvi/internal/app/imagebuild"
@@ -63,6 +64,7 @@ import (
 	appreviewtriage "github.com/khazaddev/narvi/internal/app/reviewtriage"
 	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/app/shadowscm"
 	"github.com/khazaddev/narvi/internal/app/uploadsweep"
 	"github.com/khazaddev/narvi/internal/platform"
 	"github.com/khazaddev/narvi/migrations"
@@ -227,12 +229,53 @@ func serve() error {
 	// createPRBestEffort (internal/app/sessionactor/pushpr.go) calls
 	// CreatePR on once a push_complete event arrives -- constructed once
 	// here, exactly mirroring modal.New's own real-adapter-in-production-
-	// wiring precedent immediately above. httpClient is nil (defaults to
-	// http.DefaultClient, see githubapi.New's own doc comment) since each
-	// individual CreatePR call is already bounded by its own caller-
-	// supplied context deadline (platform.Timeouts.PRCreateTimeout), not a
-	// package-level http.Client.Timeout.
-	sourceControl := githubapi.New(nil, githubAPIBaseURL)
+	// wiring precedent immediately above.
+	//
+	// This is the ONE production construction site for the GitHub adapter,
+	// which is what makes §30.2's layer 0 possible with a single seam: the
+	// gate is installed as the adapter's transport here, so every request
+	// the package makes rides through it -- including the mutating methods
+	// that live outside the port and the synchronous comments the GitHub
+	// ingress posts through this same instance.
+	//
+	// There is no nil default any more. §30.2 removed it deliberately: a
+	// developer writing githubapi.New(nil, baseURL) in a new package used
+	// to get a working, gate-free adapter invisible to every layer above.
+	// Individual call deadlines still come from each caller's own context
+	// (platform.Timeouts.PRCreateTimeout), not a package-level Timeout.
+	shadowLedger := postgres.NewShadowSCMWriteStore(pool)
+	repoSettingsForEgress := postgres.NewRepoSettingsStore(pool)
+	isLiveEgress := func(ctx context.Context, repoFullName string) bool {
+		return egressmode.Resolve(ctx, egressmode.Deps{
+			PlatformShadow: cfg.ShadowMode,
+			RepoSettings:   repoSettingsForEgress,
+		}, repoFullName).Live()
+	}
+	gatedHTTPClient := githubapi.NewGatedClient(shadowLedger, isLiveEgress)
+	liveSourceControl := githubapi.New(gatedHTTPClient, githubAPIBaseURL)
+
+	// Layer 1 on top of layer 0 (§30.2), redundant in one direction only:
+	// the decorator records the six port writes with their real types and
+	// keeps the state machines coherent; the transport underneath
+	// guarantees nothing escapes even when the decorator's coverage is
+	// stale.
+	sourceControl, err := shadowscm.New(liveSourceControl, shadowLedger, isLiveEgress)
+	if err != nil {
+		return fmt.Errorf("build shadow source-control decorator: %w", err)
+	}
+
+	// Consumers typed on ports.SourceControl take the decorator. A few take
+	// the CONCRETE adapter instead -- the notifiers, and the ingress comment
+	// poster, whose PostIssueComment is one of the mutating methods §30.2
+	// observes living outside the port -- and those keep liveSourceControl.
+	//
+	// That is the design rather than a gap, and it is why layer 0 exists.
+	// The decorator cannot be substituted where a concrete type is demanded,
+	// and a codebase where some callers hold a gated object and others hold
+	// an ungated one under similar names is exactly the per-call-site
+	// discipline §30 refuses. liveSourceControl is not ungated: its
+	// transport is the gate, so every mutating request it makes -- including
+	// the ones no typed layer can see -- is intercepted and recorded.
 
 	// Registry/wshub are wired into the real binary here -- an intended,
 	// natural consequence: the timer pump becomes genuinely live here for
@@ -245,13 +288,14 @@ func serve() error {
 	// NewRegistry fallible (constructs the contract_drift_detected OTel
 	// counter), mirroring recon/builder's own identical error handling
 	// immediately below. §14.4 ("handoff-readiness sentinel") adds
-	// diffFetcher -- the SAME sourceControl *githubapi.Adapter instance
+	// diffFetcher -- the SAME sourceControl instance (the shadow decorator,
+	// which forwards diff reads to the adapter beneath it)
 	// passed a second time, satisfying sessionactor.PRDiffFetcher exactly
 	// like it already satisfies the github inbound handler's own
 	// reviewcontext.Fetcher below (DiffFetcher: sourceControl) -- never a
 	// second, independently-constructed client. §24 ("review:
 	// automatic re-review on new commits") adds ReviewDiffFetcher --
-	// the SAME sourceControl instance a THIRD time, satisfying
+	// the SAME sourceControl decorator a THIRD time, satisfying
 	// reviewcontext.Fetcher directly (GetPullRequest/GetCompareDiff are
 	// both real *githubapi.Adapter methods) -- plus GitHubBotHandle/
 	// GitHubBotToken, bundled into sessionactor.RegistryOptions (see that
@@ -1008,7 +1052,7 @@ func serve() error {
 			BotHandle:     cfg.GitHubBotHandle,
 			// ReReviewLabel/DiffFetcher ("review sessions", §8.2):
 			// the manual re-trigger-via-label lane's own configured label
-			// name, and the SAME *githubapi.Adapter instance already
+			// name, and the SAME instance already
 			// constructed above (sourceControl) as PullRequests/Comments --
 			// never a second, independently-constructed copy -- now ALSO
 			// wired as this Step's own diff/stack pre-fetch source.
@@ -1037,7 +1081,7 @@ func serve() error {
 			// correctness, H5 audit fix): resolve an issue_comment
 			// mention's TRUE head branch/repo via one authenticated
 			// GET /repos/{owner}/{repo}/pulls/{number} call. sourceControl
-			// is the SAME *githubapi.Adapter instance already constructed
+			// is the SAME instance already constructed
 			// above for CreatePR/ResolveBranchSHA/ResolveContractsFingerprint
 			// -- never a second, independently-constructed copy -- and
 			// cfg.GitHubBotToken is the SAME bot credential githubNotifier
@@ -1048,9 +1092,12 @@ func serve() error {
 			// Comments (a follow-up fix, Finding 1; also posts
 			// batch fix/deny-unlinked-github-actors' own "please sign in"
 			// reply): the SAME *githubapi.Adapter instance as
-			// PullRequests/sourceControl above -- never a second,
-			// independently-constructed copy.
-			Comments: sourceControl,
+			// PullRequests above -- never a second, independently-
+			// constructed copy. It is liveSourceControl rather than the
+			// decorator because PostIssueComment lives outside the port;
+			// its suppression comes from the transport gate underneath,
+			// which is why that layer exists (§30.2).
+			Comments: liveSourceControl,
 			Timeouts: cfg.Timeouts,
 			// PublicBaseURL/LinkNotices (batch fix/deny-unlinked-github-
 			// actors): PublicBaseURL is the SAME base identitylink.
@@ -1840,7 +1887,7 @@ func serve() error {
 	// linearnotifier.go). slackNotifier/planSlackNotifier are constructed
 	// earlier, alongside outboxStore -- see that construction site's own
 	// doc comment for why.
-	githubNotifier := githubapi.NewBotNotifier(sourceControl, cfg.GitHubBotToken)
+	githubNotifier := githubapi.NewBotNotifier(liveSourceControl, cfg.GitHubBotToken)
 	linearNotifier := outboxworker.NewLinearNotifier(linearClient, linearInstallationStore, cfg.TokenEncryptionKey)
 	// githubVerdictNotifier ("server-side verdict", §8.2) wraps
 	// the SAME sourceControl *githubapi.Adapter instance every other
@@ -1849,7 +1896,7 @@ func serve() error {
 	// posting a verdict is a bot-attributed action exactly like posting
 	// the (now-blocked-for-review-sessions) generic outcome comment used
 	// to be, never a per-commenter credential.
-	githubVerdictNotifier := githubapi.NewVerdictNotifier(sourceControl, cfg.GitHubBotToken)
+	githubVerdictNotifier := githubapi.NewVerdictNotifier(liveSourceControl, cfg.GitHubBotToken)
 	// sentinelAutoFixNotifier ("sentinels + suggestions", §17.2)
 	// spawns the child session -- reviewFindingStore/sentinelFixStore are
 	// the SAME instances every other caller above already uses.
@@ -1858,12 +1905,12 @@ func serve() error {
 	// the handoff-readiness comment and applies the "handoff" label on a
 	// scoped session's PR -- the SAME sourceControl/cfg.GitHubBotToken
 	// every other GitHub-flavored notifier above already uses.
-	handoffNotifier := githubapi.NewHandoffNotifier(sourceControl, cfg.GitHubBotToken)
+	handoffNotifier := githubapi.NewHandoffNotifier(liveSourceControl, cfg.GitHubBotToken)
 	// releaseManifestNotifier ("release PR review", §15.2) posts
 	// the release manifest check's own summary comment -- the SAME
 	// sourceControl/cfg.GitHubBotToken every other GitHub-flavored
 	// notifier above already uses.
-	releaseManifestNotifier := githubapi.NewReleaseManifestNotifier(sourceControl, cfg.GitHubBotToken)
+	releaseManifestNotifier := githubapi.NewReleaseManifestNotifier(liveSourceControl, cfg.GitHubBotToken)
 	// descriptionAutofixNotifier ("review digest: description
 	// adequacy + graduated remediation", §26.2) re-verifies Narvi-
 	// authorship and this repo's own descriptionAutofix flag, fresh, at
@@ -1937,7 +1984,7 @@ func serve() error {
 	if cfg.RWXAccessToken != "" {
 		rwxDispatchClient := rwx.NewDispatchClient(nil, "", cfg.RWXAccessToken)
 		outboxNotifiers[ports.NotificationKindRWXPreviewDispatch] = rwx.NewPreviewNotifier(rwxDispatchClient)
-		outboxNotifiers[ports.NotificationKindGitHubPreviewLink] = githubapi.NewPreviewLinkNotifier(sourceControl, cfg.GitHubBotToken)
+		outboxNotifiers[ports.NotificationKindGitHubPreviewLink] = githubapi.NewPreviewLinkNotifier(liveSourceControl, cfg.GitHubBotToken)
 	}
 
 	// blob_delete (§28.4) is registered ONLY when blobStore is

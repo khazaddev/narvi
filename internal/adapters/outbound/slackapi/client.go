@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -57,7 +58,17 @@ var _ ports.Notifier = (*Client)(nil)
 // githubapi.New/linearapi.New's own identical precedent.
 func New(httpClient *http.Client, apiBaseURL, botToken string) *Client {
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		// Not http.DefaultClient. §30.2 calls that default an attractive
+		// nuisance and removes it from all four outbound constructors:
+		// New(nil, ...) in a new package used to produce a WORKING client
+		// that no egress layer could see. It now produces one that can
+		// make no request at all -- the omission is useless rather than
+		// dangerous, and the zero value fails closed.
+		//
+		// This surface's own gate is a later Step's work; the default had
+		// to go now regardless, because a gate installed later cannot
+		// reach a client somebody already constructed around it.
+		httpClient = &http.Client{Transport: refusingTransport{}}
 	}
 	if apiBaseURL == "" {
 		apiBaseURL = defaultAPIBaseURL
@@ -147,4 +158,14 @@ func (c *Client) Deliver(ctx context.Context, n ports.Notification) error {
 		return &DeliveryError{SlackError: parsed.Error}
 	}
 	return nil
+}
+
+// refusingTransport answers every request with an error naming the cause,
+// so a construction site built without a transport fails at its first call
+// with something a reader can act on -- rather than silently reaching a
+// customer's systems, which is what the removed default did.
+type refusingTransport struct{}
+
+func (refusingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("slackapi: this client was built with no HTTP client, so it can make no requests")
 }

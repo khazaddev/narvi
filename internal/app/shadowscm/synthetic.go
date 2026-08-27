@@ -1,0 +1,43 @@
+// This file holds the synthetic results a suppressed write hands back, and
+// the rule §30.6 sets for them: a synthetic result must be impossible to
+// mistake for a real one.
+//
+// That rule is not decoration. These values flow into the same fields real
+// ones do -- a PR number rendered on a screen, a commit SHA written into a
+// row, a URL someone may click. A plausible-looking fake is the worst
+// outcome available: it survives into records and screens where nobody can
+// tell it apart, and the evaluation the shadow deployment exists to
+// produce becomes unreadable.
+//
+// So each value here is chosen to be self-evidently synthetic on sight,
+// while still being the right SHAPE for the field it fills, so the state
+// machines consuming it stay coherent (§30.7).
+
+package shadowscm
+
+import "github.com/khazaddev/narvi/internal/app/ports"
+
+// syntheticPRNumber is deliberately negative. Real GitHub pull request
+// numbers are positive and monotonic, so a negative one cannot collide
+// with a real PR and cannot be mistaken for one anywhere it is printed,
+// compared, or stored -- while still being an int, so nothing downstream
+// has to special-case the type.
+const syntheticPRNumber = -1
+
+// syntheticCommitSHA is the right length and alphabet for a git object id,
+// so anything that validates the shape still works, and spells what it is
+// so nobody reads it as a real commit. It is not a valid hex SHA: the
+// letters past 'f' make it impossible for it to name an object that could
+// ever exist.
+const syntheticCommitSHA = "shadowsuppressednotarealcommitsha0000000"
+
+// syntheticPRRef builds the PRRef a suppressed CreatePR returns. The URL
+// points nowhere on the real host on purpose -- a link that resolves to a
+// customer's actual repository would invite someone to click through and
+// conclude the PR is missing, rather than that it was never created.
+func syntheticPRRef(owner, repo string) ports.PRRef {
+	return ports.PRRef{
+		Number: syntheticPRNumber,
+		URL:    "shadow-suppressed://" + owner + "/" + repo + "/pull/not-created",
+	}
+}
