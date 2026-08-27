@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/shadowledger"
 )
@@ -68,6 +69,7 @@ func (d *Decorator) record(ctx context.Context, e shadowledger.Entry) error {
 	return shadowledger.Record(ctx, d.ledger, e)
 }
 
+// CreatePR opens a pull request, or records that it would have.
 func (d *Decorator) CreatePR(ctx context.Context, spec ports.CreatePRSpec) (ports.PRRef, error) {
 	if d.isLive(ctx, repoName(spec.Owner, spec.Repo)) {
 		return d.live.CreatePR(ctx, spec)
@@ -88,6 +90,7 @@ func (d *Decorator) CreatePR(ctx context.Context, spec ports.CreatePRSpec) (port
 	return synthetic, nil
 }
 
+// UpdateFileContent commits a file change, or records that it would have.
 func (d *Decorator) UpdateFileContent(ctx context.Context, spec ports.UpdateFileContentSpec) (string, error) {
 	if d.isLive(ctx, repoName(spec.Owner, spec.Repo)) {
 		return d.live.UpdateFileContent(ctx, spec)
@@ -107,6 +110,7 @@ func (d *Decorator) UpdateFileContent(ctx context.Context, spec ports.UpdateFile
 	return syntheticCommitSHA, nil
 }
 
+// UpdatePRBody rewrites a pull request body, or records that it would have.
 func (d *Decorator) UpdatePRBody(ctx context.Context, spec ports.UpdatePRBodySpec) error {
 	if d.isLive(ctx, repoName(spec.Owner, spec.Repo)) {
 		return d.live.UpdatePRBody(ctx, spec)
@@ -121,6 +125,7 @@ func (d *Decorator) UpdatePRBody(ctx context.Context, spec ports.UpdatePRBodySpe
 	})
 }
 
+// RegisterPRStack groups pull requests into a stack, or records that it would have.
 func (d *Decorator) RegisterPRStack(ctx context.Context, spec ports.RegisterPRStackSpec) error {
 	if d.isLive(ctx, repoName(spec.Owner, spec.Repo)) {
 		return d.live.RegisterPRStack(ctx, spec)
@@ -134,6 +139,7 @@ func (d *Decorator) RegisterPRStack(ctx context.Context, spec ports.RegisterPRSt
 	})
 }
 
+// CreateBranch pushes a branch, or records that it would have.
 func (d *Decorator) CreateBranch(ctx context.Context, spec ports.CreateBranchSpec) error {
 	if d.isLive(ctx, repoName(spec.Owner, spec.Repo)) {
 		return d.live.CreateBranch(ctx, spec)
@@ -173,38 +179,96 @@ func (d *Decorator) MergePR(ctx context.Context, spec ports.MergePRSpec) (string
 	return "", ports.ErrShadowSuppressed
 }
 
+// ResolveBranchSHA is a read and is forwarded unchanged.
 func (d *Decorator) ResolveBranchSHA(ctx context.Context, spec ports.ResolveBranchSHASpec) (string, string, error) {
 	return d.live.ResolveBranchSHA(ctx, spec)
 }
 
+// ResolveContractsFingerprint is a read and is forwarded unchanged.
 func (d *Decorator) ResolveContractsFingerprint(ctx context.Context, spec ports.ResolveContractsFingerprintSpec) (string, bool, error) {
 	return d.live.ResolveContractsFingerprint(ctx, spec)
 }
 
+// CheckRepoAccess is a read and is forwarded unchanged.
 func (d *Decorator) CheckRepoAccess(ctx context.Context, spec ports.CheckRepoAccessSpec) (bool, error) {
 	return d.live.CheckRepoAccess(ctx, spec)
 }
 
+// GetFileContent is a read and is forwarded unchanged.
 func (d *Decorator) GetFileContent(ctx context.Context, spec ports.GetFileContentSpec) (string, string, bool, error) {
 	return d.live.GetFileContent(ctx, spec)
 }
 
+// GetPRBody is a read and is forwarded unchanged.
 func (d *Decorator) GetPRBody(ctx context.Context, owner, repo string, number int, token string) (string, bool, error) {
 	return d.live.GetPRBody(ctx, owner, repo, number, token)
 }
 
+// ListMergedBetween is a read and is forwarded unchanged.
 func (d *Decorator) ListMergedBetween(ctx context.Context, spec ports.ListMergedBetweenSpec) ([]ports.MergedPR, bool, error) {
 	return d.live.ListMergedBetween(ctx, spec)
 }
 
+// ListOpenPRsForUser is a read and is forwarded unchanged.
 func (d *Decorator) ListOpenPRsForUser(ctx context.Context, spec ports.ListOpenPRsForUserSpec) ([]ports.OpenPR, bool, error) {
 	return d.live.ListOpenPRsForUser(ctx, spec)
 }
 
+// GetOpenPR is a read and is forwarded unchanged.
 func (d *Decorator) GetOpenPR(ctx context.Context, owner, repo string, number int, token string) (ports.OpenPR, bool, error) {
 	return d.live.GetOpenPR(ctx, owner, repo, number, token)
 }
 
+// ResolveCodeOwners is a read and is forwarded unchanged.
 func (d *Decorator) ResolveCodeOwners(ctx context.Context, spec ports.ResolveCodeOwnersSpec) ([]ports.Owner, error) {
 	return d.live.ResolveCodeOwners(ctx, spec)
+}
+
+// ---- Reads that live on the concrete adapter rather than on the port.
+//
+// §30.2 observes that methods exist outside ports.SourceControl; these two
+// are the read half of that, reached by consumers through their own
+// narrower interfaces. They are forwarded like every other read, and they
+// are here so that one object satisfies every consumer -- handing the
+// undecorated adapter to some callers and the decorator to others would
+// mean two objects with different egress behaviour circulating under
+// names that do not say which is which.
+//
+// The type assertion is deliberate rather than a widened field: the
+// decorator's contract is ports.SourceControl, and a live implementation
+// that does not carry these is a legitimate one (every test fake). Such an
+// implementation reaching here is a wiring mistake, and the error says so
+// instead of panicking.
+
+// GetPullRequestDiff is a read and is forwarded unchanged.
+func (d *Decorator) GetPullRequestDiff(ctx context.Context, owner, repo string, number int32, token string) (string, bool, error) {
+	f, ok := d.live.(interface {
+		GetPullRequestDiff(context.Context, string, string, int32, string) (string, bool, error)
+	})
+	if !ok {
+		return "", false, errors.New("shadowscm: the wrapped source control does not fetch pull-request diffs")
+	}
+	return f.GetPullRequestDiff(ctx, owner, repo, number, token)
+}
+
+// GetCompareDiff is a read and is forwarded unchanged.
+func (d *Decorator) GetCompareDiff(ctx context.Context, owner, repo, base, head, token string) (string, bool, error) {
+	f, ok := d.live.(interface {
+		GetCompareDiff(context.Context, string, string, string, string, string) (string, bool, error)
+	})
+	if !ok {
+		return "", false, errors.New("shadowscm: the wrapped source control does not fetch compare diffs")
+	}
+	return f.GetCompareDiff(ctx, owner, repo, base, head, token)
+}
+
+// GetPullRequest is a read and is forwarded unchanged.
+func (d *Decorator) GetPullRequest(ctx context.Context, owner, repo string, number int32, token string) (githubapi.PullRequest, error) {
+	f, ok := d.live.(interface {
+		GetPullRequest(context.Context, string, string, int32, string) (githubapi.PullRequest, error)
+	})
+	if !ok {
+		return githubapi.PullRequest{}, errors.New("shadowscm: the wrapped source control does not fetch pull requests")
+	}
+	return f.GetPullRequest(ctx, owner, repo, number, token)
 }

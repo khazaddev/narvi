@@ -193,3 +193,27 @@ func TestShadowGate_UnrecognisedPathResolvesShadow(t *testing.T) {
 }
 
 var errLedgerDown = errors.New("ledger unavailable")
+
+// TestNew_WithoutATransportCannotReachAnything pins §30.2's "the zero
+// value fails closed". This constructor used to default a nil client to
+// http.DefaultClient, which made New(nil, base) a WORKING, gate-free
+// adapter that no layer above could see -- the attractive nuisance the
+// section names. A nil client now yields one that can make no request at
+// all, so forgetting the gate is useless rather than dangerous.
+func TestNew_WithoutATransportCannotReachAnything(t *testing.T) {
+	var reached int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	a := New(nil, srv.URL)
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/repos/acme/widgets", nil)
+	if _, err := a.httpClient.Do(req); err == nil {
+		t.Fatal("an adapter built with no transport reached the network; the omission must fail closed")
+	}
+	if reached != 0 {
+		t.Fatalf("the server was contacted %d times by a gate-less adapter", reached)
+	}
+}
