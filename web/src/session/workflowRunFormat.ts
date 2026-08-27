@@ -155,9 +155,30 @@ export function decisionLabel(decision: NonNullable<WorkflowStepRun['decision']>
   }
 }
 
-/** formatStepCost renders WorkflowStepRun.costUsd honestly: null means no cost figure has arrived yet for this attempt (an unfinished or just-dispatched step) and must never collapse into "$0.00" -- a genuine, already-observed $0.00 step_finish is a real, distinct value from "unknown yet" (§25.15). Mirrors SessionRail.tsx's own identical formatUsd convention for the same reason, kept as its own small local copy rather than a shared one-liner util -- this codebase's own established practice (every cost-rendering view owns a two-line formatter rather than importing one). */
+/**
+ * formatStepCost renders WorkflowStepRun.costUsd honestly, which here means
+ * defending TWO distinctions, not one.
+ *
+ * null is "no cost figure has arrived yet for this attempt" and must never
+ * collapse into "$0.00" -- an already-observed $0.00 is a real value and a
+ * different one from "unknown yet" (§25.15).
+ *
+ * And a sub-cent figure must not collapse into "$0.00" either. Two decimals
+ * is the wrong precision for a PER-STEP figure: a single agent step
+ * routinely costs a fraction of a cent, so "$0.00" would be what the screen
+ * showed for most steps, indistinguishable from free. The column behind this
+ * carries six decimals for exactly that reason -- rounding the honesty back
+ * out here would undo it one layer up, which is the same mistake in a
+ * different place. Anything that would round to zero but is not zero gets
+ * four decimals instead.
+ *
+ * SessionRail.tsx's formatUsd is two-decimal for a per-TURN total, where the
+ * figure is larger by construction; this is deliberately not that function.
+ */
 export function formatStepCost(usd: number | null): string {
-  return usd === null ? '—' : `$${usd.toFixed(2)}`
+  if (usd === null) return '—'
+  if (usd !== 0 && Math.abs(usd) < 0.01) return `$${usd.toFixed(4)}`
+  return `$${usd.toFixed(2)}`
 }
 
 /**

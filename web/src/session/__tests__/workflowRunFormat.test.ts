@@ -121,6 +121,19 @@ describe('formatStepCost -- null must never render as a fabricated $0.00', () =>
     expect(formatStepCost(1.5)).toBe('$1.50')
     expect(formatStepCost(12)).toBe('$12.00')
   })
+
+  // The second collapse, and the one two decimals causes on its own: a
+  // single agent step routinely costs a fraction of a cent, so at 2dp most
+  // steps would read "$0.00" -- indistinguishable from free, which is the
+  // exact failure the column behind this carries six decimals to avoid.
+  it('keeps a sub-cent figure visible instead of rounding it into $0.00', () => {
+    expect(formatStepCost(0.004)).toBe('$0.0040')
+    expect(formatStepCost(0.0004)).toBe('$0.0004')
+  })
+
+  it('still separates a sub-cent cost from a genuine zero', () => {
+    expect(formatStepCost(0.004)).not.toBe(formatStepCost(0))
+  })
 })
 
 describe('totalKnownCost', () => {
