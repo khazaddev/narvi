@@ -409,6 +409,34 @@ Boot progress phases instead of spinner; failure reason + resume everywhere (mat
 ### 12.4 Sequencing & exit
 Built in phase 7. Definition of done: all nine views built to the mockups + §12.3 items; screenshot-level review against the mockups; `make dist` produces the single self-contained binary.
 
+**What the screenshot review actually found, recorded rather than rounded up.** All nine views are
+built and all §12.3 items shipped, including the composer's own acceptance criteria (one shared
+can-submit predicate driving both the button and the key handler, and an IME guard reading the
+browser's composition state). `make dist` produces the binary, and it was proved self-contained by
+running it from a directory where no copy of the SPA existed on disk.
+
+But **the first clause of this definition cannot be met as written**, and pretending otherwise would
+be the exact defect this codebase spends most of its effort on. §12.2's inventory was written as a
+description of the finished product, and a substantial part of it names data that no backend
+component computes: there is no platform-wide analytics rollup, no composition-review pass, no
+structured plan schema, no persisted sandbox fingerprint, no automation run-health aggregate, and no
+wire field for four of the review readout's own listed contents. A screen cannot be "built to the
+mockup" when the mockup draws a number the system does not have.
+
+Every one of those is filed as a named gap rather than faked, and **every affected screen says on
+screen what it cannot show** — "not available yet", "not tracked here", "not reported yet" — which
+is the behaviour this project requires and the reason those Steps shipped correctly without them.
+
+Two corrections to §12.2 itself, which the review surfaced. Item 2's "risk-map verdict table (area ×
+severity × assessment) editable by maintainers" is **superseded by §26.1**, which deliberately
+replaces that table with a header risk badge plus prose digest sections; the shipped screen matches
+§26.1, so this is a stale inventory line, not a gap — though §26.1 does not restore the
+"editable by maintainers" capability, and no edit path exists. Item 7's SSO/OIDC secondary is built
+but unconfigurable by design, which is a deliberate posture rather than an omission.
+
+The honest reading of this phase's exit: the UI is complete against what the system can actually
+answer, and §12.2 remains the record of what it should eventually answer.
+
 ### 12.5 Integrations read model & routes (amendment)
 
 The integrations screen in §12.2's inventory needs to show, per ingress surface (Slack, Linear,
