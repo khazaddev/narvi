@@ -171,3 +171,38 @@ func TestResolve_RealRow_HonorsLiveEgressEnabled(t *testing.T) {
 		t.Error("Resolve().Live() = false, want true: a real row with live_egress_enabled=true must resolve live")
 	}
 }
+
+// TestResolve_RowExistsForAnUnrelatedReason_StillDefaultsShadow closes a
+// gap the two tests above do not cover: a row can exist (any OTHER
+// repo_settings column may have been written first -- auto-merge, in
+// this test) without live_egress_enabled ever having been touched. That
+// is a DIFFERENT case from "no row at all" (pgx.ErrNoRows never fires
+// here) and from "explicitly written false" (nothing ever calls
+// UpsertLiveEgressEnabled for this repo) -- it is migrations/
+// 000101_repo_settings_live_egress_enabled.up.sql's own `DEFAULT false`
+// column clause, exercised for real, proving the column's default
+// resolves shadow exactly like an absent row does.
+func TestResolve_RowExistsForAnUnrelatedReason_StillDefaultsShadow(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
+
+	const repoFullName = "acme/auto-merge-only-repo"
+	if _, err := repoSettings.UpsertAutoMergeToggle(ctx, repoFullName, true); err != nil {
+		t.Fatalf("UpsertAutoMergeToggle: %v", err)
+	}
+
+	row, err := repoSettings.Get(ctx, repoFullName)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if row.LiveEgressEnabled {
+		t.Fatal("row.LiveEgressEnabled = true immediately after a write that never touched it -- the column's own DEFAULT is wrong at the schema level")
+	}
+
+	got := egressmode.Resolve(ctx, egressmode.Deps{RepoSettings: repoSettings}, repoFullName)
+
+	if got.Live() {
+		t.Error("Resolve().Live() = true, want false: a row that exists for an unrelated reason must still default shadow (migrations/000101's own DEFAULT false)")
+	}
+}
