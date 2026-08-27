@@ -370,18 +370,27 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check for web/ changes
+      - name: Check for changes this job can catch
         id: changes
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          if git diff --name-only "$BASE" "$HEAD" -- web/ | grep -q .; then
+          # contracts/ is in this list because the SPA IMPORTS from it:
+          # web/src reads the generated DTOs as @narvi/contracts/rest-dtos.
+          # Filtered on web/ alone, a contracts-only change that renamed or
+          # removed a field broke the SPA's typecheck and this job never
+          # ran -- the whole PR went green while the frontend no longer
+          # compiled. A path filter has to cover what the job can BREAK,
+          # not just where the job's own sources live.
+          # This workflow file is here for the same reason: a change to the
+          # filter must be able to run the job it filters.
+          if git diff --name-only "$BASE" "$HEAD" -- web/ contracts/ .github/workflows/ci.yml | grep -q .; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
             echo "relevant=false" >> "$GITHUB_OUTPUT"
-            echo "No changes under web/ -- skipping typecheck/lint/build."
+            echo "No changes under web/ or contracts/ -- skipping typecheck/lint/build."
           fi
 
       - name: Set up Node

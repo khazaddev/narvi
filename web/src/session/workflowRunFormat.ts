@@ -12,6 +12,7 @@
 // derivation, kept pure and unit-testable so the logic has one home instead
 // of being inlined into the view.
 import type { WorkflowRun, WorkflowStepRun } from '@narvi/contracts/rest-dtos'
+import { formatUsd } from './money'
 
 import { canActOnPlan } from './planFormat'
 import type { ChipTone } from './reviewFormat'
@@ -176,9 +177,7 @@ export function decisionLabel(decision: NonNullable<WorkflowStepRun['decision']>
  * figure is larger by construction; this is deliberately not that function.
  */
 export function formatStepCost(usd: number | null): string {
-  if (usd === null) return '—'
-  if (usd !== 0 && Math.abs(usd) < 0.01) return `$${usd.toFixed(4)}`
-  return `$${usd.toFixed(2)}`
+  return formatUsd(usd)
 }
 
 /**

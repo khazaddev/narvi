@@ -26,11 +26,8 @@ import { parseArtifacts } from './artifactPayloads'
 import type { CostRollup } from './costRollup'
 import { formatRelativeTime } from './relativeTime'
 import type { SandboxRailModel } from './sandboxRail'
+import { formatUsd } from './money'
 import { isSafeHref } from './urlSafety'
-
-function formatUsd(usd: number | null): string {
-  return usd === null ? '—' : `$${usd.toFixed(2)}`
-}
 
 function formatTokenCount(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`

@@ -2147,6 +2147,7 @@ type TurnStepCost struct {
 	StepID    string             `json:"step_id"`
 	CostUsd   pgtype.Numeric     `json:"cost_usd"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	SessionID pgtype.UUID        `json:"session_id"`
 }
 
 type User struct {

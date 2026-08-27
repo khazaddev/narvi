@@ -6,14 +6,18 @@
 // top comment for the full "why a thin wrapper, not a bigger generator"
 // writeup.
 //
-// Routes mirrored 1:1 from cmd/control-plane/main.go's own
-// router.Route("/api/sessions", ...) block (§6.3) -- only the slice
-// web/src/ws (this Step's own pipeline demo/tests) actually needs today:
-// create a session, read it back, mint a client WS token, and page
-// through its REST event history. The remaining ~15 routes under
-// /api/sessions (uploads, plans, review, ...) are exactly as typeable
-// through this SAME request<T> + rest-dtos.ts pattern -- later views add
-// them as each one needs a route, not speculatively here.
+// Routes mirrored 1:1 from cmd/control-plane/main.go's own router blocks
+// (§6.3). This file described a four-route skeleton -- create a session,
+// read it back, mint a WS token, page its events -- and said the rest
+// would be added "as each one needs a route". They were: the whole UI is
+// built on this file now, across every screen. The description outlived
+// what it described by an entire phase, which is why it is worth saying
+// plainly that a header comment naming a current SCOPE goes stale by
+// default, while one naming a PATTERN does not.
+//
+// The pattern is the durable part and still holds: every route goes
+// through the same request<T> plus a generated type from rest-dtos.ts,
+// and nothing here declares an interface of its own.
 import type {
   ApplySuggestionResponse,
   Automation,

@@ -138,7 +138,7 @@ export function ReleaseManifestBody({ readout }: { readout: ReleaseManifestReado
               Trigger: {readout.aggregateReviewTriggerReasons.map((r, i) => (i === 0 ? <T key={i} text={r} /> : <span key={i}> · <T text={r} /></span>))}
             </p>
           )}
-          {!readout.aggregateReviewTriggered && <p style={{ margin: '6px 0 0', color: 'var(--faint)', fontSize: 'var(--text-base)' }}>None of §15.3's composition criteria were met for this release.</p>}
+          {!readout.aggregateReviewTriggered && <p style={{ margin: '6px 0 0', color: 'var(--faint)', fontSize: 'var(--text-base)' }}>None of the composition criteria were met for this release.</p>}
         </div>
       )}
 
@@ -148,7 +148,7 @@ export function ReleaseManifestBody({ readout }: { readout: ReleaseManifestReado
             <b>Composition findings</b>
           </div>
           <p style={{ color: 'var(--faint)', fontSize: 'var(--text-base)' }}>
-            Not yet available: the composition-focused aggregate diff review pass (§15.3) is not dispatched by this deployment yet -- only its own trigger decision, above, is computed today. This section will populate once that pass ships.
+            Not yet available: the composition-focused aggregate diff review pass is not dispatched by this deployment yet -- only its own trigger decision, above, is computed today. This section will populate once that pass ships.
           </p>
         </div>
       )}

@@ -267,7 +267,7 @@ export function MembersPanel() {
             {listQuery.data.pendingLinkPrompts.length > 0 && (
               <div style={{ marginTop: 12 }}>
                 <b style={{ fontSize: 'var(--text-sm)' }}>Pending identity links</b>
-                <p className="ph">not yet matched to a member -- resolves automatically once the verified email matches (§13.2)</p>
+                <p className="ph">not yet matched to a member -- resolves automatically once the verified email matches</p>
                 {listQuery.data.pendingLinkPrompts.map((p, i) => (
                   <span key={i} className="idchip pend" style={{ marginRight: 6 }}>
                     {identityProviderLabel(p.provider)} · pending (expires {formatDateTime(p.expiresAt)})

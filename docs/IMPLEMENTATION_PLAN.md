@@ -108,14 +108,24 @@ they gate nothing in Phase 3 and don't need to wait for Phase 5 to be scheduled.
 plan follows whenever new Steps are inserted mid-sequence rather than appended: every following Step
 number shifts to make room, so a Step's number identifies its position in the CURRENT plan, never a
 fixed historical slot — nothing depends on a Step keeping the number it once had.
-That premise used to rest on discipline; it is now enforced. Go source cites the
-technical plan's §-sections and never a Step number at all (`internal/ops`'s own
-`TestNoStepRefInSource`), so a renumber touches these two documents and nothing
-else — which is what made every Phase 7 insertion (three backend Steps added
-mid-phase, once the screens above them turned out to have nothing to read) a
-docs-only change rather than a sweep across 678 files. The range those
-insertions shifted is deliberately not written here: a sentence about the
-mechanism should not itself need renumbering.
+That premise rests on discipline, and **partly** on enforcement — a distinction
+this paragraph previously erased, and the phase audit caught. `internal/ops`'s own
+`TestNoStepRefInSource` really does keep Step numbers out of source, but it scans
+`internal/`, `cmd/`, `contracts/` and `web/src` only. **183 Step citations live
+outside that scan**: 155 in `migrations/`, plus `docs/runbooks`, `docs/guides`,
+`deploy/` and `.github/`. A renumber touches those too, and nothing tells you so.
+
+What made every Phase 7 insertion (three backend Steps added mid-phase, once the
+screens above them turned out to have nothing to read) a cheap change was that
+the shifted range happened not to be cited in those places — not that it could
+not have been. Closing this is a real sweep and is filed as such, because the
+only honest way to do it is to check each citation against the row it names:
+arithmetic was tried on the technical plan's own citations during this phase and
+got five of them wrong, three of which had already been broken by an earlier
+renumber in a way no shift could repair.
+
+The range those insertions shifted is deliberately not written here: a sentence
+about the mechanism should not itself need renumbering.
 
 | Step | Title | Content | Ref. |
 |---|---|---|---|
@@ -364,6 +374,7 @@ be cited by a scheduled Step as a prerequisite — if it is, it has stopped belo
 | 125 | release composition findings | §12.2 item 9's findings and their Block release / Acknowledge & ship actions. The composition pass itself is never dispatched -- only its trigger decision is computed -- so the screen renders a "not yet available" state | §12.2, §15.3 |
 | 126 | structured plan document | §12.2 item 3's numbered steps with file refs and scope estimate. `Plan.content` is unstructured model-authored prose because the plan domain model has no structured schema; the screen renders it as prose | §12.2 |
 | 127 | sandbox runtime fingerprint & correlation id | §12.2 item 1's rail names both; sandbox-agent computes a fingerprint but only logs it locally, and a correlation id is per-request and never persisted. The rail prints "not reported yet" for each | §12.2, §5.2 |
+| 128 | Step citations outside the checker's reach | `TestNoStepRefInSource` scans `internal/`, `cmd/`, `contracts/` and `web/src`. 183 Step citations live outside it — 155 in `migrations/`, the rest across `docs/runbooks`, `docs/guides`, `deploy/` and `.github/` — so a renumber silently invalidates them. The sweep must verify each citation against the title of the row it names, never shift it arithmetically: that was tried on the technical plan during Phase 7 and got five wrong, three of them already broken by an earlier renumber in a way no shift repairs. Widening the checker to those roots is the second half and cannot land before the sweep, or CI goes red on 183 pre-existing citations | §11 |
 
 ## Sequencing & parallelism
 

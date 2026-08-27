@@ -344,7 +344,7 @@ export function EnvironmentsPanel() {
 
       <div className="panel">
         <h4>Global OpenCode config &amp; cloud identity</h4>
-        <p className="ph">applies to every session with no more specific environment/repo config -- §27.2/§27.3. Signing-key rotation lives on Settings -&gt; Integrations, alongside every other surface that connects this platform to something outside it.</p>
+        <p className="ph">applies to every session with no more specific environment or repository configuration. Signing-key rotation lives on Settings -&gt; Integrations, alongside every other surface that connects this platform to something outside it.</p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div>
             <b style={{ fontSize: 'var(--text-sm)' }}>OpenCode config (global)</b>

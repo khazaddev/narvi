@@ -96,7 +96,7 @@ function SessionWorkspace() {
 
         {sessionQuery.isSuccess && (
           <>
-            <SessionHeader session={sessionQuery.data} model={model} />
+            <SessionHeader session={sessionQuery.data} model={model} cost={costModel} />
             {stream.syncState === 'syncing' && (
               <div className="sync-banner" role="status">
                 Syncing session history…

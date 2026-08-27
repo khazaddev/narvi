@@ -272,9 +272,9 @@ const recordTurnStepCost = `-- name: RecordTurnStepCost :execrows
 WITH target AS (
     SELECT t.id FROM turns AS t WHERE t.session_id = $1 AND t.status = 'processing'
 ), claimed AS (
-    INSERT INTO turn_step_costs (turn_id, step_id, cost_usd)
-    SELECT target.id, $2, $3 FROM target
-    ON CONFLICT (turn_id, step_id) DO NOTHING
+    INSERT INTO turn_step_costs (session_id, turn_id, step_id, cost_usd)
+    SELECT $1, target.id, $2, $3 FROM target
+    ON CONFLICT (session_id, step_id) DO NOTHING
     RETURNING turn_id, cost_usd
 )
 UPDATE turns
@@ -295,10 +295,19 @@ type RecordTurnStepCostParams struct {
 // ONE statement, three jobs. The CTE resolves the turn this event belongs
 // to from the sandbox-authenticated session id alone, with no preceding
 // read -- turns_one_processing_per_session (migrations/000005) guarantees
-// at most one row can match. The INSERT claims (turn_id, step_id) or
+// at most one row can match. The INSERT claims (session_id, step_id) or
 // conflicts away to nothing. The UPDATE runs ONLY over rows the INSERT
 // actually produced, so a redelivered step_finish moves no dollars and a
 // genuinely new one moves exactly its own.
+//
+// The key is (session_id, step_id) and NOT (turn_id, step_id), which is
+// what it was until migration 000100. turn_id is resolved from whichever
+// turn is processing when the event lands, so it MOVES between a delivery
+// and its replay -- a replay arriving after the turn boundary resolved a
+// different turn, did not conflict, and charged the same step again.
+// Measured: one $5.00 step delivered twice charged $10.00. An idempotency
+// key cannot be derived from state that changes between the two
+// deliveries it exists to tell apart.
 //
 // This replaces an earlier version gated on whether appendRawEvent had
 // INSERTED the raw event row. That flag answers "was this (session_id,
