@@ -2113,6 +2113,18 @@ type SessionTimer struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type ShadowScmWrite struct {
+	ID            pgtype.UUID        `json:"id"`
+	Operation     string             `json:"operation"`
+	RepoFullName  string             `json:"repo_full_name"`
+	Target        *string            `json:"target"`
+	SpecJson      []byte             `json:"spec_json"`
+	ResultJson    []byte             `json:"result_json"`
+	SessionID     pgtype.UUID        `json:"session_id"`
+	CorrelationID *string            `json:"correlation_id"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
 type SlackThreadSession struct {
 	ChannelID string             `json:"channel_id"`
 	ThreadTs  string             `json:"thread_ts"`
