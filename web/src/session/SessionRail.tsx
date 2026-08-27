@@ -259,6 +259,24 @@ function PlanLinkPanel({ sessionId }: { sessionId: string }) {
   )
 }
 
+// WorkflowRunsLinkPanel: entry point into the workflow run view + human
+// decision gate (§25.9/§25.10, §12.2's own workflow-runs Step) -- always
+// rendered, mirroring PlanLinkPanel's own identical precedent immediately
+// above: the session DTO carries no "does this session have a workflow
+// run" signal to gate on cheaply, so a session with none simply gets
+// WorkflowRunsView's own graceful "no workflow runs have started" state on
+// the destination route.
+function WorkflowRunsLinkPanel({ sessionId }: { sessionId: string }) {
+  return (
+    <div>
+      <h3>Workflow runs</h3>
+      <Link to="/session/$sessionId/runs" params={{ sessionId }} className="btn" style={{ textDecoration: 'none', textAlign: 'center', display: 'block' }}>
+        View runs
+      </Link>
+    </div>
+  )
+}
+
 export function SessionRail({ sessionId, sandbox, cost }: { sessionId: string; sandbox: SandboxRailModel; cost: CostRollup }) {
   return (
     <aside className="rail" aria-label="Session details">
@@ -267,6 +285,7 @@ export function SessionRail({ sessionId, sandbox, cost }: { sessionId: string; s
       <ArtifactsPanel sessionId={sessionId} />
       <CostPanel cost={cost} />
       <PlanLinkPanel sessionId={sessionId} />
+      <WorkflowRunsLinkPanel sessionId={sessionId} />
       <ReviewLinksPanel sessionId={sessionId} />
     </aside>
   )

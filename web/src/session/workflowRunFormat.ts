@@ -1,0 +1,291 @@
+// workflowRunFormat.ts -- pure, testable formatting/derivation helpers for
+// WorkflowRunsView.tsx (the run view + human decision gate), mirroring this
+// codebase's own established split (planFormat.ts/reviewFormat.ts/
+// workflowFormat.ts): render logic that needs no React lives here.
+//
+// # The edge actually taken is derived here, never stored
+//
+// §25.15 is explicit that "the edge actually taken" is not a wire field: it
+// is derivable, exactly, from the ordered step runs and their outcome
+// statuses -- the next step run's own stepDefinitionId IS the edge target
+// that was taken. edgeToNext/buildStepRunSequence below are that
+// derivation, kept pure and unit-testable so the logic has one home instead
+// of being inlined into the view.
+import type { WorkflowRun, WorkflowStepRun } from '@narvi/contracts/rest-dtos'
+
+import { canActOnPlan } from './planFormat'
+import type { ChipTone } from './reviewFormat'
+import type { StatusTone } from './sessionStatus'
+import { edgeStatusTone } from './workflowFormat'
+
+// -- run-level status --------------------------------------------------
+
+/** Reuses sessionStatus.ts's own StatusTone (adds 'run' -- a pulsing chip for an actively-in-progress state -- to the plain ChipTone vocabulary) rather than inventing a second "tone plus running" union: a workflow run's own 'running' status is the exact same kind of live-activity fact a session's own status chip already renders this way. */
+export function runStatusTone(status: WorkflowRun['status']): StatusTone {
+  switch (status) {
+    case 'running':
+      return 'run'
+    case 'completed':
+      return 'ok'
+    case 'needs_review':
+      return 'warn'
+    case 'failed':
+      return 'crit'
+    case 'cancelled':
+      return 'neutral'
+    default:
+      return 'neutral'
+  }
+}
+
+export function runStatusLabel(status: WorkflowRun['status']): string {
+  switch (status) {
+    case 'running':
+      return 'running'
+    case 'completed':
+      return 'completed'
+    case 'needs_review':
+      return 'needs review'
+    case 'failed':
+      return 'failed'
+    case 'cancelled':
+      return 'cancelled'
+    default:
+      return status
+  }
+}
+
+/**
+ * featuredRun picks the run WorkflowRunsView.tsx should feature: the
+ * currently active one (running, or parked needs_review awaiting a human)
+ * if there is one, otherwise the most recently created run. Mirrors
+ * planFormat.ts's own latestPlan (prefer the actionable version, else the
+ * newest) one level up: a session, not a single document, and `runs` is
+ * already server-sorted newest-first (ListWorkflowRunsForSession's own
+ * ORDER BY created_at DESC) so the fallback never re-sorts.
+ */
+export function featuredRun(runs: readonly WorkflowRun[]): WorkflowRun | null {
+  if (runs.length === 0) return null
+  const active = runs.find((r) => r.status === 'running' || r.status === 'needs_review')
+  if (active) return active
+  return runs[0]
+}
+
+/**
+ * NEEDS_REVIEW_EXPLANATION is the operator-facing text for a run parked at
+ * 'needs_review' with no attempt awaiting a decision (i.e. the circuit
+ * breaker escalation path, not the ordinary HITL gate -- see
+ * decidableStepRun below for how the view tells the two apart). Mirrors the
+ * server's own escalationNoticeText (advance.go) honestly: that function
+ * cannot tell a spent retry loop apart from an outcome with no configured
+ * next step either, so this does not pretend to. Deliberately offers no
+ * retry affordance: a spent circuit breaker is a stopping point, not
+ * something a manual re-trigger works around (the manual-re-trigger
+ * exemption is a budget-check carve-out for automatic re-review, a
+ * different mechanism entirely, and does not apply to a breaker that has
+ * already tripped here).
+ */
+export const NEEDS_REVIEW_EXPLANATION =
+  "Automatic progress on this run has stopped: either a bounded retry reached its limit, or a step's outcome had no automatic next step configured. Nothing further happens on this run automatically, and there is no retry action here."
+
+// -- step-attempt-level status ------------------------------------------
+
+export function stepRunStatusTone(status: WorkflowStepRun['status']): StatusTone {
+  switch (status) {
+    case 'awaiting_decision':
+      return 'warn'
+    case 'running':
+      return 'run'
+    case 'completed':
+      return 'ok'
+    case 'failed':
+      return 'crit'
+    case 'cancelled':
+      return 'neutral'
+    default:
+      return 'neutral'
+  }
+}
+
+export function stepRunStatusLabel(status: WorkflowStepRun['status']): string {
+  switch (status) {
+    case 'awaiting_decision':
+      return 'awaiting decision'
+    case 'running':
+      return 'running'
+    case 'completed':
+      return 'completed'
+    case 'failed':
+      return 'failed'
+    case 'cancelled':
+      return 'cancelled'
+    default:
+      return status
+  }
+}
+
+/** outcomeStatusTone reuses workflowFormat.ts's own edgeStatusTone: WorkflowStepRun.outcomeStatus and WorkflowEdge.onStatus are the exact same closed 3-value Postgres enum, so this is one rule with two call sites, not two independent copies. */
+export function outcomeStatusTone(status: NonNullable<WorkflowStepRun['outcomeStatus']>): ChipTone {
+  return edgeStatusTone(status)
+}
+
+export function outcomeStatusLabel(status: NonNullable<WorkflowStepRun['outcomeStatus']>): string {
+  switch (status) {
+    case 'ok':
+      return 'ok'
+    case 'needs_fix':
+      return 'needs fix'
+    case 'blocked':
+      return 'blocked'
+    default:
+      return status
+  }
+}
+
+export function decisionLabel(decision: NonNullable<WorkflowStepRun['decision']>): string {
+  switch (decision) {
+    case 'approve':
+      return 'approved'
+    case 'reject':
+      return 'rejected'
+    case 'revise':
+      return 'revision requested'
+    default:
+      return decision
+  }
+}
+
+/** formatStepCost renders WorkflowStepRun.costUsd honestly: null means no cost figure has arrived yet for this attempt (an unfinished or just-dispatched step) and must never collapse into "$0.00" -- a genuine, already-observed $0.00 step_finish is a real, distinct value from "unknown yet" (§25.15). Mirrors SessionRail.tsx's own identical formatUsd convention for the same reason, kept as its own small local copy rather than a shared one-liner util -- this codebase's own established practice (every cost-rendering view owns a two-line formatter rather than importing one). */
+export function formatStepCost(usd: number | null): string {
+  return usd === null ? '—' : `$${usd.toFixed(2)}`
+}
+
+/**
+ * totalKnownCost sums every non-null costUsd across a run's own step
+ * attempts -- treating a still-null attempt as "not yet known" rather than
+ * zero, the same discipline formatStepCost enforces one level up. Returns
+ * null (never a fabricated 0) when NOT ONE attempt has reported a cost yet,
+ * so a freshly-started run's header never claims "$0.00 so far".
+ */
+export function totalKnownCost(stepRuns: readonly WorkflowStepRun[]): number | null {
+  let total = 0
+  let sawAny = false
+  for (const sr of stepRuns) {
+    if (sr.costUsd !== null) {
+      total += sr.costUsd
+      sawAny = true
+    }
+  }
+  return sawAny ? total : null
+}
+
+// -- step sequence + the edge actually taken -----------------------------
+
+export interface StepRunAttempt {
+  stepRun: WorkflowStepRun
+  /** 1-based position among DISTINCT step definitions encountered so far, in execution order -- the closest REAL substitute for a step "name" this wire carries (WorkflowStepRun has no order/name field of its own, mirroring WorkflowCanvas.tsx's own identical "no fabricated label" reasoning for WorkflowStepDefinition). */
+  stepIndex: number
+  /** 1-based count of attempts of this exact step within the run so far, including this one -- 1 on a step's first attempt, 2+ on a needs_fix retry or a human revise re-run. */
+  attemptNumber: number
+}
+
+/** buildStepRunSequence walks a run's own ordered step runs (oldest-first, per ListWorkflowStepRunsForRun's own doc comment) and assigns each attempt its step position and attempt count. Pure; the view renders one StepRunAttempt per card. */
+export function buildStepRunSequence(stepRuns: readonly WorkflowStepRun[]): StepRunAttempt[] {
+  const stepIndexOf = new Map<string, number>()
+  const attemptCounts = new Map<string, number>()
+  let nextIndex = 1
+  return stepRuns.map((stepRun) => {
+    let stepIndex = stepIndexOf.get(stepRun.stepDefinitionId)
+    if (stepIndex === undefined) {
+      stepIndex = nextIndex
+      nextIndex += 1
+      stepIndexOf.set(stepRun.stepDefinitionId, stepIndex)
+    }
+    const attemptNumber = (attemptCounts.get(stepRun.stepDefinitionId) ?? 0) + 1
+    attemptCounts.set(stepRun.stepDefinitionId, attemptNumber)
+    return { stepRun, stepIndex, attemptNumber }
+  })
+}
+
+export type EdgeKind = 'advance' | 'retry' | 'revise'
+
+export interface EdgeTaken {
+  kind: EdgeKind
+  onStatus: WorkflowStepRun['outcomeStatus']
+}
+
+/**
+ * edgeToNext derives the edge actually taken from one attempt to the next
+ * one in the same run's own sequence (§25.15: "the next step run's own
+ * stepDefinitionId IS the edge target that was taken" -- never a stored
+ * field). Three cases, checked in this order because a decision='revise'
+ * attempt is defined to ALWAYS target the same step regardless of its own
+ * outcomeStatus (§25.9: revise never consults workflow.NextStep at all), so
+ * that check must win before the same-step-id check below would otherwise
+ * also fire and get the label right for the wrong reason:
+ *   - decision === 'revise' on `from` -- a human's revise verdict; `to` is
+ *     guaranteed the SAME stepDefinitionId (DispatchSameStepRevision never
+ *     resolves via an edge), rendered distinctly from an automatic retry.
+ *   - `to` shares `from`'s own stepDefinitionId -- an automatic needs_fix
+ *     re-fire looping back to the same step (loopguard-permitted).
+ *   - otherwise -- an ordinary advance to a different step.
+ */
+export function edgeToNext(from: WorkflowStepRun, to: WorkflowStepRun): EdgeTaken {
+  if (from.decision === 'revise') {
+    return { kind: 'revise', onStatus: from.outcomeStatus }
+  }
+  if (to.stepDefinitionId === from.stepDefinitionId) {
+    return { kind: 'retry', onStatus: from.outcomeStatus }
+  }
+  return { kind: 'advance', onStatus: from.outcomeStatus }
+}
+
+/** edgeLabel renders one EdgeTaken as the connector caption between two step cards -- operator-facing, so no § citation and no internal identifier, only the real outcome status and the real destination step's own position. */
+export function edgeLabel(edge: EdgeTaken, toStepIndex: number): string {
+  const statusWord = edge.onStatus ? outcomeStatusLabel(edge.onStatus) : 'no outcome reported'
+  switch (edge.kind) {
+    case 'revise':
+      return `revision requested → re-running step ${toStepIndex}`
+    case 'retry':
+      return `${statusWord} → retrying step ${toStepIndex}`
+    case 'advance':
+      return `${statusWord} → step ${toStepIndex}`
+    default:
+      return statusWord
+  }
+}
+
+/**
+ * decidableStepRun finds the ONE attempt (if any) actually parked
+ * awaiting_decision -- the real, server-enforced gate on whether the decide
+ * endpoint's guarded UPDATE can succeed at all (its own "AND status =
+ * 'awaiting_decision'" clause). This is how the view tells §25.9's ordinary
+ * HITL gate (a real decidable row exists; the RUN's own status usually
+ * stays 'running') apart from the circuit-breaker/unrouted-outcome
+ * escalation path (WorkflowRun.status flips to 'needs_review' directly,
+ * with NO step run ever entering awaiting_decision) -- the two share
+ * nothing on the wire except both being "stuck", and only one of them has
+ * anything to decide.
+ */
+export function decidableStepRun(stepRuns: readonly WorkflowStepRun[]): WorkflowStepRun | null {
+  return stepRuns.find((sr) => sr.status === 'awaiting_decision') ?? null
+}
+
+/**
+ * canActOnWorkflowStep is this view's own CLIENT-SIDE approximation of
+ * authz.ActionDecideWorkflowStep -- §25.11 states this is "the SAME row as
+ * ActionApprovePlan" in so many words, and internal/adapters/inbound/httpapi/
+ * workflowstepauthz.go's own canActOnWorkflowStep confirms it is a direct,
+ * unmodified pass-through to that same matrix row (own/joined-aware:
+ * admin/maintainer decide any run, a member only one they created or
+ * joined, a viewer never). Rather than re-deriving that matrix a second
+ * time client-side, this reuses planFormat.ts's own canActOnPlan under a
+ * name that matches THIS screen's call site -- same function, same
+ * conservative under-approximation caveat (documented in full on
+ * canActOnPlan itself: "joined" has no client-visible signal anywhere in
+ * this codebase, so this can wrongly HIDE the decide affordance from a
+ * genuinely-joined member, never wrongly show it to someone the server
+ * would refuse). The server re-checks the real matrix, including "joined",
+ * independently on every decide call regardless of what this renders.
+ */
+export const canActOnWorkflowStep = canActOnPlan
