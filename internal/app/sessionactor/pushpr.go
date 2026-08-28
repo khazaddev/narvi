@@ -443,15 +443,14 @@ func (a *Actor) recordFalseFailureIfApplicable(ctx context.Context, tx pgx.Tx) e
 //
 // sig.suppressedInShadow is resolved and persisted by completeProcessingTurn
 // (pushSignal's own doc comment) but deliberately NOT consulted here to
-// decide whether to send the WS push command at all -- this Step's own
-// scope (docs/IMPLEMENTATION_PLAN.md row 101) is the push/PR pair's
-// CONSISTENCY (one resolved decision, honored without a re-read at PR-
-// creation time, below), not adding a brand-new suppression point at the
-// WS layer: the sandbox-side credential the push actually uses is already
-// governed by §30.4's read-only substitution regardless of what this
-// function does, and every consumer of ports.SourceControl.CreatePR
-// (createPRBestEffort included) already goes through the §30.2 port
-// decorator in production, which independently suppresses a shadow
+// decide whether to send the WS push command at all -- §30.8's own fix is
+// the push/PR pair's CONSISTENCY (one resolved decision, honored without
+// a re-read at PR-creation time, below), not a brand-new suppression
+// point at the WS layer: the sandbox-side credential the push actually
+// uses is already governed by §30.4's read-only substitution regardless
+// of what this function does, and every consumer of ports.SourceControl.
+// CreatePR (createPRBestEffort included) already goes through the §30.2
+// port decorator in production, which independently suppresses a shadow
 // repo's CreatePR call. sig.suppressedInShadow's OWN read happens in
 // createPRBestEffort, below.
 func (a *Actor) sendPushBestEffort(sessionID string, sig *pushSignal) {
