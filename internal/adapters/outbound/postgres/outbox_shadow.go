@@ -42,6 +42,7 @@
 // between enqueue and delivery). Create calls it once and freezes the
 // result into the row; Builder calls it again, only when the frozen
 // stamp says live, to catch exactly that race.
+
 package postgres
 
 import (
@@ -99,7 +100,7 @@ func (s *OutboxStore) ResolveEffectiveMode(ctx context.Context, sessionID pgtype
 		// repo" (which would resolve via the deployment-wide switch
 		// alone, the wrong, more permissive path for an anomaly this
 		// significant).
-		platform.Logger(ctx).Warn("postgres: outbox: resolve session for egress-mode stamp failed -- resolving shadow (fail-closed, §30.8)", "error", err, "session_id", sessionID.String())
+		platform.Logger(ctx).Warn("postgres: outbox: resolve session for egress-mode stamp failed -- resolving shadow (fail-closed)", "error", err, "session_id", sessionID.String())
 		return true
 	}
 

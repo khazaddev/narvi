@@ -61,6 +61,16 @@ type Builder struct {
 // app/imagebuild.NewBuilder's own image_build_failure_streak precedent
 // exactly.
 func NewBuilder(store *postgres.OutboxStore, pool *pgxpool.Pool, notifiers map[ports.NotificationKind]ports.Notifier, timeouts platform.Timeouts) (*Builder, error) {
+	// §30.2's own outbox seam: refuse to start rather than let a
+	// registered-but-unclassified kind reach attempt() with no way to
+	// decide whether §30.8's suppress-wins check applies to it -- see
+	// classification.go's own top comment for why this check belongs
+	// HERE, on the finished map NewBuilder receives, rather than at
+	// main.go's own wiring line.
+	if err := classifyNotifiers(notifiers); err != nil {
+		return nil, err
+	}
+
 	meter := otel.Meter(meterName)
 
 	outboxLag, err := meter.Int64Gauge(
@@ -318,6 +328,30 @@ func (b *Builder) attempt(ctx context.Context, row sqlcgen.Outbox) {
 	}
 	row = renewed
 
+	// §30.8's own epoch discipline: "suppress if the stamp OR the current
+	// flag says shadow -- monotone toward suppression, in both
+	// directions." row.SuppressedInShadow is the enqueue-time half (a
+	// born-shadow row is terminally shadow, and NEVER re-checked here --
+	// this notifier is never even called for it, whatever repo_settings
+	// says by now). A born-LIVE row gets ONE further check, right here,
+	// at the true moment of delivery: has this row's own repo been
+	// demoted since it was enqueued? That is the delivery-time half
+	// suppress-wins needs, and it applies ONLY to §30.2's classified
+	// SUPPRESS kinds -- a PASS-THROUGH kind (blob_delete, sentinel_auto_fix,
+	// linear_digest) always reaches notifier.Deliver unconditionally.
+	// classifyNotifiers (NewBuilder) already guarantees row.Kind, having
+	// resolved a real notifier above, also has an entry here.
+	if notificationKindClassification[ports.NotificationKind(row.Kind)] == ClassSuppress {
+		suppressed := row.SuppressedInShadow
+		if !suppressed {
+			suppressed = b.store.ResolveEffectiveMode(ctx, row.SessionID)
+		}
+		if suppressed {
+			b.deliverToLedger(ctx, logger, row)
+			return
+		}
+	}
+
 	deliverCtx, cancel := context.WithTimeout(ctx, b.timeouts.OutboxDeliveryTimeout)
 	defer cancel()
 
@@ -337,6 +371,27 @@ func (b *Builder) attempt(ctx context.Context, row sqlcgen.Outbox) {
 		}
 		logger.Error("outboxworker: mark delivered failed", "error", err)
 	}
+}
+
+// deliverToLedger records §30.6/§30.8's own terminal mark: row's own
+// effective egress mode was shadow at this exact moment, so this
+// attempt delivers it into the suppression ledger instead of the world
+// -- notifier.Deliver is never called. The outbox row ITSELF is the
+// record (§30.6: "the row already carries the full payload... it IS the
+// record"), so unlike a suppressed direct SCM write (shadowledger.
+// Record, shadow_scm_writes), nothing further needs writing beyond this
+// one terminal mark -- see MarkOutboxEntryDeliveredToLedger's own
+// generated doc comment for the exact column-level effect.
+func (b *Builder) deliverToLedger(ctx context.Context, logger *slog.Logger, row sqlcgen.Outbox) {
+	if _, err := b.store.MarkDeliveredToLedger(ctx, row.ID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			logger.Warn("outboxworker: mark delivered-to-ledger no-op: row no longer pending")
+			return
+		}
+		logger.Error("outboxworker: mark delivered-to-ledger failed", "error", err)
+		return
+	}
+	logger.Info("outboxworker: row suppressed in shadow -- delivered to the ledger instead of the world")
 }
 
 // recordFailure computes the next retry time (or dead-letter decision) via
