@@ -121,14 +121,7 @@ func (s *Supervisor) Spawn(spec Spec) (*Process, error) {
 	cmd.Env = spec.Env
 	cmd.Stdout = spec.Stdout
 	cmd.Stderr = spec.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if spec.Credential != nil {
-		// See Spec.Credential's own doc comment: this is the §30.5 UID
-		// drop, applied verbatim, never derived or defaulted here --
-		// Supervisor itself has no opinion on WHICH uid/gid a caller
-		// wants; it only ever passes one through to the kernel.
-		cmd.SysProcAttr.Credential = spec.Credential
-	}
+	cmd.SysProcAttr = sysProcAttrFor(spec)
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("supervisor: start %s: %w", spec.Path, err)
@@ -184,4 +177,31 @@ func (s *Supervisor) StopAll(ctx context.Context, grace time.Duration) error {
 	}
 
 	return fanout.Wait()
+}
+
+// sysProcAttrFor builds the attributes the kernel will apply to a spawned
+// child, extracted from Spawn so it can be asserted on WITHOUT privileges.
+//
+// That matters more here than the usual testability argument. The tests
+// that prove the §30.5 boundary is real -- a child that cannot read
+// another uid's 0600 file, or this process's own environ -- can only run
+// as root on Linux, so they skip on a developer's machine AND in CI. The
+// boundary's whole value would therefore have had no automated guard at
+// all: deleting the Credential assignment would have gone green
+// everywhere.
+//
+// This function cannot prove the kernel enforces anything. It proves the
+// only thing a regression would actually break: that the credential a
+// caller supplied is the one handed to the kernel, and that a caller who
+// supplied none gets no credential rather than a defaulted one.
+func sysProcAttrFor(spec Spec) *syscall.SysProcAttr {
+	attr := &syscall.SysProcAttr{Setpgid: true}
+	if spec.Credential != nil {
+		// See Spec.Credential's own doc comment: this is the §30.5 UID
+		// drop, applied verbatim, never derived or defaulted here --
+		// Supervisor itself has no opinion on WHICH uid/gid a caller
+		// wants; it only ever passes one through to the kernel.
+		attr.Credential = spec.Credential
+	}
+	return attr
 }

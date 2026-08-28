@@ -13,6 +13,21 @@ import (
 	"path/filepath"
 )
 
+// On the asymmetry between this and the credential itself, which is why
+// only one of them needed a privilege-free guard added:
+//
+// Removing the Credential from the spawn fails OPEN and silently -- the
+// runtime keeps working, at sandbox-agent's own uid, with the boundary
+// gone and nothing to notice. That is why there is now a test asserting
+// the credential reaches the kernel's attributes, runnable anywhere.
+//
+// Removing this chown fails CLOSED and loudly: a runtime dropped to
+// another uid cannot read its own workspace, so the very first turn fails
+// visibly rather than quietly proceeding without protection. A test that
+// would catch its silent removal is worth less than it looks, because
+// production catches it immediately and unmistakably. Recorded rather than
+// scaffolded around.
+
 // ChownWorkspaceForRuntime recursively changes the owner of every entry
 // under workspaceDir to uid/gid -- the SAME uid/gid
 // cmd/sandbox-agent/main.go builds the agent runtime's own *syscall.
