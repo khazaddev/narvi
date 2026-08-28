@@ -13,6 +13,7 @@ import (
 
 	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 	"github.com/khazaddev/narvi/internal/domain/gitstate"
+	"github.com/khazaddev/narvi/internal/sandboxagent/credentials"
 	"github.com/khazaddev/narvi/internal/sandboxagent/gitclone"
 	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
 )
@@ -715,7 +716,8 @@ func TestCleanForImageBuild_DiscardsUntrackedAndTrackedResidue(t *testing.T) {
 	}
 
 	sup := supervisor.New()
-	if err := gitclone.CleanForImageBuild(context.Background(), sup, workspaceDir, []string{"repo1"},
+	credentialCacheDir := filepath.Join(t.TempDir(), "credentials")
+	if err := gitclone.CleanForImageBuild(context.Background(), sup, workspaceDir, []string{"repo1"}, credentialCacheDir,
 		testSyncStepTimeout, testStopGrace); err != nil {
 		t.Fatalf("CleanForImageBuild() error = %v, want nil", err)
 	}
@@ -747,7 +749,8 @@ func TestCleanForImageBuild_FailureIsFatal(t *testing.T) {
 	workspaceDir := t.TempDir()
 
 	sup := supervisor.New()
-	err := gitclone.CleanForImageBuild(context.Background(), sup, workspaceDir, []string{"nonexistent-repo"},
+	credentialCacheDir := filepath.Join(t.TempDir(), "credentials")
+	err := gitclone.CleanForImageBuild(context.Background(), sup, workspaceDir, []string{"nonexistent-repo"}, credentialCacheDir,
 		testSyncStepTimeout, testStopGrace)
 	if err == nil {
 		t.Fatal("CleanForImageBuild() error = nil, want a fatal error for a nonexistent repo directory")
@@ -782,7 +785,8 @@ func TestCleanForImageBuild_MaliciousRepoNameRejectedBeforeAnySpawn(t *testing.T
 	}
 
 	sup := supervisor.New()
-	err := gitclone.CleanForImageBuild(context.Background(), sup, workspaceDir, []string{"../escaped-outside-workspace"},
+	credentialCacheDir := filepath.Join(t.TempDir(), "credentials")
+	err := gitclone.CleanForImageBuild(context.Background(), sup, workspaceDir, []string{"../escaped-outside-workspace"}, credentialCacheDir,
 		testSyncStepTimeout, testStopGrace)
 	if err == nil {
 		t.Fatal("CleanForImageBuild() error = nil, want a fatal validation error for the malicious repo name")
@@ -790,6 +794,43 @@ func TestCleanForImageBuild_MaliciousRepoNameRejectedBeforeAnySpawn(t *testing.T
 
 	if _, statErr := os.Stat(outsideUntracked); statErr != nil {
 		t.Errorf("outside untracked file stat = %v, want nil -- a path-traversal name must never reach `git clean`", statErr)
+	}
+}
+
+// TestCleanForImageBuild_PurgesCredentialCache is §30.4(2)'s own
+// defense-in-depth test: a credential minted during the clone that
+// preceded this call has already been written to disk (RunGet/Get's own
+// Fetch+Store path, internal/sandboxagent/credentials/get.go) -- this
+// proves CleanForImageBuild removes it, so a provider image capturing the
+// filesystem right after this call finds no token at all, independent of
+// whether the read-only-mint primary fix (cmd/sandbox-agent's own
+// runCredentialHelper) also worked correctly.
+func TestCleanForImageBuild_PurgesCredentialCache(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	initRepo(t, repoDir)
+
+	credentialCacheDir := filepath.Join(t.TempDir(), "credentials")
+	cache := &credentials.Cache{Dir: credentialCacheDir}
+	if err := cache.Store("github.com", credentials.Credential{
+		Username: "x-access-token", Password: "a-token-that-must-not-survive-into-any-image", ExpiresAt: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("seed credential cache: %v", err)
+	}
+
+	sup := supervisor.New()
+	if err := gitclone.CleanForImageBuild(context.Background(), sup, workspaceDir, []string{"repo1"}, credentialCacheDir,
+		testSyncStepTimeout, testStopGrace); err != nil {
+		t.Fatalf("CleanForImageBuild() error = %v, want nil", err)
+	}
+
+	if _, statErr := os.Stat(credentialCacheDir); statErr == nil {
+		t.Errorf("credential cache dir %s still exists after CleanForImageBuild, want it purged entirely", credentialCacheDir)
+	}
+	if _, found, err := cache.Load("github.com"); err != nil || found {
+		t.Errorf("cache.Load(\"github.com\") after CleanForImageBuild = (found=%v, err=%v), want (false, nil)", found, err)
 	}
 }
 

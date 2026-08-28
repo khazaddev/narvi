@@ -2045,6 +2045,24 @@ func runBootSequence(
 	onGitCheckoutTiming gitclone.OnGitCheckoutTiming,
 	onHookRerunTiming boot.OnHookRerunTiming,
 ) error {
+	// §30.4(3)'s own boot-time credential-cache purge, unconditional,
+	// every mode -- run BEFORE anything in this boot sequence has a chance
+	// to write a fresh credential into cfg.CredentialCacheDir. This is
+	// explicitly NOT load-bearing on its own: whether the provider's
+	// restore is a cold re-boot (this code runs) or a warm resume (it does
+	// not) is the open Modal question §30.9 names, and nothing here may
+	// rest on the unverified answer. The load-bearing control for a
+	// restored snapshot is the snapshot-mint-time purge on the control
+	// plane's own sandbox-side HandleSnapshot (cmd/sandbox-agent's own
+	// HandleSnapshot, called before the snapshot is ever taken); this call
+	// is additional, cheap insurance for whichever boots DO re-run this
+	// far. A failure purging a directory that may not even exist yet is
+	// unexpected enough to be worth failing loudly rather than silently
+	// proceeding into a boot that might reuse a stale credential.
+	if err := (&credentials.Cache{Dir: cfg.CredentialCacheDir}).PurgeAll(); err != nil {
+		return fmt.Errorf("purge credential cache at boot: %w", err)
+	}
+
 	var repos []boot.RepoInfo
 	// workspaceMoved (§19.4) stays nil for a nil-SessionConfig boot
 	// (the dev/test no-op case, exactly like repos itself) -- boot.RunBoot's
@@ -2245,7 +2263,7 @@ func runBootSequence(
 		for i, r := range repos {
 			repoNames[i] = r.Name
 		}
-		if err := gitclone.CleanForImageBuild(ctx, sup, cfg.WorkspaceDir, repoNames,
+		if err := gitclone.CleanForImageBuild(ctx, sup, cfg.WorkspaceDir, repoNames, cfg.CredentialCacheDir,
 			timeouts.GitSyncStepTimeout, timeouts.ProcessStopGracePeriod); err != nil {
 			return fmt.Errorf("clean workspace before snapshot: %w", err)
 		}

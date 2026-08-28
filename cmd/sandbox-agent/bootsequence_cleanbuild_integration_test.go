@@ -34,6 +34,7 @@ import (
 	"github.com/khazaddev/narvi/internal/domain/sandboxboot"
 	"github.com/khazaddev/narvi/internal/platform"
 	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
+	"github.com/khazaddev/narvi/internal/sandboxagent/credentials"
 	"github.com/khazaddev/narvi/internal/sandboxagent/services"
 	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
 )
@@ -87,6 +88,18 @@ func setUpResidueRepoAndServer(t *testing.T, markerDir string) (gitServerURL str
 // fresh workspace directory via the REAL, unmodified CloneAll path.
 func runBootSequenceForMode(t *testing.T, mode sandboxboot.BootMode, repoURL string) (workspaceDir string, bootErr error) {
 	t.Helper()
+	workspaceDir, bootErr = runBootSequenceForModeWithCredentialCacheDir(t, mode, repoURL, t.TempDir())
+	return workspaceDir, bootErr
+}
+
+// runBootSequenceForModeWithCredentialCacheDir is runBootSequenceForMode's
+// general-purpose form: credentialCacheDir is the caller's own choice
+// (rather than a fresh t.TempDir() runBootSequenceForMode picks internally)
+// so a test can pre-seed it with a credential BEFORE calling runBootSequence,
+// then assert on its state afterward -- §30.4(3)'s own "a boot-time cache
+// purge in all modes" needs exactly that shape to prove end to end.
+func runBootSequenceForModeWithCredentialCacheDir(t *testing.T, mode sandboxboot.BootMode, repoURL, credentialCacheDir string) (workspaceDir string, bootErr error) {
+	t.Helper()
 
 	// The git-http-backend test server (startGitHTTPServer) uses a real
 	// but self-signed TLS cert -- trusted here ONLY because this is a
@@ -103,7 +116,7 @@ func runBootSequenceForMode(t *testing.T, mode sandboxboot.BootMode, repoURL str
 	cfg := boot.Config{
 		BootMode:           mode,
 		WorkspaceDir:       workspaceDir,
-		CredentialCacheDir: t.TempDir(),
+		CredentialCacheDir: credentialCacheDir,
 		SessionConfig: &sessionconfig.SessionConfig{
 			BootMode:          sessionconfig.SessionConfigBootMode(mode),
 			ControlPlaneWsUrl: "wss://unused.invalid/ws",
@@ -208,6 +221,39 @@ func TestRunBootSequence_BootModeFresh_DoesNotRunCleanTreeStep(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(repoDir, "untracked-residue.txt")); err != nil {
 		t.Errorf("untracked-residue.txt stat = %v, want it to still exist (BootModeFresh must not discard setup.sh residue)", err)
+	}
+}
+
+// TestRunBootSequence_PurgesCredentialCacheAtBootStart is §30.4(3)'s own
+// "a boot-time cache purge in all modes" test, proven through
+// runBootSequence itself: a credential is seeded into cfg.
+// CredentialCacheDir BEFORE boot, as if left over from a prior boot cycle
+// of a reused sandbox/warm-resumed provider instance, and must be gone
+// once runBootSequence returns -- for BootModeFresh, which shares no code
+// path with CleanForImageBuild's own end-of-BootModeBuild purge, so this
+// specifically proves the UNCONDITIONAL, start-of-boot purge runs on its
+// own. Explicitly NOT load-bearing on its own per §30.4(3)'s own wording
+// (the snapshot-mint-time purge is) -- this test proves the mechanism
+// exists and runs, not that it alone closes the snapshot-restore gap.
+func TestRunBootSequence_PurgesCredentialCacheAtBootStart(t *testing.T) {
+	markerDir := t.TempDir()
+	repoURL := setUpResidueRepoAndServer(t, markerDir)
+
+	credentialCacheDir := t.TempDir()
+	leftoverCache := &credentials.Cache{Dir: credentialCacheDir}
+	if err := leftoverCache.Store("github.com", credentials.Credential{
+		Username: "x-access-token", Password: "leftover-token-from-a-prior-boot-cycle", ExpiresAt: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("seed leftover credential cache: %v", err)
+	}
+
+	_, bootErr := runBootSequenceForModeWithCredentialCacheDir(t, sandboxboot.BootModeFresh, repoURL, credentialCacheDir)
+	if bootErr != nil {
+		t.Fatalf("runBootSequence(BootModeFresh) error = %v, want nil", bootErr)
+	}
+
+	if _, found, err := leftoverCache.Load("github.com"); err != nil || found {
+		t.Errorf("leftoverCache.Load(\"github.com\") after boot = (found=%v, err=%v), want (false, nil) -- the boot-start purge must remove it", found, err)
 	}
 }
 
