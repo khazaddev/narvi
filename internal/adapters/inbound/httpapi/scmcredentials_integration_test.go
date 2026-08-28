@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapp"
+	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/platform"
@@ -1017,5 +1018,304 @@ func TestScmCredentials_NonReviewSession_HostScopingStillEnforced(t *testing.T) 
 	status, _ := postScmCredentials(t, rig, session.ID.String(), "sandbox-bearer-token")
 	if status != http.StatusForbidden {
 		t.Errorf("status = %d, want %d (host mismatch must still be enforced ahead of the review-session check)", status, http.StatusForbidden)
+	}
+}
+
+// --- §30.4's own shadow substitution: the four hard requirements ---
+
+// failingLedgerStore is a shadowledger.Store that always fails -- used
+// only by TestScmCredentials_Shadow_LedgerRecordFailureIs500 to prove the
+// record-or-fail path itself, which a real Postgres-backed store cannot
+// be made to do on demand without actually breaking the connection.
+type failingLedgerStore struct{}
+
+func (failingLedgerStore) Create(context.Context, sqlcgen.CreateShadowSCMWriteParams) (sqlcgen.ShadowScmWrite, error) {
+	return sqlcgen.ShadowScmWrite{}, fmt.Errorf("failingLedgerStore: simulated write failure")
+}
+
+// TestScmCredentials_Shadow_ReviewSessionReceivesReadOnlyCredential is
+// §30.4(1)'s own NAMED requirement: "A dedicated test asserts a review
+// session in shadow receives a read-only credential." Without the single
+// interception point placed BEFORE the review-session branch, this
+// session -- a github_pr_sessions row exists for it, and its repo is
+// deliberately left un-promoted (shadow is repo_settings' own default,
+// §30.8) -- would reach step 7 and receive rig.botToken, the fully
+// write-capable credential §30.4(1) says every shadow review sandbox must
+// never see.
+func TestScmCredentials_Shadow_ReviewSessionReceivesReadOnlyCredential(t *testing.T) {
+	const realBotToken = "bot-token-must-never-reach-a-shadow-review-sandbox"
+	minter := newFakeReadOnlyMinter()
+	rig := newTestRig(t, func(r *testRig) {
+		r.botToken = realBotToken
+		r.readOnlyMinter = minter
+	})
+	ctx := context.Background()
+
+	owner, err := rig.users.Create(ctx, sqlcgen.CreateUserParams{
+		PrimaryEmail: "shadow-review-owner@example.com", DisplayName: "Shadow Review Owner", Role: sqlcgen.UserRoleMember,
+	})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	encrypted, err := platform.EncryptToken(rig.tokenEncryptionKey, []byte("gho_creatorsOwnPersonalToken"))
+	if err != nil {
+		t.Fatalf("EncryptToken: %v", err)
+	}
+	email := "shadow-review-owner@example.com"
+	if _, err := rig.identities.Create(ctx, sqlcgen.CreateIdentityParams{
+		UserID: owner.ID, Provider: sqlcgen.IdentityProviderGithub, ExternalID: "shadow-review-owner-external-id",
+		Email: &email, EmailVerified: true, LinkedVia: sqlcgen.IdentityLinkedViaAdmin, AccessTokenEncrypted: encrypted,
+	}); err != nil {
+		t.Fatalf("create identity: %v", err)
+	}
+
+	// Deliberately NOT calling promoteRepoLive: repo_settings defaults
+	// this repo to shadow, exactly the ordinary state of any newly
+	// connected, not-yet-promoted repository (§30.8).
+	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{
+		SpawnSource: sqlcgen.SessionSpawnSourceGithub,
+		CreatedBy:   owner.ID,
+		Repos:       []byte(`[{"name":"narvi","url":"https://github.com/shadow-owner/shadow-repo","branch":null}]`),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := rig.prSessions.EnsureRow(ctx, "shadow-owner/shadow-repo-review", 21); err != nil {
+		t.Fatalf("ensure github_pr_sessions row: %v", err)
+	}
+	if err := rig.prSessions.SetSessionID(ctx, "shadow-owner/shadow-repo-review", 21, session.ID); err != nil {
+		t.Fatalf("set github_pr_sessions session id: %v", err)
+	}
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	status, got := postScmCredentials(t, rig, session.ID.String(), "sandbox-bearer-token")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+	if got.Password == realBotToken {
+		t.Fatal("Password equals the bot token -- a shadow review sandbox received the fully write-capable credential §30.4(1) requires it never see")
+	}
+	if got.Password != minter.Token.Value {
+		t.Errorf("Password = %q, want the substituted read-only token %q", got.Password, minter.Token.Value)
+	}
+	if minter.CallCount != 1 {
+		t.Errorf("readOnlyMinter called %d times, want 1", minter.CallCount)
+	}
+	if minter.SawOwner != "shadow-owner" || len(minter.SawRepoNames) != 1 || minter.SawRepoNames[0] != "shadow-repo" {
+		t.Errorf("minter saw owner=%q repoNames=%v, want owner=%q repoNames=[shadow-repo]", minter.SawOwner, minter.SawRepoNames, "shadow-owner")
+	}
+}
+
+// TestScmCredentials_Shadow_NonReviewSessionReceivesReadOnlyCredential
+// proves the SAME interception point also covers the OTHER mint branch
+// (the creator's decrypted OAuth token, steps 8-10) -- §30.4(1) requires
+// ONE interception covering BOTH branches, not two independent fixes.
+func TestScmCredentials_Shadow_NonReviewSessionReceivesReadOnlyCredential(t *testing.T) {
+	const realCreatorToken = "gho_creatorTokenMustNeverReachAShadowSandbox"
+	minter := newFakeReadOnlyMinter()
+	rig := newTestRig(t, func(r *testRig) { r.readOnlyMinter = minter })
+	ctx := context.Background()
+
+	// Deliberately using createSessionWithGitHubIdentityAndRepos's own
+	// LOWER-LEVEL pieces rather than the helper itself, since that helper
+	// promotes its repo live by design (every OTHER test in this file
+	// wants that) -- this test wants the opposite, the default un-promoted
+	// state.
+	user, err := rig.users.Create(ctx, sqlcgen.CreateUserParams{
+		PrimaryEmail: "shadow-nonreview@example.com", DisplayName: "Shadow NonReview", Role: sqlcgen.UserRoleMember,
+	})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	encrypted, err := platform.EncryptToken(rig.tokenEncryptionKey, []byte(realCreatorToken))
+	if err != nil {
+		t.Fatalf("EncryptToken: %v", err)
+	}
+	email := "shadow-nonreview@example.com"
+	if _, err := rig.identities.Create(ctx, sqlcgen.CreateIdentityParams{
+		UserID: user.ID, Provider: sqlcgen.IdentityProviderGithub, ExternalID: "shadow-nonreview-external-id",
+		Email: &email, EmailVerified: true, LinkedVia: sqlcgen.IdentityLinkedViaAdmin, AccessTokenEncrypted: encrypted,
+	}); err != nil {
+		t.Fatalf("create identity: %v", err)
+	}
+	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{
+		SpawnSource: sqlcgen.SessionSpawnSourceWeb, CreatedBy: user.ID,
+		Repos: []byte(`[{"name":"shadow-repo","url":"https://github.com/shadow-owner2/shadow-repo","branch":null}]`),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	status, got := postScmCredentials(t, rig, session.ID.String(), "sandbox-bearer-token")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+	if got.Password == realCreatorToken {
+		t.Fatal("Password equals the creator's own real OAuth token -- reached the LIVE creator-OAuth branch despite the repo being un-promoted (shadow)")
+	}
+	if got.Password != minter.Token.Value {
+		t.Errorf("Password = %q, want the substituted read-only token %q", got.Password, minter.Token.Value)
+	}
+}
+
+// TestScmCredentials_Shadow_ForceReadOnlyAppliesEvenWhenLive proves
+// §30.4(2)'s own client signal: a BootModeBuild credential-helper request
+// (forceReadOnly: true) gets the read-only substitution even for a repo
+// that IS promoted live -- "a build only needs read" is unconditional, not
+// merely a fallback for an un-promoted repo.
+func TestScmCredentials_Shadow_ForceReadOnlyAppliesEvenWhenLive(t *testing.T) {
+	minter := newFakeReadOnlyMinter()
+	rig := newTestRig(t, func(r *testRig) { r.readOnlyMinter = minter })
+	ctx := context.Background()
+
+	const plaintextAccessToken = "gho_realGitHubAccessTokenForceReadOnlyTest"
+	session := createSessionWithGitHubIdentity(ctx, t, rig, plaintextAccessToken)
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	status, got := postScmCredentialsForceReadOnly(t, rig, session.ID.String(), "sandbox-bearer-token", "1", "github.com")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+	if got.Password == plaintextAccessToken {
+		t.Fatal("Password equals the creator's own real OAuth token -- forceReadOnly must apply even though this repo is promoted live")
+	}
+	if got.Password != minter.Token.Value {
+		t.Errorf("Password = %q, want the substituted read-only token %q", got.Password, minter.Token.Value)
+	}
+}
+
+// TestScmCredentials_Shadow_MultiOwnerRefused proves a session whose
+// matched repos on the requested host span more than one distinct owner
+// is refused (403) rather than served by a credential scoped to only one
+// of them -- a GitHub App installation token cannot cover two accounts at
+// once, and silently picking one owner would leave the sandbox believing
+// it has a credential that only half-works.
+func TestScmCredentials_Shadow_MultiOwnerRefused(t *testing.T) {
+	minter := newFakeReadOnlyMinter()
+	rig := newTestRig(t, func(r *testRig) { r.readOnlyMinter = minter })
+	ctx := context.Background()
+
+	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{
+		SpawnSource: sqlcgen.SessionSpawnSourceWeb,
+		Repos: []byte(`[
+			{"name":"repo-one","url":"https://github.com/owner-one/repo-one","branch":null},
+			{"name":"repo-two","url":"https://github.com/owner-two/repo-two","branch":null}
+		]`),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	status, _ := postScmCredentials(t, rig, session.ID.String(), "sandbox-bearer-token")
+	if status != http.StatusForbidden {
+		t.Errorf("status = %d, want %d (repos on this host span two distinct owners)", status, http.StatusForbidden)
+	}
+	if minter.CallCount != 0 {
+		t.Errorf("readOnlyMinter called %d times, want 0 (must refuse before ever attempting a mint)", minter.CallCount)
+	}
+}
+
+// TestScmCredentials_Shadow_ScopeCheckFailureRefusesAndRecordsLedger
+// proves §30.4(4)'s own per-mint scope introspection: a minted token
+// carrying anything beyond read access is refused (403, the same generic
+// body), never returned to the sandbox -- and the refusal is recorded
+// into shadow_scm_writes with the SAME record-or-fail semantics the rest
+// of the ledger already enforces.
+func TestScmCredentials_Shadow_ScopeCheckFailureRefusesAndRecordsLedger(t *testing.T) {
+	minter := newFakeReadOnlyMinter()
+	minter.Token.Permissions = map[string]string{"contents": "write", "metadata": "read"}
+	rig := newTestRig(t, func(r *testRig) { r.readOnlyMinter = minter })
+	ctx := context.Background()
+
+	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{
+		SpawnSource: sqlcgen.SessionSpawnSourceWeb,
+		Repos:       []byte(`[{"name":"scoped-repo","url":"https://github.com/scope-owner/scoped-repo","branch":null}]`),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	status, got := postScmCredentials(t, rig, session.ID.String(), "sandbox-bearer-token")
+	if status != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", status, http.StatusForbidden)
+	}
+	if got.Password == minter.Token.Value {
+		t.Fatal("Password equals the over-scoped minted token -- it must never be returned once the scope check refuses it")
+	}
+
+	// rig.shadowLedger is typed shadowledger.Store (Create only, so a
+	// test can swap in a failing fake -- see failingLedgerStore above);
+	// reading the row back uses a fresh, ordinary reader over the SAME
+	// pool the write actually went to.
+	ledgerReader := narvipg.NewShadowSCMWriteStore(rig.pool)
+	rows, err := ledgerReader.ListForRepo(ctx, "scope-owner/scoped-repo", 10)
+	if err != nil {
+		t.Fatalf("ListForRepo: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("shadow_scm_writes rows for scope-owner/scoped-repo = %d, want 1", len(rows))
+	}
+	if rows[0].Operation != "scm_credential_mint_refused" {
+		t.Errorf("rows[0].Operation = %q, want %q", rows[0].Operation, "scm_credential_mint_refused")
+	}
+	if strings.Contains(string(rows[0].SpecJson), minter.Token.Value) {
+		t.Errorf("rows[0].SpecJson = %s, must never carry the (rejected) token value", rows[0].SpecJson)
+	}
+}
+
+// TestScmCredentials_Shadow_LedgerRecordFailureIs500 proves record-or-fail
+// end to end through this handler: when the scope check refuses a mint
+// AND the ledger itself cannot record that refusal, the handler must fail
+// loudly (500), never silently 403 as if the refusal were safely
+// evidenced.
+func TestScmCredentials_Shadow_LedgerRecordFailureIs500(t *testing.T) {
+	minter := newFakeReadOnlyMinter()
+	minter.Token.Permissions = map[string]string{"contents": "write"}
+	rig := newTestRig(t, func(r *testRig) {
+		r.readOnlyMinter = minter
+		r.shadowLedger = failingLedgerStore{}
+	})
+	ctx := context.Background()
+
+	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{
+		SpawnSource: sqlcgen.SessionSpawnSourceWeb,
+		Repos:       []byte(`[{"name":"narvi","url":"https://github.com/khazaddev/narvi","branch":null}]`),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	status, _ := postScmCredentials(t, rig, session.ID.String(), "sandbox-bearer-token")
+	if status != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d (a refusal that cannot be recorded must fail loudly)", status, http.StatusInternalServerError)
+	}
+}
+
+// TestScmCredentials_Shadow_MintErrorIsInternalError proves a genuine
+// failure to reach GitHub while minting (as opposed to a scope-check
+// refusal of a successfully minted token) surfaces as a plain 500, never
+// as a 403 that could be confused with a deliberate security refusal.
+func TestScmCredentials_Shadow_MintErrorIsInternalError(t *testing.T) {
+	minter := newFakeReadOnlyMinter()
+	minter.Err = fmt.Errorf("simulated GitHub API failure")
+	rig := newTestRig(t, func(r *testRig) { r.readOnlyMinter = minter })
+	ctx := context.Background()
+
+	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{
+		SpawnSource: sqlcgen.SessionSpawnSourceWeb,
+		Repos:       []byte(`[{"name":"narvi","url":"https://github.com/khazaddev/narvi","branch":null}]`),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	status, _ := postScmCredentials(t, rig, session.ID.String(), "sandbox-bearer-token")
+	if status != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", status, http.StatusInternalServerError)
 	}
 }

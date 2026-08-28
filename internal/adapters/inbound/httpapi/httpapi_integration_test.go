@@ -54,6 +54,7 @@ import (
 	appreviewtriage "github.com/khazaddev/narvi/internal/app/reviewtriage"
 	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/app/shadowledger"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -193,7 +194,14 @@ type testRig struct {
 	// this rig's own shadow-specific tests instead create a session whose
 	// repo is deliberately left un-promoted (the default), or set
 	// platformShadow true via newTestRig's own mutate func.
-	shadowLedger   *narvipg.ShadowSCMWriteStore
+	// shadowLedger is typed as the interface (shadowledger.Store), not the
+	// concrete *narvipg.ShadowSCMWriteStore, mirroring sourceControl's own
+	// identical "swap for a fake" precedent immediately above -- a test
+	// proving §30.4(4)'s own "record-or-fail" ledger-write-failure path
+	// overrides this via newTestRig's own mutate func with a fake that
+	// fails on demand, which a concrete Postgres-backed field could not
+	// do without actually breaking the database connection.
+	shadowLedger   shadowledger.Store
 	readOnlyMinter httpapi.ReadOnlyMinter
 	platformShadow bool
 
