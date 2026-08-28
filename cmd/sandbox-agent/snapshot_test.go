@@ -287,8 +287,7 @@ func TestHandleSnapshot_PurgesCredentialCacheBeforeMint(t *testing.T) {
 	if err := cache.Store("github.com", credentials.Credential{Username: "x-access-token", Password: "leftover-write-token"}); err != nil {
 		t.Fatalf("seed credential cache: %v", err)
 	}
-	cachedPath := filepath.Join(cacheDir)
-	if entries, err := os.ReadDir(cachedPath); err != nil || len(entries) == 0 {
+	if entries, err := os.ReadDir(cacheDir); err != nil || len(entries) == 0 {
 		t.Fatalf("precondition failed: cache dir has no seeded entries (err=%v)", err)
 	}
 
