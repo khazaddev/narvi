@@ -221,3 +221,47 @@ UPDATE sandboxes
 SET pending_snapshot_message_id = $2, updated_at = now()
 WHERE session_id = $1
 RETURNING *;
+
+-- name: SetSandboxPendingPush :one
+-- §30.8's own "the push/PR pair resolves its mode ONCE per turn"
+-- (migrations/000107_sandbox_pending_push_egress_mode.up.sql): stamps
+-- this session's own effective egress mode, resolved exactly once by
+-- completeProcessingTurn (app/sessionactor/pushpr.go) at the moment it
+-- builds the turn's own pushSignal, in the SAME transact that completes
+-- the turn. Also resets pending_push_cancelled back to false in the SAME
+-- statement -- a brand-new push cycle starting now supersedes whatever a
+-- STALE prior cycle may have left behind (mirrors
+-- UpdateSandboxSnapshotID's own "clear the prior cycle's own leftover
+-- state in the same write" precedent).
+UPDATE sandboxes
+SET pending_push_suppressed_in_shadow = $2, pending_push_cancelled = false, updated_at = now()
+WHERE session_id = $1
+RETURNING *;
+
+-- name: ClearSandboxPendingPush :one
+-- Consumes this sandbox's own persisted push/PR decision -- called by
+-- createPRBestEffort (pushpr.go) once it has read and acted on
+-- pending_push_suppressed_in_shadow/pending_push_cancelled for the
+-- current push cycle, so a LATER, unrelated push_complete redelivery (or
+-- the next real push cycle) never reads a stale decision back. Mirrors
+-- UpdateSandboxSnapshotID's own "clear the now-satisfied outstanding
+-- column" idiom.
+UPDATE sandboxes
+SET pending_push_suppressed_in_shadow = NULL, pending_push_cancelled = false, updated_at = now()
+WHERE session_id = $1
+RETURNING *;
+
+-- name: CancelSandboxPendingPush :one
+-- §30.4's own "demotion ... must cancel in-flight push signals" -- sets
+-- pending_push_cancelled = true for a sandbox that currently has one
+-- outstanding (pending_push_suppressed_in_shadow IS NOT NULL), called by
+-- the repo-demotion sweep (internal/app/seed) for every live sandbox of a
+-- just-demoted repo. A no-op (pgx.ErrNoRows, the caller's own job to
+-- treat as "nothing to cancel") when this sandbox has no push currently
+-- outstanding -- there is nothing to cancel, and this must never
+-- fabricate a pending_push_suppressed_in_shadow value that was never
+-- resolved.
+UPDATE sandboxes
+SET pending_push_cancelled = true, updated_at = now()
+WHERE session_id = $1 AND pending_push_suppressed_in_shadow IS NOT NULL
+RETURNING *;

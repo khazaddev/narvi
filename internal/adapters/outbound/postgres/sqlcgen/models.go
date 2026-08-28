@@ -2036,21 +2036,23 @@ type ReviewVerdict struct {
 }
 
 type Sandbox struct {
-	ID                         pgtype.UUID        `json:"id"`
-	SessionID                  pgtype.UUID        `json:"session_id"`
-	Gen                        int32              `json:"gen"`
-	Status                     SandboxStatus      `json:"status"`
-	LastSeenAt                 pgtype.Timestamptz `json:"last_seen_at"`
-	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
-	TokenHash                  *string            `json:"token_hash"`
-	ProviderID                 *string            `json:"provider_id"`
-	SpawnFailureCount          int32              `json:"spawn_failure_count"`
-	LastSpawnFailureAt         pgtype.Timestamptz `json:"last_spawn_failure_at"`
-	SnapshotID                 *string            `json:"snapshot_id"`
-	PendingSnapshotMessageID   *string            `json:"pending_snapshot_message_id"`
-	PreSuspectStatus           *SandboxStatus     `json:"pre_suspect_status"`
-	SnapshotSuppressedInShadow bool               `json:"snapshot_suppressed_in_shadow"`
+	ID                            pgtype.UUID        `json:"id"`
+	SessionID                     pgtype.UUID        `json:"session_id"`
+	Gen                           int32              `json:"gen"`
+	Status                        SandboxStatus      `json:"status"`
+	LastSeenAt                    pgtype.Timestamptz `json:"last_seen_at"`
+	CreatedAt                     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                     pgtype.Timestamptz `json:"updated_at"`
+	TokenHash                     *string            `json:"token_hash"`
+	ProviderID                    *string            `json:"provider_id"`
+	SpawnFailureCount             int32              `json:"spawn_failure_count"`
+	LastSpawnFailureAt            pgtype.Timestamptz `json:"last_spawn_failure_at"`
+	SnapshotID                    *string            `json:"snapshot_id"`
+	PendingSnapshotMessageID      *string            `json:"pending_snapshot_message_id"`
+	PreSuspectStatus              *SandboxStatus     `json:"pre_suspect_status"`
+	SnapshotSuppressedInShadow    bool               `json:"snapshot_suppressed_in_shadow"`
+	PendingPushSuppressedInShadow *bool              `json:"pending_push_suppressed_in_shadow"`
+	PendingPushCancelled          bool               `json:"pending_push_cancelled"`
 }
 
 type SandboxHistory struct {

@@ -322,6 +322,28 @@ func (a *Actor) completeProcessingTurn(ctx context.Context, tx pgx.Tx, sandboxRo
 	if len(repos) == 0 {
 		return nil, nil
 	}
+
+	// §30.8's own epoch discipline, applied to this turn's own push/PR
+	// pair: "the push/PR pair resolves its mode ONCE per turn... resolved
+	// at push send, persisted with the signal, and createPRBestEffort
+	// honors the persisted decision -- never a re-read." Resolved EXACTLY
+	// ONCE, right here (the SAME session-repos-aggregated formula
+	// postgres.OutboxStore.ResolveEffectiveMode already centralizes for
+	// the outbox's own identical epoch-stamp need), and persisted onto the
+	// sandbox row in this SAME transact -- NOT carried on pushSignal
+	// itself: sendPushBestEffort (which consumes this signal) and
+	// createPRBestEffort (which reads this persisted column back, below)
+	// are two SEPARATE wire-event handler invocations, with nothing in
+	// memory surviving between them, so the column is the only thing that
+	// can actually carry this decision across that gap.
+	suppressedInShadow := a.stores.outbox.WithTx(tx).ResolveEffectiveMode(ctx, a.sessionID)
+	if _, err := a.stores.sandbox.WithTx(tx).SetPendingPush(ctx, sqlcgen.SetSandboxPendingPushParams{
+		SessionID:                     a.sessionID,
+		PendingPushSuppressedInShadow: &suppressedInShadow,
+	}); err != nil {
+		return nil, fmt.Errorf("sessionactor: persist push/PR egress-mode decision: %w", err)
+	}
+
 	return &pushSignal{gen: int(sandboxRow.Gen), repos: repos}, nil
 }
 
@@ -418,6 +440,20 @@ func (a *Actor) recordFalseFailureIfApplicable(ctx context.Context, tx pgx.Tx) e
 // a real `git symbolic-ref` round trip through the sandbox this Step's own
 // wire contract has no command for -- an honest, documented gap, not a
 // silent shortcut.
+//
+// sig.suppressedInShadow is resolved and persisted by completeProcessingTurn
+// (pushSignal's own doc comment) but deliberately NOT consulted here to
+// decide whether to send the WS push command at all -- this Step's own
+// scope (docs/IMPLEMENTATION_PLAN.md row 101) is the push/PR pair's
+// CONSISTENCY (one resolved decision, honored without a re-read at PR-
+// creation time, below), not adding a brand-new suppression point at the
+// WS layer: the sandbox-side credential the push actually uses is already
+// governed by §30.4's read-only substitution regardless of what this
+// function does, and every consumer of ports.SourceControl.CreatePR
+// (createPRBestEffort included) already goes through the §30.2 port
+// decorator in production, which independently suppresses a shadow
+// repo's CreatePR call. sig.suppressedInShadow's OWN read happens in
+// createPRBestEffort, below.
 func (a *Actor) sendPushBestEffort(sessionID string, sig *pushSignal) {
 	if sig == nil {
 		return
@@ -516,6 +552,45 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 		a.createSentinelFixPRBestEffort(ctx, evt)
 		return
 	}
+
+	// §30.8's own "the push/PR pair resolves its mode ONCE per turn":
+	// honor the decision completeProcessingTurn already resolved and
+	// persisted at push-send time (pushSignal.suppressedInShadow's own
+	// doc comment) -- NEVER re-derive it here via egressmode.Resolve or
+	// postgres.OutboxStore.ResolveEffectiveMode. That re-read is exactly
+	// the bug this part of the Step exists to prevent: a repo demoted (or
+	// promoted) between this turn's own push send and this push_complete
+	// arriving must not flip what this ONE turn's PR creation does.
+	sandboxRow, err := a.stores.sandbox.Get(ctx, a.sessionID)
+	if err != nil {
+		a.logger.Error("sessionactor: get sandbox for push/PR egress-mode decision failed; skipping PR creation (fail-closed)", "error", err)
+		return
+	}
+	suppressedInShadow, pushCancelled := sandboxRow.PendingPushSuppressedInShadow, sandboxRow.PendingPushCancelled
+	if _, clearErr := a.stores.sandbox.ClearPendingPush(ctx, a.sessionID); clearErr != nil {
+		a.logger.Warn("sessionactor: clear consumed push/PR egress-mode decision failed", "error", clearErr)
+	}
+	if pushCancelled {
+		// §30.4's own demotion fix: a repo-demotion sweep cancelled this
+		// in-flight push signal (the ScmCredentialTTL window) -- this
+		// push_complete's own result is no longer trustworthy enough to
+		// act on, regardless of what suppressedInShadow itself says.
+		a.logger.Warn("sessionactor: push_complete arrived for a push cycle cancelled by a repo-demotion sweep; skipping PR creation")
+		return
+	}
+	if suppressedInShadow != nil && *suppressedInShadow {
+		// The persisted decision says this cycle was shadow -- honored
+		// exactly as resolved, never re-checked against whatever the
+		// repo's CURRENT egress mode happens to say right now.
+		a.logger.Info("sessionactor: push_complete arrived for a push cycle whose own persisted decision is shadow; skipping PR creation (§30.4/§30.8)")
+		return
+	}
+	// suppressedInShadow == nil (no push cycle was ever recorded for this
+	// sandbox -- an honest gap: a push_complete this Step's own new
+	// bookkeeping never saw resolved/persisted, e.g. one already in flight
+	// across a rollout of this exact change) falls through to the
+	// pre-existing, unconditional behavior below, exactly as it always
+	// was before this Step.
 
 	if !a.creatorMayGetPRAttribution(ctx, sessionRow.CreatedBy) {
 		return // already logged by creatorMayGetPRAttribution

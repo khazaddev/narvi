@@ -137,3 +137,30 @@ func (s *SandboxStore) ListLiveProviderIDs(ctx context.Context) ([]string, error
 func (s *SandboxStore) UpdatePendingSnapshotMessageID(ctx context.Context, arg sqlcgen.UpdateSandboxPendingSnapshotMessageIDParams) (sqlcgen.Sandbox, error) {
 	return s.q.UpdateSandboxPendingSnapshotMessageID(ctx, arg)
 }
+
+// SetPendingPush stamps this sandbox's own persisted push/PR egress-mode
+// decision (§30.8's "resolved at push send, persisted with the signal") --
+// called by completeProcessingTurn (app/sessionactor/pushpr.go) in the
+// same transact that completes the turn and builds its pushSignal. Also
+// resets pending_push_cancelled to false (a fresh cycle), per
+// SetSandboxPendingPush's own generated doc comment.
+func (s *SandboxStore) SetPendingPush(ctx context.Context, arg sqlcgen.SetSandboxPendingPushParams) (sqlcgen.Sandbox, error) {
+	return s.q.SetSandboxPendingPush(ctx, arg)
+}
+
+// ClearPendingPush consumes this sandbox's own persisted push/PR
+// decision, once createPRBestEffort has read and acted on it -- see
+// ClearSandboxPendingPush's own generated doc comment.
+func (s *SandboxStore) ClearPendingPush(ctx context.Context, sessionID pgtype.UUID) (sqlcgen.Sandbox, error) {
+	return s.q.ClearSandboxPendingPush(ctx, sessionID)
+}
+
+// CancelPendingPush marks a sandbox's own currently-outstanding push
+// decision cancelled -- §30.4's own "demotion ... must cancel in-flight
+// push signals", called by the repo-demotion sweep (internal/app/seed).
+// Returns pgx.ErrNoRows (unwrapped) when this sandbox has no push
+// currently outstanding -- see CancelSandboxPendingPush's own generated
+// doc comment; callers treat that as "nothing to cancel", not an error.
+func (s *SandboxStore) CancelPendingPush(ctx context.Context, sessionID pgtype.UUID) (sqlcgen.Sandbox, error) {
+	return s.q.CancelSandboxPendingPush(ctx, sessionID)
+}
