@@ -67,6 +67,106 @@ func createShadowEpochTestSession(ctx context.Context, t *testing.T, pool *pgxpo
 // promoted to live BEFORE PumpOnce ever runs. If Builder re-read the flag
 // at delivery time instead of trusting its own enqueue-time stamp, this
 // notifier would fire for real -- it must not.
+// createMultiRepoSession builds a session naming SEVERAL repositories,
+// which is a first-class shape in this system (multi-repo workspaces) and
+// the one the per-repo stamp used to be blind to.
+func createMultiRepoSession(ctx context.Context, t *testing.T, pool *pgxpool.Pool, repoFullNames ...string) pgtype.UUID {
+	t.Helper()
+	entries := make([]map[string]any, 0, len(repoFullNames))
+	for _, n := range repoFullNames {
+		entries = append(entries, map[string]any{"name": n, "url": "https://github.com/" + n, "branch": nil})
+	}
+	reposJSON, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatalf("marshal test repos: %v", err)
+	}
+	session, err := narvipg.NewSessionStore(pool).Create(ctx, sqlcgen.CreateSessionParams{
+		SpawnSource: sqlcgen.SessionSpawnSourceWeb,
+		Repos:       reposJSON,
+	})
+	if err != nil {
+		t.Fatalf("create multi-repo test session: %v", err)
+	}
+	return session.ID
+}
+
+// TestCreate_MultiRepoSession_SuppressedIfAnyRepoIsShadow pins §30.8's
+// monotone-toward-suppression rule where it has teeth.
+//
+// A notification about work spanning two repositories is a customer-visible
+// effect for BOTH, so it may go out only if both may. The first version of
+// this code bailed out for any session not naming exactly one repository
+// and fell back to the deployment-wide switch alone -- which on an ordinary
+// deployment resolves LIVE. Adding a second repository to a session was
+// therefore enough to deliver a suppressed repository's notifications: the
+// per-repo flag bypassed by a fact about the session rather than about the
+// flag.
+func TestCreate_MultiRepoSession_SuppressedIfAnyRepoIsShadow(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewOutboxStore(pool, false)
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
+
+	const promoted = "acme/multi-promoted"
+	const suppressed = "acme/multi-suppressed"
+	if _, err := repoSettings.UpsertLiveEgressEnabled(ctx, promoted, true); err != nil {
+		t.Fatalf("promote first repo: %v", err)
+	}
+	// The second repo is left unpromoted, which is the ordinary default.
+
+	sessionID := createMultiRepoSession(ctx, t, pool, promoted, suppressed)
+	payload, err := json.Marshal(map[string]any{"channel_id": "C1", "thread_ts": "1.1", "text": "hi"})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	row, err := store.Create(ctx, sqlcgen.CreateOutboxEntryParams{
+		SessionID: sessionID,
+		Kind:      string(ports.NotificationKindSlack),
+		Payload:   payload,
+	})
+	if err != nil {
+		t.Fatalf("create outbox entry: %v", err)
+	}
+	if !row.SuppressedInShadow {
+		t.Fatal("a session naming one promoted and one suppressed repository was stamped LIVE -- one suppressed repository must suppress the whole notification")
+	}
+}
+
+// TestCreate_MultiRepoSession_LiveWhenEveryRepoIsPromoted proves the fix
+// did not simply suppress everything multi-repo, which would be safe and
+// useless.
+func TestCreate_MultiRepoSession_LiveWhenEveryRepoIsPromoted(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewOutboxStore(pool, false)
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
+
+	const a = "acme/multi-both-a"
+	const b = "acme/multi-both-b"
+	for _, n := range []string{a, b} {
+		if _, err := repoSettings.UpsertLiveEgressEnabled(ctx, n, true); err != nil {
+			t.Fatalf("promote %s: %v", n, err)
+		}
+	}
+
+	sessionID := createMultiRepoSession(ctx, t, pool, a, b)
+	payload, err := json.Marshal(map[string]any{"channel_id": "C1", "thread_ts": "1.1", "text": "hi"})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	row, err := store.Create(ctx, sqlcgen.CreateOutboxEntryParams{
+		SessionID: sessionID,
+		Kind:      string(ports.NotificationKindSlack),
+		Payload:   payload,
+	})
+	if err != nil {
+		t.Fatalf("create outbox entry: %v", err)
+	}
+	if row.SuppressedInShadow {
+		t.Fatal("a session whose every repository is promoted was stamped SHADOW -- the fix must not suppress all multi-repo work")
+	}
+}
+
 func TestPumpOnce_BornShadow_StaysShadowAfterPromotion(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)

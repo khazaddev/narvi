@@ -77,15 +77,20 @@ func TestNewBuilder_StartsCleanly_WhenEveryRegisteredKindIsClassified(t *testing
 // list of every ports.NotificationKind constant (internal/app/ports/
 // notifier.go) as of this Step -- Go has no way to enumerate a named
 // string type's own declared constants at compile time or via
-// reflection, so this list is this test's own stand-in for that missing
-// language feature, mirroring internal/app/shadowledger's own sealed-Spec
-// var-assertion pattern (spec.go) one level up: a NEW kind added to
-// notifier.go without a matching addition BOTH here and in
-// classification.go's own notificationKindClassification map fails this
-// test, catching the "kind exists but was never wired into ANY notifiers
-// map at all" gap that classifyNotifiers' own runtime, map-driven check
-// (TestNewBuilder_RefusesToStart_OnUnclassifiedKind above) cannot see by
-// construction (it only ever inspects whatever IS registered).
+// reflection.
+//
+// This list does NOT catch a kind added to notifier.go, and an earlier
+// version of this comment claimed it did. It cannot: a new constant added
+// there alone leaves both this list and the classification map untouched,
+// so the two still agree and this test stays green. Two hand-maintained
+// copies of the same fact cannot check each other -- verified by adding a
+// twentieth kind and watching this test pass.
+//
+// TestClassification_CoversEveryKindDeclaredInSource
+// (classificationsource_test.go) is the guard for that, by reading the
+// constants out of the declaring file. What this list is still good for
+// is being read: it puts every kind and its classification side by side
+// in one place, which the parse-based check cannot do.
 var allKnownNotificationKinds = []ports.NotificationKind{
 	ports.NotificationKindSlack,
 	ports.NotificationKindLinear,

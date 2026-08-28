@@ -404,14 +404,28 @@ func (a *Actor) readReviewRetriggerState(ctx context.Context) (*reviewRetriggerD
 			return a.deleteTimer(ctx, tx, TimerReviewRetriggerDebounce)
 		}
 
-		// §24.3 step 2: the latest posted verdict for this PR --
-		// GetLatestNonShadow, not the plain GetLatestReviewVerdict every
-		// internal, operator-facing caller uses (§30.8): this decision is
-		// customer-consequential in both directions -- a shadow-era
-		// "already reviewed" fact must never suppress a REAL re-review
-		// once this repo goes live, and a shadow-era risk level must
-		// never be quoted in the real, customer-visible budget-exhausted
-		// notice below (enqueueAutoRetriggerBudgetExhaustedNotice).
+		// §24.3 step 2: the latest posted verdict for this PR. TWO reads,
+		// because this one row feeds three decisions and they do not all
+		// have the same audience.
+		//
+		// GetLatestNonShadow for the customer-consequential pair (§30.8):
+		// a shadow-era "already reviewed" fact must never suppress a REAL
+		// re-review once this repo goes live, and a shadow-era risk level
+		// must never be quoted in the real, customer-visible
+		// budget-exhausted notice below.
+		//
+		// But the THIRD consumer is §24's "once deep, a PR stays deep"
+		// floor, and that one is internal: it picks a model tier and an
+		// effort for a review this platform is about to run on its own
+		// machines. Filtering it would quietly make a shadow evaluation
+		// behave DIFFERENTLY from the live system it exists to predict --
+		// a PR that went deep in shadow would drop back to light on its
+		// next shadow push, and the evaluation would under-report exactly
+		// the escalation an operator is trying to observe. So the floor
+		// reads the unfiltered latest.
+		//
+		// The split is the point: suppression is about what reaches a
+		// customer, and evaluation fidelity is about everything else.
 		var verdictHeadSHA, verdictRiskLevel, verdictReviewPath string
 		if latest, verdictErr := a.stores.reviewVerdict.WithTx(tx).GetLatestNonShadow(ctx, prSession.RepoFullName, prSession.PrNumber); verdictErr != nil {
 			if !errors.Is(verdictErr, pgx.ErrNoRows) {
@@ -430,6 +444,16 @@ func (a *Actor) readReviewRetriggerState(ctx context.Context) (*reviewRetriggerD
 			if latest.ReviewPath != nil {
 				verdictReviewPath = *latest.ReviewPath
 			}
+		}
+		// The floor's own read, unfiltered -- see the two-reads note
+		// above. A shadow-era depth is a fact about how this platform
+		// reviews, not an effect on anyone's repository.
+		if anyLatest, anyErr := a.stores.reviewVerdict.WithTx(tx).GetLatest(ctx, prSession.RepoFullName, prSession.PrNumber); anyErr != nil {
+			if !errors.Is(anyErr, pgx.ErrNoRows) {
+				return fmt.Errorf("sessionactor: get latest review verdict for the depth floor: %w", anyErr)
+			}
+		} else if anyLatest.ReviewPath != nil && verdictReviewPath == "" {
+			verdictReviewPath = *anyLatest.ReviewPath
 		}
 
 		base := reviewRetriggerDecision{

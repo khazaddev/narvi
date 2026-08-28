@@ -48,9 +48,10 @@
 //
 // Capability's one field is unexported, and the only function able to
 // produce a Capability whose Live() reports true is this package's own
-// unexported liveCapability -- called from exactly one place, Resolve.
-// No other package can construct a live Capability by any means other
-// than calling Resolve, and a zero-value Capability (from a forgotten
+// unexported liveCapability -- whose callers are enumerated on that
+// function itself. No other package can construct a live Capability by
+// any means other than calling one of this package's resolvers, and a
+// zero-value Capability (from a forgotten
 // assignment, a zero-initialized struct field, or any other accident) is
 // always the shadow capability. See capability.go's own doc comment.
 //

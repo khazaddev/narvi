@@ -104,19 +104,45 @@ func (s *OutboxStore) ResolveEffectiveMode(ctx context.Context, sessionID pgtype
 		return true
 	}
 
-	repoFullName, ok := singleSessionRepoFullName(session.Repos)
-	if !ok {
+	repoFullNames, parsed := sessionRepoFullNames(session.Repos)
+	if !parsed {
+		// The session names repositories this code could not read. That is
+		// an anomaly, not a repo-less notification, and it resolves shadow
+		// -- the same posture as a failed session read above, for the same
+		// reason: a thing we cannot evaluate must not be sent.
+		platform.Logger(ctx).Warn("postgres: outbox: could not read this session's repositories for the egress-mode stamp -- resolving shadow (fail-closed)", "session_id", sessionID.String())
+		return true
+	}
+	if len(repoFullNames) == 0 {
+		// Genuinely repo-less (a digest, a platform notice). The per-repo
+		// axis does not apply, so only the deployment-wide switch decides.
 		return egressmode.ResolvePlatform(s.platformShadow).Suppressed()
 	}
 
-	return egressmode.Resolve(ctx, egressmode.Deps{
-		RepoSettings:   repoSettingsReader{q: s.q},
-		PlatformShadow: s.platformShadow,
-	}, repoFullName).Suppressed()
+	// ANY suppressed repository suppresses the whole notification.
+	//
+	// §30.8's rule is monotone toward suppression, and a multi-repo session
+	// is exactly where that has teeth: a notification about work spanning
+	// two repositories is a customer-visible effect for BOTH, so it may go
+	// out only if both may. An earlier version of this bailed out for any
+	// session that did not name exactly one repository and fell back to the
+	// deployment switch alone -- which on an ordinary deployment resolves
+	// LIVE, so adding a second repository to a session was enough to make a
+	// suppressed repository's notifications deliver. The per-repo flag was
+	// bypassed by a fact about the session rather than about the flag.
+	for _, repoFullName := range repoFullNames {
+		if egressmode.Resolve(ctx, egressmode.Deps{
+			RepoSettings:   repoSettingsReader{q: s.q},
+			PlatformShadow: s.platformShadow,
+		}, repoFullName).Suppressed() {
+			return true
+		}
+	}
+	return false
 }
 
-// singleSessionRepoFullName derives a single unambiguous "owner/repo"
-// full name from a session's own raw sessions.repos column (JSONB) --
+// sessionRepoFullNames derives every "owner/repo" full name from a
+// session's own raw sessions.repos column (JSONB) --
 // pure, no I/O. Mirrors internal/app/workflowengine's own
 // repoFullNameFromSessionRepos (lane.go) field for field and judgment
 // call for judgment call (that package's own doc comment there explains
@@ -126,19 +152,31 @@ func (s *OutboxStore) ResolveEffectiveMode(ctx context.Context, sessionID pgtype
 // helper (internal/app/sessionactor's own reposFromJSON, internal/
 // adapters/inbound/httpapi's own sessionRepoFullNames) rather than one
 // shared reposession-parsing package no Step has ever introduced.
-func singleSessionRepoFullName(rawRepos []byte) (string, bool) {
+// It returns EVERY repository the session names, not one, because the
+// egress decision is monotone toward suppression and therefore has to see
+// all of them. The second return value distinguishes "this session names
+// no repositories" (an empty slice, parsed fine) from "these repositories
+// could not be read" (false) -- two facts that must resolve differently,
+// and which a single empty result would collapse.
+func sessionRepoFullNames(rawRepos []byte) ([]string, bool) {
 	if len(rawRepos) == 0 {
-		return "", false
+		return nil, true
 	}
 	var repos []restdtos.CreateSessionRequestReposElem
-	if err := json.Unmarshal(rawRepos, &repos); err != nil || len(repos) != 1 {
-		return "", false
+	if err := json.Unmarshal(rawRepos, &repos); err != nil {
+		return nil, false
 	}
-	owner, repo, err := reposource.ParseOwnerRepo(repos[0].Url)
-	if err != nil {
-		return "", false
+	names := make([]string, 0, len(repos))
+	for _, r := range repos {
+		owner, repo, err := reposource.ParseOwnerRepo(r.Url)
+		if err != nil {
+			// One unreadable entry makes the whole set unevaluable: the
+			// others cannot vouch for the one nobody could resolve.
+			return nil, false
+		}
+		names = append(names, owner+"/"+repo)
 	}
-	return owner + "/" + repo, true
+	return names, true
 }
 
 // MarkDeliveredToLedger records §30.6/§30.8's own terminal mark: this
