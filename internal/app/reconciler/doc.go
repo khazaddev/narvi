@@ -67,4 +67,21 @@
 // This package is pure cloud-side orphan reaping: it never routes through
 // app/sessionactor.Registry.GetOrSpawn/Actor.Send into any session's own
 // actor.
+//
+// # ReconcileDemotions (§30.4)
+//
+// Run's SAME ticker also drives ReconcileDemotions, added alongside
+// ReconcileOnce rather than as a separate loop: it reads every sandbox
+// internal/app/repodemotion.Sweep has flagged
+// (sandboxes.demotion_terminate_requested_at, migrations/
+// 000108_sandbox_demotion_termination.up.sql -- Sweep itself is
+// Postgres-only, since its own caller, internal/app/seed's one-shot CLI,
+// never constructs a real ports.SandboxProvider) and calls THIS
+// process's own real StopSandbox for each, clearing the flag on success
+// and leaving it set (for the next tick to retry) on failure -- the SAME
+// per-item error isolation and retry-until-cleared shape ReconcileOnce's
+// own orphan reaping already established, applied to a demotion's own
+// mandatory-termination requirement rather than an unexplained provider
+// ref. See reconciler.go's own ReconcileDemotions doc comment for the
+// full mechanics.
 package reconciler

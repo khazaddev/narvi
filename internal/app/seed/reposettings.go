@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/khazaddev/narvi/internal/app/auditlog"
+	"github.com/khazaddev/narvi/internal/app/repodemotion"
 	"github.com/khazaddev/narvi/internal/domain/seedmanifest"
 )
 
@@ -45,6 +46,18 @@ import (
 // deps.RepoSettings directly, never through the REST layer), which is
 // the reason enrollment is seed-manifest-only in v1, not merely a
 // convenience choice.
+//
+// # LiveEgressEnabled (§30.4/§30.8) demotion also runs from here
+//
+// This is, today, the ONLY writer of repo_settings.live_egress_enabled
+// (migrations/000101_repo_settings_live_egress_enabled.up.sql's own doc
+// comment: "no REST route calls this yet"), so it is also the one place
+// a genuine live->shadow TRANSITION can be detected and acted on: a
+// write credential minted just before such a flip stays served for up to
+// ScmCredentialTTL (§30.4), so demotion must terminate every live
+// sandbox of the repo and cancel any in-flight push signal
+// (internal/app/repodemotion.Sweep, called below once the transition
+// itself has committed).
 func seedRepoSetting(ctx context.Context, deps Deps, s seedmanifest.RepoSetting, dryRun bool) Item {
 	key := s.RepoFullName
 
@@ -141,8 +154,40 @@ func seedRepoSetting(ctx context.Context, deps Deps, s seedmanifest.RepoSetting,
 		return Item{Kind: "repo_setting", Key: key, Outcome: OutcomeError, Detail: "record audit log: " + err.Error()}
 	}
 
+	// isDemotion captures the pre-write value (current, read before this
+	// transaction ever began) against the NEWLY declared one -- a genuine
+	// true->false TRANSITION, exactly mirroring UpsertLiveEgressEnabled's
+	// own live_egress_promoted_at CASE logic (queries/reposettings.sql):
+	// re-affirming an already-shadow repo, or a fresh row that starts
+	// shadow, is not a demotion (there is nothing this repo's own
+	// sandboxes could have held beyond read-only in either case, §30.8's
+	// "shadow-by-default-at-onboarding" -- this window exists only for
+	// demotion of a FORMERLY-live repo).
+	isDemotion := s.LiveEgressEnabled != nil && current.LiveEgressEnabled && !*s.LiveEgressEnabled
+
 	if err := tx.Commit(ctx); err != nil {
 		return Item{Kind: "repo_setting", Key: key, Outcome: OutcomeError, Detail: "commit tx: " + err.Error()}
+	}
+
+	if isDemotion {
+		// §30.4's own demotion fix, run AFTER commit (Sweep is Postgres-
+		// only, never a real provider call, but the settings write itself
+		// is already durable regardless of what Sweep does): every
+		// currently-live sandbox of this now-demoted repo is flagged for
+		// real termination (internal/app/reconciler.Reconciler's own new
+		// demotion-sweep tick actually issues the StopSandbox call) and
+		// has any in-flight push/PR decision cancelled. A Sweep failure is
+		// reported as a genuine error -- the demotion itself already
+		// committed and cannot (and should not) be rolled back for this,
+		// but an operator must be loudly told that this repo's sandboxes
+		// were NOT flagged, rather than quietly assuming §30.4's own
+		// mandatory termination happened.
+		marked, sweepErr := repodemotion.Sweep(ctx, deps.Sandboxes, s.RepoFullName)
+		if sweepErr != nil {
+			return Item{Kind: "repo_setting", Key: key, Outcome: OutcomeError,
+				Detail: fmt.Sprintf("%s (committed, but repo-demotion sweep failed: %s)", detail, sweepErr.Error())}
+		}
+		detail = fmt.Sprintf("%s, demotion sweep flagged %d live sandbox(es) for termination", detail, marked)
 	}
 
 	return Item{Kind: "repo_setting", Key: key, Outcome: OutcomeUpserted, Detail: detail}

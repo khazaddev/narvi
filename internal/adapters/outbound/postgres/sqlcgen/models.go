@@ -2053,6 +2053,7 @@ type Sandbox struct {
 	SnapshotSuppressedInShadow    bool               `json:"snapshot_suppressed_in_shadow"`
 	PendingPushSuppressedInShadow *bool              `json:"pending_push_suppressed_in_shadow"`
 	PendingPushCancelled          bool               `json:"pending_push_cancelled"`
+	DemotionTerminateRequestedAt  pgtype.Timestamptz `json:"demotion_terminate_requested_at"`
 }
 
 type SandboxHistory struct {

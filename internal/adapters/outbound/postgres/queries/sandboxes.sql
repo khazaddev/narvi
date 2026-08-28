@@ -265,3 +265,51 @@ UPDATE sandboxes
 SET pending_push_cancelled = true, updated_at = now()
 WHERE session_id = $1 AND pending_push_suppressed_in_shadow IS NOT NULL
 RETURNING *;
+
+-- name: ListLiveSandboxesWithSessionRepos :many
+-- §30.4's own repo-demotion sweep (internal/app/seed): every LIVE sandbox
+-- (the SAME "live status" set ListLiveSandboxProviderIDs already defines
+-- above), joined with its owning session's own raw repos JSONB column
+-- (sessions.repos, migrations/000018_session_repos.up.sql) -- the sweep
+-- parses this in Go (mirroring postgres.outboxShadow's own
+-- sessionRepoFullNames, and app/sessionactor's own reposFromJSON/
+-- rolloutDecisionForSession, this codebase's established "duplicate the
+-- small per-package repo-JSON helper rather than share one" convention)
+-- to decide which of these sandboxes belong to the just-demoted repo.
+SELECT sandboxes.session_id AS session_id,
+       sandboxes.provider_id AS provider_id,
+       sessions.repos AS repos
+FROM sandboxes
+JOIN sessions ON sessions.id = sandboxes.session_id
+WHERE sandboxes.status IN ('spawning', 'connecting', 'booting', 'ready', 'snapshotting', 'suspect');
+
+-- name: MarkSandboxDemotionTerminationRequested :one
+-- §30.4's own "demotion ... must terminate (or respawn) every sandbox of
+-- the repo" (migrations/000108_sandbox_demotion_termination.up.sql):
+-- stamped by the repo-demotion sweep (internal/app/seed) for every live
+-- sandbox it finds belonging to a just-demoted repo. Read back, and acted
+-- on, by app/reconciler.Reconciler's own new demotion-sweep tick.
+UPDATE sandboxes
+SET demotion_terminate_requested_at = now(), updated_at = now()
+WHERE session_id = $1
+RETURNING *;
+
+-- name: ListSandboxesPendingDemotionTermination :many
+-- app/reconciler.Reconciler's own new demotion-sweep tick reads every
+-- sandbox row a repo-demotion sweep has flagged, so it can issue a real
+-- ports.SandboxProvider.StopSandbox call for each -- mirrors this
+-- reconciler's own existing orphan-reaping query
+-- (ListLiveSandboxProviderIDs) in spirit, but scoped to rows an explicit
+-- demotion flagged rather than every live row.
+SELECT * FROM sandboxes WHERE demotion_terminate_requested_at IS NOT NULL;
+
+-- name: ClearSandboxDemotionTerminationRequested :one
+-- Consumes a sandbox's own demotion-termination request once
+-- app/reconciler.Reconciler has successfully issued a real StopSandbox
+-- call for it -- left set (so the very next tick retries) when that call
+-- fails, mirroring this reconciler's own existing orphan-reap retry
+-- precedent (ReconcileOnce's own doc comment).
+UPDATE sandboxes
+SET demotion_terminate_requested_at = NULL, updated_at = now()
+WHERE session_id = $1
+RETURNING *;

@@ -32,6 +32,15 @@ type Deps struct {
 	RepoSettings *postgres.RepoSettingsStore
 	AuditLog     *postgres.AuditLogStore
 
+	// Sandboxes (§30.4) is seedRepoSetting's own input to
+	// internal/app/repodemotion.Sweep -- the ONLY use this package makes
+	// of it -- called once a real repo_settings.live_egress_enabled
+	// true->false transition commits, so every currently-live sandbox of
+	// the just-demoted repo is flagged for real termination and has any
+	// in-flight push signal cancelled. See reposettings.go's own doc
+	// comment.
+	Sandboxes *postgres.SandboxStore
+
 	// TokenEncryptionKey is platform.Config.TokenEncryptionKey, used to
 	// seal every Secret's plaintext value via platform.EncryptToken
 	// before it is ever written to sandbox_secrets.value_encrypted --
@@ -59,6 +68,7 @@ func NewDeps(pool *pgxpool.Pool, tokenEncryptionKey []byte, initialAdminEmails [
 		Automations:        postgres.NewAutomationStore(pool),
 		RepoSettings:       postgres.NewRepoSettingsStore(pool),
 		AuditLog:           postgres.NewAuditLogStore(pool),
+		Sandboxes:          postgres.NewSandboxStore(pool),
 		TokenEncryptionKey: tokenEncryptionKey,
 		InitialAdminEmails: initialAdminEmails,
 	}

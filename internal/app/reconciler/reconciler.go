@@ -30,6 +30,13 @@ type Reconciler struct {
 
 	orphansReaped metric.Int64Counter
 
+	// demotionsTerminated (§30.4) counts every sandbox this reconciler has
+	// actually terminated because a repo-demotion sweep
+	// (internal/app/repodemotion.Sweep, called from internal/app/seed's
+	// own live_egress_enabled writer) flagged it -- see
+	// ReconcileDemotions' own doc comment.
+	demotionsTerminated metric.Int64Counter
+
 	// unexplained is ReconcileOnce's own in-memory, cross-tick debounce
 	// state: for each ProviderID currently suspected of being an orphan
 	// (seen in provider.List() with no matching row in the expected-alive
@@ -82,23 +89,34 @@ func NewReconciler(sandboxes *postgres.SandboxStore, provider ports.SandboxProvi
 		return nil, fmt.Errorf("reconciler: construct orphans_reaped counter: %w", err)
 	}
 
+	demotionsTerminated, err := meter.Int64Counter(
+		"demotions_terminated",
+		metric.WithDescription("Number of live sandboxes stopped because a repo-demotion sweep flagged them (§30.4)."),
+		metric.WithUnit("{sandbox}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("reconciler: construct demotions_terminated counter: %w", err)
+	}
+
 	return &Reconciler{
-		sandboxes:     sandboxes,
-		provider:      provider,
-		timeouts:      timeouts,
-		orphansReaped: orphansReaped,
-		unexplained:   make(map[string]time.Time),
+		sandboxes:           sandboxes,
+		provider:            provider,
+		timeouts:            timeouts,
+		orphansReaped:       orphansReaped,
+		demotionsTerminated: demotionsTerminated,
+		unexplained:         make(map[string]time.Time),
 	}, nil
 }
 
 // Run runs the process-wide reconciler loop (§5.3: "60s loop against the
 // provider API") until ctx is done -- mirrors app/sessionactor's own
 // RunTimerPump exactly (timerpump.go): a ticker on
-// platform.Timeouts.ReconcilerInterval, calling ReconcileOnce each tick,
-// logging (never propagating) any per-tick error so one bad tick never
-// kills the whole loop. The caller starts this via its own errgroup.Go
-// exactly once per process, same as RunTimerPump's own doc comment
-// describes.
+// platform.Timeouts.ReconcilerInterval, calling ReconcileOnce (orphan GC)
+// and ReconcileDemotions (§30.4) each tick, logging (never propagating)
+// either one's error so one bad tick never kills the whole loop, and
+// never lets one starve the other of its own tick. The caller starts
+// this via its own errgroup.Go exactly once per process, same as
+// RunTimerPump's own doc comment describes.
 func (r *Reconciler) Run(ctx context.Context) error {
 	ticker := time.NewTicker(r.timeouts.ReconcilerInterval)
 	defer ticker.Stop()
@@ -110,6 +128,9 @@ func (r *Reconciler) Run(ctx context.Context) error {
 		case <-ticker.C:
 			if err := r.ReconcileOnce(ctx); err != nil {
 				platform.Logger(ctx).Error("reconciler: tick failed", "error", err)
+			}
+			if err := r.ReconcileDemotions(ctx); err != nil {
+				platform.Logger(ctx).Error("reconciler: demotion-sweep tick failed", "error", err)
 			}
 		}
 	}
@@ -239,6 +260,67 @@ func (r *Reconciler) ReconcileOnce(ctx context.Context) error {
 	}
 
 	r.unexplained = stillUnexplained
+
+	return nil
+}
+
+// ReconcileDemotions implements §30.4's own mandatory-termination half:
+// "demotion ... must terminate (or respawn) every sandbox of the repo".
+// internal/app/repodemotion.Sweep (called from internal/app/seed's own
+// live_egress_enabled writer, the ONLY place that flag flips today) is
+// Postgres-only -- it never touches a real provider, since the seed CLI
+// that calls it never constructs one -- so it merely FLAGS every
+// affected sandbox (sandboxes.demotion_terminate_requested_at,
+// migrations/000108_sandbox_demotion_termination.up.sql). This method is
+// what actually terminates the real cloud resource: it runs inside
+// "control-plane serve", the one process that holds a real
+// ports.SandboxProvider, on the SAME ReconcilerInterval-ticking loop
+// ReconcileOnce already uses (Run, above) -- so a demotion recorded on
+// any pod, at any time, is acted on by whichever pod's own reconciler
+// next ticks, with no direct coupling between the seed CLI and this one.
+//
+// A sandbox flagged with no provider_id yet (a spawn attempt genuinely
+// in flight -- dispatch.go's own three-step spawn sequencing can commit
+// a live-status row before provider_id is recorded, mirroring
+// ReconcileOnce's own identical, already-documented race) is left FLAGGED
+// for the next tick to retry, exactly like a failed StopSandbox call
+// below: there is nothing yet to stop, but the flag must not be dropped
+// just because this tick was too early.
+//
+// One failed StopSandbox call is logged and does NOT abort the rest of
+// the batch, mirroring ReconcileOnce's own per-orphan error isolation --
+// and stays flagged so the very next tick retries.
+func (r *Reconciler) ReconcileDemotions(ctx context.Context) error {
+	rows, err := r.sandboxes.ListPendingDemotionTermination(ctx)
+	if err != nil {
+		return fmt.Errorf("reconciler: list sandboxes pending demotion termination: %w", err)
+	}
+
+	for _, row := range rows {
+		if row.ProviderID == nil {
+			platform.Logger(ctx).Warn("reconciler: sandbox flagged for demotion termination has no provider_id yet; leaving flagged for a later tick",
+				"session_id", row.SessionID.String())
+			continue
+		}
+
+		if err := r.provider.StopSandbox(ctx, ports.SandboxRef{ProviderID: *row.ProviderID}); err != nil {
+			platform.Logger(ctx).Error("reconciler: stop demoted sandbox failed; leaving flagged for retry",
+				"error", err, "session_id", row.SessionID.String(), "provider_id", *row.ProviderID)
+			continue
+		}
+
+		if _, err := r.sandboxes.ClearDemotionTerminationRequested(ctx, row.SessionID); err != nil {
+			// The sandbox was genuinely stopped -- a failure to clear the
+			// flag only means the NEXT tick harmlessly calls StopSandbox
+			// again against an already-gone resource (most provider APIs
+			// treat a double-stop as a benign no-op), never a correctness
+			// problem, but still logged so it stays observable.
+			platform.Logger(ctx).Error("reconciler: clear demotion termination request failed after a successful stop",
+				"error", err, "session_id", row.SessionID.String())
+		}
+
+		r.demotionsTerminated.Add(ctx, 1)
+	}
 
 	return nil
 }

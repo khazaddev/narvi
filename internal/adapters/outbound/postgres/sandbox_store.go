@@ -164,3 +164,34 @@ func (s *SandboxStore) ClearPendingPush(ctx context.Context, sessionID pgtype.UU
 func (s *SandboxStore) CancelPendingPush(ctx context.Context, sessionID pgtype.UUID) (sqlcgen.Sandbox, error) {
 	return s.q.CancelSandboxPendingPush(ctx, sessionID)
 }
+
+// ListLiveWithSessionRepos returns every live sandbox alongside its
+// owning session's own raw repos JSONB -- the repo-demotion sweep's
+// (internal/app/seed) own input; see ListLiveSandboxesWithSessionRepos's
+// own generated doc comment.
+func (s *SandboxStore) ListLiveWithSessionRepos(ctx context.Context) ([]sqlcgen.ListLiveSandboxesWithSessionReposRow, error) {
+	return s.q.ListLiveSandboxesWithSessionRepos(ctx)
+}
+
+// MarkDemotionTerminationRequested flags a sandbox for the process-wide
+// reconciler (internal/app/reconciler) to really terminate -- §30.4's own
+// "demotion ... must terminate (or respawn) every sandbox of the repo",
+// called by the repo-demotion sweep (internal/app/seed) for every live
+// sandbox it finds belonging to a just-demoted repo.
+func (s *SandboxStore) MarkDemotionTerminationRequested(ctx context.Context, sessionID pgtype.UUID) (sqlcgen.Sandbox, error) {
+	return s.q.MarkSandboxDemotionTerminationRequested(ctx, sessionID)
+}
+
+// ListPendingDemotionTermination returns every sandbox a repo-demotion
+// sweep has flagged for termination -- app/reconciler.Reconciler's own
+// new demotion-sweep tick reads this every ReconcilerInterval.
+func (s *SandboxStore) ListPendingDemotionTermination(ctx context.Context) ([]sqlcgen.Sandbox, error) {
+	return s.q.ListSandboxesPendingDemotionTermination(ctx)
+}
+
+// ClearDemotionTerminationRequested consumes a sandbox's own
+// demotion-termination request once app/reconciler.Reconciler has
+// successfully issued a real StopSandbox call for it.
+func (s *SandboxStore) ClearDemotionTerminationRequested(ctx context.Context, sessionID pgtype.UUID) (sqlcgen.Sandbox, error) {
+	return s.q.ClearSandboxDemotionTerminationRequested(ctx, sessionID)
+}
