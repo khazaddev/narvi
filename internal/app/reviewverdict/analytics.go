@@ -40,6 +40,28 @@ func ListRecordsSince(ctx context.Context, deps Deps, repoFullName string, since
 	return records, nil
 }
 
+// ListNonShadowRecordsSince is ListRecordsSince's own §30.8 customer-
+// consequential sibling -- excludes any verdict whose own
+// suppressed_in_shadow stamp is true, or that predates repoFullName's
+// own live_egress_promoted_at fence (ListNonShadowReviewVerdictsInWindow's
+// own generated doc comment). internal/app/digest's own daily rollup
+// (§21.3) is this function's one caller: a shadow-era verdict must never
+// surface as a phantom review in a customer-facing digest, even though
+// Timeseries/TopRiskDrivers below deliberately stay on ListRecordsSince's
+// own unfiltered read (§30.6: those feed Narvi's own internal analytics
+// surface, never a customer's own channel).
+func ListNonShadowRecordsSince(ctx context.Context, deps Deps, repoFullName string, sinceTime time.Time) ([]reviewverdict.Record, error) {
+	rows, err := deps.ReviewVerdicts.ListNonShadowInWindow(ctx, repoFullName, pgtype.Timestamptz{Time: sinceTime, Valid: true}, maxAnalyticsRows)
+	if err != nil {
+		return nil, err
+	}
+	records := make([]reviewverdict.Record, len(rows))
+	for i, row := range rows {
+		records[i] = recordFromRow(row)
+	}
+	return records, nil
+}
+
 // maxHistoryRows bounds the merge readout's own PR-scoped "History" rail
 // (§26.1 item 5, §12.2 item 2) -- generous for any single PR's real
 // verdict volume, mirroring maxAnalyticsRows' own identical "bounded from

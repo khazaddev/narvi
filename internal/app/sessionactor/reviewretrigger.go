@@ -404,12 +404,16 @@ func (a *Actor) readReviewRetriggerState(ctx context.Context) (*reviewRetriggerD
 			return a.deleteTimer(ctx, tx, TimerReviewRetriggerDebounce)
 		}
 
-		// §24.3 step 2: the latest posted verdict for this PR -- the
-		// SAME per-PR GetLatestReviewVerdict reduction §21.1 defines and
-		// every other caller of "the latest verdict for this PR" already
-		// reuses (queries/reviewverdicts.sql).
+		// §24.3 step 2: the latest posted verdict for this PR --
+		// GetLatestNonShadow, not the plain GetLatestReviewVerdict every
+		// internal, operator-facing caller uses (§30.8): this decision is
+		// customer-consequential in both directions -- a shadow-era
+		// "already reviewed" fact must never suppress a REAL re-review
+		// once this repo goes live, and a shadow-era risk level must
+		// never be quoted in the real, customer-visible budget-exhausted
+		// notice below (enqueueAutoRetriggerBudgetExhaustedNotice).
 		var verdictHeadSHA, verdictRiskLevel, verdictReviewPath string
-		if latest, verdictErr := a.stores.reviewVerdict.WithTx(tx).GetLatest(ctx, prSession.RepoFullName, prSession.PrNumber); verdictErr != nil {
+		if latest, verdictErr := a.stores.reviewVerdict.WithTx(tx).GetLatestNonShadow(ctx, prSession.RepoFullName, prSession.PrNumber); verdictErr != nil {
 			if !errors.Is(verdictErr, pgx.ErrNoRows) {
 				return fmt.Errorf("sessionactor: get latest review verdict: %w", verdictErr)
 			}

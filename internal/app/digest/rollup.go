@@ -39,8 +39,12 @@ func buildRepoSection(ctx context.Context, deps Deps, repoFullName string, now t
 
 	section.AutoMergeEnabled = appreviewverdict.AutoMergeEnabled(ctx, deps.ReviewVerdict, repoFullName)
 
+	// §30.8: a shadow-era verdict must never reveal a phantom review in
+	// this customer-facing rollup -- ListNonShadowRecordsSince is
+	// ListRecordsSince's own query-level exclusion, never a call-site
+	// filter over the unfiltered read.
 	since := now.Add(-deps.Timeouts.DigestContentWindow)
-	records, err := appreviewverdict.ListRecordsSince(ctx, deps.ReviewVerdict, repoFullName, since)
+	records, err := appreviewverdict.ListNonShadowRecordsSince(ctx, deps.ReviewVerdict, repoFullName, since)
 	if err != nil {
 		logger.Error("digest: list review_verdicts records failed", "error", err, "repo_full_name", repoFullName)
 	} else if len(records) > 0 {
