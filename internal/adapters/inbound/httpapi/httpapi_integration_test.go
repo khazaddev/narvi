@@ -181,6 +181,22 @@ type testRig struct {
 	repoSettings *narvipg.RepoSettingsStore
 	botHandle    string
 
+	// shadowLedger/readOnlyMinter/platformShadow (§30.4) back this rig's
+	// own scm-credentials route's shadow-substitution branch. readOnlyMinter
+	// defaults to a fakeReadOnlyMinter returning a fixed, obviously-fake
+	// read-only token (scmcredentials_integration_test.go) -- every
+	// pre-existing test in this file that relies on
+	// createSessionWithGitHubIdentity/createSessionWithGitHubIdentityAndRepos
+	// gets its session's own repo(s) upserted live (repo_settings.
+	// live_egress_enabled = true) by that SAME helper, so those tests keep
+	// exercising the LIVE creator-OAuth/bot-token path they always did --
+	// this rig's own shadow-specific tests instead create a session whose
+	// repo is deliberately left un-promoted (the default), or set
+	// platformShadow true via newTestRig's own mutate func.
+	shadowLedger   *narvipg.ShadowSCMWriteStore
+	readOnlyMinter httpapi.ReadOnlyMinter
+	platformShadow bool
+
 	// rolloutMode (§10 Phase 6, §32) backs this rig's own
 	// CreateSession route below -- defaults to platform.RolloutModeOpen
 	// (today's existing, unchanged behavior for every test in this file
@@ -393,6 +409,8 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		prSessions:            narvipg.NewGitHubPRSessionStore(pool),
 		repoSettings:          narvipg.NewRepoSettingsStore(pool),
 		botHandle:             "narvi-test-bot",
+		shadowLedger:          narvipg.NewShadowSCMWriteStore(pool),
+		readOnlyMinter:        newFakeReadOnlyMinter(),
 		rolloutMode:           platform.RolloutModeOpen,
 		reviewFindings:        narvipg.NewReviewFindingStore(pool),
 		sentinelFixes:         narvipg.NewSentinelFixStore(pool),
@@ -573,7 +591,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// outside auth.Middleware entirely -- see scmcredentials.go's own doc
 	// comment.
 	router.Post("/sessions/{sessionID}/scm-credentials",
-		httpapi.ScmCredentials(rig.sessions, rig.sandboxes, rig.identities, rig.users, rig.prSessions, rig.botToken, rig.tokenEncryptionKey, platform.DefaultTimeouts()))
+		httpapi.ScmCredentials(rig.sessions, rig.sandboxes, rig.identities, rig.users, rig.prSessions, rig.repoSettings, rig.shadowLedger, rig.readOnlyMinter, rig.botToken, rig.tokenEncryptionKey, platform.DefaultTimeouts(), rig.platformShadow))
 	// snapshot-mint (§3.2, "snapshots & restore") is mounted the SAME
 	// way -- see snapshotmint.go's own doc comment.
 	router.Post("/sessions/{sessionID}/snapshot",

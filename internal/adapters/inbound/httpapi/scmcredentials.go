@@ -120,6 +120,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -136,17 +137,32 @@ import (
 
 	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/wshub"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapp"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/egressmode"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/app/shadowledger"
+	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/domain/sandbox"
+	"github.com/khazaddev/narvi/internal/domain/scmscope"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
 // scmCredentialsRequest mirrors internal/sandboxagent/credentials.
 // cpclient.go's own scmCredentialsRequest exactly.
+//
+// ForceReadOnly is §30.4(2)'s own addition: the sandbox's own credential
+// helper sets this true when cfg.BootMode == sandboxboot.BootModeBuild --
+// "a build only needs read". It can only NARROW what this handler
+// returns, never widen it: a true value forces the shadow-substitution
+// branch below regardless of what the egress-mode resolution would have
+// said on its own, but a false value never bypasses that resolution --
+// the sandbox cannot request a WRITE-capable credential by omitting this
+// field, only ask (honestly or not) for the strictly safer one.
 type scmCredentialsRequest struct {
-	Host string `json:"host"`
+	Host          string `json:"host"`
+	ForceReadOnly bool   `json:"forceReadOnly,omitempty"`
 }
 
 // scmCredentialsResponse mirrors internal/sandboxagent/credentials.
@@ -183,6 +199,15 @@ func verifySandboxBearerToken(presented string, storedHash *string) bool {
 	}
 	got := wshub.HashSandboxToken(presented)
 	return subtle.ConstantTimeCompare([]byte(got), []byte(*storedHash)) == 1
+}
+
+// ReadOnlyMinter mints a §30.4 read-only GitHub App installation token
+// scoped to owner's own repoNames -- satisfied in production by
+// internal/adapters/outbound/githubapp.Client (see that package's own
+// doc.go for why no real GitHub App is reachable to test against), and
+// fakeable here without one.
+type ReadOnlyMinter interface {
+	MintInstallationToken(ctx context.Context, owner string, repoNames []string) (githubapp.Token, error)
 }
 
 // ScmCredentials backs POST /sessions/{sessionID}/scm-credentials (note:
@@ -231,6 +256,26 @@ func verifySandboxBearerToken(presented string, storedHash *string) bool {
 //     the session's own repos don't actually use, e.g. a compromised
 //     in-sandbox dependency probing an arbitrary host via the
 //     credential-helper protocol).
+//     6.5. §30.4's own shadow substitution -- a SINGLE, server-side-only
+//     interception covering BOTH of steps 7 and 8-10 below (§30.4(1): "a
+//     dedicated test asserts a review session in shadow receives a
+//     read-only credential" -- substituting only the creator-OAuth branch
+//     would still hand every shadow REVIEW sandbox the fully write-capable
+//     bot token). Resolved from req.ForceReadOnly (§30.4(2), a build boot)
+//     OR ANY of the session's own repos on req.Host resolving shadow
+//     (egressmode.Resolve, monotone toward suppression -- mirrors
+//     postgres.OutboxStore.ResolveEffectiveMode's own identical "any
+//     suppressed repo suppresses the whole" reasoning for a multi-repo
+//     session). When shadow: mints a read-only GitHub App installation
+//     token (internal/adapters/outbound/githubapp), validates its granted
+//     permissions are read-only (§30.4(4), internal/domain/scmscope.
+//     ValidateReadOnly) before ever returning it, records a refusal into
+//     the ledger and 500s if that scope check fails AND the record itself
+//     fails (never silently), otherwise 403s the SAME generic body as
+//     every other outcome in this class -> steps 7 and 8-10 never run at
+//     all. A session whose repos on req.Host span more than one distinct
+//     owner cannot be served by one substituted credential (a GitHub App
+//     installation is per-account) -> the SAME 403, logged separately.
 //  7. This session has a github_pr_sessions row (prSessions.
 //     GetBySessionID succeeds) -> 200 with botToken, never the creator's
 //     own identity -- see this file's own top comment ("Audit remediation")
@@ -294,9 +339,13 @@ func ScmCredentials(
 	identities *postgres.IdentityStore,
 	users *postgres.UserStore,
 	prSessions *postgres.GitHubPRSessionStore,
+	repoSettings egressmode.RepoSettingsReader,
+	ledger shadowledger.Store,
+	readOnlyMinter ReadOnlyMinter,
 	botToken string,
 	tokenEncryptionKey []byte,
 	timeouts platform.Timeouts,
+	platformShadow bool,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -385,6 +434,90 @@ func ScmCredentials(
 			logger.Warn("httpapi: scm-credentials: rejecting: requested host not among session's own repo hosts",
 				"requested_host", req.Host)
 			writeError(w, http.StatusForbidden, "no usable git credential for this session")
+			return
+		}
+
+		// §30.4's own shadow substitution (this func's own doc comment
+		// step 6.5): a SINGLE interception, server-side only, covering
+		// BOTH the review-bot-token branch (step 7) and the creator-OAuth
+		// branch (steps 8-10) below. hostRepoFullNames is every session
+		// repo on req.Host regardless of owner (used for the egress-mode
+		// resolution, which must see all of them -- §30.8's own "any
+		// suppressed repo suppresses the whole" rule); hostReposByOwner
+		// groups the SAME repos by owner, since a GitHub App installation
+		// token covers exactly one account and MintInstallationToken can
+		// only be scoped to one.
+		hostRepoFullNames, hostReposByOwner := shadowHostRepos(sessionRow.Repos, req.Host)
+
+		shadow := req.ForceReadOnly
+		if !shadow {
+			for _, repoFullName := range hostRepoFullNames {
+				if egressmode.Resolve(ctx, egressmode.Deps{
+					RepoSettings:   repoSettings,
+					PlatformShadow: platformShadow,
+				}, repoFullName).Suppressed() {
+					shadow = true
+					break
+				}
+			}
+		}
+
+		if shadow {
+			if len(hostReposByOwner) != 1 {
+				logger.Warn("httpapi: scm-credentials: rejecting: session's repos on this host span more than one owner; a single substituted read-only credential cannot cover them",
+					"requested_host", req.Host, "distinct_owners", len(hostReposByOwner))
+				writeError(w, http.StatusForbidden, "no usable git credential for this session")
+				return
+			}
+			var owner string
+			var repoNames []string
+			for o, names := range hostReposByOwner {
+				owner, repoNames = o, names
+			}
+
+			mintCtx, cancel := context.WithTimeout(ctx, timeouts.GitHubAppMintTimeout)
+			token, mintErr := readOnlyMinter.MintInstallationToken(mintCtx, owner, repoNames)
+			cancel()
+			if mintErr != nil {
+				logger.Error("httpapi: scm-credentials: mint read-only installation token failed", "error", mintErr)
+				writeError(w, http.StatusInternalServerError, "internal error")
+				return
+			}
+
+			// §30.4(4)'s own per-mint scope introspection: fail-closed,
+			// never trust the request shape alone. A refusal here is
+			// recorded with the SAME record-or-fail semantics the rest of
+			// the ledger already enforces (shadowledger's own top doc
+			// comment) -- a refusal that cannot be recorded is a 500, not
+			// a silent 403, because "suppressed but unrecorded" is exactly
+			// the contract violation that package exists to prevent.
+			if scopeErr := scmscope.ValidateReadOnly(token.Permissions); scopeErr != nil {
+				logger.Warn("httpapi: scm-credentials: refusing: minted installation token failed the read-only scope check",
+					"error", scopeErr, "requested_host", req.Host)
+				if recordErr := shadowledger.Record(ctx, ledger, shadowledger.Entry{
+					Operation:    "scm_credential_mint_refused",
+					RepoFullName: hostRepoFullNames[0],
+					Target:       req.Host,
+					SessionID:    sessionID,
+					Spec: shadowledger.ScmCredentialMintRefused{
+						Host:               req.Host,
+						Reason:             scopeErr.Error(),
+						GrantedPermissions: token.Permissions,
+					},
+				}); recordErr != nil {
+					logger.Error("httpapi: scm-credentials: record refused mint failed", "error", recordErr)
+					writeError(w, http.StatusInternalServerError, "internal error")
+					return
+				}
+				writeError(w, http.StatusForbidden, "no usable git credential for this session")
+				return
+			}
+
+			writeJSON(w, http.StatusOK, scmCredentialsResponse{
+				Username:  "x-access-token",
+				Password:  token.Value,
+				ExpiresAt: time.Now().Add(timeouts.ScmCredentialTTL),
+			})
 			return
 		}
 
@@ -558,6 +691,49 @@ func sessionRepoHosts(rawRepos []byte) ([]string, error) {
 		hosts = append(hosts, strings.ToLower(parsed.Host))
 	}
 	return hosts, nil
+}
+
+// shadowHostRepos parses rawRepos (sessions.repos' own raw JSONB bytes)
+// and returns every repo whose clone URL's host case-insensitively
+// matches host: repoFullNames is "owner/repo" for each -- every one of
+// them, regardless of owner, since §30.4's own shadow-mode resolution
+// below must see all of them (§30.8's "any suppressed repo suppresses the
+// whole" rule, mirroring postgres.OutboxStore's own identical
+// sessionRepoFullNames/ResolveEffectiveMode reasoning). byOwner groups
+// the SAME repos' bare names by owner, since MintInstallationToken can
+// only ever be scoped to one account's own installation -- a session
+// whose matched repos span more than one owner therefore has
+// len(byOwner) > 1, which this func's one caller (ScmCredentials) treats
+// as "cannot be served by a single substituted credential" and refuses.
+//
+// A repo whose URL fails to parse, or whose host doesn't match, is
+// skipped rather than erroring the whole request -- mirrors
+// sessionRepoHosts' own identical "already-trusted, already-persisted
+// data; one malformed entry should not fail credential minting for every
+// other, well-formed repo" reasoning immediately below.
+func shadowHostRepos(rawRepos []byte, host string) (repoFullNames []string, byOwner map[string][]string) {
+	if len(rawRepos) == 0 {
+		return nil, nil
+	}
+	var repos []sessionconfig.SessionConfigReposElem
+	if err := json.Unmarshal(rawRepos, &repos); err != nil {
+		return nil, nil
+	}
+	host = strings.ToLower(host)
+	byOwner = make(map[string][]string)
+	for _, repo := range repos {
+		parsed, err := url.Parse(repo.Url)
+		if err != nil || parsed.Host == "" || strings.ToLower(parsed.Host) != host {
+			continue
+		}
+		owner, name, err := reposource.ParseOwnerRepo(repo.Url)
+		if err != nil {
+			continue
+		}
+		repoFullNames = append(repoFullNames, owner+"/"+name)
+		byOwner[owner] = append(byOwner[owner], name)
+	}
+	return repoFullNames, byOwner
 }
 
 // sessionHasRepoHost reports whether host case-insensitively matches at

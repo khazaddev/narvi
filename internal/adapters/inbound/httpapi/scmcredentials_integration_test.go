@@ -15,9 +15,92 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapp"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/platform"
 )
+
+// repoFullNamesFromJSON extracts "owner/repo" from every {name, url,
+// branch} entry in reposJSON -- the exact shape sessions.repos carries in
+// production. Used only by this file's own test fixtures, to seed
+// repo_settings.live_egress_enabled ahead of a session's own creation.
+func repoFullNamesFromJSON(t *testing.T, reposJSON string) []string {
+	t.Helper()
+	var repos []struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal([]byte(reposJSON), &repos); err != nil {
+		t.Fatalf("unmarshal reposJSON fixture %q: %v", reposJSON, err)
+	}
+	fullNames := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		owner, name, err := reposource.ParseOwnerRepo(repo.URL)
+		if err != nil {
+			t.Fatalf("parse owner/repo from fixture URL %q: %v", repo.URL, err)
+		}
+		fullNames = append(fullNames, owner+"/"+name)
+	}
+	return fullNames
+}
+
+// promoteRepoLive upserts repo_settings.live_egress_enabled = true for
+// every repo named in reposJSON -- §30.4's own shadow substitution
+// defaults every UN-promoted repo to shadow (§30.8), so any test in this
+// file that builds a session directly (bypassing
+// createSessionWithGitHubIdentityAndRepos/createOwnedGitHubReviewSessionWithRepos,
+// which already do this) and wants to exercise a LIVE-path check (steps
+// 7-10, never this Step's own step 6.5) must call this first.
+func promoteRepoLive(ctx context.Context, t *testing.T, r testRig, reposJSON string) {
+	t.Helper()
+	for _, fullName := range repoFullNamesFromJSON(t, reposJSON) {
+		if _, err := r.repoSettings.UpsertLiveEgressEnabled(ctx, fullName, true); err != nil {
+			t.Fatalf("upsert live_egress_enabled for %s: %v", fullName, err)
+		}
+	}
+}
+
+// fakeReadOnlyMinter is this rig's own fake of httpapi.ReadOnlyMinter --
+// there is no real GitHub App reachable from this environment (see
+// internal/adapters/outbound/githubapp's own doc.go), so every test that
+// exercises §30.4's shadow-substitution branch does so against this fake
+// rather than a real GitHub API call. Configurable per test via its own
+// exported fields (mirroring fakeSnapshotProvider's own established
+// pattern in this same package): Token/Err let a test control what the
+// "mint" itself returns, and the three Saw* fields record what was
+// actually asked for so a test can assert on it.
+type fakeReadOnlyMinter struct {
+	Token githubapp.Token
+	Err   error
+
+	SawOwner     string
+	SawRepoNames []string
+	CallCount    int
+}
+
+// newFakeReadOnlyMinter returns a fake preconfigured to succeed with a
+// fixed, obviously-fake, genuinely read-only token -- the safe default
+// for every test in this rig that does not care about the shadow branch's
+// own mint result specifically.
+func newFakeReadOnlyMinter() *fakeReadOnlyMinter {
+	return &fakeReadOnlyMinter{
+		Token: githubapp.Token{
+			Value:       "ghs_fakeReadOnlyInstallationToken",
+			ExpiresAt:   time.Now().Add(time.Hour),
+			Permissions: map[string]string{"contents": "read", "metadata": "read"},
+		},
+	}
+}
+
+func (m *fakeReadOnlyMinter) MintInstallationToken(_ context.Context, owner string, repoNames []string) (githubapp.Token, error) {
+	m.CallCount++
+	m.SawOwner = owner
+	m.SawRepoNames = repoNames
+	if m.Err != nil {
+		return githubapp.Token{}, m.Err
+	}
+	return m.Token, nil
+}
 
 // sha256Hex mirrors wshub.HashSandboxToken's own algorithm exactly (SHA-256,
 // hex-encoded) -- duplicated here rather than imported since this is a
@@ -74,8 +157,28 @@ func createSessionWithGitHubIdentity(ctx context.Context, t *testing.T, r testRi
 // general-purpose form: reposJSON is written verbatim into sessions.repos
 // (the same JSONB shape internal/adapters/inbound/httpapi.CreateSession's
 // own real path persists, {branch, name, url} per repo).
+//
+// §30.4's own shadow substitution: every repo named in reposJSON is
+// upserted LIVE (repo_settings.live_egress_enabled = true) before this
+// function returns -- every PRE-EXISTING test in this file that uses this
+// helper (or createSessionWithGitHubIdentity) is proving the LIVE
+// creator-OAuth path (§9.3's own "e2e happy path", the audit-remediation
+// checks, gen/host-scoping), not §30.4's shadow branch, and repo_settings.
+// live_egress_enabled defaults to false for EVERY repo (§30.8) -- without
+// this seed, every one of those tests would silently start receiving a
+// substituted read-only credential instead of the real one they assert
+// against. A test that specifically wants the shadow branch (this Step's
+// own dedicated tests) creates its OWN session against a repo it
+// deliberately leaves un-promoted, or explicitly demotes one back via
+// r.repoSettings.UpsertLiveEgressEnabled(ctx, fullName, false).
 func createSessionWithGitHubIdentityAndRepos(ctx context.Context, t *testing.T, r testRig, plaintextAccessToken, reposJSON string) sqlcgen.Session {
 	t.Helper()
+
+	for _, fullName := range repoFullNamesFromJSON(t, reposJSON) {
+		if _, err := r.repoSettings.UpsertLiveEgressEnabled(ctx, fullName, true); err != nil {
+			t.Fatalf("upsert live_egress_enabled for %s: %v", fullName, err)
+		}
+	}
 
 	externalID := fmt.Sprintf("scm-test-github-id-%d", time.Now().UnixNano())
 	user, err := r.users.Create(ctx, sqlcgen.CreateUserParams{
@@ -195,6 +298,35 @@ func postScmCredentialsFull(t *testing.T, r testRig, sessionID, bearer, gen, hos
 	return resp.StatusCode, got
 }
 
+// postScmCredentialsForceReadOnly mirrors postScmCredentialsFull exactly,
+// except the request body also carries "forceReadOnly": true -- §30.4(2)'s
+// own signal a BootModeBuild credential-helper invocation sends.
+func postScmCredentialsForceReadOnly(t *testing.T, r testRig, sessionID, bearer, gen, host string) (int, scmCredResponse) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, r.server.URL+"/sessions/"+sessionID+"/scm-credentials",
+		strings.NewReader(fmt.Sprintf(`{"host":%q,"forceReadOnly":true}`, host)))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	if gen != "" {
+		req.Header.Set("X-Sandbox-Gen", gen)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var got scmCredResponse
+	_ = json.NewDecoder(resp.Body).Decode(&got)
+	return resp.StatusCode, got
+}
+
 // TestScmCredentials_Success proves the full real flow: a valid sandbox
 // bearer token + a session whose user has a real, encrypted GitHub access
 // token -> 200 with a credential whose password decrypts to the SAME
@@ -286,6 +418,10 @@ func TestScmCredentials_NoCreatedBy(t *testing.T) {
 	// ("github.com") so this test exercises the created_by check it
 	// actually names, rather than incidentally tripping the audit
 	// remediation's own (unrelated) host-scoping check instead.
+	// §30.4's own shadow substitution: promoted live so this test still
+	// reaches the created_by check (step 8) rather than this Step's own
+	// shadow branch (step 6.5) -- see promoteRepoLive's own doc comment.
+	promoteRepoLive(ctx, t, rig, reviewSessionRepos)
 	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{
 		SpawnSource: sqlcgen.SessionSpawnSourceWeb,
 		Repos:       []byte(`[{"name":"narvi","url":"https://github.com/khazaddev/narvi","branch":null}]`),
@@ -315,6 +451,9 @@ func TestScmCredentials_NoGitHubIdentity(t *testing.T) {
 	}
 	// Repos matches postScmCredentials' own default request host -- see
 	// the identical comment in TestScmCredentials_NoCreatedBy above.
+	// §30.4's own shadow substitution: promoted live -- see
+	// promoteRepoLive's own doc comment.
+	promoteRepoLive(ctx, t, rig, reviewSessionRepos)
 	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{
 		SpawnSource: sqlcgen.SessionSpawnSourceWeb, CreatedBy: user.ID,
 		Repos: []byte(`[{"name":"narvi","url":"https://github.com/khazaddev/narvi","branch":null}]`),
@@ -409,6 +548,9 @@ func TestScmCredentials_NoStoredToken(t *testing.T) {
 	}
 	// Repos matches postScmCredentials' own default request host -- see the
 	// identical comment in TestScmCredentials_NoCreatedBy above.
+	// §30.4's own shadow substitution: promoted live -- see
+	// promoteRepoLive's own doc comment.
+	promoteRepoLive(ctx, t, rig, reviewSessionRepos)
 	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{
 		SpawnSource: sqlcgen.SessionSpawnSourceWeb, CreatedBy: user.ID,
 		Repos: []byte(`[{"name":"narvi","url":"https://github.com/khazaddev/narvi","branch":null}]`),
@@ -737,6 +879,11 @@ func TestScmCredentials_StillMemberCreator_Succeeds(t *testing.T) {
 func (r testRig) createOwnedGitHubReviewSessionWithRepos(ctx context.Context, t *testing.T, ownerID pgtype.UUID, repoFullName string, prNumber int32, reposJSON string) sqlcgen.Session {
 	t.Helper()
 
+	// §30.4's own shadow substitution: this helper's own tests are
+	// proving the LIVE review-bot-token path (step 7), not this Step's
+	// shadow branch (step 6.5) -- see promoteRepoLive's own doc comment.
+	promoteRepoLive(ctx, t, r, reposJSON)
+
 	session, err := r.sessions.Create(ctx, sqlcgen.CreateSessionParams{
 		SpawnSource: sqlcgen.SessionSpawnSourceGithub,
 		CreatedBy:   ownerID,
@@ -813,16 +960,22 @@ func TestScmCredentials_ReviewSession_UsesBotToken(t *testing.T) {
 }
 
 // TestScmCredentials_ReviewSession_NoCreatorGuard_StillSucceeds proves the
-// review-session branch (step 6.5) is reached and succeeds via botToken
-// even when the session has no created_by user at all (CreatedBy invalid)
-// -- steps 7-9 (created_by/disabled/viewer/identity checks) exist only to
-// gate a PER-USER credential this branch never looks up, so none of them
-// can block it.
+// review-session branch (step 7, unaffected by this Step's own new step
+// 6.5 shadow-substitution check, since this session's repo is promoted
+// live below) is reached and succeeds via botToken even when the session
+// has no created_by user at all (CreatedBy invalid) -- steps 8-10
+// (created_by/disabled/viewer/identity checks) exist only to gate a
+// PER-USER credential this branch never looks up, so none of them can
+// block it.
 func TestScmCredentials_ReviewSession_NoCreatorGuard_StillSucceeds(t *testing.T) {
 	const realBotToken = "bot-token-no-creator"
 	rig := newTestRig(t, func(r *testRig) { r.botToken = realBotToken })
 	ctx := context.Background()
 
+	// §30.4's own shadow substitution: promoted live so this test still
+	// reaches the review-bot-token branch (step 7) -- see
+	// promoteRepoLive's own doc comment.
+	promoteRepoLive(ctx, t, rig, reviewSessionRepos)
 	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{
 		SpawnSource: sqlcgen.SessionSpawnSourceGithub,
 		Repos:       []byte(reviewSessionRepos),
