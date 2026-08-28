@@ -39,13 +39,14 @@ type Spec interface {
 	isShadowSpec()
 }
 
-func (CreatePR) isShadowSpec()          {}
-func (UpdateFileContent) isShadowSpec() {}
-func (UpdatePRBody) isShadowSpec()      {}
-func (RegisterPRStack) isShadowSpec()   {}
-func (CreateBranch) isShadowSpec()      {}
-func (MergePR) isShadowSpec()           {}
-func (Transport) isShadowSpec()         {}
+func (CreatePR) isShadowSpec()                 {}
+func (UpdateFileContent) isShadowSpec()        {}
+func (UpdatePRBody) isShadowSpec()             {}
+func (RegisterPRStack) isShadowSpec()          {}
+func (CreateBranch) isShadowSpec()             {}
+func (MergePR) isShadowSpec()                  {}
+func (Transport) isShadowSpec()                {}
+func (ScmCredentialMintRefused) isShadowSpec() {}
 
 // CreatePR mirrors ports.CreatePRSpec without its Token.
 type CreatePR struct {
@@ -129,6 +130,29 @@ type Transport struct {
 	Body   string `json:"body"`
 }
 
+// ScmCredentialMintRefused is what internal/adapters/inbound/httpapi.
+// ScmCredentials records when §30.4(4)'s own fail-closed scope check
+// refuses to hand back a credential it just minted -- the read-only
+// GitHub App installation token this Step's shadow-substitution branch
+// requested came back carrying a permission this codebase never asked
+// for and will not trust, so no credential is served at all. Like every
+// other spec in this file, it carries no token: only what was requested
+// and what GitHub actually reported granting, both already redacted of
+// any secret value by the time they reach here (a permission level is
+// the string "read"/"write"/"admin", never a credential).
+type ScmCredentialMintRefused struct {
+	// Host is the git host the sandbox requested a credential for.
+	Host string `json:"host"`
+	// Reason is the scmscope validation failure's own Error() text --
+	// names the offending permission and level, e.g. `permission
+	// "contents" is "write", not read-only`.
+	Reason string `json:"reason"`
+	// GrantedPermissions is exactly what GitHub's own mint response
+	// reported granting -- the same map internal/domain/scmscope.
+	// ValidateReadOnly rejected.
+	GrantedPermissions map[string]string `json:"grantedPermissions"`
+}
+
 // These assertions pin the sealed set. Removing isShadowSpec from any of
 // them, or forgetting it on a type added later, is a build failure at the
 // point where someone would otherwise have widened the ledger's input
@@ -141,4 +165,5 @@ var (
 	_ Spec = CreateBranch{}
 	_ Spec = MergePR{}
 	_ Spec = Transport{}
+	_ Spec = ScmCredentialMintRefused{}
 )
