@@ -263,10 +263,10 @@ func parseLogLevel(raw string) (slog.Level, error) {
 	}
 }
 
-// InvalidRuntimeUIDError/InvalidRuntimeGIDError are returned by Load when
-// NARVI_RUNTIME_UID/NARVI_RUNTIME_GID is set to a non-empty value that
-// does not parse as a uint32. Same fail-fast shape as
-// InvalidLogLevelError above.
+// InvalidRuntimeUIDError is returned by Load when NARVI_RUNTIME_UID is set
+// to a non-empty value that does not parse as a uint32. Same fail-fast
+// shape as InvalidLogLevelError above; see InvalidRuntimeGIDError just
+// below for the gid counterpart.
 type InvalidRuntimeUIDError struct {
 	Value string
 }
@@ -275,6 +275,9 @@ func (e *InvalidRuntimeUIDError) Error() string {
 	return fmt.Sprintf("boot: invalid %s=%q: must be a non-negative integer", runtimeUIDEnvVar, e.Value)
 }
 
+// InvalidRuntimeGIDError is InvalidRuntimeUIDError's own gid counterpart,
+// returned by Load when NARVI_RUNTIME_GID is set to a non-empty value
+// that does not parse as a uint32.
 type InvalidRuntimeGIDError struct {
 	Value string
 }
@@ -283,19 +286,21 @@ func (e *InvalidRuntimeGIDError) Error() string {
 	return fmt.Sprintf("boot: invalid %s=%q: must be a non-negative integer", runtimeGIDEnvVar, e.Value)
 }
 
-// RuntimeUIDIsRootError/RuntimeGIDIsRootError are returned by Load when
-// NARVI_RUNTIME_UID/NARVI_RUNTIME_GID is explicitly set to "0" -- a
-// Credential naming uid/gid 0 drops no privilege at all, silently
-// defeating §30.5's entire purpose. See Config.RuntimeUID's own doc
-// comment for why this is a loud fail-closed, never a quiet regression,
-// mirroring §30.4's own scope-introspection posture for a different
-// credential.
+// RuntimeUIDIsRootError is returned by Load when NARVI_RUNTIME_UID is
+// explicitly set to "0" -- a Credential naming uid 0 drops no privilege
+// at all, silently defeating §30.5's entire purpose. See
+// Config.RuntimeUID's own doc comment for why this is a loud fail-closed,
+// never a quiet regression, mirroring §30.4's own scope-introspection
+// posture for a different credential; see RuntimeGIDIsRootError just
+// below for the gid counterpart.
 type RuntimeUIDIsRootError struct{}
 
 func (e *RuntimeUIDIsRootError) Error() string {
 	return fmt.Sprintf("boot: %s=0 (root) would not drop any privilege; refusing to boot", runtimeUIDEnvVar)
 }
 
+// RuntimeGIDIsRootError is RuntimeUIDIsRootError's own gid counterpart,
+// returned by Load when NARVI_RUNTIME_GID is explicitly set to "0".
 type RuntimeGIDIsRootError struct{}
 
 func (e *RuntimeGIDIsRootError) Error() string {

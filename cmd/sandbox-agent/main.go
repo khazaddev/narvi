@@ -1332,8 +1332,47 @@ func run() error {
 		resolvedCredentials = fetchProviderCredentials(ctx, cfg, timeouts.ProviderCredentialFetchTimeout)
 		providerCredentialEnv := providerCredentialSpawnEnv(resolvedCredentials)
 
+		// runtimeCredential (TECHNICAL_PLAN.md §30.5, "OS-level isolation
+		// between sandbox-agent and the agent runtime"): cfg.RuntimeUID/
+		// RuntimeGID are boot.Load's own fail-fast-validated values
+		// (non-numeric or explicit-0/root already refused there, before
+		// this line is ever reached) -- built into a *syscall.Credential
+		// HERE, this process's own one and only call site that needs one,
+		// rather than in the boot package (see Config.RuntimeUID's own doc
+		// comment for why).
+		//
+		// NoSetGroups is true ONLY when cfg.RuntimeUID/RuntimeGID exactly
+		// equal this process's OWN current uid/gid -- i.e. no actual
+		// identity change is being requested at all, the documented
+		// escape hatch for running the real binary unprivileged (a real
+		// dev machine, an integration test spawning this real binary as
+		// the ordinary CI/dev user -- see
+		// cmd/sandbox-agent/push_integration_test.go's own
+		// runSandboxAgent, which sets NARVI_RUNTIME_UID/GID to its own
+		// os.Getuid()/os.Getgid() for exactly this reason). Confirmed
+		// live: Go's own exec path calls setgroups() whenever Credential
+		// is non-nil UNLESS NoSetGroups is true, and setgroups() itself
+		// always requires privilege regardless of whether it changes
+		// anything -- so even a self-uid/gid Credential fails
+		// unprivileged without this (see
+		// internal/sandboxagent/supervisor.Spec.Credential's own doc
+		// comment for the same finding). In the real, privileged
+		// production path, cfg.RuntimeUID/RuntimeGID are (by construction
+		// -- see boot's own RuntimeUIDIsRootError/RuntimeGIDIsRootError,
+		// which refuse 0/root, and the 65534 default, essentially never
+		// sandbox-agent's own real uid) never equal to this process's own
+		// identity, so this condition never triggers there:
+		// NoSetGroups stays false and supplementary groups are genuinely
+		// cleared as part of the real privilege drop, exactly as wanted.
+		selfUID, selfGID := uint32(os.Getuid()), uint32(os.Getgid())
+		runtimeCredential := &syscall.Credential{
+			Uid:         cfg.RuntimeUID,
+			Gid:         cfg.RuntimeGID,
+			NoSetGroups: cfg.RuntimeUID == selfUID && cfg.RuntimeGID == selfGID,
+		}
+
 		result, spawnErr := opencodeproc.Spawn(ctx, sup, cfg.WorkspaceDir, providerCredentialEnv, sandboxSecretEnv,
-			timeouts.OpenCodeReadinessTimeout, timeouts.OpenCodeReadinessPollInterval)
+			runtimeCredential, timeouts.OpenCodeReadinessTimeout, timeouts.OpenCodeReadinessPollInterval)
 		if spawnErr != nil {
 			// Best-effort cleanup of whatever sup may already be tracking
 			// -- opencodeproc.Spawn's own internal Supervisor.Spawn call
@@ -1695,6 +1734,39 @@ func run() error {
 		BootMode: &bootMode,
 		Failed:   &bootFailed,
 	})
+
+	// (TECHNICAL_PLAN.md §30.5): once boot itself succeeded, re-own
+	// cfg.WorkspaceDir to the isolated agent runtime's own uid/gid --
+	// BEFORE anything below marks the sandbox ready to receive a
+	// "prompt" command. Every writer above (gitclone.CloneAll, repo
+	// setup hooks, services.yml, the AGENTS.md/opencode.json writers
+	// folded into runBootSequence) ran as sandbox-agent's own identity,
+	// never the runtime's -- see boot.ChownWorkspaceForRuntime's own doc
+	// comment for why leaving that unfixed would leave the runtime
+	// locked out of the one surface §30.5 requires stay usable. Guarded
+	// on cfg.SessionConfig != nil: that is exactly the condition under
+	// which opencodeproc.Spawn (and the os.MkdirAll that creates
+	// cfg.WorkspaceDir in the first place, above) ever ran at all --
+	// with no live session there is no runtime to re-own anything for,
+	// and cfg.WorkspaceDir may not even exist.
+	//
+	// Folded into bootErr itself, not a separate error path: a chown
+	// failure here gets the EXACT same fail-fast treatment as any other
+	// boot failure below (cancel ctx, never mark boot complete, surface
+	// as this process's own eventual exit error) -- a session that
+	// booted but left its own runtime unable to read or write its
+	// workspace is not one worth continuing, and letting the runtime
+	// discover that itself, per-file, at arbitrary points during a turn,
+	// is exactly the silent failure mode this codebase's own conventions
+	// refuse to ship. bootFailed/sendBootTiming above are deliberately
+	// UNAFFECTED by this: that event already reported runBootSequence's
+	// own, narrower outcome before this step ever ran.
+	if bootErr == nil && cfg.SessionConfig != nil {
+		if chownErr := boot.ChownWorkspaceForRuntime(cfg.WorkspaceDir, cfg.RuntimeUID, cfg.RuntimeGID); chownErr != nil {
+			bootErr = fmt.Errorf("sandbox-agent: re-own workspace for isolated runtime: %w", chownErr)
+		}
+	}
+
 	if bootErr != nil {
 		// A boot failure needs the same graceful convergence a fatal WS
 		// status or an OS signal gets -- cancel ctx (stop is a genuine
