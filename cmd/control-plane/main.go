@@ -39,6 +39,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/inbound/wshub"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/chatgptoauth"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapp"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/linearapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/llm"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/modal"
@@ -66,6 +67,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/app/shadowscm"
 	"github.com/khazaddev/narvi/internal/app/uploadsweep"
+	"github.com/khazaddev/narvi/internal/domain/scmscope"
 	"github.com/khazaddev/narvi/internal/platform"
 	"github.com/khazaddev/narvi/migrations"
 )
@@ -91,6 +93,43 @@ const linearAPIBaseURL = "https://api.linear.app"
 // ingress") -- the ONLY place this literal appears in this binary's
 // wiring, mirroring githubAPIBaseURL's own identical precedent exactly.
 const slackAPIBaseURL = "https://slack.com/api"
+
+// appPermissionsChecker is the narrow slice of *githubapp.Client
+// verifyGitHubAppScopeAtBoot actually needs -- an interface so this
+// function is unit-testable against a fake, without a real GitHub App or
+// network access (see internal/adapters/outbound/githubapp's own doc.go
+// for why no real one is reachable from this environment at all).
+type appPermissionsChecker interface {
+	AppPermissions(ctx context.Context) (map[string]string, error)
+}
+
+// verifyGitHubAppScopeAtBoot is §30.4(4)'s own boot-time half of "scope
+// introspection, fail-closed, at boot and at mint": before this process
+// ever starts serving traffic, confirm the configured GitHub App's own
+// maximum granted permissions are read-only (internal/domain/scmscope.
+// ValidateReadOnly). An operator who pastes a broad App (or misconfigures
+// its own permissions to include Contents: Read & write) into this slot
+// gets a loud boot refusal here, never a silent re-arming of every shadow
+// sandbox on the first real mint. The refusal message says what to fix,
+// not which section requires it -- an operator reading this output has no
+// reason to know or care about this codebase's own internal section
+// numbers.
+func verifyGitHubAppScopeAtBoot(ctx context.Context, client appPermissionsChecker, timeout time.Duration) error {
+	scopeCheckCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	appPermissions, err := client.AppPermissions(scopeCheckCtx)
+	if err != nil {
+		return fmt.Errorf("check the configured GitHub App's own granted permissions at boot: %w", err)
+	}
+	if err := scmscope.ValidateReadOnly(appPermissions); err != nil {
+		return fmt.Errorf(
+			"refusing to start: the configured GitHub App grants more than read access (%w) -- narrow its own permissions to Contents: Read-only and Metadata: Read-only in the App's settings on GitHub, then restart",
+			err,
+		)
+	}
+	return nil
+}
 
 // This is intentionally a bare-bones dispatch, not a flag-parsing
 // library: two subcommands, "serve" and "seed" ("config/data
@@ -276,6 +315,25 @@ func serve() error {
 	} else if suppressed > 0 {
 		slog.Warn("narvi control-plane: outgoing effects are suppressed for at least this many repositories -- they are recorded rather than sent, and stay that way until each is explicitly promoted",
 			"at_least", suppressed)
+	}
+
+	// githubAppClient (§30.4) mints the read-only GitHub App installation
+	// tokens ScmCredentials' own shadow branch below substitutes for the
+	// write-capable creator OAuth/bot-token credentials. Constructed once
+	// here, the ONE production construction site, mirroring
+	// gatedHTTPClient/liveSourceControl's own identical "one seam" pattern
+	// immediately below.
+	githubAppClient := githubapp.New(http.DefaultClient, githubAPIBaseURL, cfg.GitHubAppID, cfg.GitHubAppPrivateKey, cfg.Timeouts.GitHubAppJWTTTL, cfg.Timeouts.GitHubAppJWTClockSkew)
+
+	// §30.4(4)'s own boot-time half of "scope introspection, fail-closed,
+	// at boot and at mint": before this process ever starts serving
+	// traffic, confirm the configured GitHub App's own maximum granted
+	// permissions are read-only. An operator who pastes a broad App (or
+	// misconfigures its permissions to include Contents: Read & write)
+	// into this slot must get a loud boot refusal, never a silent
+	// re-arming of every shadow sandbox on the first real mint.
+	if err := verifyGitHubAppScopeAtBoot(ctx, githubAppClient, cfg.Timeouts.GitHubAppScopeCheckTimeout); err != nil {
+		return err
 	}
 
 	gatedHTTPClient := githubapi.NewGatedClient(shadowLedger, isLiveEgress)
@@ -806,9 +864,14 @@ func serve() error {
 	// githubPRSessionStore/cfg.GitHubBotToken (an audit remediation)
 	// are the SAME instances review/verdict below already uses, so a
 	// review session mints the SAME bot credential either way, never the
-	// creator's own personal OAuth token.
+	// creator's own personal OAuth token. repoSettingsForEgress/
+	// shadowLedger/cfg.ShadowMode (§30.4) are the SAME instances
+	// isLiveEgress/gatedHTTPClient already use above, so this handler's
+	// own shadow-substitution branch resolves egress mode identically to
+	// every other §30 seam in this binary; githubAppClient is this Step's
+	// own read-only mint.
 	router.Post("/sessions/{sessionID}/scm-credentials",
-		httpapi.ScmCredentials(sessionStore, sandboxStore, identityStore, userStore, githubPRSessionStore, cfg.GitHubBotToken, cfg.TokenEncryptionKey, cfg.Timeouts))
+		httpapi.ScmCredentials(sessionStore, sandboxStore, identityStore, userStore, githubPRSessionStore, repoSettingsForEgress, shadowLedger, githubAppClient, cfg.GitHubBotToken, cfg.TokenEncryptionKey, cfg.Timeouts, cfg.ShadowMode))
 
 	// provider-credentials ("provider credential injection",
 	// §25.1/§25.3): deliberately mounted OUTSIDE /api/sessions and outside

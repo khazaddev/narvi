@@ -265,9 +265,18 @@ func runCredentialHelper(args []string) error {
 		return fmt.Errorf("sandbox-agent: credential-helper: build CP client: %w", err)
 	}
 
+	// forceReadOnly (§30.4(2)): "the image-build path must never hold a
+	// write token... force the read-only mint for BootModeBuild (a build
+	// only needs read)". This is the primary fix -- the credential cache
+	// purge inside gitclone.CleanForImageBuild (below, cfg.BootMode ==
+	// sandboxboot.BootModeBuild branch) is defense-in-depth on top of it,
+	// not a substitute for it.
+	forceReadOnly := cfg.BootMode == sandboxboot.BootModeBuild
+
 	return credentials.RunGet(
 		context.Background(), os.Stdin, os.Stdout, cache, client,
 		cfg.SessionConfig.SessionId, cfg.SessionConfig.SandboxToken, cfg.SessionConfig.Gen, timeouts.CredentialExpiryBuffer,
+		forceReadOnly,
 	)
 }
 
@@ -2036,6 +2045,28 @@ func runBootSequence(
 	onGitCheckoutTiming gitclone.OnGitCheckoutTiming,
 	onHookRerunTiming boot.OnHookRerunTiming,
 ) error {
+	// §30.4(3)'s own boot-time credential-cache purge, unconditional,
+	// every mode -- run BEFORE anything in this boot sequence has a chance
+	// to write a fresh credential into cfg.CredentialCacheDir. This is
+	// explicitly NOT load-bearing on its own: whether the provider's
+	// restore is a cold re-boot (this code runs) or a warm resume (it does
+	// not) is the open Modal question §30.9 names, and nothing here may
+	// rest on the unverified answer. The load-bearing control for a
+	// restored snapshot is a purge at snapshot-MINT time, so that no
+	// snapshot ever contains a credential in the first place. That purge
+	// is NOT written yet -- HandleSnapshot mints and reports, and touches
+	// no cache -- so today a restored snapshot is defended only by the
+	// forced read-only mint on the build path, and by this call on
+	// whichever boots re-run this far. Read that as the gap it is: this
+	// call is cheap insurance, not the control.
+	//
+	// A failure purging a directory that may not even exist yet is
+	// unexpected enough to be worth failing loudly rather than silently
+	// proceeding into a boot that might reuse a stale credential.
+	if err := (&credentials.Cache{Dir: cfg.CredentialCacheDir}).PurgeAll(); err != nil {
+		return fmt.Errorf("purge credential cache at boot: %w", err)
+	}
+
 	var repos []boot.RepoInfo
 	// workspaceMoved (§19.4) stays nil for a nil-SessionConfig boot
 	// (the dev/test no-op case, exactly like repos itself) -- boot.RunBoot's
@@ -2236,7 +2267,7 @@ func runBootSequence(
 		for i, r := range repos {
 			repoNames[i] = r.Name
 		}
-		if err := gitclone.CleanForImageBuild(ctx, sup, cfg.WorkspaceDir, repoNames,
+		if err := gitclone.CleanForImageBuild(ctx, sup, cfg.WorkspaceDir, repoNames, cfg.CredentialCacheDir,
 			timeouts.GitSyncStepTimeout, timeouts.ProcessStopGracePeriod); err != nil {
 			return fmt.Errorf("clean workspace before snapshot: %w", err)
 		}

@@ -254,3 +254,63 @@ func TestCache_FlockSerializesConcurrentAccess(t *testing.T) {
 		t.Errorf("final Load() = %+v, looks corrupted (empty fields)", final)
 	}
 }
+
+// TestCache_PurgeAllRemovesEverything proves PurgeAll leaves no cached
+// credential behind at all -- multiple hosts, all gone -- and that the
+// Cache is still usable afterward (a fresh Store/Load round trip
+// succeeds, proving PurgeAll doesn't leave the directory in a state a
+// later credential-helper invocation couldn't recover from).
+func TestCache_PurgeAllRemovesEverything(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "cache")
+	cache := &credentials.Cache{Dir: dir}
+
+	cred := credentials.Credential{Username: "u", Password: "p", ExpiresAt: time.Now().Add(time.Hour)}
+	if err := cache.Store("github.com", cred); err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+	if err := cache.Store("gitlab.com", cred); err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+
+	if err := cache.PurgeAll(); err != nil {
+		t.Fatalf("PurgeAll() error = %v, want nil", err)
+	}
+
+	// Checked BEFORE any Load call below: Cache.path() (Load/Store/Erase's
+	// own shared helper) calls os.MkdirAll as a side effect of merely
+	// LOOKING for a cache file, which would recreate (empty) the very
+	// directory this assertion means to prove is gone.
+	if _, err := os.Stat(dir); err == nil {
+		t.Errorf("cache dir %s still exists after PurgeAll, want it removed entirely", dir)
+	}
+
+	for _, host := range []string{"github.com", "gitlab.com"} {
+		if _, found, err := cache.Load(host); err != nil || found {
+			t.Errorf("cache.Load(%q) after PurgeAll = (found=%v, err=%v), want (false, nil)", host, found, err)
+		}
+	}
+
+	// Still usable afterward.
+	if err := cache.Store("github.com", cred); err != nil {
+		t.Fatalf("Store() after PurgeAll error = %v, want nil (the cache must still be usable)", err)
+	}
+	got, found, err := cache.Load("github.com")
+	if err != nil || !found || got.Username != "u" {
+		t.Errorf("Load() after PurgeAll+Store = (%+v, %v, %v), want the freshly stored credential", got, found, err)
+	}
+}
+
+// TestCache_PurgeAllOfAbsentDirIsNotAnError proves purging a Cache whose
+// Dir was never created (no credential ever minted yet) is a safe no-op,
+// not an error -- the common case for the very first credential-helper
+// invocation of a fresh boot.
+func TestCache_PurgeAllOfAbsentDirIsNotAnError(t *testing.T) {
+	t.Parallel()
+
+	cache := &credentials.Cache{Dir: filepath.Join(t.TempDir(), "never-created")}
+	if err := cache.PurgeAll(); err != nil {
+		t.Errorf("PurgeAll() error = %v, want nil for a Dir that was never created", err)
+	}
+}

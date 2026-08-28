@@ -2455,6 +2455,60 @@ type Timeouts struct {
 	// slow/contended database without letting a genuinely stuck
 	// connection hang the operator's terminal indefinitely.
 	SeedRunTimeout time.Duration
+
+	// --- §30.4 standalone additions ("sandbox capability: GitHub App
+	// read-only installation tokens"): no ordering relationship with
+	// either invariant chain above, so -- per every prior Step's own
+	// standalone-addition precedent -- plain fields with sensible
+	// defaults, not wired into a fake invariant link.
+
+	// GitHubAppJWTTTL bounds the "exp" claim of the short-lived JWT
+	// internal/adapters/outbound/githubapp signs with the App's own
+	// private key to authenticate AS THE APP (never as an installation)
+	// for the two calls that need that identity: resolving a repo's
+	// installation id, and minting that installation's own access token.
+	// GitHub's own API rejects an App JWT whose "exp" is more than 10
+	// minutes past "iat" -- this is a hard external ceiling, not a
+	// judgment call, so this value must never be raised above it. Chosen
+	// as 9 minutes: comfortable headroom under the 10-minute ceiling for
+	// ordinary clock skew between this process and GitHub's own clock,
+	// mirroring CloudIdentityTokenLifetime's own "chosen with margin
+	// under an externally-imposed bound" reasoning.
+	GitHubAppJWTTTL time.Duration
+
+	// GitHubAppJWTClockSkew backdates the App JWT's "iat" claim so a small
+	// clock difference between this process and GitHub cannot make a
+	// freshly-signed token look future-dated.
+	//
+	// Not a per-deployment budget like its neighbours -- it is a fixed
+	// allowance for skew, and GitHub's own tolerance is what makes any
+	// particular value right. It lives here anyway, because the rule is
+	// about where duration literals live and not about whether they are
+	// tunable: a literal elsewhere is one the next reader has to go find,
+	// whatever the reason it was put there.
+	GitHubAppJWTClockSkew time.Duration
+
+	// GitHubAppScopeCheckTimeout bounds the one-shot, boot-time GET /app
+	// call cmd/control-plane's own startup sequence makes to introspect
+	// the configured GitHub App's own granted permissions (§30.4's
+	// "scope introspection, fail-closed, at boot") before this process
+	// ever starts serving traffic. Not specified in the plan; chosen as
+	// 10s, matching RepoSHAResolutionTimeout/CredentialFetchTimeout's own
+	// "a single, lightweight GitHub REST GET" reasoning.
+	GitHubAppScopeCheckTimeout time.Duration
+
+	// GitHubAppMintTimeout bounds the two sequential GitHub REST calls
+	// internal/adapters/outbound/githubapp.Client.MintInstallationToken
+	// makes per credential mint (GET the repo's installation id, then
+	// POST that installation's own access token, scoped contents:read +
+	// metadata:read) -- internal/adapters/inbound/httpapi.ScmCredentials'
+	// own shadow-substitution branch calls this synchronously inside an
+	// HTTP handler, so it must stay bounded. Not specified in the plan;
+	// chosen as 20s -- double GitHubGetPRTimeout's own 10s single-GET
+	// baseline, since this is two round trips rather than one, still
+	// comfortably inside ScmCredentialTTL (15min) so a slow mint cannot
+	// itself eat the credential's own advertised lifetime.
+	GitHubAppMintTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -2668,6 +2722,11 @@ func DefaultTimeouts() Timeouts {
 		DockerReadinessTimeout: 60 * time.Second, // §27.5; not specified, chosen generously -- see field doc comment
 
 		SeedRunTimeout: 5 * time.Minute, // §10-P6/§13.4; not specified, chosen generously -- see field doc comment
+
+		GitHubAppJWTTTL:            9 * time.Minute,
+		GitHubAppJWTClockSkew:      60 * time.Second, // §30.4; not specified, chosen with margin under GitHub's own hard 10-minute App-JWT ceiling -- see field doc comment
+		GitHubAppScopeCheckTimeout: 10 * time.Second, // §30.4; not specified, chosen, matches RepoSHAResolutionTimeout's own "lightweight call" reasoning
+		GitHubAppMintTimeout:       20 * time.Second, // §30.4; not specified, chosen -- see field doc comment
 	}
 }
 

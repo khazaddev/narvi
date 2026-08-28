@@ -13,6 +13,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -70,5 +71,56 @@ func TestShutdownControlPlaneOTel_FastShutdown_ReturnsPromptly(t *testing.T) {
 	}
 	if elapsed > 5*time.Second {
 		t.Errorf("shutdownControlPlaneOTel() took %s for an already-fast shutdown func, want it to return promptly rather than waiting on anything", elapsed)
+	}
+}
+
+// fakeAppPermissionsChecker is a minimal appPermissionsChecker fake --
+// there is no real GitHub App reachable from this environment (see
+// internal/adapters/outbound/githubapp's own doc.go), so
+// verifyGitHubAppScopeAtBoot is tested against this instead of a real
+// githubapp.Client.
+type fakeAppPermissionsChecker struct {
+	permissions map[string]string
+	err         error
+}
+
+func (f fakeAppPermissionsChecker) AppPermissions(context.Context) (map[string]string, error) {
+	return f.permissions, f.err
+}
+
+// TestVerifyGitHubAppScopeAtBoot_ReadOnlySucceeds proves an App whose own
+// granted permissions are read-only lets boot proceed (nil error).
+func TestVerifyGitHubAppScopeAtBoot_ReadOnlySucceeds(t *testing.T) {
+	checker := fakeAppPermissionsChecker{permissions: map[string]string{"contents": "read", "metadata": "read"}}
+	if err := verifyGitHubAppScopeAtBoot(context.Background(), checker, time.Second); err != nil {
+		t.Errorf("verifyGitHubAppScopeAtBoot() error = %v, want nil", err)
+	}
+}
+
+// TestVerifyGitHubAppScopeAtBoot_BroadPermissionsRefusesToStart is §30.4(4)'s
+// own named test: "a boot with a broad credential in the shadow slot
+// refuses to start, loudly." An operator who pastes/configures a GitHub
+// App with (e.g.) Contents: Read & write must never boot silently into a
+// state where every shadow sandbox is re-armed with a write-capable
+// credential on the first mint.
+func TestVerifyGitHubAppScopeAtBoot_BroadPermissionsRefusesToStart(t *testing.T) {
+	checker := fakeAppPermissionsChecker{permissions: map[string]string{"contents": "write", "metadata": "read"}}
+	err := verifyGitHubAppScopeAtBoot(context.Background(), checker, time.Second)
+	if err == nil {
+		t.Fatal("verifyGitHubAppScopeAtBoot() error = nil, want a boot refusal for a write-capable App")
+	}
+	if strings.Contains(err.Error(), "§") {
+		t.Errorf("verifyGitHubAppScopeAtBoot() error = %q, must not cite an internal section number in operator-facing text", err.Error())
+	}
+}
+
+// TestVerifyGitHubAppScopeAtBoot_IntrospectionFailureRefusesToStart proves
+// a genuine failure to even ASK GitHub for the App's own permissions
+// (network error, invalid credentials, ...) also refuses to boot -- an
+// unknown scope must never be treated as an acceptable one.
+func TestVerifyGitHubAppScopeAtBoot_IntrospectionFailureRefusesToStart(t *testing.T) {
+	checker := fakeAppPermissionsChecker{err: errors.New("simulated network failure")}
+	if err := verifyGitHubAppScopeAtBoot(context.Background(), checker, time.Second); err == nil {
+		t.Fatal("verifyGitHubAppScopeAtBoot() error = nil, want a boot refusal when the App's own scope cannot even be determined")
 	}
 }

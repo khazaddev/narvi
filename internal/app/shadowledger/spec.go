@@ -39,13 +39,15 @@ type Spec interface {
 	isShadowSpec()
 }
 
-func (CreatePR) isShadowSpec()          {}
-func (UpdateFileContent) isShadowSpec() {}
-func (UpdatePRBody) isShadowSpec()      {}
-func (RegisterPRStack) isShadowSpec()   {}
-func (CreateBranch) isShadowSpec()      {}
-func (MergePR) isShadowSpec()           {}
-func (Transport) isShadowSpec()         {}
+func (CreatePR) isShadowSpec()                 {}
+func (UpdateFileContent) isShadowSpec()        {}
+func (UpdatePRBody) isShadowSpec()             {}
+func (RegisterPRStack) isShadowSpec()          {}
+func (CreateBranch) isShadowSpec()             {}
+func (MergePR) isShadowSpec()                  {}
+func (Transport) isShadowSpec()                {}
+func (ScmCredentialMintRefused) isShadowSpec() {}
+func (ScmCredentialSubstituted) isShadowSpec() {}
 
 // CreatePR mirrors ports.CreatePRSpec without its Token.
 type CreatePR struct {
@@ -129,6 +131,60 @@ type Transport struct {
 	Body   string `json:"body"`
 }
 
+// ScmCredentialMintRefused is what internal/adapters/inbound/httpapi.
+// ScmCredentials records when §30.4(4)'s own fail-closed scope check
+// refuses to hand back a credential it just minted -- the read-only
+// GitHub App installation token this Step's shadow-substitution branch
+// requested came back carrying a permission this codebase never asked
+// for and will not trust, so no credential is served at all. Like every
+// other spec in this file, it carries no token: only what was requested
+// and what GitHub actually reported granting, both already redacted of
+// any secret value by the time they reach here (a permission level is
+// the string "read"/"write"/"admin", never a credential).
+type ScmCredentialMintRefused struct {
+	// Host is the git host the sandbox requested a credential for.
+	Host string `json:"host"`
+	// Reason is the scmscope validation failure's own Error() text --
+	// names the offending permission and level, e.g. `permission
+	// "contents" is "write", not read-only`.
+	Reason string `json:"reason"`
+	// GrantedPermissions is exactly what GitHub's own mint response
+	// reported granting -- the same map internal/domain/scmscope.
+	// ValidateReadOnly rejected.
+	GrantedPermissions map[string]string `json:"grantedPermissions"`
+}
+
+// ScmCredentialSubstituted is §30.6's own "the shadow mint records its
+// substitution" -- the SUCCESS counterpart to ScmCredentialMintRefused,
+// written every time a write-capable credential is replaced by a
+// read-only installation token.
+//
+// It is the more important of the two records, and it was the one
+// missing. A refusal is loud on its own: the sandbox gets a 403 and
+// cannot proceed. A successful substitution is silent by construction --
+// the sandbox receives a credential, clones happily, and discovers the
+// missing write capability only if it tries to push. Without this row the
+// ledger cannot answer the question it exists for, "what did shadow mode
+// actually suppress on this session", for the single most consequential
+// suppression on the credential path.
+//
+// Like every spec here it carries no token -- not even a prefix or a
+// length. What was substituted is a fact about capability, and the
+// substituted token's own value is never evidence of anything.
+type ScmCredentialSubstituted struct {
+	// Host is the git host the sandbox requested a credential for.
+	Host string `json:"host"`
+	// Owner and RepoNames are the scope the read-only installation token
+	// was minted FOR -- the same values handed to GitHub's mint call.
+	Owner     string   `json:"owner"`
+	RepoNames []string `json:"repoNames"`
+	// GrantedPermissions is what GitHub reported granting, after
+	// internal/domain/scmscope.ValidateReadOnly accepted it. Recording
+	// the accepted set (not just the rejected one) is what makes the
+	// ledger sufficient to audit a substitution after the fact.
+	GrantedPermissions map[string]string `json:"grantedPermissions"`
+}
+
 // These assertions pin the sealed set. Removing isShadowSpec from any of
 // them, or forgetting it on a type added later, is a build failure at the
 // point where someone would otherwise have widened the ledger's input
@@ -141,4 +197,6 @@ var (
 	_ Spec = CreateBranch{}
 	_ Spec = MergePR{}
 	_ Spec = Transport{}
+	_ Spec = ScmCredentialMintRefused{}
+	_ Spec = ScmCredentialSubstituted{}
 )

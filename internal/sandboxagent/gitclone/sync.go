@@ -13,6 +13,7 @@ import (
 	"github.com/khazaddev/narvi/internal/domain/gitstate"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/khazaddev/narvi/internal/sandboxagent/credentials"
 	"github.com/khazaddev/narvi/internal/sandboxagent/githarden"
 	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
 )
@@ -967,7 +968,25 @@ func checkoutBase(ctx context.Context, sup *supervisor.Supervisor, repoName, dir
 // -fdx` / `git -C <dir> checkout -- .` run against a directory OUTSIDE
 // workspaceDir entirely, destroying untracked files there (verified
 // directly against the real git binary: this is not theoretical).
-func CleanForImageBuild(ctx context.Context, sup *supervisor.Supervisor, workspaceDir string, repoNames []string, timeout, stopGrace time.Duration) error {
+//
+// credentialCacheDir (§30.4(2)) is boot.Config.CredentialCacheDir --
+// purged (credentials.Cache.PurgeAll) AFTER every repo tree is cleaned,
+// still before this function returns (i.e. still before the caller's own
+// snapshot signal). By the time a BootModeBuild clone ran,
+// internal/sandboxagent/credentials/get.go's own Get had already written
+// a minted token to this exact directory (RunGet/Get's own Fetch+Store
+// path); if the provider image captures the filesystem after RunBoot
+// returns, that token would be baked into the shared image every future
+// session reuses. Forcing the read-only mint for BootModeBuild
+// (cmd/sandbox-agent/main.go's own runCredentialHelper) is the PRIMARY
+// fix -- a read-only token baked into an image is still harmless, per
+// §30.4's own "equally harmless in a process environment, a disk cache,
+// a baked image, or a restored snapshot" -- this purge is defense in
+// depth on top of it, not a substitute: it means even a bug in that
+// primary fix leaves no token file behind at all. A purge failure is
+// fatal, matching every other failure in this function's own loop above:
+// a workspace this function cannot fully clean is not safe to snapshot.
+func CleanForImageBuild(ctx context.Context, sup *supervisor.Supervisor, workspaceDir string, repoNames []string, credentialCacheDir string, timeout, stopGrace time.Duration) error {
 	for _, name := range repoNames {
 		if err := reposource.ValidateRepoName(name); err != nil {
 			return fmt.Errorf("gitclone: invalid repo name %q before image-build clean (fatal): %w", name, err)
@@ -981,6 +1000,11 @@ func CleanForImageBuild(ctx context.Context, sup *supervisor.Supervisor, workspa
 		if _, err := runGit(ctx, sup, []string{"-C", dir, "checkout", "--", "."}, timeout, stopGrace); err != nil {
 			return fmt.Errorf("gitclone: discard tracked modifications in %s before snapshot (fatal): %w", name, err)
 		}
+	}
+
+	cache := &credentials.Cache{Dir: credentialCacheDir}
+	if err := cache.PurgeAll(); err != nil {
+		return fmt.Errorf("gitclone: purge credential cache before image-build snapshot (fatal): %w", err)
 	}
 	return nil
 }

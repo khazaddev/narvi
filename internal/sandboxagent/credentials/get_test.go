@@ -32,10 +32,17 @@ type fakeFetcher struct {
 	calls       int
 	fetchResult credentials.Credential
 	fetchErr    error
+
+	// lastForceReadOnly records what Fetch was last called with -- §30.4(2)
+	// requires Get/RunGet to thread their own forceReadOnly parameter
+	// straight through, and this is how TestGet_ForceReadOnlyThreadedToFetch
+	// proves it.
+	lastForceReadOnly bool
 }
 
-func (f *fakeFetcher) Fetch(_ context.Context, sessionID, sandboxToken string, gen int, host string) (credentials.Credential, error) {
+func (f *fakeFetcher) Fetch(_ context.Context, sessionID, sandboxToken string, gen int, host string, forceReadOnly bool) (credentials.Credential, error) {
 	f.calls++
+	f.lastForceReadOnly = forceReadOnly
 	if f.failOnFetch {
 		f.t.Fatalf("Fetch(sessionID=%q, sandboxToken=%q, gen=%d, host=%q) called, want it never called", sessionID, sandboxToken, gen, host)
 	}
@@ -58,7 +65,7 @@ func TestGet_NonHTTPSProtocolRefusesSilently(t *testing.T) {
 
 	cred, ok, err := credentials.Get(
 		context.Background(), descriptorReader("ssh", "example.com"), cache, fetcher,
-		"sess-1", "tok", testGen, testExpiryBuffer,
+		"sess-1", "tok", testGen, testExpiryBuffer, false,
 	)
 	if err != nil {
 		t.Fatalf("Get() error = %v, want nil", err)
@@ -87,7 +94,7 @@ func TestGet_CacheHitNeverCallsFetch(t *testing.T) {
 
 	got, ok, err := credentials.Get(
 		context.Background(), descriptorReader("https", "example.com"), cache, fetcher,
-		"sess-1", "tok", testGen, testExpiryBuffer,
+		"sess-1", "tok", testGen, testExpiryBuffer, false,
 	)
 	if err != nil {
 		t.Fatalf("Get() error = %v, want nil", err)
@@ -118,7 +125,7 @@ func TestGet_CacheMissCallsFetchAndStores(t *testing.T) {
 
 	got, ok, err := credentials.Get(
 		context.Background(), descriptorReader("https", "example.com"), cache, fetcher,
-		"sess-1", "tok", testGen, testExpiryBuffer,
+		"sess-1", "tok", testGen, testExpiryBuffer, false,
 	)
 	if err != nil {
 		t.Fatalf("Get() error = %v, want nil", err)
@@ -167,7 +174,7 @@ func TestGet_StaleWithinExpiryBufferCallsFetch(t *testing.T) {
 
 	got, ok, err := credentials.Get(
 		context.Background(), descriptorReader("https", "example.com"), cache, fetcher,
-		"sess-1", "tok", testGen, testExpiryBuffer,
+		"sess-1", "tok", testGen, testExpiryBuffer, false,
 	)
 	if err != nil {
 		t.Fatalf("Get() error = %v, want nil", err)
@@ -206,7 +213,7 @@ func TestGet_FetchFailureNeverReturnsStaleCredential(t *testing.T) {
 
 	got, ok, err := credentials.Get(
 		context.Background(), descriptorReader("https", "example.com"), cache, fetcher,
-		"sess-1", "tok", testGen, testExpiryBuffer,
+		"sess-1", "tok", testGen, testExpiryBuffer, false,
 	)
 	if err == nil {
 		t.Fatal("Get() error = nil, want an error when Fetch fails against a stale cache")
@@ -235,7 +242,7 @@ func TestRunGet_WritesUsernamePasswordOnHit(t *testing.T) {
 	var stdout bytes.Buffer
 	err := credentials.RunGet(
 		context.Background(), descriptorReader("https", "example.com"), &stdout, cache, fetcher,
-		"sess-1", "tok", testGen, testExpiryBuffer,
+		"sess-1", "tok", testGen, testExpiryBuffer, false,
 	)
 	if err != nil {
 		t.Fatalf("RunGet() error = %v, want nil", err)
@@ -256,7 +263,7 @@ func TestRunGet_WritesNothingWhenNotOK(t *testing.T) {
 	var stdout bytes.Buffer
 	err := credentials.RunGet(
 		context.Background(), descriptorReader("ssh", "example.com"), &stdout, cache, fetcher,
-		"sess-1", "tok", testGen, testExpiryBuffer,
+		"sess-1", "tok", testGen, testExpiryBuffer, false,
 	)
 	if err != nil {
 		t.Fatalf("RunGet() error = %v, want nil", err)
@@ -292,7 +299,7 @@ func TestRunErase_PurgesEntryAndForcesNextGetToFetch(t *testing.T) {
 
 	got, ok, err := credentials.Get(
 		context.Background(), descriptorReader("https", "example.com"), cache, fetcher,
-		"sess-1", "tok", testGen, testExpiryBuffer,
+		"sess-1", "tok", testGen, testExpiryBuffer, false,
 	)
 	if err != nil {
 		t.Fatalf("Get() after erase error = %v, want nil", err)
@@ -348,5 +355,28 @@ func TestRunErase_EmptyHostIsANoOp(t *testing.T) {
 	cache := &credentials.Cache{Dir: filepath.Join(t.TempDir(), "cache")}
 	if err := credentials.RunErase(strings.NewReader("\n"), cache); err != nil {
 		t.Errorf("RunErase() error = %v, want nil for a descriptor with no host", err)
+	}
+}
+
+// TestGet_ForceReadOnlyThreadedToFetch proves §30.4(2)'s own client-side
+// signal reaches CredentialFetcher.Fetch unmodified on a cache miss --
+// cmd/sandbox-agent's own runCredentialHelper sets this true for a
+// BootModeBuild boot ("a build only needs read"), and Get must not drop
+// or invert it on the way to Fetch.
+func TestGet_ForceReadOnlyThreadedToFetch(t *testing.T) {
+	t.Parallel()
+
+	cache := &credentials.Cache{Dir: filepath.Join(t.TempDir(), "cache")}
+	fresh := credentials.Credential{Username: "u", Password: "p", ExpiresAt: time.Now().Add(time.Hour)}
+	fetcher := &fakeFetcher{t: t, fetchResult: fresh}
+
+	if _, _, err := credentials.Get(
+		context.Background(), descriptorReader("https", "example.com"), cache, fetcher,
+		"sess-1", "tok", testGen, testExpiryBuffer, true,
+	); err != nil {
+		t.Fatalf("Get() error = %v, want nil", err)
+	}
+	if !fetcher.lastForceReadOnly {
+		t.Error("Fetch was called with forceReadOnly=false, want true")
 	}
 }

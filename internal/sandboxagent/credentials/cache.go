@@ -156,3 +156,29 @@ func (c *Cache) Erase(host string) error {
 		return nil
 	})
 }
+
+// PurgeAll removes every cached credential this Cache holds, by deleting
+// its own Dir wholesale (not one file at a time -- Erase's own
+// per-host-file granularity has no use here, since the whole point is
+// leaving nothing behind at all) -- §30.4(2)'s own defense-in-depth for
+// the image-build path: gitclone.CleanForImageBuild calls this
+// immediately before a BootModeBuild snapshot, on top of (never instead
+// of) forcing the read-only mint in the first place, so a bug in that
+// primary fix would still leave no token on disk for the provider image
+// to capture. Also called unconditionally at the START of every boot
+// (cmd/sandbox-agent/main.go's own runBootSequence), regardless of mode --
+// §30.4(3)'s own "a boot-time cache purge in all modes is also required,"
+// though NOT load-bearing on its own there -- the control that would be
+// load-bearing, a purge at snapshot-mint time, is not written yet (see
+// that call site's own doc comment).
+//
+// A missing Dir is not an error (os.RemoveAll's own documented behavior)
+// -- a sandbox that never minted any credential at all has nothing to
+// purge, which is the common case for a fresh BootModeFresh/BootModeBuild
+// boot's very first credential-helper invocation.
+func (c *Cache) PurgeAll() error {
+	if err := os.RemoveAll(c.Dir); err != nil {
+		return fmt.Errorf("credentials: purge cache dir %s: %w", c.Dir, err)
+	}
+	return nil
+}
