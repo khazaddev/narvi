@@ -265,9 +265,18 @@ func runCredentialHelper(args []string) error {
 		return fmt.Errorf("sandbox-agent: credential-helper: build CP client: %w", err)
 	}
 
+	// forceReadOnly (§30.4(2)): "the image-build path must never hold a
+	// write token... force the read-only mint for BootModeBuild (a build
+	// only needs read)". This is the primary fix -- the credential cache
+	// purge inside gitclone.CleanForImageBuild (below, cfg.BootMode ==
+	// sandboxboot.BootModeBuild branch) is defense-in-depth on top of it,
+	// not a substitute for it.
+	forceReadOnly := cfg.BootMode == sandboxboot.BootModeBuild
+
 	return credentials.RunGet(
 		context.Background(), os.Stdin, os.Stdout, cache, client,
 		cfg.SessionConfig.SessionId, cfg.SessionConfig.SandboxToken, cfg.SessionConfig.Gen, timeouts.CredentialExpiryBuffer,
+		forceReadOnly,
 	)
 }
 

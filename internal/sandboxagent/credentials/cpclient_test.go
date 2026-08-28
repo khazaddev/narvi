@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -129,18 +130,21 @@ func TestCPClient_Fetch_RequestShape(t *testing.T) {
 	t.Parallel()
 
 	var gotHost, gotAuth, gotPath, gotGen string
+	var gotForceReadOnly bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotAuth = r.Header.Get("Authorization")
 		gotGen = r.Header.Get("X-Sandbox-Gen")
 
 		var body struct {
-			Host string `json:"host"`
+			Host          string `json:"host"`
+			ForceReadOnly bool   `json:"forceReadOnly"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Errorf("decode request body: %v", err)
 		}
 		gotHost = body.Host
+		gotForceReadOnly = body.ForceReadOnly
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{
@@ -156,13 +160,18 @@ func TestCPClient_Fetch_RequestShape(t *testing.T) {
 		t.Fatalf("NewCPClient() error = %v", err)
 	}
 
-	cred, err := client.Fetch(context.Background(), "sess-1", "sandbox-tok", 42, "example.com")
+	// forceReadOnly=true (§30.4(2)) -- mirrors a BootModeBuild credential-
+	// helper invocation.
+	cred, err := client.Fetch(context.Background(), "sess-1", "sandbox-tok", 42, "example.com", true)
 	if err != nil {
 		t.Fatalf("Fetch() error = %v, want nil", err)
 	}
 
 	if gotHost != "example.com" {
 		t.Errorf("request body host = %q, want %q", gotHost, "example.com")
+	}
+	if !gotForceReadOnly {
+		t.Error("request body forceReadOnly = false, want true")
 	}
 	if gotAuth != "Bearer sandbox-tok" {
 		t.Errorf("Authorization header = %q, want %q", gotAuth, "Bearer sandbox-tok")
@@ -182,6 +191,40 @@ func TestCPClient_Fetch_RequestShape(t *testing.T) {
 	}
 }
 
+// TestCPClient_Fetch_ForceReadOnlyOmittedWhenFalse proves the wire field
+// is genuinely omitted (never sent as an explicit "false") when the
+// caller does not set it -- matching this codebase's own established
+// convention for optional boolean wire fields, and keeping a non-build
+// boot's request byte-for-byte identical to what it was before §30.4.
+func TestCPClient_Fetch_ForceReadOnlyOmittedWhenFalse(t *testing.T) {
+	t.Parallel()
+
+	var gotBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"username": "x-token", "password": "secret-pass",
+			"expiresAt": time.Now().Add(time.Hour).Format(time.RFC3339),
+		})
+	}))
+	defer server.Close()
+
+	client, err := credentials.NewCPClient(wsEquivalent(server.URL), testFetchTimeout)
+	if err != nil {
+		t.Fatalf("NewCPClient() error = %v", err)
+	}
+
+	if _, err := client.Fetch(context.Background(), "sess-1", "sandbox-tok", 1, "example.com", false); err != nil {
+		t.Fatalf("Fetch() error = %v, want nil", err)
+	}
+
+	if strings.Contains(gotBody, "forceReadOnly") {
+		t.Errorf("request body = %s, must omit forceReadOnly entirely when false", gotBody)
+	}
+}
+
 func TestCPClient_Fetch_NonTwoXXIsAnError(t *testing.T) {
 	t.Parallel()
 
@@ -196,7 +239,7 @@ func TestCPClient_Fetch_NonTwoXXIsAnError(t *testing.T) {
 		t.Fatalf("NewCPClient() error = %v", err)
 	}
 
-	_, err = client.Fetch(context.Background(), "sess-1", "tok", 1, "example.com")
+	_, err = client.Fetch(context.Background(), "sess-1", "tok", 1, "example.com", false)
 	if err == nil {
 		t.Fatal("Fetch() error = nil, want an error for a 500 response")
 	}
@@ -223,7 +266,7 @@ func TestCPClient_Fetch_ErrorResponseBodyNeverLeaks(t *testing.T) {
 		t.Fatalf("NewCPClient() error = %v", err)
 	}
 
-	_, err = client.Fetch(context.Background(), "sess-1", "tok", 1, "example.com")
+	_, err = client.Fetch(context.Background(), "sess-1", "tok", 1, "example.com", false)
 	if err == nil {
 		t.Fatal("Fetch() error = nil, want an error for a 401 response")
 	}
@@ -271,7 +314,7 @@ func TestCPClient_Fetch_RejectsNewlineInUsernameOrPassword(t *testing.T) {
 				t.Fatalf("NewCPClient() error = %v", err)
 			}
 
-			_, err = client.Fetch(context.Background(), "sess-1", "tok", 1, "example.com")
+			_, err = client.Fetch(context.Background(), "sess-1", "tok", 1, "example.com", false)
 			if err == nil {
 				t.Fatal("Fetch() error = nil, want an error for a username/password containing a newline")
 			}
@@ -293,7 +336,7 @@ func TestCPClient_Fetch_MalformedResponseBody(t *testing.T) {
 		t.Fatalf("NewCPClient() error = %v", err)
 	}
 
-	_, err = client.Fetch(context.Background(), "sess-1", "tok", 1, "example.com")
+	_, err = client.Fetch(context.Background(), "sess-1", "tok", 1, "example.com", false)
 	if err == nil {
 		t.Fatal("Fetch() error = nil, want an error for a malformed 2xx response body")
 	}

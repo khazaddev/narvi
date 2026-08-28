@@ -26,6 +26,11 @@ import (
 //     branch discards the value before returning -- there is no variable
 //     in this function's scope that could hold a stale Credential past
 //     that point for a later branch to accidentally return.
+//
+// forceReadOnly (§30.4(2)) is passed straight through to client.Fetch on
+// a miss/stale hit -- true for a BootModeBuild boot (cmd/sandbox-agent/
+// main.go's own runCredentialHelper), forcing the read-only substitution
+// regardless of the repo's own egress mode: "a build only needs read".
 func Get(
 	ctx context.Context,
 	r io.Reader,
@@ -34,6 +39,7 @@ func Get(
 	sessionID, sandboxToken string,
 	gen int,
 	expiryBuffer time.Duration,
+	forceReadOnly bool,
 ) (Credential, bool, error) {
 	desc, err := ParseDescriptor(r)
 	if err != nil {
@@ -53,7 +59,7 @@ func Get(
 	// disk) is now out of scope forever. The ONLY Credential this
 	// function can return from this point on is `fetched`, produced
 	// fresh below.
-	fetched, err := client.Fetch(ctx, sessionID, sandboxToken, gen, desc.Host)
+	fetched, err := client.Fetch(ctx, sessionID, sandboxToken, gen, desc.Host, forceReadOnly)
 	if err != nil {
 		return Credential{}, false, fmt.Errorf("credentials: fetch credential for %s: %w", desc.Host, err)
 	}
@@ -104,8 +110,9 @@ func RunGet(
 	sessionID, sandboxToken string,
 	gen int,
 	expiryBuffer time.Duration,
+	forceReadOnly bool,
 ) error {
-	cred, ok, err := Get(ctx, stdin, cache, client, sessionID, sandboxToken, gen, expiryBuffer)
+	cred, ok, err := Get(ctx, stdin, cache, client, sessionID, sandboxToken, gen, expiryBuffer, forceReadOnly)
 	if err != nil {
 		return err
 	}

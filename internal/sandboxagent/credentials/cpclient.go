@@ -38,8 +38,14 @@ const maxScmCredentialsResponseSize = 1 << 20 // 1 MiB
 // scm-credentials endpoint can reject a stale gen's request exactly like
 // the sandbox WS handshake already does (internal/adapters/inbound/wshub/
 // sandbox.go's own X-Sandbox-Gen check).
+//
+// forceReadOnly (§30.4(2)) is true when this sandbox is booting in
+// BootModeBuild -- "a build only needs read". It can only narrow what CP
+// hands back, never widen it: CP's own egress-mode resolution runs
+// independently either way, so a sandbox that lies about its own boot
+// mode gains nothing by omitting this.
 type CredentialFetcher interface {
-	Fetch(ctx context.Context, sessionID, sandboxToken string, gen int, host string) (Credential, error)
+	Fetch(ctx context.Context, sessionID, sandboxToken string, gen int, host string, forceReadOnly bool) (Credential, error)
 }
 
 // CPClient is the credential helper's CP client: it POSTs to control
@@ -138,8 +144,13 @@ func isLoopbackHost(hostport string) bool {
 // shape POSTed to CP's future scm-credentials endpoint. protocol is
 // always https by construction (credentials.Get refuses anything else
 // before Fetch is ever called), so it is not sent.
+//
+// ForceReadOnly (§30.4(2)) mirrors CredentialFetcher's own doc comment
+// above -- omitted (rather than sent false) when not set, matching every
+// other boolean wire field in this codebase's own established convention.
 type scmCredentialsRequest struct {
-	Host string `json:"host"`
+	Host          string `json:"host"`
+	ForceReadOnly bool   `json:"forceReadOnly,omitempty"`
 }
 
 // scmCredentialsResponse is this Step's own invented, documented response
@@ -166,8 +177,8 @@ type scmCredentialsResponse struct {
 // a validation-failure response is exactly the kind of body that can echo
 // request/secret data back verbatim, and this error can end up logged.
 // Only the HTTP status and a generic, fixed description ever surface.
-func (c CPClient) Fetch(ctx context.Context, sessionID, sandboxToken string, gen int, host string) (Credential, error) {
-	reqBody, err := json.Marshal(scmCredentialsRequest{Host: host})
+func (c CPClient) Fetch(ctx context.Context, sessionID, sandboxToken string, gen int, host string, forceReadOnly bool) (Credential, error) {
+	reqBody, err := json.Marshal(scmCredentialsRequest{Host: host, ForceReadOnly: forceReadOnly})
 	if err != nil {
 		return Credential{}, fmt.Errorf("credentials: encode scm-credentials request: %w", err)
 	}
