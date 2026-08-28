@@ -364,3 +364,105 @@ func TestLoad_SessionConfigBootModeMismatch(t *testing.T) {
 		t.Errorf("ModeMismatchError.Error() = %q, want a non-empty message", mismatchErr.Error())
 	}
 }
+
+func TestLoad_RuntimeUIDGIDDefaults(t *testing.T) {
+	t.Setenv("NARVI_BOOT_MODE", "fresh")
+	t.Setenv("NARVI_RUNTIME_UID", "")
+	t.Setenv("NARVI_RUNTIME_GID", "")
+
+	cfg, err := boot.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.RuntimeUID != 65534 {
+		t.Errorf("RuntimeUID = %d, want %d", cfg.RuntimeUID, 65534)
+	}
+	if cfg.RuntimeGID != 65534 {
+		t.Errorf("RuntimeGID = %d, want %d", cfg.RuntimeGID, 65534)
+	}
+}
+
+func TestLoad_RuntimeUIDGIDOverride(t *testing.T) {
+	t.Setenv("NARVI_BOOT_MODE", "fresh")
+	t.Setenv("NARVI_RUNTIME_UID", "10001")
+	t.Setenv("NARVI_RUNTIME_GID", "10002")
+
+	cfg, err := boot.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.RuntimeUID != 10001 {
+		t.Errorf("RuntimeUID = %d, want %d", cfg.RuntimeUID, 10001)
+	}
+	if cfg.RuntimeGID != 10002 {
+		t.Errorf("RuntimeGID = %d, want %d", cfg.RuntimeGID, 10002)
+	}
+}
+
+func TestLoad_InvalidRuntimeUID(t *testing.T) {
+	t.Setenv("NARVI_BOOT_MODE", "fresh")
+	t.Setenv("NARVI_RUNTIME_UID", "not-a-number")
+
+	_, err := boot.Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want an error for invalid NARVI_RUNTIME_UID")
+	}
+	var invErr *boot.InvalidRuntimeUIDError
+	if !errors.As(err, &invErr) {
+		t.Fatalf("Load() error = %v (%T), want *boot.InvalidRuntimeUIDError", err, err)
+	}
+	if invErr.Error() == "" {
+		t.Errorf("InvalidRuntimeUIDError.Error() = %q, want a non-empty message", invErr.Error())
+	}
+}
+
+func TestLoad_InvalidRuntimeGID(t *testing.T) {
+	t.Setenv("NARVI_BOOT_MODE", "fresh")
+	t.Setenv("NARVI_RUNTIME_GID", "not-a-number")
+
+	_, err := boot.Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want an error for invalid NARVI_RUNTIME_GID")
+	}
+	var invErr *boot.InvalidRuntimeGIDError
+	if !errors.As(err, &invErr) {
+		t.Fatalf("Load() error = %v (%T), want *boot.InvalidRuntimeGIDError", err, err)
+	}
+	if invErr.Error() == "" {
+		t.Errorf("InvalidRuntimeGIDError.Error() = %q, want a non-empty message", invErr.Error())
+	}
+}
+
+// TestLoad_RuntimeUIDZeroRefused proves NARVI_RUNTIME_UID=0 (root) is a
+// fail-fast boot error, not a silently-accepted value that would make
+// cmd/sandbox-agent/main.go build a Credential naming root -- dropping no
+// privilege at all and silently defeating §30.5's entire purpose.
+func TestLoad_RuntimeUIDZeroRefused(t *testing.T) {
+	t.Setenv("NARVI_BOOT_MODE", "fresh")
+	t.Setenv("NARVI_RUNTIME_UID", "0")
+
+	_, err := boot.Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want *boot.RuntimeUIDIsRootError for NARVI_RUNTIME_UID=0")
+	}
+	var rootErr *boot.RuntimeUIDIsRootError
+	if !errors.As(err, &rootErr) {
+		t.Fatalf("Load() error = %v (%T), want *boot.RuntimeUIDIsRootError", err, err)
+	}
+}
+
+// TestLoad_RuntimeGIDZeroRefused is TestLoad_RuntimeUIDZeroRefused's own
+// gid counterpart.
+func TestLoad_RuntimeGIDZeroRefused(t *testing.T) {
+	t.Setenv("NARVI_BOOT_MODE", "fresh")
+	t.Setenv("NARVI_RUNTIME_GID", "0")
+
+	_, err := boot.Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want *boot.RuntimeGIDIsRootError for NARVI_RUNTIME_GID=0")
+	}
+	var rootErr *boot.RuntimeGIDIsRootError
+	if !errors.As(err, &rootErr) {
+		t.Fatalf("Load() error = %v (%T), want *boot.RuntimeGIDIsRootError", err, err)
+	}
+}

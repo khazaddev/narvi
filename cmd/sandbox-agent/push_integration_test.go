@@ -427,6 +427,30 @@ func runSandboxAgent(t *testing.T, binPath, gitServerURL, workspaceDir string, f
 		"NARVI_SESSION_CONFIG="+sessionConfigJSON,
 		"NARVI_WORKSPACE_DIR="+workspaceDir,
 		"NARVI_CREDENTIAL_CACHE_DIR="+credCacheDir,
+		// TECHNICAL_PLAN.md §30.5 ("OS-level isolation between
+		// sandbox-agent and the agent runtime"): this real subprocess
+		// spawns a real `opencode serve` for its own agent runtime, which
+		// main.go now drops to boot.Config.RuntimeUID/RuntimeGID via a
+		// *syscall.Credential -- a genuine kernel-enforced uid change,
+		// which requires CAP_SETUID/root. This test process (an ordinary
+		// `go test` run, unprivileged, exactly like every other
+		// integration test in this file) is not root, so the default
+		// target uid/gid (65534, "nobody") would make the subprocess's
+		// own opencode spawn fail outright with "operation not
+		// permitted" -- confirmed live: this is exactly what broke this
+		// test the first time this Step's own runtimeCredential wiring
+		// landed. Setting these to THIS test process's own current
+		// identity is the documented escape hatch (see that Credential's
+		// own construction in main.go): a uid/gid Credential naming the
+		// SAME identity the process already has changes nothing and
+		// needs no privilege at all, so opencode spawns exactly as it
+		// did before this Step, while the real cross-uid enforcement
+		// itself stays proven elsewhere (internal/sandboxagent/
+		// supervisor and opencodeproc's own rooted-Linux-container
+		// tests) -- this test's own job is HandlePush, not sandbox
+		// isolation.
+		fmt.Sprintf("NARVI_RUNTIME_UID=%d", os.Getuid()),
+		fmt.Sprintf("NARVI_RUNTIME_GID=%d", os.Getgid()),
 		// The git-http-backend test server (startGitHTTPServer) uses a
 		// real but self-signed TLS cert -- trusted here ONLY because this
 		// is a throwaway test server, never anything resembling

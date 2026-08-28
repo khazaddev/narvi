@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/khazaddev/narvi/internal/domain/sandboxboot"
@@ -80,6 +81,11 @@ func RunBoot(
 	reporter services.ProgressReporter,
 	onHookRerunTiming OnHookRerunTiming,
 	hookTimeout, stopGrace, readinessTimeout, readinessPollInterval, setupRetryDelay time.Duration,
+	// runtimeCredential is the identity customer-authored processes run
+	// under -- services.yml commands, and the setup hooks below. See
+	// services.Run's own parameter doc for why they share the agent
+	// runtime's identity rather than sandbox-agent's.
+	runtimeCredential *syscall.Credential,
 ) error {
 	for _, repo := range repos {
 		repoDir := filepath.Join(workspaceDir, repo.Name)
@@ -111,7 +117,7 @@ func RunBoot(
 		// package already imports services). secretEnv is appended on top
 		// of that filtered base -- §27.1's own explicit "services.yml
 		// services" spawn target.
-		if err := services.Run(ctx, sup, repoDir, manifest, append(supervisor.EnvWithout(SessionConfigEnvVar), secretEnv...), reporter, readinessTimeout, readinessPollInterval); err != nil {
+		if err := services.Run(ctx, sup, repoDir, manifest, append(supervisor.EnvWithout(SessionConfigEnvVar), secretEnv...), reporter, readinessTimeout, readinessPollInterval, runtimeCredential); err != nil {
 			return fmt.Errorf("boot: services.yml supervision for %s failed: %w", repo.Name, err)
 		}
 	}

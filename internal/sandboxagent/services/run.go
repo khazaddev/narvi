@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -118,14 +119,29 @@ func Run(
 	env []string,
 	reporter ProgressReporter,
 	readinessTimeout, readinessPollInterval time.Duration,
+	// credential is the identity these services run under, and it is the
+	// SAME one the agent runtime gets (§30.5). services.yml commands come
+	// from the customer's own repository: running them as sandbox-agent
+	// while the agent beside them is dropped would leave the more
+	// obviously untrusted of the two processes with the more privilege.
+	//
+	// It also keeps the workspace coherent. A service writing as
+	// sandbox-agent into a tree the runtime owns leaves files the runtime
+	// cannot touch, and the agent would meet that as an inexplicable
+	// permission error in the middle of its own work.
+	//
+	// nil means "no drop", which is what an unprivileged process must pass
+	// -- see supervisor.Spec.Credential.
+	credential *syscall.Credential,
 ) error {
 	spawned := make([]spawnedService, 0, len(manifest.Services))
 	for _, svc := range manifest.Services {
 		proc, err := sup.Spawn(supervisor.Spec{
-			Path: "/bin/sh",
-			Args: []string{"-c", svc.Cmd},
-			Dir:  filepath.Join(repoDir, svc.Cwd),
-			Env:  env,
+			Path:       "/bin/sh",
+			Args:       []string{"-c", svc.Cmd},
+			Dir:        filepath.Join(repoDir, svc.Cwd),
+			Env:        env,
+			Credential: credential,
 		})
 		if err != nil {
 			return fmt.Errorf("services: spawn %q: %w", svc.Name, err)

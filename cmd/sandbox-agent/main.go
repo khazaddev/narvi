@@ -168,6 +168,7 @@ import (
 	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
 	"github.com/khazaddev/narvi/internal/sandboxagent/credentials"
 	"github.com/khazaddev/narvi/internal/sandboxagent/gitclone"
+	"github.com/khazaddev/narvi/internal/sandboxagent/githarden"
 	"github.com/khazaddev/narvi/internal/sandboxagent/opencodeproc"
 	"github.com/khazaddev/narvi/internal/sandboxagent/services"
 	"github.com/khazaddev/narvi/internal/sandboxagent/snapshotclient"
@@ -526,7 +527,7 @@ func (h *commandHandler) pushOneRepo(repoSpec sandboxws.PushReposElem) (string, 
 		// defense in depth alongside the validation above: even an
 		// already-validated remote/branch should never be positionally
 		// ambiguous to git's own argument parser.
-		Args:   []string{"-C", dir, "-c", "credential.helper=" + credHelperArg, "push", "--", remote, repoSpec.Branch},
+		Args:   githarden.Args(dir, "-c", "credential.helper="+credHelperArg, "push", "--", remote, repoSpec.Branch),
 		Stderr: &stderr,
 		// Env is DELIBERATELY left at its zero value (nil, "inherit this
 		// process's own environment") -- a reviewed choice, not an
@@ -582,7 +583,7 @@ func (h *commandHandler) headSHA(dir string) (string, error) {
 	var stdout bytes.Buffer
 	proc, err := h.sup.Spawn(supervisor.Spec{
 		Path:   "git",
-		Args:   []string{"-C", dir, "rev-parse", "HEAD"},
+		Args:   githarden.Args(dir, "rev-parse", "HEAD"),
 		Stdout: &stdout,
 		// Unlike pushOneRepo's own git push Spawn call just above (which
 		// deliberately keeps full env inheritance -- see its own comment),
@@ -1259,9 +1260,16 @@ func run() error {
 			bootDegradeNotes = append(bootDegradeNotes, "sandbox secrets: boot-time fetch failed after retrying; this session booted with NO sandbox secrets injected (warn-and-continue degrade policy, §27.1) -- env vars a repo's setup.sh/start.sh/services.yml or opencode may normally expect from a configured sandbox secret may be missing")
 		}
 
-		homeDir, homeErr := os.UserHomeDir()
+		// The RUNTIME's home, not this process's own. §27.2's global
+		// OpenCode configuration document is written here for the agent
+		// runtime to read, and the runtime now runs under a different uid
+		// (§30.5): sandbox-agent is root in production, its home is /root,
+		// and /root is not traversable by another uid -- so a
+		// world-readable document written there is unreadable anyway, and
+		// the runtime would simply come up without its configuration.
+		homeDir, homeErr := boot.EnsureRuntimeHome(cfg.WorkspaceDir, cfg.RuntimeUID, cfg.RuntimeGID)
 		if homeErr != nil {
-			slog.Warn("sandbox-agent: resolve home directory failed, skipping opencode global config injection", "error", homeErr)
+			slog.Warn("sandbox-agent: prepare runtime home failed, skipping opencode global config injection", "error", homeErr)
 		} else {
 			openCodeConfigDelivery, openCodeConfigFetchOK := fetchOpenCodeConfig(ctx, cfg, timeouts)
 			openCodeConfigEnv := applyOpenCodeConfig(openCodeConfigDelivery, openCodeConfigFetchOK, homeDir, openCodeEnvironmentConfigPath)
@@ -1332,8 +1340,55 @@ func run() error {
 		resolvedCredentials = fetchProviderCredentials(ctx, cfg, timeouts.ProviderCredentialFetchTimeout)
 		providerCredentialEnv := providerCredentialSpawnEnv(resolvedCredentials)
 
-		result, spawnErr := opencodeproc.Spawn(ctx, sup, cfg.WorkspaceDir, providerCredentialEnv, sandboxSecretEnv,
-			timeouts.OpenCodeReadinessTimeout, timeouts.OpenCodeReadinessPollInterval)
+		// runtimeCredential (TECHNICAL_PLAN.md §30.5, "OS-level isolation
+		// between sandbox-agent and the agent runtime"): cfg.RuntimeUID/
+		// RuntimeGID are boot.Load's own fail-fast-validated values
+		// (non-numeric or explicit-0/root already refused there, before
+		// this line is ever reached) -- built into a *syscall.Credential
+		// HERE, this process's own one and only call site that needs one,
+		// rather than in the boot package (see Config.RuntimeUID's own doc
+		// comment for why).
+		//
+		// NoSetGroups is true ONLY when cfg.RuntimeUID/RuntimeGID exactly
+		// equal this process's OWN current uid/gid -- i.e. no actual
+		// identity change is being requested at all, the documented
+		// escape hatch for running the real binary unprivileged (a real
+		// dev machine, an integration test spawning this real binary as
+		// the ordinary CI/dev user -- see
+		// cmd/sandbox-agent/push_integration_test.go's own
+		// runSandboxAgent, which sets NARVI_RUNTIME_UID/GID to its own
+		// os.Getuid()/os.Getgid() for exactly this reason). Confirmed
+		// live: Go's own exec path calls setgroups() whenever Credential
+		// is non-nil UNLESS NoSetGroups is true, and setgroups() itself
+		// always requires privilege regardless of whether it changes
+		// anything -- so even a self-uid/gid Credential fails
+		// unprivileged without this (see
+		// internal/sandboxagent/supervisor.Spec.Credential's own doc
+		// comment for the same finding). In the real, privileged
+		// production path, cfg.RuntimeUID/RuntimeGID are (by construction
+		// -- see boot's own RuntimeUIDIsRootError/RuntimeGIDIsRootError,
+		// which refuse 0/root, and the 65534 default, essentially never
+		// sandbox-agent's own real uid) never equal to this process's own
+		// identity, so this condition never triggers there:
+		// NoSetGroups stays false and supplementary groups are genuinely
+		// cleared as part of the real privilege drop, exactly as wanted.
+		runtimeCredential := runtimeCredentialFor(cfg)
+
+		// HOME must name the runtime's OWN home, or everything the runtime
+		// resolves relative to it lands somewhere it cannot reach: it
+		// inherits this process's environment, and this process is root in
+		// production. Appended after the other environment slices for the
+		// same reason they are ordered that way -- a later assignment wins,
+		// and this one has to.
+		// Copied rather than appended in place: sandboxSecretEnv is used
+		// elsewhere, and appending to it could share or clobber its backing
+		// array depending on capacity.
+		runtimeEnv := make([]string, 0, len(sandboxSecretEnv)+1)
+		runtimeEnv = append(runtimeEnv, sandboxSecretEnv...)
+		runtimeEnv = append(runtimeEnv, "HOME="+boot.RuntimeHomePath(cfg.WorkspaceDir))
+
+		result, spawnErr := opencodeproc.Spawn(ctx, sup, cfg.WorkspaceDir, providerCredentialEnv, runtimeEnv,
+			runtimeCredential, timeouts.OpenCodeReadinessTimeout, timeouts.OpenCodeReadinessPollInterval)
 		if spawnErr != nil {
 			// Best-effort cleanup of whatever sup may already be tracking
 			// -- opencodeproc.Spawn's own internal Supervisor.Spawn call
@@ -1695,6 +1750,39 @@ func run() error {
 		BootMode: &bootMode,
 		Failed:   &bootFailed,
 	})
+
+	// (TECHNICAL_PLAN.md §30.5): once boot itself succeeded, re-own
+	// cfg.WorkspaceDir to the isolated agent runtime's own uid/gid --
+	// BEFORE anything below marks the sandbox ready to receive a
+	// "prompt" command. Every writer above (gitclone.CloneAll, repo
+	// setup hooks, services.yml, the AGENTS.md/opencode.json writers
+	// folded into runBootSequence) ran as sandbox-agent's own identity,
+	// never the runtime's -- see boot.ChownWorkspaceForRuntime's own doc
+	// comment for why leaving that unfixed would leave the runtime
+	// locked out of the one surface §30.5 requires stay usable. Guarded
+	// on cfg.SessionConfig != nil: that is exactly the condition under
+	// which opencodeproc.Spawn (and the os.MkdirAll that creates
+	// cfg.WorkspaceDir in the first place, above) ever ran at all --
+	// with no live session there is no runtime to re-own anything for,
+	// and cfg.WorkspaceDir may not even exist.
+	//
+	// Folded into bootErr itself, not a separate error path: a chown
+	// failure here gets the EXACT same fail-fast treatment as any other
+	// boot failure below (cancel ctx, never mark boot complete, surface
+	// as this process's own eventual exit error) -- a session that
+	// booted but left its own runtime unable to read or write its
+	// workspace is not one worth continuing, and letting the runtime
+	// discover that itself, per-file, at arbitrary points during a turn,
+	// is exactly the silent failure mode this codebase's own conventions
+	// refuse to ship. bootFailed/sendBootTiming above are deliberately
+	// UNAFFECTED by this: that event already reported runBootSequence's
+	// own, narrower outcome before this step ever ran.
+	if bootErr == nil && cfg.SessionConfig != nil {
+		if chownErr := boot.ChownWorkspaceForRuntime(cfg.WorkspaceDir, cfg.RuntimeUID, cfg.RuntimeGID); chownErr != nil {
+			bootErr = fmt.Errorf("sandbox-agent: re-own workspace for isolated runtime: %w", chownErr)
+		}
+	}
+
 	if bootErr != nil {
 		// A boot failure needs the same graceful convergence a fatal WS
 		// status or an OS signal gets -- cancel ctx (stop is a genuine
@@ -2125,7 +2213,7 @@ func runBootSequence(
 	if err := boot.RunBoot(ctx, sup, cfg.WorkspaceDir, repos, cfg.BootMode, workspaceMoved, setupRerunLadder, secretEnv, reportBootProgress, onHookRerunTiming,
 		timeouts.HookTimeout, timeouts.ProcessStopGracePeriod,
 		timeouts.ServiceReadinessTimeout, timeouts.ServiceReadinessPollInterval,
-		timeouts.SetupRerunRetryBackoff); err != nil {
+		timeouts.SetupRerunRetryBackoff, runtimeCredentialFor(cfg)); err != nil {
 		return fmt.Errorf("boot: %w", err)
 	}
 
@@ -2155,4 +2243,31 @@ func runBootSequence(
 	}
 
 	return nil
+}
+
+// runtimeCredentialFor builds the identity every customer-influenced
+// process runs under (§30.5): the agent runtime itself, and the
+// services.yml commands and setup hooks that come from the customer's own
+// repository.
+//
+// One function rather than a literal at each site, because the
+// NoSetGroups condition below is subtle enough to get wrong in a copy, and
+// two sites disagreeing about it would mean two different identities in
+// one sandbox -- with files written by one that the other cannot touch.
+func runtimeCredentialFor(cfg boot.Config) *syscall.Credential {
+	// NoSetGroups is true ONLY when the configured identity is exactly
+	// this process's own, which is the unprivileged case a test run hits:
+	// clearing supplementary groups needs privileges this process does not
+	// have, and the drop would fail outright.
+	//
+	// In the real production path cfg.RuntimeUID/RuntimeGID are never this
+	// process's own identity -- boot refuses 0, and the default is 65534
+	// -- so this condition does not trigger there, supplementary groups
+	// are genuinely cleared, and the drop is the real one.
+	selfUID, selfGID := uint32(os.Getuid()), uint32(os.Getgid())
+	return &syscall.Credential{
+		Uid:         cfg.RuntimeUID,
+		Gid:         cfg.RuntimeGID,
+		NoSetGroups: cfg.RuntimeUID == selfUID && cfg.RuntimeGID == selfGID,
+	}
 }

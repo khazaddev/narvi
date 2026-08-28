@@ -59,9 +59,9 @@ func TestResilienceScenario_StaleImageBoot_WorkspaceMovedFiresSetupReruns(t *tes
 	repos := []boot.RepoInfo{{Name: "repo1", Primary: true}}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved,
-		nil, nil, noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond)
+		nil, nil, noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil)
 	if err != nil {
-		t.Fatalf("RunBoot() error = %v, want nil (a moved workspace's setup.sh rerun must be non-fatal)", err)
+		t.Fatalf("RunBoot(, nil) error = %v, want nil (a moved workspace's setup.sh rerun must be non-fatal)", err)
 	}
 
 	assertFileExists(t, rerunMarker)
@@ -95,9 +95,9 @@ func TestResilienceScenario_StaleImageBoot_WorkspaceUnmoved_SetupSkipped(t *test
 	repos := []boot.RepoInfo{{Name: "repo1", Primary: true}}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved,
-		nil, nil, noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond)
+		nil, nil, noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil)
 	if err != nil {
-		t.Fatalf("RunBoot() error = %v, want nil", err)
+		t.Fatalf("RunBoot(, nil) error = %v, want nil", err)
 	}
 
 	assertFileAbsent(t, rerunMarker)
@@ -138,9 +138,9 @@ func TestResilienceScenario_NonIdempotentSetupBoot_NonFatalFailure_VisibleInOutp
 	repos := []boot.RepoInfo{{Name: "repo1", Primary: true}}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved,
-		nil, nil, noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond)
+		nil, nil, noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil)
 	if err != nil {
-		t.Fatalf("RunBoot() error = %v, want nil (a non-idempotent setup.sh's rerun failure must be non-fatal -- boot still succeeds)", err)
+		t.Fatalf("RunBoot(, nil) error = %v, want nil (a non-idempotent setup.sh's rerun failure must be non-fatal -- boot still succeeds)", err)
 	}
 
 	rawTail, ok := handler.findAttr("output_tail")
@@ -224,9 +224,9 @@ func TestResilienceScenario_RepoAbsentFromWorkspaceMoved_SetupStillReruns(t *tes
 	repos := []boot.RepoInfo{{Name: "repo-no-sha", Primary: true}}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved,
-		nil, nil, noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond)
+		nil, nil, noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil)
 	if err != nil {
-		t.Fatalf("RunBoot() error = %v, want nil (a repo absent from workspaceMoved must still rerun setup.sh non-fatally, per the safe default)", err)
+		t.Fatalf("RunBoot(, nil) error = %v, want nil (a repo absent from workspaceMoved must still rerun setup.sh non-fatally, per the safe default)", err)
 	}
 
 	assertFileExists(t, rerunMarker)
@@ -314,9 +314,9 @@ func TestResilienceScenario_FullSetupRetry_FirstFailsSecondSucceeds(t *testing.T
 	// Ineligible, DeltaEligible: false) sends this straight to the
 	// full-setup.sh floor, the ONE tier this test exercises.
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved,
-		nil, nil, noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, 10*time.Millisecond)
+		nil, nil, noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, 10*time.Millisecond, nil)
 	if err != nil {
-		t.Fatalf("RunBoot() error = %v, want nil", err)
+		t.Fatalf("RunBoot(, nil) error = %v, want nil", err)
 	}
 
 	assertFileExists(t, successMarker)
@@ -363,9 +363,9 @@ func TestResilienceScenario_FullSetupRetry_BothAttemptsFail(t *testing.T) {
 	repos := []boot.RepoInfo{{Name: "repo1", Primary: true}}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved,
-		nil, nil, noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, 10*time.Millisecond)
+		nil, nil, noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, 10*time.Millisecond, nil)
 	if err != nil {
-		t.Fatalf("RunBoot() error = %v, want nil (a retried failure must still be non-fatal -- boot still succeeds)", err)
+		t.Fatalf("RunBoot(, nil) error = %v, want nil (a retried failure must still be non-fatal -- boot still succeeds)", err)
 	}
 
 	raw, readErr := os.ReadFile(attemptsCounter)

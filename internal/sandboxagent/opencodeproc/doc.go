@@ -46,4 +46,22 @@
 // process supervisor's own process concerns: adapters in this codebase
 // are I/O-light HTTP clients, process supervision is sandbox-agent's own
 // separate concern.
+//
+// Spawn's own runtimeCredential parameter (TECHNICAL_PLAN.md §30.5) is
+// this package's half of the OS-level isolation between sandbox-agent and
+// the agent runtime: opencode serve, and every shell/tool it forks on the
+// agent's behalf, is THE "agent runtime" that section names as running
+// same-UID as sandbox-agent today -- one process-environment read
+// (sandbox-agent's own /proc/<pid>/environ) or one on-disk file read (the
+// credential cache, 0600 "outside /workspace" but same-UID-readable) away
+// from the sandbox bearer and the SCM credential respectively. A non-nil
+// runtimeCredential is threaded straight into
+// internal/sandboxagent/supervisor.Spec's own Credential field, applied
+// to nothing else this package spawns (there is only ever the one
+// process). See that field's own doc comment for the exact mechanics
+// (kernel-enforced, requires the calling process's own privilege to take
+// effect) and internal/sandboxagent/supervisor/credential_test.go /
+// spawn_test.go's own TestSpawn_RuntimeCredentialDropsCannotReadAnotherUIDsFile
+// for this isolation proven by actual execution, in a rooted Linux
+// container.
 package opencodeproc

@@ -5,7 +5,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -59,7 +61,7 @@ func TestSpawn_RealBinary(t *testing.T) {
 		_ = sup.StopAll(stopCtx, 5*time.Second)
 	})
 
-	result, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, nil, 150*time.Second, 250*time.Millisecond)
+	result, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, nil, nil, 150*time.Second, 250*time.Millisecond)
 	if err != nil {
 		t.Fatalf("Spawn() error = %v, want nil (real opencode binary should be on PATH)", err)
 	}
@@ -100,7 +102,7 @@ func TestSpawn_BadBinaryPath(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, nil, 30*time.Second, 250*time.Millisecond)
+	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, nil, nil, 30*time.Second, 250*time.Millisecond)
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -144,7 +146,7 @@ func TestSpawn_EnvExcludesSessionConfig(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, nil, 5*time.Second, 50*time.Millisecond)
+	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, nil, nil, 5*time.Second, 50*time.Millisecond)
 	if err == nil {
 		t.Fatal("Spawn() error = nil, want an error (the fake opencode script exits 1 before ever becoming healthy)")
 	}
@@ -196,7 +198,7 @@ func TestSpawn_ProviderCredentialEnvAppended(t *testing.T) {
 	defer cancel()
 
 	providerCredentialEnv := []string{"ANTHROPIC_API_KEY=sk-resolved-anthropic-key"}
-	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), providerCredentialEnv, nil, 5*time.Second, 50*time.Millisecond)
+	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), providerCredentialEnv, nil, nil, 5*time.Second, 50*time.Millisecond)
 	if err == nil {
 		t.Fatal("Spawn() error = nil, want an error (the fake opencode script exits 1 before ever becoming healthy)")
 	}
@@ -243,7 +245,7 @@ func TestSpawn_NilProviderCredentialEnv_UnchangedBehavior(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, nil, 5*time.Second, 50*time.Millisecond)
+	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, nil, nil, 5*time.Second, 50*time.Millisecond)
 	if err == nil {
 		t.Fatal("Spawn() error = nil, want an error (the fake opencode script exits 1 before ever becoming healthy)")
 	}
@@ -294,7 +296,7 @@ func TestSpawn_SandboxSecretEnvAppended(t *testing.T) {
 	defer cancel()
 
 	sandboxSecretEnv := []string{"MY_SANDBOX_SECRET=resolved-secret-value"}
-	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, sandboxSecretEnv, 5*time.Second, 50*time.Millisecond)
+	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, sandboxSecretEnv, nil, 5*time.Second, 50*time.Millisecond)
 	if err == nil {
 		t.Fatal("Spawn() error = nil, want an error (the fake opencode script exits 1 before ever becoming healthy)")
 	}
@@ -337,7 +339,7 @@ func TestSpawn_ProviderCredentialEnvWinsOverSandboxSecretEnv(t *testing.T) {
 
 	providerCredentialEnv := []string{"SHARED_NAME=from-provider-credential"}
 	sandboxSecretEnv := []string{"SHARED_NAME=from-sandbox-secret"}
-	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), providerCredentialEnv, sandboxSecretEnv, 5*time.Second, 50*time.Millisecond)
+	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), providerCredentialEnv, sandboxSecretEnv, nil, 5*time.Second, 50*time.Millisecond)
 	if err == nil {
 		t.Fatal("Spawn() error = nil, want an error (the fake opencode script exits 1 before ever becoming healthy)")
 	}
@@ -348,5 +350,121 @@ func TestSpawn_ProviderCredentialEnvWinsOverSandboxSecretEnv(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(got)); got != "from-provider-credential" {
 		t.Errorf("SHARED_NAME as seen by the spawned process = %q, want %q (providerCredentialEnv appended last, per §27.1)", got, "from-provider-credential")
+	}
+}
+
+// A self-uid Credential's harmlessness is proven one layer down, by
+// supervisor's own TestSpawn_CredentialSelfUID_Succeeds, and it is proven
+// better there: that test spawns /bin/sh rather than the real opencode
+// binary, so it runs on every platform and in CI, needs no port, and
+// cannot be destabilised by anything else running beside it.
+//
+// A test here that spawned `opencode serve` for the same property was
+// removed rather than repaired. Its own doc comment conceded it did not
+// prove the parameter reaches supervisor.Spec.Credential -- the cross-uid
+// test below is what proves that -- so it was paying a real binary spawn
+// to re-establish something already established. And it was not free: it
+// made a SEVENTH concurrent `opencode serve` in this package, and serve
+// picks its port through a free-port helper that closes its listener
+// before the child binds. That window is a known, filed flake, and this
+// test lost the race in CI while passing locally. Adding contention to a
+// known race in order to re-prove a covered property is a bad trade in
+// both directions.
+
+func TestSpawn_RuntimeCredentialDropsCannotReadAnotherUIDsFile(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skipf("requires linux (this test asserts a real kernel-enforced file-permission denial across a uid boundary); running on %s", runtime.GOOS)
+	}
+	if os.Geteuid() != 0 {
+		t.Skip("requires running as root (euid 0): dropping a spawned child to an UNPRIVILEGED uid/gid requires CAP_SETUID/CAP_SETGID, which a non-root test process does not have")
+	}
+
+	// binDir (holding the fake "opencode" script), workDir (the spawned
+	// process's own cwd), and probeDir (where it writes its findings) are
+	// all this TEST's OWN scaffolding, not the secret being protected --
+	// they must be reachable by the unprivileged runtimeCredential uid.
+	// Deliberately os.MkdirTemp (creates DIRECTLY under os.TempDir(),
+	// e.g. /tmp -- conventionally mode 1777, world-traversable) rather
+	// than t.TempDir() (which nests every per-test directory one level
+	// deeper, under an ADDITIONAL shared, mode-0700, root-owned directory
+	// unique to this test -- confirmed live: using t.TempDir() here first
+	// made this test fail with "fork/exec ...: permission denied" even
+	// though binDir ITSELF was correctly chmod'd 0755, because the
+	// unprivileged child could not even traverse INTO that shared 0700
+	// parent to reach it). Every directory permission check below is
+	// real kernel enforcement, not simulated -- this test's own
+	// scaffolding bugs are exactly the same class of denial it exists to
+	// prove for the real secret. secretPath's own directory is
+	// deliberately left at t.TempDir()'s default (root-only, nested
+	// under that same 0700 shared parent) -- matching
+	// internal/sandboxagent/credentials/cache.go's own real
+	// Dir-0700/file-0600 shape (if anything, a STRICTER, doubly-enforced
+	// version of it) -- so the file's own 0600 mode (and/or its parents)
+	// is what blocks the read, exactly like the real credential cache.
+	binDir, err := os.MkdirTemp("", "narvi-runtimecred-bin")
+	if err != nil {
+		t.Fatalf("MkdirTemp(binDir): %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(binDir) })
+	if err := os.Chmod(binDir, 0o755); err != nil {
+		t.Fatalf("Chmod(binDir): %v", err)
+	}
+	workDir, err := os.MkdirTemp("", "narvi-runtimecred-work")
+	if err != nil {
+		t.Fatalf("MkdirTemp(workDir): %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(workDir) })
+	if err := os.Chmod(workDir, 0o755); err != nil {
+		t.Fatalf("Chmod(workDir): %v", err)
+	}
+	probeDir, err := os.MkdirTemp("", "narvi-runtimecred-probe")
+	if err != nil {
+		t.Fatalf("MkdirTemp(probeDir): %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(probeDir) })
+	if err := os.Chmod(probeDir, 0o777); err != nil {
+		t.Fatalf("Chmod(probeDir): %v", err)
+	}
+	probeFile := filepath.Join(probeDir, "probe")
+
+	secretPath := filepath.Join(t.TempDir(), "narvi-credentials-like-secret.json")
+	if err := os.WriteFile(secretPath, []byte(`{"password":"should-be-unreadable"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// /bin/cat (absolute path, never bare "cat"): PATH is overridden below
+	// to binDir ONLY, so a bare "cat" would fail with "not found" for a
+	// reason having nothing to do with runtimeCredential -- confirmed
+	// live (this test originally used a bare "cat" and passed
+	// VACUOUSLY, for exactly that wrong reason, both with and without
+	// the Credential threaded through -- see this test's own mutation
+	// note in the Step's report, since a "test that passes either way"
+	// is worse than no test at all).
+	script := "#!/bin/sh\n" +
+		`/bin/cat ` + secretPath + ` > "$PROBE_FILE" 2>>"$PROBE_FILE"` + "\n" +
+		"exit 1\n"
+	if err := os.WriteFile(filepath.Join(binDir, "opencode"), []byte(script), 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	t.Setenv("PATH", binDir)
+	t.Setenv("PROBE_FILE", probeFile)
+
+	sup := supervisor.New()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cred := &syscall.Credential{Uid: 65534, Gid: 65534}
+	_, err = opencodeproc.Spawn(ctx, sup, workDir, nil, nil, cred, 5*time.Second, 50*time.Millisecond)
+	if err == nil {
+		t.Fatal("Spawn() error = nil, want an error (the fake opencode script exits 1 before ever becoming healthy)")
+	}
+
+	got, readErr := os.ReadFile(probeFile)
+	if readErr != nil {
+		t.Fatalf("read probe file: %v", readErr)
+	}
+	if strings.Contains(string(got), "should-be-unreadable") {
+		t.Fatalf("the spawned process (runtimeCredential uid 65534) read a 0600 file owned by this root test process successfully (probe=%q); want a kernel permission error, proving runtimeCredential reached the spawned process", got)
 	}
 }
