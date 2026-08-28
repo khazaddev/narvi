@@ -323,7 +323,7 @@ func serve() error {
 	// here, the ONE production construction site, mirroring
 	// gatedHTTPClient/liveSourceControl's own identical "one seam" pattern
 	// immediately below.
-	githubAppClient := githubapp.New(http.DefaultClient, githubAPIBaseURL, cfg.GitHubAppID, cfg.GitHubAppPrivateKey, cfg.Timeouts.GitHubAppJWTTTL)
+	githubAppClient := githubapp.New(http.DefaultClient, githubAPIBaseURL, cfg.GitHubAppID, cfg.GitHubAppPrivateKey, cfg.Timeouts.GitHubAppJWTTTL, cfg.Timeouts.GitHubAppJWTClockSkew)
 
 	// §30.4(4)'s own boot-time half of "scope introspection, fail-closed,
 	// at boot and at mint": before this process ever starts serving

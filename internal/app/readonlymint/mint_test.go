@@ -1,6 +1,8 @@
 package readonlymint_test
 
 import (
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"context"
 	"encoding/json"
 	"errors"
@@ -60,21 +62,39 @@ func readOnlyToken() githubapp.Token {
 	}
 }
 
+// testSessionID is a fixed, valid session UUID: Mint carries it through
+// to the ledger record untouched, so its value only has to be stable.
+var testSessionID = pgtype.UUID{Bytes: [16]byte{0x5c, 0x0d, 0xef, 0x01, 0x23, 0x45, 0x46, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78}, Valid: true}
+
 // TestMint_Success proves a genuinely read-only minted token is returned
-// as-is, with nothing recorded into the ledger.
+// as-is AND that the substitution is recorded (§30.6).
+//
+// This test previously asserted the opposite -- "want 0 rows for a
+// successful read-only mint" -- and passed, which is how the missing
+// record survived: the assertion encoded the gap as the expectation.
 func TestMint_Success(t *testing.T) {
 	minter := &fakeMinter{token: readOnlyToken()}
 	ledger := &fakeLedgerStore{}
 
-	got, err := readonlymint.Mint(context.Background(), minter, ledger, "acme", []string{"widgets"}, "acme/widgets", "github.com")
+	got, err := readonlymint.Mint(context.Background(), minter, ledger, "acme", []string{"widgets"}, "acme/widgets", "github.com", testSessionID)
 	if err != nil {
 		t.Fatalf("Mint() error = %v, want nil", err)
 	}
 	if got.Value != minter.token.Value {
 		t.Errorf("Mint() = %+v, want the minter's own token", got)
 	}
-	if len(ledger.rows) != 0 {
-		t.Errorf("ledger recorded %d rows, want 0 for a successful read-only mint", len(ledger.rows))
+	if len(ledger.rows) != 1 {
+		t.Fatalf("ledger recorded %d rows, want 1: a successful substitution is invisible everywhere else", len(ledger.rows))
+	}
+	row := ledger.rows[0]
+	if row.Operation != "scm_credential_substituted" {
+		t.Errorf("row.Operation = %q, want %q", row.Operation, "scm_credential_substituted")
+	}
+	if row.SessionID != testSessionID {
+		t.Errorf("row.SessionID = %v, want the caller's own session %v", row.SessionID, testSessionID)
+	}
+	if strings.Contains(string(row.SpecJson), minter.token.Value) {
+		t.Errorf("the substituted token's own value reached spec_json: %s", row.SpecJson)
 	}
 	if minter.sawOwner != "acme" || len(minter.sawRepoNames) != 1 || minter.sawRepoNames[0] != "widgets" {
 		t.Errorf("minter saw owner=%q repoNames=%v, want owner=acme repoNames=[widgets]", minter.sawOwner, minter.sawRepoNames)
@@ -89,7 +109,7 @@ func TestMint_MinterFailure_NothingRecorded(t *testing.T) {
 	minter := &fakeMinter{err: errors.New("simulated GitHub API failure")}
 	ledger := &fakeLedgerStore{}
 
-	_, err := readonlymint.Mint(context.Background(), minter, ledger, "acme", []string{"widgets"}, "acme/widgets", "github.com")
+	_, err := readonlymint.Mint(context.Background(), minter, ledger, "acme", []string{"widgets"}, "acme/widgets", "github.com", testSessionID)
 	if err == nil {
 		t.Fatal("Mint() error = nil, want an error when the underlying mint itself fails")
 	}
@@ -112,7 +132,7 @@ func TestMint_ScopeCheckFailure_RefusesAndRecords(t *testing.T) {
 	minter := &fakeMinter{token: overScoped}
 	ledger := &fakeLedgerStore{}
 
-	got, err := readonlymint.Mint(context.Background(), minter, ledger, "acme", []string{"widgets"}, "acme/widgets", "github.com")
+	got, err := readonlymint.Mint(context.Background(), minter, ledger, "acme", []string{"widgets"}, "acme/widgets", "github.com", testSessionID)
 	if err == nil {
 		t.Fatal("Mint() error = nil, want a scope-check refusal")
 	}
@@ -133,6 +153,12 @@ func TestMint_ScopeCheckFailure_RefusesAndRecords(t *testing.T) {
 	}
 	if row.RepoFullName != "acme/widgets" {
 		t.Errorf("row.RepoFullName = %q, want %q", row.RepoFullName, "acme/widgets")
+	}
+	// A refusal that cannot be attributed to the session that asked is
+	// far weaker evidence: the ledger is read to answer "what did this
+	// session try to do", not just "did anything get refused anywhere".
+	if row.SessionID != testSessionID {
+		t.Errorf("row.SessionID = %v, want the caller's own session %v", row.SessionID, testSessionID)
 	}
 	if row.ResultJson != nil {
 		t.Errorf("row.ResultJson = %s, want nil -- nothing was invented in place of the refused token", row.ResultJson)
@@ -162,12 +188,36 @@ func TestMint_LedgerRecordFailure_IsAHardError(t *testing.T) {
 	minter := &fakeMinter{token: overScoped}
 	ledger := &fakeLedgerStore{err: errors.New("simulated ledger write failure")}
 
-	_, err := readonlymint.Mint(context.Background(), minter, ledger, "acme", []string{"widgets"}, "acme/widgets", "github.com")
+	_, err := readonlymint.Mint(context.Background(), minter, ledger, "acme", []string{"widgets"}, "acme/widgets", "github.com", testSessionID)
 	if err == nil {
 		t.Fatal("Mint() error = nil, want an error when the ledger cannot record the refusal")
 	}
 	var scopeErr *readonlymint.ErrRefusedByScopeCheck
 	if errors.As(err, &scopeErr) {
 		t.Errorf("Mint() error = %v (*ErrRefusedByScopeCheck), want a distinct record-failure error", err)
+	}
+}
+
+// TestMint_Success_LedgerFailureFailsTheMint holds the SUCCESS path to the
+// same record-or-fail rule §30.6 states for suppression generally: a
+// substitution this process cannot evidence must not be served.
+//
+// Failing here is safe precisely because it happens before the token
+// leaves: nothing external has happened, and the sandbox gets an error
+// rather than a silently unrecorded read-only credential.
+func TestMint_Success_LedgerFailureFailsTheMint(t *testing.T) {
+	minter := &fakeMinter{token: readOnlyToken()}
+	ledger := &fakeLedgerStore{err: errors.New("simulated ledger write failure")}
+
+	got, err := readonlymint.Mint(context.Background(), minter, ledger, "acme", []string{"widgets"}, "acme/widgets", "github.com", testSessionID)
+	if err == nil {
+		t.Fatal("Mint() error = nil; a substitution that could not be recorded must not be served")
+	}
+	if got.Value != "" {
+		t.Errorf("Mint() returned token %q alongside an error; it must return no credential at all", got.Value)
+	}
+	var refused *readonlymint.ErrRefusedByScopeCheck
+	if errors.As(err, &refused) {
+		t.Errorf("error = %v, typed as a scope refusal; a ledger failure is a different fault and callers map the two to different statuses", err)
 	}
 }

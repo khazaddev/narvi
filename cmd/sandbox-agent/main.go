@@ -2052,11 +2052,15 @@ func runBootSequence(
 	// restore is a cold re-boot (this code runs) or a warm resume (it does
 	// not) is the open Modal question §30.9 names, and nothing here may
 	// rest on the unverified answer. The load-bearing control for a
-	// restored snapshot is the snapshot-mint-time purge on the control
-	// plane's own sandbox-side HandleSnapshot (cmd/sandbox-agent's own
-	// HandleSnapshot, called before the snapshot is ever taken); this call
-	// is additional, cheap insurance for whichever boots DO re-run this
-	// far. A failure purging a directory that may not even exist yet is
+	// restored snapshot is a purge at snapshot-MINT time, so that no
+	// snapshot ever contains a credential in the first place. That purge
+	// is NOT written yet -- HandleSnapshot mints and reports, and touches
+	// no cache -- so today a restored snapshot is defended only by the
+	// forced read-only mint on the build path, and by this call on
+	// whichever boots re-run this far. Read that as the gap it is: this
+	// call is cheap insurance, not the control.
+	//
+	// A failure purging a directory that may not even exist yet is
 	// unexpected enough to be worth failing loudly rather than silently
 	// proceeding into a boot that might reuse a stale credential.
 	if err := (&credentials.Cache{Dir: cfg.CredentialCacheDir}).PurgeAll(); err != nil {

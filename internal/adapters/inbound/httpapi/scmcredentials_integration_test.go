@@ -1319,3 +1319,156 @@ func TestScmCredentials_Shadow_MintErrorIsInternalError(t *testing.T) {
 		t.Errorf("status = %d, want %d", status, http.StatusInternalServerError)
 	}
 }
+
+// TestScmCredentials_UnparseableRepoIsNotWriteCapable closes a fail-open
+// the review found, and the hole is worth stating exactly.
+//
+// TWO parsers read the same session repos. The authorization gate accepts
+// any repo URL that has a host; the substitution set additionally
+// requires an owner/repo path. A URL like "https://github.com/acme" --
+// which session creation accepts, validating scheme and host only --
+// therefore passed the gate and contributed NOTHING to the set. The
+// substitution loop then never ran a single iteration, and the handler
+// fell through to the write-capable branches.
+//
+// The deployment-wide switch was bypassed along with it, because it was
+// only ever read INSIDE that loop: a dedicated evaluation deployment with
+// the master switch ON would still have handed out a write-capable token.
+// A malformed URL decided whether a credential could write.
+func TestScmCredentials_UnparseableRepoIsNotWriteCapable(t *testing.T) {
+	const realBotToken = "bot-token-must-never-be-reached-through-an-unparseable-url"
+	const realCreatorToken = "gho_creatorTokenMustNeverBeReachedThroughAnUnparseableURL"
+	minter := newFakeReadOnlyMinter()
+	rig := newTestRig(t, func(r *testRig) {
+		r.botToken = realBotToken
+		r.readOnlyMinter = minter
+	})
+	ctx := context.Background()
+
+	owner, err := rig.users.Create(ctx, sqlcgen.CreateUserParams{
+		PrimaryEmail: "unparseable-owner@example.com", DisplayName: "Unparseable Owner", Role: sqlcgen.UserRoleMember,
+	})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	encrypted, err := platform.EncryptToken(rig.tokenEncryptionKey, []byte(realCreatorToken))
+	if err != nil {
+		t.Fatalf("EncryptToken: %v", err)
+	}
+	email := "unparseable-owner@example.com"
+	if _, err := rig.identities.Create(ctx, sqlcgen.CreateIdentityParams{
+		UserID: owner.ID, Provider: sqlcgen.IdentityProviderGithub, ExternalID: "unparseable-owner-external-id",
+		Email: &email, EmailVerified: true, LinkedVia: sqlcgen.IdentityLinkedViaAdmin, AccessTokenEncrypted: encrypted,
+	}); err != nil {
+		t.Fatalf("create identity: %v", err)
+	}
+
+	// A host with no owner/repo path: accepted by the authorization gate,
+	// invisible to the substitution set.
+	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{
+		SpawnSource: sqlcgen.SessionSpawnSourceGithub,
+		CreatedBy:   owner.ID,
+		Repos:       []byte(`[{"name":"narvi","url":"https://github.com/acme","branch":null}]`),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	// The outcome is a refusal, not a read-only token, and that is the
+	// correct end of this path: with no owner/repo the mint has nothing
+	// to scope a token TO, and no credential at all is strictly safer
+	// than a write-capable one. What this test pins is the negative --
+	// neither write-capable secret is reachable through a URL shape.
+	status, got := postScmCredentials(t, rig, session.ID.String(), "sandbox-bearer-token")
+	if status != http.StatusForbidden {
+		t.Errorf("status = %d, want %d", status, http.StatusForbidden)
+	}
+	if got.Password == realBotToken || got.Password == realCreatorToken {
+		t.Fatal("a session whose repo URL could not be read as owner/repo received a WRITE-CAPABLE credential; an unparseable URL must never decide that")
+	}
+	if minter.CallCount != 0 {
+		t.Errorf("readOnlyMinter called %d times, want 0: there is no owner to scope a read-only token to", minter.CallCount)
+	}
+}
+
+// TestScmCredentials_Shadow_SubstitutionIsRecorded proves §30.6's own
+// "the shadow mint records its substitution" end to end -- the SUCCESS
+// counterpart to the refusal test above, and the record that was missing.
+//
+// A refusal announces itself: the sandbox gets a 403 and stops. A
+// successful substitution announces itself to nobody -- the sandbox is
+// handed a working credential and only discovers what it lost if it tries
+// to push. This row is the only place that event is ever visible, which
+// is what makes it the more load-bearing of the two records, not the
+// lesser one.
+func TestScmCredentials_Shadow_SubstitutionIsRecorded(t *testing.T) {
+	minter := newFakeReadOnlyMinter()
+	rig := newTestRig(t, func(r *testRig) { r.readOnlyMinter = minter })
+	ctx := context.Background()
+
+	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{
+		SpawnSource: sqlcgen.SessionSpawnSourceWeb,
+		Repos:       []byte(`[{"name":"narvi","url":"https://github.com/subst-owner/subst-repo","branch":null}]`),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	status, got := postScmCredentials(t, rig, session.ID.String(), "sandbox-bearer-token")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+	if got.Password != minter.Token.Value {
+		t.Fatalf("Password = %q, want the substituted read-only token", got.Password)
+	}
+
+	ledgerReader := narvipg.NewShadowSCMWriteStore(rig.pool)
+	rows, err := ledgerReader.ListForRepo(ctx, "subst-owner/subst-repo", 10)
+	if err != nil {
+		t.Fatalf("ListForRepo: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("shadow_scm_writes rows for subst-owner/subst-repo = %d, want 1: a served substitution must leave evidence", len(rows))
+	}
+	if rows[0].Operation != "scm_credential_substituted" {
+		t.Errorf("rows[0].Operation = %q, want %q", rows[0].Operation, "scm_credential_substituted")
+	}
+	if rows[0].SessionID != session.ID {
+		t.Errorf("rows[0].SessionID = %v, want the session that asked %v", rows[0].SessionID, session.ID)
+	}
+	if strings.Contains(string(rows[0].SpecJson), minter.Token.Value) {
+		t.Errorf("rows[0].SpecJson = %s, must never carry the substituted token's own value", rows[0].SpecJson)
+	}
+}
+
+// TestScmCredentials_Shadow_SubstitutionLedgerFailureIs500 holds the
+// SUCCESS path to record-or-fail through the handler: a substitution that
+// cannot be evidenced must not be served. The sandbox gets a 500, never a
+// working read-only credential the ledger has no record of.
+func TestScmCredentials_Shadow_SubstitutionLedgerFailureIs500(t *testing.T) {
+	minter := newFakeReadOnlyMinter()
+	rig := newTestRig(t, func(r *testRig) {
+		r.readOnlyMinter = minter
+		r.shadowLedger = failingLedgerStore{}
+	})
+	ctx := context.Background()
+
+	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{
+		SpawnSource: sqlcgen.SessionSpawnSourceWeb,
+		Repos:       []byte(`[{"name":"narvi","url":"https://github.com/khazaddev/narvi","branch":null}]`),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	status, got := postScmCredentials(t, rig, session.ID.String(), "sandbox-bearer-token")
+	if status != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d (a substitution that cannot be recorded must fail loudly)", status, http.StatusInternalServerError)
+	}
+	if got.Password != "" {
+		t.Errorf("Password = %q; no credential may be served when its substitution could not be recorded", got.Password)
+	}
+}

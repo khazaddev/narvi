@@ -2476,6 +2476,18 @@ type Timeouts struct {
 	// under an externally-imposed bound" reasoning.
 	GitHubAppJWTTTL time.Duration
 
+	// GitHubAppJWTClockSkew backdates the App JWT's "iat" claim so a small
+	// clock difference between this process and GitHub cannot make a
+	// freshly-signed token look future-dated.
+	//
+	// Not a per-deployment budget like its neighbours -- it is a fixed
+	// allowance for skew, and GitHub's own tolerance is what makes any
+	// particular value right. It lives here anyway, because the rule is
+	// about where duration literals live and not about whether they are
+	// tunable: a literal elsewhere is one the next reader has to go find,
+	// whatever the reason it was put there.
+	GitHubAppJWTClockSkew time.Duration
+
 	// GitHubAppScopeCheckTimeout bounds the one-shot, boot-time GET /app
 	// call cmd/control-plane's own startup sequence makes to introspect
 	// the configured GitHub App's own granted permissions (§30.4's
@@ -2711,7 +2723,8 @@ func DefaultTimeouts() Timeouts {
 
 		SeedRunTimeout: 5 * time.Minute, // §10-P6/§13.4; not specified, chosen generously -- see field doc comment
 
-		GitHubAppJWTTTL:            9 * time.Minute,  // §30.4; not specified, chosen with margin under GitHub's own hard 10-minute App-JWT ceiling -- see field doc comment
+		GitHubAppJWTTTL:            9 * time.Minute,
+		GitHubAppJWTClockSkew:      60 * time.Second, // §30.4; not specified, chosen with margin under GitHub's own hard 10-minute App-JWT ceiling -- see field doc comment
 		GitHubAppScopeCheckTimeout: 10 * time.Second, // §30.4; not specified, chosen, matches RepoSHAResolutionTimeout's own "lightweight call" reasoning
 		GitHubAppMintTimeout:       20 * time.Second, // §30.4; not specified, chosen -- see field doc comment
 	}

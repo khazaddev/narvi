@@ -58,7 +58,7 @@ func TestClient_AppPermissions(t *testing.T) {
 		}))
 		defer server.Close()
 
-		client := githubapp.New(server.Client(), server.URL, 42, testPrivateKey(t), time.Minute)
+		client := githubapp.New(server.Client(), server.URL, 42, testPrivateKey(t), time.Minute, 60*time.Second)
 		perms, err := client.AppPermissions(context.Background())
 		if err != nil {
 			t.Fatalf("AppPermissions() error = %v, want nil", err)
@@ -76,7 +76,7 @@ func TestClient_AppPermissions(t *testing.T) {
 		}))
 		defer server.Close()
 
-		client := githubapp.New(server.Client(), server.URL, 42, testPrivateKey(t), time.Minute)
+		client := githubapp.New(server.Client(), server.URL, 42, testPrivateKey(t), time.Minute, 60*time.Second)
 		_, err := client.AppPermissions(context.Background())
 		if err == nil {
 			t.Fatal("AppPermissions() error = nil, want an error on http 401")
@@ -106,8 +106,18 @@ func TestClient_MintInstallationToken(t *testing.T) {
 				if perms["contents"] != "read" || perms["metadata"] != "read" {
 					t.Errorf("mint request permissions = %v, want exactly contents:read + metadata:read", perms)
 				}
-				if _, hasWrite := perms["administration"]; hasWrite {
-					t.Errorf("mint request permissions = %v, must never request anything beyond contents/metadata", perms)
+				// Assert the SET, not a sample of it. Naming one
+				// forbidden key ("administration") reads like a scope
+				// check and is not one: it leaves pull_requests:write,
+				// workflows:write and every other permission GitHub
+				// offers free to appear here and be minted.
+				for name, level := range perms {
+					if name != "contents" && name != "metadata" {
+						t.Errorf("mint request asks for permission %q=%v; the request must carry contents and metadata and nothing else", name, level)
+					}
+					if level != "read" {
+						t.Errorf("mint request asks for %q at level %v; every requested level must be read", name, level)
+					}
 				}
 				repos, _ := body["repositories"].([]any)
 				if len(repos) != 1 || repos[0] != "widgets" {
@@ -124,7 +134,7 @@ func TestClient_MintInstallationToken(t *testing.T) {
 		}))
 		defer server.Close()
 
-		client := githubapp.New(server.Client(), server.URL, 42, testPrivateKey(t), time.Minute)
+		client := githubapp.New(server.Client(), server.URL, 42, testPrivateKey(t), time.Minute, 60*time.Second)
 		token, err := client.MintInstallationToken(context.Background(), "acme", []string{"widgets"})
 		if err != nil {
 			t.Fatalf("MintInstallationToken() error = %v, want nil", err)
@@ -150,7 +160,7 @@ func TestClient_MintInstallationToken(t *testing.T) {
 		}))
 		defer server.Close()
 
-		client := githubapp.New(server.Client(), server.URL, 42, testPrivateKey(t), time.Minute)
+		client := githubapp.New(server.Client(), server.URL, 42, testPrivateKey(t), time.Minute, 60*time.Second)
 		_, err := client.MintInstallationToken(context.Background(), "acme", nil)
 		if err == nil {
 			t.Fatal("MintInstallationToken() error = nil, want an error for zero repo names")
@@ -178,7 +188,7 @@ func TestClient_MintInstallationToken(t *testing.T) {
 		}))
 		defer server.Close()
 
-		client := githubapp.New(server.Client(), server.URL, 42, testPrivateKey(t), time.Minute)
+		client := githubapp.New(server.Client(), server.URL, 42, testPrivateKey(t), time.Minute, 60*time.Second)
 		_, err := client.MintInstallationToken(context.Background(), "acme", []string{"widgets"})
 		if err == nil {
 			t.Fatal("MintInstallationToken() error = nil, want an error when installation lookup 404s")

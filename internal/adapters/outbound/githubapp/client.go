@@ -39,6 +39,7 @@ type Client struct {
 	appID      int64
 	privateKey *rsa.PrivateKey
 	jwtTTL     time.Duration
+	clockSkew  time.Duration
 }
 
 // New builds a Client. httpClient's own Timeout should be left unset (or
@@ -49,13 +50,14 @@ type Client struct {
 // jwtTTL is platform.Timeouts.GitHubAppJWTTTL, threaded through rather than
 // read from a package-level default -- every duration literal lives in
 // platform/timeouts.go, never here.
-func New(httpClient *http.Client, baseURL string, appID int64, privateKey *rsa.PrivateKey, jwtTTL time.Duration) *Client {
+func New(httpClient *http.Client, baseURL string, appID int64, privateKey *rsa.PrivateKey, jwtTTL, clockSkew time.Duration) *Client {
 	return &Client{
 		httpClient: httpClient,
 		baseURL:    baseURL,
 		appID:      appID,
 		privateKey: privateKey,
 		jwtTTL:     jwtTTL,
+		clockSkew:  clockSkew,
 	}
 }
 
@@ -78,7 +80,7 @@ var readOnlyMintPermissions = map[string]string{
 // documented reasoning: a validation-failure body can echo request/secret
 // data back verbatim, and this error can end up logged.
 func (c *Client) doAppRequest(ctx context.Context, method, path string, body any, out any) error {
-	jwtToken, err := signAppJWT(c.appID, c.privateKey, c.jwtTTL, time.Now())
+	jwtToken, err := signAppJWT(c.appID, c.privateKey, c.jwtTTL, c.clockSkew, time.Now())
 	if err != nil {
 		return err
 	}

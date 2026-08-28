@@ -13,7 +13,7 @@ import (
 // TestSignAppJWT_ClaimsAndSignature proves signAppJWT produces a token
 // that (a) verifies against the signing key's own public half and (b)
 // carries the exact claim shape GitHub's App-authentication JWT requires:
-// "iat" backdated by appJWTClockSkewBudget, "exp" exactly jwtTTL past
+// "iat" backdated by clockSkew, "exp" exactly jwtTTL past
 // "iat" (so it is bounded by whatever GitHubAppJWTTTL the caller
 // configured, itself kept under GitHub's own hard 10-minute ceiling), and
 // "iss" equal to the App's own id.
@@ -26,8 +26,9 @@ func TestSignAppJWT_ClaimsAndSignature(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	const appID = int64(555)
 	const jwtTTL = 3 * time.Minute
+	const clockSkew = 60 * time.Second
 
-	token, err := signAppJWT(appID, key, jwtTTL, now)
+	token, err := signAppJWT(appID, key, jwtTTL, clockSkew, now)
 	if err != nil {
 		t.Fatalf("signAppJWT() error = %v, want nil", err)
 	}
@@ -42,9 +43,9 @@ func TestSignAppJWT_ClaimsAndSignature(t *testing.T) {
 		t.Fatalf("unmarshal claims: %v", err)
 	}
 
-	wantIat := now.Add(-appJWTClockSkewBudget).Unix()
+	wantIat := now.Add(-clockSkew).Unix()
 	if claims.IssuedAt != wantIat {
-		t.Errorf("claims.IssuedAt = %d, want %d (now - %s clock-skew budget)", claims.IssuedAt, wantIat, appJWTClockSkewBudget)
+		t.Errorf("claims.IssuedAt = %d, want %d (now - %s clock-skew budget)", claims.IssuedAt, wantIat, clockSkew)
 	}
 	wantExp := now.Add(jwtTTL).Unix()
 	if claims.ExpiresAt != wantExp {
@@ -78,7 +79,7 @@ func TestSignAppJWT_DifferentKeyFailsVerification(t *testing.T) {
 		t.Fatalf("generate other test key: %v", err)
 	}
 
-	token, err := signAppJWT(1, key, time.Minute, time.Now())
+	token, err := signAppJWT(1, key, time.Minute, 60*time.Second, time.Now())
 	if err != nil {
 		t.Fatalf("signAppJWT() error = %v, want nil", err)
 	}

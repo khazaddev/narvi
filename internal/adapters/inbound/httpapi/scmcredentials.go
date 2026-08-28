@@ -110,9 +110,7 @@
 // own identity. This does not claim to make a bash-capable review agent
 // structurally incapable of ever calling GitHub's API directly with
 // SOME credential (that would require OS-level process isolation between
-// sandbox-agent and the agent runtime it supervises, or GitHub App
-// fine-grained/read-only installation tokens -- neither of which this
-// codebase has today, see this Step's own PR description) -- it closes
+// sandbox-agent and the agent runtime it supervises) -- it closes
 // the STRICTLY WORSE half of that gap: an arbitrary commenter's own
 // broad, personal, cross-repo credential never reaches a review sandbox
 // at all.
@@ -141,11 +139,11 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/egressmode"
+	"github.com/khazaddev/narvi/internal/app/readonlymint"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/app/shadowledger"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/domain/sandbox"
-	"github.com/khazaddev/narvi/internal/domain/scmscope"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -449,8 +447,32 @@ func ScmCredentials(
 		// only be scoped to one.
 		hostRepoFullNames, hostReposByOwner := shadowHostRepos(sessionRow.Repos, req.Host)
 
+		// Two parsers read the same repos, and they do not agree. The
+		// authorization gate above accepts any URL with a host;
+		// shadowHostRepos additionally drops anything that is not
+		// owner/repo shaped. A session repo like "https://github.com/acme"
+		// -- which session creation accepts, since it validates only
+		// scheme and host -- therefore passes the gate and contributes
+		// NOTHING to the set resolved below.
+		//
+		// Left as a bare loop over that set, an empty set meant the loop
+		// never ran, shadow stayed false, and the handler fell through to
+		// the write-capable branches. Worse, platformShadow is only read
+		// INSIDE the loop, so a dedicated evaluation deployment with the
+		// master switch on would have handed out a write-capable token
+		// too -- a fail-open in the one direction §30.8 forbids, and the
+		// deployment-wide switch bypassed by a malformed URL.
+		//
+		// So the repo-less case resolves on the switch alone, through the
+		// resolver's own ResolvePlatform, which exists for exactly this:
+		// an artifact with no single customer repository to check the
+		// per-repo flag against. And an unparseable repo is not treated as
+		// absent -- see hostReposUnparseable below.
 		shadow := req.ForceReadOnly
 		if !shadow {
+			if len(hostRepoFullNames) == 0 {
+				shadow = egressmode.ResolvePlatform(platformShadow).Suppressed()
+			}
 			for _, repoFullName := range hostRepoFullNames {
 				if egressmode.Resolve(ctx, egressmode.Deps{
 					RepoSettings:   repoSettings,
@@ -461,9 +483,29 @@ func ScmCredentials(
 				}
 			}
 		}
+		// A repo this code could not parse is a repo whose egress mode
+		// nobody established. It resolves shadow rather than being
+		// skipped: the alternative is that a URL shape decides whether a
+		// credential can write.
+		if !shadow && hostReposUnparseable(sessionRow.Repos, req.Host) {
+			logger.Warn("httpapi: scm-credentials: a repo on this host could not be read as owner/repo; forcing shadow for this request",
+				"requested_host", req.Host)
+			shadow = true
+		}
 
 		if shadow {
-			if len(hostReposByOwner) != 1 {
+			// Both arms below refuse, and both are correct: no
+			// credential at all is strictly safer than a write-capable
+			// one. They are separated only so each log line states the
+			// reason that actually applies -- "spans more than one
+			// owner" is false when the count is zero.
+			switch {
+			case len(hostReposByOwner) == 0:
+				logger.Warn("httpapi: scm-credentials: rejecting: no repo on this host could be read as owner/repo, so no read-only credential can be scoped; serving none",
+					"requested_host", req.Host)
+				writeError(w, http.StatusForbidden, "no usable git credential for this session")
+				return
+			case len(hostReposByOwner) > 1:
 				logger.Warn("httpapi: scm-credentials: rejecting: session's repos on this host span more than one owner; a single substituted read-only credential cannot cover them",
 					"requested_host", req.Host, "distinct_owners", len(hostReposByOwner))
 				writeError(w, http.StatusForbidden, "no usable git credential for this session")
@@ -475,41 +517,31 @@ func ScmCredentials(
 				owner, repoNames = o, names
 			}
 
+			// One implementation of "mint, then refuse to serve what
+			// came back over-scoped" -- internal/app/readonlymint.Mint,
+			// which also owns §30.4(4)'s record-or-fail on a refusal.
+			// This handler previously inlined a second copy of that
+			// sequence; two copies of a security rule is one that can
+			// silently drift out from under the other's tests.
 			mintCtx, cancel := context.WithTimeout(ctx, timeouts.GitHubAppMintTimeout)
-			token, mintErr := readOnlyMinter.MintInstallationToken(mintCtx, owner, repoNames)
+			token, mintErr := readonlymint.Mint(mintCtx, readOnlyMinter, ledger, owner, repoNames, hostRepoFullNames[0], req.Host, sessionID)
 			cancel()
-			if mintErr != nil {
-				logger.Error("httpapi: scm-credentials: mint read-only installation token failed", "error", mintErr)
-				writeError(w, http.StatusInternalServerError, "internal error")
-				return
-			}
-
-			// §30.4(4)'s own per-mint scope introspection: fail-closed,
-			// never trust the request shape alone. A refusal here is
-			// recorded with the SAME record-or-fail semantics the rest of
-			// the ledger already enforces (shadowledger's own top doc
-			// comment) -- a refusal that cannot be recorded is a 500, not
-			// a silent 403, because "suppressed but unrecorded" is exactly
-			// the contract violation that package exists to prevent.
-			if scopeErr := scmscope.ValidateReadOnly(token.Permissions); scopeErr != nil {
+			var refused *readonlymint.ErrRefusedByScopeCheck
+			switch {
+			case errors.As(mintErr, &refused):
+				// Refused AND recorded. 403: no credential exists to
+				// serve, and the refusal is already durable evidence.
 				logger.Warn("httpapi: scm-credentials: refusing: minted installation token failed the read-only scope check",
-					"error", scopeErr, "requested_host", req.Host)
-				if recordErr := shadowledger.Record(ctx, ledger, shadowledger.Entry{
-					Operation:    "scm_credential_mint_refused",
-					RepoFullName: hostRepoFullNames[0],
-					Target:       req.Host,
-					SessionID:    sessionID,
-					Spec: shadowledger.ScmCredentialMintRefused{
-						Host:               req.Host,
-						Reason:             scopeErr.Error(),
-						GrantedPermissions: token.Permissions,
-					},
-				}); recordErr != nil {
-					logger.Error("httpapi: scm-credentials: record refused mint failed", "error", recordErr)
-					writeError(w, http.StatusInternalServerError, "internal error")
-					return
-				}
+					"error", mintErr, "requested_host", req.Host)
 				writeError(w, http.StatusForbidden, "no usable git credential for this session")
+				return
+			case mintErr != nil:
+				// Either the mint itself failed, or a refusal could not
+				// be recorded. Both are 500: "suppressed but unrecorded"
+				// is exactly the contract violation the ledger exists to
+				// prevent, so it must never present as a quiet 403.
+				logger.Error("httpapi: scm-credentials: read-only installation token unavailable", "error", mintErr)
+				writeError(w, http.StatusInternalServerError, "internal error")
 				return
 			}
 
@@ -752,4 +784,38 @@ func sessionHasRepoHost(rawRepos []byte, host string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// hostReposUnparseable reports whether any repo on host is one this code
+// could not read as owner/repo.
+//
+// It exists because shadowHostRepos SKIPS such a repo, and a skip is
+// silent: the caller sees a shorter list, not a problem. That is the right
+// shape for building a substitution set -- you cannot substitute for a
+// repository you cannot name -- and the wrong shape for deciding whether
+// to substitute at all, where a skipped repo would quietly mean "nothing
+// to suppress here".
+//
+// So the two questions get two functions. This one answers "was anything
+// dropped", and its caller resolves shadow when the answer is yes.
+func hostReposUnparseable(rawRepos []byte, host string) bool {
+	if len(rawRepos) == 0 {
+		return false
+	}
+	var repos []sessionconfig.SessionConfigReposElem
+	if err := json.Unmarshal(rawRepos, &repos); err != nil {
+		// Unreadable repos JSON is itself an unestablished egress mode.
+		return true
+	}
+	host = strings.ToLower(host)
+	for _, repo := range repos {
+		parsed, err := url.Parse(repo.Url)
+		if err != nil || parsed.Host == "" || strings.ToLower(parsed.Host) != host {
+			continue
+		}
+		if _, _, err := reposource.ParseOwnerRepo(repo.Url); err != nil {
+			return true
+		}
+	}
+	return false
 }

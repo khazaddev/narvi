@@ -8,14 +8,6 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/oidcsigning"
 )
 
-// appJWTClockSkewBudget is subtracted from "now" when setting a GitHub App
-// JWT's own "iat" claim -- GitHub's own documented recommendation ("to
-// protect against clock drift... issued at time, 60 seconds in the past").
-// Not a platform.Timeouts field: this is a fixed protocol constant GitHub's
-// own API dictates, not a tunable per-deployment budget the way
-// GitHubAppJWTTTL (the token's own lifetime) is.
-const appJWTClockSkewBudget = 60 * time.Second
-
 // appJWTClaims is the exact claim set GitHub's own App-authentication JWT
 // requires: "iat" (issued-at, backdated by appJWTClockSkewBudget), "exp"
 // (at most 10 minutes past "iat" -- bounded here by jwtTTL, which
@@ -37,9 +29,9 @@ type appJWTClaims struct {
 // immediate REST call and is never handed to anything outside this
 // package -- there is no cache to purge, and minting a fresh one each time
 // is cheap (one RSA signature, no network call).
-func signAppJWT(appID int64, privateKey *rsa.PrivateKey, jwtTTL time.Duration, now time.Time) (string, error) {
+func signAppJWT(appID int64, privateKey *rsa.PrivateKey, jwtTTL, clockSkew time.Duration, now time.Time) (string, error) {
 	claims := appJWTClaims{
-		IssuedAt:  now.Add(-appJWTClockSkewBudget).Unix(),
+		IssuedAt:  now.Add(-clockSkew).Unix(),
 		ExpiresAt: now.Add(jwtTTL).Unix(),
 		Issuer:    appID,
 	}
