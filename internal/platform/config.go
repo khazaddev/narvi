@@ -4,7 +4,10 @@
 package platform
 
 import (
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/base64"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -1077,6 +1080,98 @@ func canonicalOTLPEndpointURL(raw string) (string, error) {
 	return canonical.String(), nil
 }
 
+// gitHubAppIDEnvVarName and gitHubAppPrivateKeyEnvVarName configure §30.4's
+// own GitHub App plumbing ("the other half of the same named debt": App id
+// + private key in platform.Config, fail-fast validation) -- read from
+// NARVI_GITHUB_APP_ID / NARVI_GITHUB_APP_PRIVATE_KEY. Both required in every
+// stage -- never defaulted, matching every other "never a baked-in default"
+// secret this file already reads (GitHubBotToken, TokenEncryptionKey, the 3
+// HMAC secrets).
+//
+// Required rather than optional (unlike GitHubImageBuildToken, this file's
+// one other GitHub-flavored credential with a genuine off switch): §30.8's
+// own repo_settings.live_egress_enabled defaults to false for EVERY repo,
+// promoted only by a future Step's explicit "Activate" gesture --
+// §30.4's read-only App installation token is therefore not a
+// dedicated-evaluation-deployment nicety, it is the credential every
+// not-yet-promoted repo's sandbox needs merely to clone at all, on every
+// deployment, starting the moment this Step ships (§30.4: "until this
+// chantier, 'refuse to mint write' and 'refuse to mint at all' were the
+// same thing... starving the mint breaks 'Narvi must actually run'"). A
+// deployment that boots without this credential configured would silently
+// regress every one of its not-yet-promoted repos back to that same
+// all-or-nothing failure the instant internal/adapters/inbound/httpapi.
+// ScmCredentials' own shadow branch (this Step) tries to substitute a
+// credential it does not have.
+const (
+	gitHubAppIDEnvVarName         = "NARVI_GITHUB_APP_ID"
+	gitHubAppPrivateKeyEnvVarName = "NARVI_GITHUB_APP_PRIVATE_KEY"
+)
+
+// InvalidGitHubAppIDError is returned by Load when NARVI_GITHUB_APP_ID is
+// set to a value that does not parse as a positive integer -- mirrors
+// InvalidDBPoolMaxConnsError's own identical "named, typed, positive-integer"
+// shape.
+type InvalidGitHubAppIDError struct {
+	Value string
+}
+
+func (e *InvalidGitHubAppIDError) Error() string {
+	return fmt.Sprintf("invalid %s=%q: must be a positive integer (the GitHub App's own numeric id)", gitHubAppIDEnvVarName, e.Value)
+}
+
+// InvalidGitHubAppPrivateKeyError is returned by Load when
+// NARVI_GITHUB_APP_PRIVATE_KEY fails to decode into a usable RSA private
+// key -- Reason names which of the two checks failed (not valid base64, or
+// the decoded bytes are not a PEM-encoded RSA private key), mirroring
+// InvalidTokenEncryptionKeyError's own identical two-stage "decode, then
+// validate the decoded shape" reasoning.
+type InvalidGitHubAppPrivateKeyError struct {
+	Reason string
+}
+
+func (e *InvalidGitHubAppPrivateKeyError) Error() string {
+	return fmt.Sprintf("invalid %s: %s", gitHubAppPrivateKeyEnvVarName, e.Reason)
+}
+
+// parseGitHubAppPrivateKey decodes raw (expected to be the App's own PEM
+// private-key file, base64-encoded exactly like TokenEncryptionKey above --
+// chosen for the identical reason: a multi-line PEM block survives a single
+// env var, untouched by shell/.env-file newline handling, only when it is
+// not carrying literal newlines itself) into a parsed *rsa.PrivateKey.
+// GitHub issues App private keys as PKCS#1 ("BEGIN RSA PRIVATE KEY"); both
+// PKCS#1 and PKCS#8 ("BEGIN PRIVATE KEY") are accepted so an operator who
+// re-encodes the downloaded .pem into the more modern container is not
+// penalized for it. The key is parsed once, here, at boot -- never
+// re-decoded per mint call (internal/adapters/outbound/githubapp.Client
+// takes the already-parsed value directly, mirroring TokenEncryptionKey's
+// own "decoded once at Load time" discipline).
+func parseGitHubAppPrivateKey(raw string) (*rsa.PrivateKey, error) {
+	decoded, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		return nil, &InvalidGitHubAppPrivateKeyError{Reason: fmt.Sprintf("not valid base64: %v", err)}
+	}
+
+	block, _ := pem.Decode(decoded)
+	if block == nil {
+		return nil, &InvalidGitHubAppPrivateKeyError{Reason: "base64 decoded, but the result is not a PEM block"}
+	}
+
+	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
+		return key, nil
+	}
+
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, &InvalidGitHubAppPrivateKeyError{Reason: fmt.Sprintf("PEM block is neither a PKCS#1 nor a PKCS#8 private key: %v", err)}
+	}
+	rsaKey, ok := parsed.(*rsa.PrivateKey)
+	if !ok {
+		return nil, &InvalidGitHubAppPrivateKeyError{Reason: "PEM block decodes to a private key, but it is not RSA -- GitHub Apps are always issued RSA keys"}
+	}
+	return rsaKey, nil
+}
+
 // Config is the top-level, typed control-plane configuration, validated
 // once at boot (§5.4, §11: "typed config validated at boot, fail-fast,
 // named errors").
@@ -1276,6 +1371,25 @@ type Config struct {
 	// docs/PRODUCTION_CHECKLIST.md for the operator-facing checklist
 	// item this backs.
 	ShadowMode bool
+
+	// GitHubAppID and GitHubAppPrivateKey are §30.4's own GitHub App
+	// plumbing, read from NARVI_GITHUB_APP_ID / NARVI_GITHUB_APP_PRIVATE_KEY
+	// (both required in every stage -- see gitHubAppIDEnvVarName's own doc
+	// comment for why this is required rather than optional). Together
+	// they let internal/adapters/outbound/githubapp.Client authenticate AS
+	// THE APP (a short-lived, RS256-signed JWT) to mint fine-grained
+	// read-only installation access tokens (contents:read + metadata:read)
+	// -- the credential internal/adapters/inbound/httpapi.ScmCredentials'
+	// own shadow-substitution branch hands to a shadow sandbox instead of
+	// the write-capable creator OAuth token or bot token every session
+	// used to receive regardless of egress mode.
+	//
+	// GitHubAppPrivateKey is the already-decoded, already-parsed RSA
+	// private key -- decoded and parsed exactly once, here, at Load()
+	// time, mirroring TokenEncryptionKey's own "never re-decoded per call"
+	// discipline immediately above. Never logged anywhere.
+	GitHubAppID         int64
+	GitHubAppPrivateKey *rsa.PrivateKey
 
 	// ModalBaseURL and ModalAuthToken configure the real
 	// internal/adapters/outbound/modal.Provider cmd/control-plane/main.go
@@ -1687,6 +1801,36 @@ func Load() (*Config, error) {
 		}
 	}
 
+	// gitHubAppID/gitHubAppPrivateKey (§30.4): required in every stage --
+	// see gitHubAppIDEnvVarName's own doc comment for why this differs
+	// from gitHubImageBuildToken's own optional precedent immediately
+	// above despite both being GitHub-flavored platform credentials.
+	var gitHubAppID int64
+	rawGitHubAppID := os.Getenv(gitHubAppIDEnvVarName)
+	if rawGitHubAppID == "" {
+		errs = append(errs, &MissingRequiredEnvError{EnvVar: gitHubAppIDEnvVarName})
+	} else {
+		parsed, parseErr := strconv.ParseInt(rawGitHubAppID, 10, 64)
+		if parseErr != nil || parsed <= 0 {
+			errs = append(errs, &InvalidGitHubAppIDError{Value: rawGitHubAppID})
+		} else {
+			gitHubAppID = parsed
+		}
+	}
+
+	var gitHubAppPrivateKey *rsa.PrivateKey
+	rawGitHubAppPrivateKey := os.Getenv(gitHubAppPrivateKeyEnvVarName)
+	if rawGitHubAppPrivateKey == "" {
+		errs = append(errs, &MissingRequiredEnvError{EnvVar: gitHubAppPrivateKeyEnvVarName})
+	} else {
+		parsed, parseErr := parseGitHubAppPrivateKey(rawGitHubAppPrivateKey)
+		if parseErr != nil {
+			errs = append(errs, parseErr)
+		} else {
+			gitHubAppPrivateKey = parsed
+		}
+	}
+
 	modalBaseURL := os.Getenv(modalBaseURLEnvVarName)
 	if modalBaseURL == "" {
 		errs = append(errs, &MissingRequiredEnvError{EnvVar: modalBaseURLEnvVarName})
@@ -1920,6 +2064,8 @@ func Load() (*Config, error) {
 		EpistemicCheckDefault:      epistemicCheckDefault,
 		RolloutMode:                rolloutMode,
 		ShadowMode:                 shadowMode,
+		GitHubAppID:                gitHubAppID,
+		GitHubAppPrivateKey:        gitHubAppPrivateKey,
 		ModalBaseURL:               modalBaseURL,
 		ModalAuthToken:             modalAuthToken,
 		ModalEgressProxyURL:        modalEgressProxyURL,

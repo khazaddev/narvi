@@ -63,7 +63,20 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("NARVI_ANTHROPIC_API_KEY", "test-anthropic-api-key")
 	t.Setenv("NARVI_INTENT_CLASSIFIER_PROVIDER", "anthropic")
 	t.Setenv("NARVI_INTENT_CLASSIFIER_MODEL", "claude-haiku-4-5")
+	// §30.4's own required GitHub App plumbing -- testGitHubAppPrivateKeyPEM
+	// is a fixed, test-only 2048-bit RSA key (never used against a real
+	// GitHub App), base64-encoded exactly like a real operator would encode
+	// a downloaded .pem file (gitHubAppPrivateKeyEnvVarName's own doc
+	// comment).
+	t.Setenv("NARVI_GITHUB_APP_ID", "123456")
+	t.Setenv("NARVI_GITHUB_APP_PRIVATE_KEY", testGitHubAppPrivateKeyPEM)
 }
+
+// testGitHubAppPrivateKeyPEM is a fixed, test-only 2048-bit RSA private key,
+// base64-encoded PEM (PKCS#1, "BEGIN RSA PRIVATE KEY" -- the shape GitHub
+// itself issues), generated once for this test file and never used against
+// any real GitHub App or any other credential in this codebase.
+const testGitHubAppPrivateKeyPEM = "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFcEFJQkFBS0NBUUVBMlozYVRnSXR6cE1YaXd0UVZGZW16VlZsd0JYY1E1RUJ1UUNnT281SG1tNnpyV25DCjliR0xUSzF4S1I1eFVqLy9Rck9taXJBb25lZlB3QmhnVmloTXpoL1NYMHpPOUgvWWhiS3F5aVVsRHI3ck0vMlYKMDZhVWxFdEtLcEZwbWVDemNSaUtPaGFTeWt1Q09XYVJzQWpWMzFSUGVVTi9MaVl6VUswTmlhL2piU05BRENYQwp3MzJKUjh0TmE1U1VwOFJ6amJkdWdUd0EvT1l4SXZTNmZSTnYvM0lWUXVBSGZaTFhHTmFhZGt3KzBPem1LY2x3Ck9NQmZZejRYRjdzOHFGOWR5eFhscm84eTNZak1COGcxYXJBcG9IeExyVlZ5S0xmN3h6VWJ3cG1uTW9QS2NKanYKMXN4bG5BMFhWcEwrZk1RN3RoV3dkOUZuSDBpOS8vcCs0c0dmeXdJREFRQUJBb0lCQUNIUngyQ0NOQzQ3YTlnLwpETi9lczF5TDNnRkpKRzhYdFFYVVZCSmxsRGtxNVIrWkpTUmIwRU05WFMyL3ZtckM2VityWGNHRitQbjVVYThQCjJzRHBDRzZzUVZ4d0ttV1RETXBTWnZwOVpWSHlWOGsvcXE0MjREWmZzUW9HaVR2UjBQRk5tQVhKQmswTUNSUDAKbmNXV3llNG9ReVdjV01LS1MwVkpiNllyUUpQd01lYVpwbkxEUGsvUDFhZnZyVkxHMG81SXRZNUxGa1dHaVdTYgpDbCtwOERGbytSWlFmVW1ERzdEY2hPWHIvZTJvd1NEODFIV2N3SXlzUlZxcGxPL3d4M2xuMjJIaUR5dVVxWTN4CmNQS2w5RHZ6c0I1NzZVU09MS0IvSGkvTjNIemc1bCt2V1MzZVZYeXovWlZYRnkrY3NkVkV6eG03QjA4QWlZK1UKRmo3Q3hjRUNnWUVBLzVDMkRWazMwQXUzRElYTnpxalFXUWJYV3BsWG5MNFU1NUJsUExYSWt3QlRHVU4rNFlOMQppQUNOM00wMUkyVnRHQ1B4a2pVbTg1WWxMc2tJYitaNGpyeW9NWk5XQzd1dzNyQ01LYit4aCtmZmdpdWNjSnRMClBMWGNsU203NzFBQ2FBT2FOR0R5RkduK3V3UzM5WDZ6MGJvaXIzc1I2NkFkVGx6TzJVYlhDNnNDZ1lFQTJmeWQKemhaYXRaMGxsYnZrcHdTbnozOEd5aWpnQjI1NmNyQ1dBSFo1dmwrVndvZ2Y0ZnllT0tacTFIalZkVSs3cUJOUgpEcGJDYVlkQWEwTXdMdXZ2Ti9jWVROVkpYUlM2S2ZOL3ZLUXBFQVFSMXN4L29Rd2s5TW9lbjJoSFoxVnBzM0pCClYrdVk3cDE0bVYxR2JIdjM1V3hQeXdKR1FWdlZiMklVWnNaK25HRUNnWUVBNVYwNUpxM0YyNkJIL3FNdjNLUEIKcWNUc0RsSEZRZFdPNld5OGowb080Mi9OSk1WZzRJQ2RRUnhPTmJhdVZFQTVNd3MvU1pzT2hGdGlyNlNaUCtTMgptbFJURjN0R0pHMmxCWmVwaythSkxKSThGSldUWjdUWVIzcG9xQzYyanNkZUFZQUtLNncrVjNmeHVHTTV2c2lpCkZqNVoxdWc3WXg5bWJlZjVkU09RNk5VQ2dZQlBWRGx4aUgwV1hzd1F3OElnYmZkTDhlUmNxYWR0ek96TzFDaWkKbm5zTHB1bHZVKzZXWlVLSFJ6alZmZXZndDFXSmd3NGFpdzdSTEtGcTU1YWZYTWsveXJLVE00TnhWbHV4YktYdAoxcWdDNWhnLzNVZ05LY2hCTlZVVG1mVnlTNGtkL3RSODFJWmhQL2xsaHFaY1VIa1VpdWcyN3VyMldoOUFXNmNsCkI5T0h3UUtCZ1FEekt2YzMvWDZ6NzdMeUFqb1BIZUpIbXQyL2tSWllJQjNmUUlsRkg0R3JoVUg1TXdLNklIeUkKWGxPUU53ZHVwdm5QaXlHS0dYeUwvcHJSVGdxQXpGMUFPNW0xWG8wVlJnMVZTeGp6Y1RPTU0zVGpnYU5GYmlMdwpreUovZjlhdzhrUTU2RFA2OWlzV1BKaVUyQko1blZLUTJPVEJwSHNTa2h5eS94amZaT29zbFE9PQotLS0tLUVORCBSU0EgUFJJVkFURSBLRVktLS0tLQo="
 
 // TestLoad is table-driven over NARVI_STAGE values: each of the three
 // valid stages succeeds, an invalid one fails fast with a
@@ -720,6 +733,108 @@ func TestLoadTokenEncryptionKey(t *testing.T) {
 	})
 }
 
+// TestLoadGitHubAppConfig covers §30.4's own required GitHub App plumbing:
+// NARVI_GITHUB_APP_ID unset/non-positive-integer
+// (*platform.InvalidGitHubAppIDError, or *platform.MissingRequiredEnvError
+// when unset), NARVI_GITHUB_APP_PRIVATE_KEY unset/malformed
+// (*platform.InvalidGitHubAppPrivateKeyError family), and both valid
+// together (Load succeeds and threads the PARSED *rsa.PrivateKey through,
+// never the raw base64/PEM string).
+func TestLoadGitHubAppConfig(t *testing.T) {
+	t.Run("app id unset", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_GITHUB_APP_ID", "")
+
+		_, err := platform.Load()
+		var missErr *platform.MissingRequiredEnvError
+		if !errors.As(err, &missErr) {
+			t.Fatalf("Load() error = %v, want *platform.MissingRequiredEnvError", err)
+		}
+		if missErr.EnvVar != "NARVI_GITHUB_APP_ID" {
+			t.Fatalf("MissingRequiredEnvError.EnvVar = %q, want %q", missErr.EnvVar, "NARVI_GITHUB_APP_ID")
+		}
+	})
+
+	t.Run("app id not a positive integer", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_GITHUB_APP_ID", "not-a-number")
+
+		_, err := platform.Load()
+		var idErr *platform.InvalidGitHubAppIDError
+		if !errors.As(err, &idErr) {
+			t.Fatalf("Load() error = %v, want *platform.InvalidGitHubAppIDError", err)
+		}
+	})
+
+	t.Run("app id zero rejected", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_GITHUB_APP_ID", "0")
+
+		_, err := platform.Load()
+		var idErr *platform.InvalidGitHubAppIDError
+		if !errors.As(err, &idErr) {
+			t.Fatalf("Load() error = %v, want *platform.InvalidGitHubAppIDError", err)
+		}
+	})
+
+	t.Run("private key unset", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_GITHUB_APP_PRIVATE_KEY", "")
+
+		_, err := platform.Load()
+		var missErr *platform.MissingRequiredEnvError
+		if !errors.As(err, &missErr) {
+			t.Fatalf("Load() error = %v, want *platform.MissingRequiredEnvError", err)
+		}
+		if missErr.EnvVar != "NARVI_GITHUB_APP_PRIVATE_KEY" {
+			t.Fatalf("MissingRequiredEnvError.EnvVar = %q, want %q", missErr.EnvVar, "NARVI_GITHUB_APP_PRIVATE_KEY")
+		}
+	})
+
+	t.Run("private key not valid base64", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_GITHUB_APP_PRIVATE_KEY", "not-valid-base64!!!")
+
+		_, err := platform.Load()
+		var keyErr *platform.InvalidGitHubAppPrivateKeyError
+		if !errors.As(err, &keyErr) {
+			t.Fatalf("Load() error = %v, want *platform.InvalidGitHubAppPrivateKeyError", err)
+		}
+	})
+
+	t.Run("private key valid base64 but not a PEM block", func(t *testing.T) {
+		setRequiredEnv(t)
+		// Valid base64 (of "just some bytes, not a PEM block"), so it clears
+		// the first decode stage and must be rejected by the PEM-parse stage
+		// instead.
+		t.Setenv("NARVI_GITHUB_APP_PRIVATE_KEY", "anVzdCBzb21lIGJ5dGVzLCBub3QgYSBQRU0gYmxvY2s=")
+
+		_, err := platform.Load()
+		var keyErr *platform.InvalidGitHubAppPrivateKeyError
+		if !errors.As(err, &keyErr) {
+			t.Fatalf("Load() error = %v, want *platform.InvalidGitHubAppPrivateKeyError", err)
+		}
+	})
+
+	t.Run("valid app id and private key succeed", func(t *testing.T) {
+		setRequiredEnv(t)
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil", err)
+		}
+		if cfg.GitHubAppID != 123456 {
+			t.Errorf("Load().GitHubAppID = %d, want 123456", cfg.GitHubAppID)
+		}
+		if cfg.GitHubAppPrivateKey == nil {
+			t.Fatal("Load().GitHubAppPrivateKey = nil, want a parsed *rsa.PrivateKey")
+		}
+		if err := cfg.GitHubAppPrivateKey.Validate(); err != nil {
+			t.Errorf("Load().GitHubAppPrivateKey.Validate() error = %v, want nil (a well-formed key)", err)
+		}
+	})
+}
+
 // TestLoadAllowlist proves Load fails fast with *platform.EmptyAllowlistError
 // when all three allowlist env vars are empty, and otherwise parses each
 // comma-separated var (trimmed, empty entries dropped) independently.
@@ -848,6 +963,8 @@ func TestLoadMakefileDevTargetValues(t *testing.T) {
 	t.Setenv("NARVI_ANTHROPIC_API_KEY", "dev-anthropic-api-key-placeholder")
 	t.Setenv("NARVI_INTENT_CLASSIFIER_PROVIDER", "anthropic")
 	t.Setenv("NARVI_INTENT_CLASSIFIER_MODEL", "claude-haiku-4-5")
+	t.Setenv("NARVI_GITHUB_APP_ID", "999999")
+	t.Setenv("NARVI_GITHUB_APP_PRIVATE_KEY", testGitHubAppPrivateKeyPEM)
 	// Every other allowlist/optional var is deliberately left unset here,
 	// matching the Makefile's dev target exactly (it never sets
 	// NARVI_ALLOWED_EMAIL_DOMAINS, NARVI_ALLOWED_EMAILS,
