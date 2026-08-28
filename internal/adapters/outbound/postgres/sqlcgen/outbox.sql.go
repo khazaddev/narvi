@@ -430,8 +430,9 @@ RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, deli
 // into the suppression ledger instead of the world -- status='delivered'
 // (the SAME terminal status a genuine delivery reaches; §30.6 is explicit
 // this is "a flag column, deliberately not a new status enum"), plus
-// delivered_to_ledger=true so a later reader (Step 104's own UNION read
-// model) can tell the two apart. Same "AND status = 'pending'" guard as
+// delivered_to_ledger=true so a later reader (§30.6's own "UNION over
+// marked outbox rows + shadow_scm_writes" read model) can tell the two
+// apart. Same "AND status = 'pending'" guard as
 // MarkOutboxEntryDelivered, for the identical reason -- and the same
 // pgx.ErrNoRows-means-superseded handling: a caller must not proceed to
 // treat this row as terminal if some other builder already raced ahead
