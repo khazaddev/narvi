@@ -705,9 +705,21 @@ func (h *commandHandler) sendPushError(cmd sandboxws.Push, pushErr error) {
 // (credentials.Cache.PurgeAll, the SAME call runBootSequence already
 // makes unconditionally at boot, and gitclone.CleanForImageBuild already
 // makes on the image-build path) so no cached credential -- read-only or
-// write-capable, live-minted or shadow-substituted -- can possibly be
-// captured by whatever the provider does next to actually take the
-// snapshot. This runs regardless of the session's own current egress
+// write-capable, live-minted or shadow-substituted -- is on disk when the
+// provider goes on to actually take the snapshot.
+//
+// "Is on disk" rather than "can possibly be captured", because this
+// purges at the last moment this process controls, not at the instant of
+// capture. The provider captures the filesystem some time AFTER the
+// snapshot_ready this function sends, and an agent running a git command
+// in that window makes the credential helper mint and cache again. What
+// bounds that residue is the layer above, not this call: a snapshot taken
+// during a live session may legitimately carry a write token, and
+// §30.4(3)'s shadow bit is what refuses to restore it into a shadow
+// session. A shadow session's own re-mint can only produce the read-only
+// substitute. Stating the window rather than implying it is closed is the
+// point -- a reader who believes this call is airtight would see no
+// reason to keep that bit fail-closed. This runs regardless of the session's own current egress
 // mode: a LIVE session's sandbox may legitimately hold a real write
 // credential on disk right now, and that is exactly the case this purge
 // exists to remove from the snapshot, since a later restore (§30.4(3)'s
