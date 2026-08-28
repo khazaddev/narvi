@@ -12,6 +12,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
+	"github.com/khazaddev/narvi/internal/platform"
 )
 
 // Sweep implements this package's own primary job (see doc.go): given
@@ -31,14 +32,24 @@ import (
 //
 // A sandbox whose own session names repositories this function cannot
 // read (malformed JSON, an unsupported host, an unparseable clone URL) is
-// skipped for THAT session only, never treated as a match: the same
-// "a thing we cannot evaluate must not be acted on" posture postgres.
-// OutboxStore.ResolveEffectiveMode already applies to its own identical
-// per-session repo-parsing step, applied here to a decision that TERMINATES
-// a sandbox rather than merely suppressing a notification -- an unreadable
-// repo list is exactly the case demanding the MOST caution, not the
-// least, so it is logged by the caller (via the returned error, if
-// parsing fails at the batch level) rather than silently matched.
+// skipped for THAT session and LOUDLY LOGGED. That is a trade-off, not a
+// maximally safe choice, and it is worth stating in that direction:
+//
+// Skipping is the less safe option for §30's own guarantee. The sandbox
+// might well be one of this repo's, and if it is, it keeps whatever
+// credential it holds for the ScmCredentialTTL window -- which is the
+// exact leak this sweep exists to close. The alternative, flagging every
+// unreadable-repo sandbox on any demotion, terminates running sessions
+// that have nothing to do with this repository, and does so on no
+// evidence at all.
+//
+// Skipping wins only because this sweep is defense-in-depth: §30.4 is
+// explicit that the structural control is the read-only credential, and
+// the sweep shortens an exposure window rather than creating the
+// guarantee. A layer that is not load-bearing may take the
+// non-destructive branch. It may not do so silently, which is why each
+// skip is a warning naming the session -- an operator can act on what
+// this function deliberately would not.
 func Sweep(ctx context.Context, sandboxes *postgres.SandboxStore, repoFullName string) (int, error) {
 	rows, err := sandboxes.ListLiveWithSessionRepos(ctx)
 	if err != nil {
@@ -49,6 +60,8 @@ func Sweep(ctx context.Context, sandboxes *postgres.SandboxStore, repoFullName s
 	for _, row := range rows {
 		names, ok := sessionRepoFullNames(row.Repos)
 		if !ok {
+			platform.Logger(ctx).Warn("repodemotion: a live sandbox's session repos could not be read; NOT flagging it for termination on this demotion (see Sweep's own doc comment for why this direction, and what it costs)",
+				"session_id", row.SessionID.String(), "demoted_repo", repoFullName)
 			continue
 		}
 
