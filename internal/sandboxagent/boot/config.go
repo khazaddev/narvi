@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
@@ -38,6 +39,18 @@ const (
 	SessionConfigEnvVar      = "NARVI_SESSION_CONFIG"
 	credentialCacheDirEnvVar = "NARVI_CREDENTIAL_CACHE_DIR"
 	sandboxIDEnvVar          = "NARVI_SANDBOX_ID"
+
+	// runtimeUIDEnvVar/runtimeGIDEnvVar (TECHNICAL_PLAN.md §30.5, "OS-level
+	// isolation between sandbox-agent and the agent runtime") name the
+	// uid/gid cmd/sandbox-agent/main.go drops the agent runtime
+	// (opencodeproc.Spawn's `opencode serve`) to, via a
+	// *syscall.Credential built from Config.RuntimeUID/RuntimeGID below.
+	// This package deliberately stops at plain uint32s -- no `syscall`
+	// import here -- leaving the *syscall.Credential construction to the
+	// one call site that actually needs it (see Config.RuntimeUID's own
+	// doc comment).
+	runtimeUIDEnvVar = "NARVI_RUNTIME_UID"
+	runtimeGIDEnvVar = "NARVI_RUNTIME_GID"
 )
 
 // Defaults for every optional env var above.
@@ -75,6 +88,21 @@ const (
 	// nothing production-relevant is running with no live session to begin
 	// with.
 	defaultSandboxID = ""
+
+	// defaultRuntimeUID/defaultRuntimeGID are used when
+	// NARVI_RUNTIME_UID/NARVI_RUNTIME_GID are unset: the traditional
+	// "nobody"/"nogroup" numeric ids (present as raw kernel ids on
+	// virtually every Linux system -- no /etc/passwd or /etc/group entry
+	// required, since a Credential's Uid/Gid are plain kernel-level
+	// numbers, not names). This is a deliberately image-agnostic default:
+	// the base sandbox image's real build definition does not live in
+	// this repo (TECHNICAL_PLAN.md §27.7 -- "its real build definition is
+	// where these land", not here), so this package cannot assume any
+	// SPECIFIC provisioned account exists in it. An operator whose image
+	// already provisions a dedicated low-privilege account can override
+	// either var to that account's own uid/gid instead.
+	defaultRuntimeUID uint32 = 65534
+	defaultRuntimeGID uint32 = 65534
 )
 
 // Config is sandbox-agent's own typed, boot-time-validated configuration,
@@ -92,6 +120,34 @@ type Config struct {
 	// disk (§5.2: "caches to disk with flock"). Deliberately OUTSIDE
 	// WorkspaceDir -- see defaultCredentialCacheDir's own doc comment.
 	CredentialCacheDir string
+
+	// RuntimeUID/RuntimeGID (TECHNICAL_PLAN.md §30.5) are the uid/gid the
+	// agent runtime (opencodeproc.Spawn's `opencode serve`, and every
+	// process it forks) runs as -- a KERNEL-ENFORCED boundary from
+	// sandbox-agent's own identity, distinct from and strictly stronger
+	// than CredentialCacheDir's own placement-based discipline above (see
+	// that field's own doc comment: "outside WorkspaceDir" is a
+	// convention a same-uid shell can trivially defeat; a different uid
+	// cannot read the cache at all, regardless of where it sits).
+	// Plain uint32s, never a *syscall.Credential, deliberately: this
+	// package has no other reason to import "syscall", and the one call
+	// site that builds a Credential from these two values
+	// (cmd/sandbox-agent/main.go) is also the one place that decides
+	// NoSetGroups/Groups, which are a spawn-time concern, not a boot-time
+	// config concern.
+	//
+	// Resolved by Load from NARVI_RUNTIME_UID/NARVI_RUNTIME_GID, each
+	// independently: unset (or empty) uses defaultRuntimeUID/
+	// defaultRuntimeGID; set to a non-numeric value is a fail-fast
+	// *InvalidRuntimeUIDError/*InvalidRuntimeGIDError; set to exactly "0"
+	// (root) is ALSO a fail-fast *RuntimeUIDIsRootError/
+	// *RuntimeGIDIsRootError -- a Credential naming uid/gid 0 would not
+	// drop any privilege at all, silently defeating this Step's entire
+	// purpose, exactly the "operator mistake becomes a loud fail-closed,
+	// never a quiet regression" posture §30.4's own scope-introspection
+	// requirement already establishes for a different credential.
+	RuntimeUID uint32
+	RuntimeGID uint32
 
 	// SandboxID is the value internal/sandboxagent/wsbridge.New sends as
 	// the sandbox WS connection's X-Sandbox-ID header (§6.1). Resolved by
@@ -207,6 +263,61 @@ func parseLogLevel(raw string) (slog.Level, error) {
 	}
 }
 
+// InvalidRuntimeUIDError/InvalidRuntimeGIDError are returned by Load when
+// NARVI_RUNTIME_UID/NARVI_RUNTIME_GID is set to a non-empty value that
+// does not parse as a uint32. Same fail-fast shape as
+// InvalidLogLevelError above.
+type InvalidRuntimeUIDError struct {
+	Value string
+}
+
+func (e *InvalidRuntimeUIDError) Error() string {
+	return fmt.Sprintf("boot: invalid %s=%q: must be a non-negative integer", runtimeUIDEnvVar, e.Value)
+}
+
+type InvalidRuntimeGIDError struct {
+	Value string
+}
+
+func (e *InvalidRuntimeGIDError) Error() string {
+	return fmt.Sprintf("boot: invalid %s=%q: must be a non-negative integer", runtimeGIDEnvVar, e.Value)
+}
+
+// RuntimeUIDIsRootError/RuntimeGIDIsRootError are returned by Load when
+// NARVI_RUNTIME_UID/NARVI_RUNTIME_GID is explicitly set to "0" -- a
+// Credential naming uid/gid 0 drops no privilege at all, silently
+// defeating §30.5's entire purpose. See Config.RuntimeUID's own doc
+// comment for why this is a loud fail-closed, never a quiet regression,
+// mirroring §30.4's own scope-introspection posture for a different
+// credential.
+type RuntimeUIDIsRootError struct{}
+
+func (e *RuntimeUIDIsRootError) Error() string {
+	return fmt.Sprintf("boot: %s=0 (root) would not drop any privilege; refusing to boot", runtimeUIDEnvVar)
+}
+
+type RuntimeGIDIsRootError struct{}
+
+func (e *RuntimeGIDIsRootError) Error() string {
+	return fmt.Sprintf("boot: %s=0 (root) would not drop any privilege; refusing to boot", runtimeGIDEnvVar)
+}
+
+// parseRuntimeID parses raw (the env var's own raw string value, "" when
+// unset) as a uint32, applying fallback when raw is empty and rejecting 0
+// unconditionally (see RuntimeUIDIsRootError/RuntimeGIDIsRootError's own
+// doc comment) -- shared by both NARVI_RUNTIME_UID and NARVI_RUNTIME_GID,
+// which validate identically apart from which named error each returns.
+func parseRuntimeID(raw string, fallback uint32) (uint32, bool, error) {
+	if raw == "" {
+		return fallback, false, nil
+	}
+	parsed, err := strconv.ParseUint(raw, 10, 32)
+	if err != nil {
+		return 0, false, err
+	}
+	return uint32(parsed), parsed == 0, nil
+}
+
 // Load reads and validates sandbox-agent's process configuration,
 // fail-fast, from environment variables. NARVI_BOOT_MODE is required (§6.4,
 // explicit); everything else is optional with a documented default.
@@ -245,6 +356,22 @@ func Load() (Config, error) {
 		credentialCacheDir = defaultCredentialCacheDir
 	}
 
+	runtimeUID, uidIsZero, err := parseRuntimeID(os.Getenv(runtimeUIDEnvVar), defaultRuntimeUID)
+	if err != nil {
+		return Config{}, &InvalidRuntimeUIDError{Value: os.Getenv(runtimeUIDEnvVar)}
+	}
+	if uidIsZero {
+		return Config{}, &RuntimeUIDIsRootError{}
+	}
+
+	runtimeGID, gidIsZero, err := parseRuntimeID(os.Getenv(runtimeGIDEnvVar), defaultRuntimeGID)
+	if err != nil {
+		return Config{}, &InvalidRuntimeGIDError{Value: os.Getenv(runtimeGIDEnvVar)}
+	}
+	if gidIsZero {
+		return Config{}, &RuntimeGIDIsRootError{}
+	}
+
 	// sessionConfig is resolved BEFORE sandboxID below -- sandboxID's own
 	// resolution needs to know whether a SessionConfig is present (and,
 	// if so, its own SandboxId) to pick the right value/detect a mismatch.
@@ -265,6 +392,8 @@ func Load() (Config, error) {
 		WorkspaceDir:       workspaceDir,
 		LogLevel:           logLevel,
 		CredentialCacheDir: credentialCacheDir,
+		RuntimeUID:         runtimeUID,
+		RuntimeGID:         runtimeGID,
 		SandboxID:          sandboxID,
 		SessionConfig:      sessionConfig,
 	}, nil

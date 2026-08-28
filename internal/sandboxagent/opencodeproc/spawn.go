@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
@@ -92,12 +93,29 @@ type Result struct {
 // its own os.UserHomeDir(), and every OTHER already-running piece of this
 // binary) is never touched by ANY resolved secret, no matter what name a
 // customer chose for it.
+// runtimeCredential (TECHNICAL_PLAN.md §30.5, "OS-level isolation between
+// sandbox-agent and the agent runtime") is threaded straight into
+// supervisor.Spec's own Credential field for the ONE process this
+// function spawns -- opencode serve, and every shell/tool it forks on the
+// agent's behalf, are the exact "agent runtime" §30.5 names as running
+// same-UID as sandbox-agent today, which makes the env-strip above purely
+// cosmetic (sandbox-agent's own /proc/<pid>/environ, and the on-disk
+// credential cache, are one read away from a same-UID process) and makes
+// the on-disk credential cache's own 0600 a placement convention, not a
+// kernel-enforced boundary. nil (every existing call site/test's own
+// value, unchanged) preserves this function's exact pre-existing
+// behavior -- see supervisor.Spec.Credential's own doc comment for
+// why nil is safe everywhere else this package's sibling
+// gitclone/docker/hooks/push spawns run (they legitimately need
+// sandbox-agent's own identity) and why only THIS spawn ever receives a
+// non-nil value in production (cmd/sandbox-agent/main.go).
 func Spawn(
 	ctx context.Context,
 	sup *supervisor.Supervisor,
 	workDir string,
 	providerCredentialEnv []string,
 	sandboxSecretEnv []string,
+	runtimeCredential *syscall.Credential,
 	readinessTimeout, readinessPollInterval time.Duration,
 ) (Result, error) {
 	port, err := freePort()
@@ -122,6 +140,12 @@ func Spawn(
 		// this func's own doc comment) are layered on top of that same
 		// filtered base.
 		Env: env,
+		// Credential (§30.5, this func's own doc comment above): the
+		// kernel-enforced half of the isolation, layered on top of the
+		// env-strip above rather than replacing it -- both close
+		// different halves of the same leak (this process's own
+		// environment vs. sandbox-agent's).
+		Credential: runtimeCredential,
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("opencodeproc: spawn opencode serve: %w", err)
