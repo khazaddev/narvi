@@ -258,3 +258,15 @@ DO UPDATE SET
     rwx_preview_dispatch_key = CASE WHEN sqlc.arg('dispatch_key_provided')::boolean THEN sqlc.narg('dispatch_key') ELSE repo_settings.rwx_preview_dispatch_key END,
     updated_at = now()
 RETURNING *;
+
+-- name: CountSuppressedRepos :one
+-- How many repositories this deployment will suppress outgoing effects for
+-- (§30.8). Read once at boot so an operator is TOLD, rather than finding
+-- out because a customer stopped receiving notifications.
+--
+-- Counts rows explicitly not promoted. It cannot count repositories with
+-- no settings row at all, which also resolve to shadow -- there is no
+-- table of "repositories this deployment knows about" to count against.
+-- The number is therefore a floor, and the boot message says so rather
+-- than presenting it as a total.
+SELECT COUNT(*) FROM repo_settings WHERE live_egress_enabled = false;

@@ -279,3 +279,13 @@ func (s *RepoSettingsStore) UpsertPreviewConfig(ctx context.Context, repoFullNam
 		DispatchKeyProvided:        dispatchKeyProvided,
 	})
 }
+
+// CountSuppressedRepos returns how many repositories have an explicit
+// settings row that has not been promoted to live egress (§30.8).
+//
+// A floor, not a total: repositories with no settings row at all also
+// resolve to shadow, and nothing enumerates those. Callers must present it
+// as "at least N", never as a complete count.
+func (s *RepoSettingsStore) CountSuppressedRepos(ctx context.Context) (int64, error) {
+	return s.q.CountSuppressedRepos(ctx)
+}

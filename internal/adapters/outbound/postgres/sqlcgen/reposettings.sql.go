@@ -11,6 +11,26 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countSuppressedRepos = `-- name: CountSuppressedRepos :one
+SELECT COUNT(*) FROM repo_settings WHERE live_egress_enabled = false
+`
+
+// How many repositories this deployment will suppress outgoing effects for
+// (§30.8). Read once at boot so an operator is TOLD, rather than finding
+// out because a customer stopped receiving notifications.
+//
+// Counts rows explicitly not promoted. It cannot count repositories with
+// no settings row at all, which also resolve to shadow -- there is no
+// table of "repositories this deployment knows about" to count against.
+// The number is therefore a floor, and the boot message says so rather
+// than presenting it as a total.
+func (q *Queries) CountSuppressedRepos(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countSuppressedRepos)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const getRepoSettings = `-- name: GetRepoSettings :one
 
 SELECT repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled, live_egress_promoted_at FROM repo_settings WHERE repo_full_name = $1

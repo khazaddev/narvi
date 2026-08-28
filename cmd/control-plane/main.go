@@ -251,6 +251,33 @@ func serve() error {
 			RepoSettings:   repoSettingsForEgress,
 		}, repoFullName).Live()
 	}
+	// Say out loud, at boot, what this deployment will and will not send.
+	//
+	// §30.8's polarity means a repository is suppressed unless something
+	// explicitly promoted it, and that is the right default -- a newly
+	// connected repository must never leak while someone decides. But the
+	// same default applies to a deployment that simply upgraded into this
+	// capability, where repositories that were sending yesterday stop
+	// today. The operator surface that promotes them is a later Step, so
+	// between here and there the only honest thing available is to tell
+	// them, by name, at boot, rather than let them learn it from a
+	// customer who stopped receiving notifications.
+	//
+	// Deliberately NOT a backfill migration promoting existing rows.
+	// Promotion is the one direction this design refuses to take on
+	// anyone's behalf: §30.8 requires a fence timestamp and the explicit
+	// quarantine of shadow-era artifacts, and a migration can honour
+	// neither. Silence would be worse than the warning; a silent promotion
+	// would be worse than both.
+	if cfg.ShadowMode {
+		slog.Warn("narvi control-plane: shadow mode is forced for this whole process -- no outgoing effect will reach any customer system, whatever any repository's own setting says")
+	} else if suppressed, err := repoSettingsForEgress.CountSuppressedRepos(ctx); err != nil {
+		slog.Warn("narvi control-plane: could not determine how many repositories have outgoing effects suppressed", "error", err)
+	} else if suppressed > 0 {
+		slog.Warn("narvi control-plane: outgoing effects are suppressed for at least this many repositories -- they are recorded rather than sent, and stay that way until each is explicitly promoted",
+			"at_least", suppressed)
+	}
+
 	gatedHTTPClient := githubapi.NewGatedClient(shadowLedger, isLiveEgress)
 	liveSourceControl := githubapi.New(gatedHTTPClient, githubAPIBaseURL)
 
