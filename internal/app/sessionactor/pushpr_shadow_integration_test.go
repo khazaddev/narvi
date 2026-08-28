@@ -173,6 +173,14 @@ func TestHandleSandboxEvent_PushComplete_PersistedShadowDecision_NeverReReadLive
 	if got := sourceControl.callCount(); got != 0 {
 		t.Errorf("CreatePR called %d times, want 0 (the persisted decision was shadow at push-send time; the repo's later promotion must not resurrect a live create)", got)
 	}
+	// Suppressed is NOT the same as skipped, and asserting only "CreatePR
+	// was not called" cannot tell them apart -- doing nothing at all
+	// passes that assertion too. §30.6 makes the difference a contract:
+	// a suppressed effect that leaves no ledger row is a violation, and
+	// SuppressCreatePR is the path that writes one.
+	if got := sourceControl.suppressCallCount(); got != 1 {
+		t.Errorf("SuppressCreatePR called %d times, want 1: a shadow-stamped cycle must be suppressed AND RECORDED, never silently skipped", got)
+	}
 
 	row, err := sandboxStore.Get(ctx, sessionID)
 	if err != nil {

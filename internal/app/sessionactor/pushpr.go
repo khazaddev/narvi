@@ -56,6 +56,7 @@ package sessionactor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -123,6 +124,20 @@ func executionOutcomeTrigger(outcome sandboxws.ExecutionCompleteOutcome) (turn.T
 		return 0, false
 	}
 }
+
+// stampedSuppressor is the narrow, consumer-side view of the shadow SCM
+// decorator this file needs: suppress-and-record a PR creation on a
+// decision frozen earlier, ignoring the repo's current egress mode.
+// Declared here rather than in ports because it exists for §30.8's
+// stamp discipline alone and has exactly one implementation.
+type stampedSuppressor interface {
+	SuppressCreatePR(ctx context.Context, spec ports.CreatePRSpec) (ports.PRRef, error)
+}
+
+// errNoStampedSuppressor is returned when a cycle stamped shadow reaches
+// a source control that cannot suppress-and-record. Failing is the safe
+// direction: the alternative is a real pull request in a customer repo.
+var errNoStampedSuppressor = errors.New("sessionactor: push cycle stamped shadow but source control cannot suppress-and-record; refusing to create a PR")
 
 // pushSignal is what completeProcessingTurn hands back to
 // handleSandboxEvent when (and only when) a turn just completed
@@ -577,12 +592,19 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 		a.logger.Warn("sessionactor: push_complete arrived for a push cycle cancelled by a repo-demotion sweep; skipping PR creation")
 		return
 	}
-	if suppressedInShadow != nil && *suppressedInShadow {
-		// The persisted decision says this cycle was shadow -- honored
-		// exactly as resolved, never re-checked against whatever the
-		// repo's CURRENT egress mode happens to say right now.
-		a.logger.Info("sessionactor: push_complete arrived for a push cycle whose own persisted decision is shadow; skipping PR creation (§30.4/§30.8)")
-		return
+	// stampSaysShadow carries the frozen decision INTO the loop below
+	// rather than returning here.
+	//
+	// Returning early looks equivalent and is not: it skips the shadow
+	// decorator, and the decorator is what writes the ledger row and mints
+	// the synthetic PR ref. A suppressed effect that leaves no record is
+	// §30.6's named contract violation, and before this bookkeeping
+	// existed a shadow repo's CreatePR reached the decorator and WAS
+	// recorded -- so an early return here would have quietly removed an
+	// entry the ledger used to get.
+	stampSaysShadow := suppressedInShadow != nil && *suppressedInShadow
+	if stampSaysShadow {
+		a.logger.Info("sessionactor: push_complete arrived for a push cycle whose own persisted decision is shadow; suppressing and recording PR creation (§30.4/§30.8)")
 	}
 	// suppressedInShadow == nil (no push cycle was ever recorded for this
 	// sandbox -- an honest gap: a push_complete this Step's own new
@@ -652,8 +674,7 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 			continue
 		}
 
-		prCtx, cancel := context.WithTimeout(ctx, a.timeouts.PRCreateTimeout)
-		ref, createErr := a.sourceControl.CreatePR(prCtx, ports.CreatePRSpec{
+		prSpec := ports.CreatePRSpec{
 			Owner: owner,
 			Repo:  repoName,
 			Head:  pushed.Branch,
@@ -661,7 +682,32 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 			Title: title,
 			Body:  prBody(pushed),
 			Token: token,
-		})
+		}
+		prCtx, cancel := context.WithTimeout(ctx, a.timeouts.PRCreateTimeout)
+		var (
+			ref       ports.PRRef
+			createErr error
+		)
+		switch {
+		case !stampSaysShadow:
+			// The frozen stamp says live. CreatePR still consults the
+			// CURRENT mode itself, so a repo demoted live->shadow between
+			// push and here is suppressed and recorded by the decorator --
+			// the other direction of §30.8's monotone rule, already
+			// covered without anything here.
+			ref, createErr = a.sourceControl.CreatePR(prCtx, prSpec)
+		default:
+			suppressor, ok := a.sourceControl.(stampedSuppressor)
+			if !ok {
+				// Never reachable in production (cmd/control-plane wires
+				// the decorator), and loud rather than silent if it ever
+				// becomes so: proceeding would open a real pull request
+				// for a cycle already decided to be shadow.
+				createErr = errNoStampedSuppressor
+				break
+			}
+			ref, createErr = suppressor.SuppressCreatePR(prCtx, prSpec)
+		}
 		cancel()
 		if createErr != nil {
 			a.logger.Error("sessionactor: create PR failed", "repo", pushed.Name, "error", createErr)

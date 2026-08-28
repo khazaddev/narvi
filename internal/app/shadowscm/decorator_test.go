@@ -173,3 +173,55 @@ func TestNew_RefusesAnIncompleteConstruction(t *testing.T) {
 		t.Error("New accepted a nil resolver -- which would make every repo's mode undefined")
 	}
 }
+
+// TestDecorator_SuppressCreatePR_IgnoresALiveCurrentMode is the promotion
+// race §30.8 freezes the push/PR mode to prevent.
+//
+// The decorator is built here with isLive returning TRUE for everything --
+// the repo has been promoted since the push went out. CreatePR would
+// therefore open a real pull request on a branch that was only ever
+// pushed under shadow. SuppressCreatePR must not consult that at all: the
+// caller holds a decision already frozen, and the suppression must still
+// be recorded.
+func TestDecorator_SuppressCreatePR_IgnoresALiveCurrentMode(t *testing.T) {
+	store := &fakeStore{}
+	spy := &liveSpy{t: t}
+	d, err := New(spy, store, func(context.Context, string) bool { return true })
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ref, err := d.SuppressCreatePR(context.Background(), ports.CreatePRSpec{
+		Owner: "acme", Repo: "widgets", Head: "feature-x", Base: "main",
+		Title: "t", Body: "b", Token: "ghp_must_never_be_recorded",
+	})
+	if err != nil {
+		t.Fatalf("SuppressCreatePR: %v", err)
+	}
+	if len(store.rows) != 1 {
+		t.Fatalf("ledger rows = %d, want 1: a suppressed effect that leaves no record is the §30.6 contract violation", len(store.rows))
+	}
+	if store.rows[0].Operation != "create_pr" {
+		t.Errorf("Operation = %q, want %q", store.rows[0].Operation, "create_pr")
+	}
+	if strings.Contains(string(store.rows[0].SpecJson), "ghp_must_never_be_recorded") {
+		t.Errorf("the token reached spec_json: %s", store.rows[0].SpecJson)
+	}
+	if ref.URL == "" || !strings.HasPrefix(ref.URL, "shadow-suppressed://") {
+		t.Errorf("ref = %+v, want a synthetic ref the caller can tell apart from a real PR", ref)
+	}
+}
+
+// TestDecorator_SuppressCreatePR_LedgerFailureFailsTheCall holds the
+// frozen-decision entry point to the SAME record-or-fail rule as every
+// other suppressed write: a suppression that cannot be evidenced must not
+// report success to its caller.
+func TestDecorator_SuppressCreatePR_LedgerFailureFailsTheCall(t *testing.T) {
+	d, _ := shadowDecorator(t, &fakeStore{err: errors.New("ledger down")})
+
+	if _, err := d.SuppressCreatePR(context.Background(), ports.CreatePRSpec{
+		Owner: "acme", Repo: "widgets", Head: "feature-x", Base: "main",
+	}); err == nil {
+		t.Fatal("SuppressCreatePR reported success when its ledger insert failed")
+	}
+}
