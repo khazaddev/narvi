@@ -1260,9 +1260,16 @@ func run() error {
 			bootDegradeNotes = append(bootDegradeNotes, "sandbox secrets: boot-time fetch failed after retrying; this session booted with NO sandbox secrets injected (warn-and-continue degrade policy, §27.1) -- env vars a repo's setup.sh/start.sh/services.yml or opencode may normally expect from a configured sandbox secret may be missing")
 		}
 
-		homeDir, homeErr := os.UserHomeDir()
+		// The RUNTIME's home, not this process's own. §27.2's global
+		// OpenCode configuration document is written here for the agent
+		// runtime to read, and the runtime now runs under a different uid
+		// (§30.5): sandbox-agent is root in production, its home is /root,
+		// and /root is not traversable by another uid -- so a
+		// world-readable document written there is unreadable anyway, and
+		// the runtime would simply come up without its configuration.
+		homeDir, homeErr := boot.EnsureRuntimeHome(cfg.WorkspaceDir, cfg.RuntimeUID, cfg.RuntimeGID)
 		if homeErr != nil {
-			slog.Warn("sandbox-agent: resolve home directory failed, skipping opencode global config injection", "error", homeErr)
+			slog.Warn("sandbox-agent: prepare runtime home failed, skipping opencode global config injection", "error", homeErr)
 		} else {
 			openCodeConfigDelivery, openCodeConfigFetchOK := fetchOpenCodeConfig(ctx, cfg, timeouts)
 			openCodeConfigEnv := applyOpenCodeConfig(openCodeConfigDelivery, openCodeConfigFetchOK, homeDir, openCodeEnvironmentConfigPath)
@@ -1367,7 +1374,20 @@ func run() error {
 		// cleared as part of the real privilege drop, exactly as wanted.
 		runtimeCredential := runtimeCredentialFor(cfg)
 
-		result, spawnErr := opencodeproc.Spawn(ctx, sup, cfg.WorkspaceDir, providerCredentialEnv, sandboxSecretEnv,
+		// HOME must name the runtime's OWN home, or everything the runtime
+		// resolves relative to it lands somewhere it cannot reach: it
+		// inherits this process's environment, and this process is root in
+		// production. Appended after the other environment slices for the
+		// same reason they are ordered that way -- a later assignment wins,
+		// and this one has to.
+		// Copied rather than appended in place: sandboxSecretEnv is used
+		// elsewhere, and appending to it could share or clobber its backing
+		// array depending on capacity.
+		runtimeEnv := make([]string, 0, len(sandboxSecretEnv)+1)
+		runtimeEnv = append(runtimeEnv, sandboxSecretEnv...)
+		runtimeEnv = append(runtimeEnv, "HOME="+boot.RuntimeHomePath(cfg.WorkspaceDir))
+
+		result, spawnErr := opencodeproc.Spawn(ctx, sup, cfg.WorkspaceDir, providerCredentialEnv, runtimeEnv,
 			runtimeCredential, timeouts.OpenCodeReadinessTimeout, timeouts.OpenCodeReadinessPollInterval)
 		if spawnErr != nil {
 			// Best-effort cleanup of whatever sup may already be tracking

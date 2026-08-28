@@ -86,3 +86,46 @@ func ChownWorkspaceForRuntime(workspaceDir string, uid, gid uint32) error {
 	}
 	return nil
 }
+
+// RuntimeHomeDir is where the dropped agent runtime's own home lives, and
+// why it is not sandbox-agent's.
+//
+// Several things the runtime must READ are written by sandbox-agent into
+// a home directory: the global OpenCode configuration document (§27.2),
+// and the cloud-identity material rendered for it (§27.4). Those files are
+// world-readable by mode, which made them look fine -- but in production
+// sandbox-agent is root, its home is /root, and /root is not traversable
+// by another uid. A 0644 file inside a 0700 directory is unreadable, and
+// the failure surfaces as the runtime simply not finding its
+// configuration.
+//
+// So the runtime gets its own home, owned by it. Under the workspace's
+// parent rather than inside the workspace, because the workspace is the
+// repository tree the agent edits and commits: a home directory appearing
+// inside a checkout would show up in git status, and something would
+// eventually commit it.
+const runtimeHomeDirName = ".narvi-runtime-home"
+
+// RuntimeHomePath returns the runtime's home directory path, given the
+// workspace directory it sits beside.
+func RuntimeHomePath(workspaceDir string) string {
+	return filepath.Join(filepath.Dir(workspaceDir), runtimeHomeDirName)
+}
+
+// EnsureRuntimeHome creates the runtime's home directory and gives it to
+// the runtime, so the process dropped to that identity can read and write
+// its own configuration and caches.
+//
+// 0700 after the chown: the home belongs to the runtime alone. Nothing
+// else needs to read it, and sandbox-agent -- which is root in production
+// -- is not blocked by a mode it can always override.
+func EnsureRuntimeHome(workspaceDir string, uid, gid uint32) (string, error) {
+	home := RuntimeHomePath(workspaceDir)
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		return "", fmt.Errorf("boot: create runtime home %s: %w", home, err)
+	}
+	if err := os.Lchown(home, int(uid), int(gid)); err != nil {
+		return "", fmt.Errorf("boot: give runtime home %s to %d:%d: %w", home, uid, gid, err)
+	}
+	return home, nil
+}
