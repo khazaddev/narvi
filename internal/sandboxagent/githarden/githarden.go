@@ -26,7 +26,6 @@
 // sandbox-agent does with git ever wants a repository-authored hook or a
 // repository-authored configuration value; those exist for humans working
 // in their own checkouts.
-
 package githarden
 
 import "github.com/khazaddev/narvi/internal/sandboxagent/supervisor"

@@ -146,9 +146,9 @@ func TestRunBoot_MixedManifestAndHookFallback(t *testing.T) {
 	}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
-		nil, nil, reporter.report, noopHookRerunTiming, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond)
+		nil, nil, reporter.report, noopHookRerunTiming, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil)
 	if err != nil {
-		t.Fatalf("RunBoot() error = %v, want nil", err)
+		t.Fatalf("RunBoot(, nil) error = %v, want nil", err)
 	}
 
 	assertFileExists(t, repoBMarker)
@@ -172,9 +172,9 @@ func TestRunBoot_AbsentManifestFallsBackToHooks(t *testing.T) {
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
-		nil, nil, noopReporter, noopHookRerunTiming, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond)
+		nil, nil, noopReporter, noopHookRerunTiming, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil)
 	if err != nil {
-		t.Fatalf("RunBoot() error = %v, want nil", err)
+		t.Fatalf("RunBoot(, nil) error = %v, want nil", err)
 	}
 
 	assertFileExists(t, marker)
@@ -203,9 +203,9 @@ func TestRunBoot_MalformedManifestIsAFatalError(t *testing.T) {
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
-		nil, nil, noopReporter, noopHookRerunTiming, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond)
+		nil, nil, noopReporter, noopHookRerunTiming, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil)
 	if err == nil {
-		t.Fatal("RunBoot() error = nil, want an error for a malformed services.yml")
+		t.Fatal("RunBoot(, nil) error = nil, want an error for a malformed services.yml")
 	}
 
 	assertFileAbsent(t, wouldRunMarker)
@@ -243,9 +243,9 @@ func TestRunBoot_FatalFailureInRepoAStopsBeforeRepoB(t *testing.T) {
 	}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
-		nil, nil, noopReporter, noopHookRerunTiming, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond)
+		nil, nil, noopReporter, noopHookRerunTiming, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil)
 	if err == nil {
-		t.Fatal("RunBoot() error = nil, want a fatal error (repo-a's primary service crashed)")
+		t.Fatal("RunBoot(, nil) error = nil, want a fatal error (repo-a's primary service crashed)")
 	}
 
 	assertFileAbsent(t, laterMarker)

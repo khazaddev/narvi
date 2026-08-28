@@ -69,16 +69,21 @@
 // In-sandbox secrecy from the CODING AGENT is a non-goal -- the agent is
 // the intended consumer of every sandbox_secrets value (it runs the
 // hooks/services/opencode serve process tree these values are injected
-// into). This is not merely a documented limitation; as of this Step
-// there is no privilege boundary between the coding agent and
-// sandbox-agent at all (internal/sandboxagent/supervisor.Spawn sets only
-// Setpgid in its own SysProcAttr, no UID drop) -- so ANYTHING in
-// sandbox-agent's own process environment or on its filesystem (the
-// bearer token, the credential cache, and now these secrets) is already
-// readable by the agent's own tools via /proc/<sandbox-agent-pid>/environ,
-// same-UID, regardless of which specific process a value was injected
-// into. OS-level isolation (a UID drop / user namespace) is §30.5's own
-// scope, not this one's -- see §27.1 for the named debt. The real
+// into). This paragraph used to say there was no privilege boundary at
+// all between the coding agent and sandbox-agent, and that anything in
+// sandbox-agent's environment or filesystem was readable same-UID through
+// /proc. That was true when it was written and is no longer: §30.5's UID
+// drop landed, so the runtime spawns under its own uid and the bearer
+// token, the credential cache and sandbox-agent's own environ are
+// unreadable to it by kernel enforcement.
+//
+// What that changes for THIS type is narrower than it sounds, and the
+// narrowing is the point: a sandbox_secrets value injected into the
+// runtime's own environment is still fully visible to the runtime, which
+// is the intended consumer. Isolation protects what the runtime was never
+// handed; it cannot protect what it was handed by design. So the posture
+// below is unchanged -- these values are readable by the agent, and the
+// boundaries that matter are the ones listed next. The real
 // boundaries
 // sandbox_secrets DOES hold today: encrypted at rest CP-side
 // (platform.EncryptToken, mirroring provider_credentials'

@@ -21,12 +21,20 @@ import (
 // gone and nothing to notice. That is why there is now a test asserting
 // the credential reaches the kernel's attributes, runnable anywhere.
 //
-// Removing this chown fails CLOSED and loudly: a runtime dropped to
-// another uid cannot read its own workspace, so the very first turn fails
-// visibly rather than quietly proceeding without protection. A test that
-// would catch its silent removal is worth less than it looks, because
-// production catches it immediately and unmistakably. Recorded rather than
-// scaffolded around.
+// I wrote here that removing this chown "fails closed and loudly", and
+// used that as the reason it needed no guard. The review showed the
+// sentence was aimed at the wrong thing. What fails loudly is the chown
+// being PRESENT: it hands each repository to the runtime, and every git
+// command sandbox-agent then runs in that repository is refused for
+// dubious ownership -- the end-of-turn push included. That is what
+// internal/sandboxagent/githarden exists for.
+//
+// The asymmetry the sentence was reaching for is real, and it belongs to
+// the credential rather than to this: removing the credential from the
+// spawn fails OPEN and silently, because the runtime keeps working at
+// sandbox-agent's own uid with the boundary simply gone. That is why the
+// credential has a privilege-free guard and this does not -- but the
+// reason had to be corrected before it could be relied on again.
 
 // ChownWorkspaceForRuntime recursively changes the owner of every entry
 // under workspaceDir to uid/gid -- the SAME uid/gid

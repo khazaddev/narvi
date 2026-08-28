@@ -189,7 +189,7 @@ func TestRun_PortReadiness(t *testing.T) {
 
 	collector := &eventCollector{}
 	err := services.Run(context.Background(), sup, t.TempDir(), manifest, nil, collector.report,
-		5*time.Second, 50*time.Millisecond)
+		5*time.Second, 50*time.Millisecond, nil)
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -228,7 +228,7 @@ func TestRun_EnvExcludesSessionConfig(t *testing.T) {
 
 	collector := &eventCollector{}
 	err := services.Run(context.Background(), sup, t.TempDir(), manifest, env, collector.report,
-		5*time.Second, 50*time.Millisecond)
+		5*time.Second, 50*time.Millisecond, nil)
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -262,7 +262,7 @@ func TestRun_HealthReadiness(t *testing.T) {
 
 	collector := &eventCollector{}
 	err := services.Run(context.Background(), sup, t.TempDir(), manifest, nil, collector.report,
-		5*time.Second, 50*time.Millisecond)
+		5*time.Second, 50*time.Millisecond, nil)
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -287,7 +287,7 @@ func TestRun_PrimaryCrashIsFatal(t *testing.T) {
 
 	collector := &eventCollector{}
 	err := services.Run(context.Background(), sup, t.TempDir(), manifest, nil, collector.report,
-		5*time.Second, 50*time.Millisecond)
+		5*time.Second, 50*time.Millisecond, nil)
 	if err == nil {
 		t.Fatal("Run() error = nil, want a fatal error (primary service crashed before ready)")
 	}
@@ -319,7 +319,7 @@ func TestRun_PrimaryCleanExitIsAlsoFatal(t *testing.T) {
 
 	collector := &eventCollector{}
 	err := services.Run(context.Background(), sup, t.TempDir(), manifest, nil, collector.report,
-		5*time.Second, 50*time.Millisecond)
+		5*time.Second, 50*time.Millisecond, nil)
 	if err == nil {
 		t.Fatal("Run() error = nil, want a fatal error (a clean exit(0) before readiness is still a crash here)")
 	}
@@ -364,7 +364,7 @@ func TestRun_MixedOutcomes_OneCrashesOneSucceeds(t *testing.T) {
 
 	collector := &eventCollector{}
 	err := services.Run(context.Background(), sup, t.TempDir(), manifest, nil, collector.report,
-		5*time.Second, 50*time.Millisecond)
+		5*time.Second, 50*time.Millisecond, nil)
 	if err == nil {
 		t.Fatal("Run() error = nil, want a fatal error naming the crashed service")
 	}
@@ -400,7 +400,7 @@ func TestRun_SecondaryTimeoutLeavesProcessRunning(t *testing.T) {
 
 	collector := &eventCollector{}
 	err := services.Run(context.Background(), sup, t.TempDir(), manifest, nil, collector.report,
-		300*time.Millisecond, 30*time.Millisecond)
+		300*time.Millisecond, 30*time.Millisecond, nil)
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil (a secondary service's timeout is only a warning)", err)
 	}
@@ -431,7 +431,7 @@ func TestRun_PrimaryTimeoutIsFatal(t *testing.T) {
 
 	collector := &eventCollector{}
 	err := services.Run(context.Background(), sup, t.TempDir(), manifest, nil, collector.report,
-		300*time.Millisecond, 30*time.Millisecond)
+		300*time.Millisecond, 30*time.Millisecond, nil)
 	if err == nil {
 		t.Fatal("Run() error = nil, want a fatal error (primary service never became ready)")
 	}
@@ -497,7 +497,7 @@ func TestRun_ServicesRunConcurrently(t *testing.T) {
 
 	start := time.Now()
 	err := services.Run(context.Background(), sup, t.TempDir(), manifest, nil, collector.report,
-		5*time.Second, 50*time.Millisecond)
+		5*time.Second, 50*time.Millisecond, nil)
 	elapsed := time.Since(start)
 
 	if err != nil {

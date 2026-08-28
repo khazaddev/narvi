@@ -1365,12 +1365,7 @@ func run() error {
 		// identity, so this condition never triggers there:
 		// NoSetGroups stays false and supplementary groups are genuinely
 		// cleared as part of the real privilege drop, exactly as wanted.
-		selfUID, selfGID := uint32(os.Getuid()), uint32(os.Getgid())
-		runtimeCredential := &syscall.Credential{
-			Uid:         cfg.RuntimeUID,
-			Gid:         cfg.RuntimeGID,
-			NoSetGroups: cfg.RuntimeUID == selfUID && cfg.RuntimeGID == selfGID,
-		}
+		runtimeCredential := runtimeCredentialFor(cfg)
 
 		result, spawnErr := opencodeproc.Spawn(ctx, sup, cfg.WorkspaceDir, providerCredentialEnv, sandboxSecretEnv,
 			runtimeCredential, timeouts.OpenCodeReadinessTimeout, timeouts.OpenCodeReadinessPollInterval)
@@ -2198,7 +2193,7 @@ func runBootSequence(
 	if err := boot.RunBoot(ctx, sup, cfg.WorkspaceDir, repos, cfg.BootMode, workspaceMoved, setupRerunLadder, secretEnv, reportBootProgress, onHookRerunTiming,
 		timeouts.HookTimeout, timeouts.ProcessStopGracePeriod,
 		timeouts.ServiceReadinessTimeout, timeouts.ServiceReadinessPollInterval,
-		timeouts.SetupRerunRetryBackoff); err != nil {
+		timeouts.SetupRerunRetryBackoff, runtimeCredentialFor(cfg)); err != nil {
 		return fmt.Errorf("boot: %w", err)
 	}
 
@@ -2228,4 +2223,31 @@ func runBootSequence(
 	}
 
 	return nil
+}
+
+// runtimeCredentialFor builds the identity every customer-influenced
+// process runs under (§30.5): the agent runtime itself, and the
+// services.yml commands and setup hooks that come from the customer's own
+// repository.
+//
+// One function rather than a literal at each site, because the
+// NoSetGroups condition below is subtle enough to get wrong in a copy, and
+// two sites disagreeing about it would mean two different identities in
+// one sandbox -- with files written by one that the other cannot touch.
+func runtimeCredentialFor(cfg boot.Config) *syscall.Credential {
+	// NoSetGroups is true ONLY when the configured identity is exactly
+	// this process's own, which is the unprivileged case a test run hits:
+	// clearing supplementary groups needs privileges this process does not
+	// have, and the drop would fail outright.
+	//
+	// In the real production path cfg.RuntimeUID/RuntimeGID are never this
+	// process's own identity -- boot refuses 0, and the default is 65534
+	// -- so this condition does not trigger there, supplementary groups
+	// are genuinely cleared, and the drop is the real one.
+	selfUID, selfGID := uint32(os.Getuid()), uint32(os.Getgid())
+	return &syscall.Credential{
+		Uid:         cfg.RuntimeUID,
+		Gid:         cfg.RuntimeGID,
+		NoSetGroups: cfg.RuntimeUID == selfUID && cfg.RuntimeGID == selfGID,
+	}
 }
