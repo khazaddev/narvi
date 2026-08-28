@@ -353,67 +353,24 @@ func TestSpawn_ProviderCredentialEnvWinsOverSandboxSecretEnv(t *testing.T) {
 	}
 }
 
-// TestSpawn_RuntimeCredentialSelfUID_DoesNotBreakSpawn proves a
-// runtimeCredential naming the CALLING process's own current uid/gid
-// (NoSetGroups: true -- see
-// internal/sandboxagent/supervisor's own
-// TestSpawn_CredentialSelfUID_Succeeds for why that flag is required
-// unprivileged) does not break an ordinary Spawn. A self-uid Credential
-// is, by construction, behaviorally indistinguishable from no Credential
-// at all (setting a uid/gid to its own current value changes nothing the
-// spawned process could observe) -- so this test, deliberately, does NOT
-// prove runtimeCredential actually reaches supervisor.Spec.Credential;
-// it only proves this function's new parameter doesn't regress the
-// common (self-uid, effectively a no-op) case. See
-// TestSpawn_RuntimeCredentialDropsCannotReadAnotherUIDsFile below for
-// this function's own real, executed, cross-uid proof of threading.
-func TestSpawn_RuntimeCredentialSelfUID_DoesNotBreakSpawn(t *testing.T) {
-	t.Parallel()
-
-	sup := supervisor.New()
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
-	defer cancel()
-	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer stopCancel()
-		_ = sup.StopAll(stopCtx, 5*time.Second)
-	})
-
-	cred := &syscall.Credential{
-		Uid:         uint32(os.Getuid()),
-		Gid:         uint32(os.Getgid()),
-		NoSetGroups: true,
-	}
-	result, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, nil, cred, 150*time.Second, 250*time.Millisecond)
-	if err != nil {
-		t.Fatalf("Spawn() with a self-uid runtimeCredential: error = %v, want nil (real opencode binary should be on PATH, and a self-uid Credential with NoSetGroups is always permitted)", err)
-	}
-	if result.Process == nil {
-		t.Fatal("Process = nil, want a live *supervisor.Process")
-	}
-	if _, exited := result.Process.Exited(); exited {
-		t.Error("Process.Exited() = true immediately after a successful Spawn, want still running (a nonzero exit here would suggest the Credential was rejected by the kernel, not merely ignored)")
-	}
-}
-
-// TestSpawn_RuntimeCredentialDropsCannotReadAnotherUIDsFile is this
-// function's own real, EXECUTED, end-to-end proof that runtimeCredential
-// reaches supervisor.Spec's own Credential field: a fake "opencode"
-// script standing in for the real binary (same technique as this file's
-// own env-probe tests, e.g. TestSpawn_EnvExcludesSessionConfig) tries to
-// `cat` a 0600 file owned by this (root) test process. With
-// runtimeCredential naming an UNPRIVILEGED uid/gid, the script's own cat
-// must fail with a kernel permission error -- proving the credential
-// genuinely reached the spawned process, not merely that Spawn didn't
-// error out.
+// A self-uid Credential's harmlessness is proven one layer down, by
+// supervisor's own TestSpawn_CredentialSelfUID_Succeeds, and it is proven
+// better there: that test spawns /bin/sh rather than the real opencode
+// binary, so it runs on every platform and in CI, needs no port, and
+// cannot be destabilised by anything else running beside it.
 //
-// Needs: Linux, running as root -- an unprivileged caller cannot ask the
-// kernel to start ANY process at a different uid at all, so this
-// property is undemonstrable without that privilege. See
-// internal/sandboxagent/supervisor's own requireLinuxRoot for the exact
-// same gate and reasoning, duplicated here rather than exported (this
-// package has no other reason to import that package's test-only
-// helper).
+// A test here that spawned `opencode serve` for the same property was
+// removed rather than repaired. Its own doc comment conceded it did not
+// prove the parameter reaches supervisor.Spec.Credential -- the cross-uid
+// test below is what proves that -- so it was paying a real binary spawn
+// to re-establish something already established. And it was not free: it
+// made a SEVENTH concurrent `opencode serve` in this package, and serve
+// picks its port through a free-port helper that closes its listener
+// before the child binds. That window is a known, filed flake, and this
+// test lost the race in CI while passing locally. Adding contention to a
+// known race in order to re-prove a covered property is a bad trade in
+// both directions.
+
 func TestSpawn_RuntimeCredentialDropsCannotReadAnotherUIDsFile(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skipf("requires linux (this test asserts a real kernel-enforced file-permission denial across a uid boundary); running on %s", runtime.GOOS)
