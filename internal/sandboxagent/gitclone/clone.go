@@ -13,6 +13,7 @@ import (
 	"github.com/khazaddev/narvi/internal/domain/environment"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/khazaddev/narvi/internal/sandboxagent/githarden"
 	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
 )
 
@@ -169,7 +170,7 @@ func applySparseCheckout(ctx context.Context, sup *supervisor.Supervisor, dir st
 	var stderr bytes.Buffer
 	proc, err := sup.Spawn(supervisor.Spec{
 		Path: "git",
-		Args: args,
+		Args: githarden.Harden(args),
 		// Inherit the ambient environment (matching every other call site
 		// in this package -- see cloneOne's own doc comment for the full
 		// "why nil/inherit is deliberate" reasoning) EXCEPT locale: LC_ALL=C
@@ -236,7 +237,7 @@ func isSparseCheckoutEnabled(ctx context.Context, sup *supervisor.Supervisor, di
 	var stdout bytes.Buffer
 	proc, err := sup.Spawn(supervisor.Spec{
 		Path:   "git",
-		Args:   []string{"-C", dir, "config", "--type=bool", "core.sparseCheckout"},
+		Args:   githarden.Args(dir, "config", "--type=bool", "core.sparseCheckout"),
 		Stdout: &stdout,
 	})
 	if err != nil {
@@ -297,7 +298,7 @@ func disableSparseCheckoutIfEnabled(ctx context.Context, sup *supervisor.Supervi
 
 	proc, err := sup.Spawn(supervisor.Spec{
 		Path: "git",
-		Args: []string{"-C", dir, "sparse-checkout", "disable"},
+		Args: githarden.Args(dir, "sparse-checkout", "disable"),
 	})
 	if err != nil {
 		return fmt.Errorf("spawn git sparse-checkout disable: %w", err)
@@ -369,7 +370,7 @@ func cloneOne(
 
 	proc, err := sup.Spawn(supervisor.Spec{
 		Path: "git",
-		Args: args,
+		Args: githarden.Harden(args),
 		// Env is DELIBERATELY left at its zero value (nil, "inherit this
 		// process's own environment") -- a reviewed choice, not an
 		// oversight. git's own credential.helper mechanism (credHelperArg,

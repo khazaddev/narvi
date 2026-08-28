@@ -13,6 +13,7 @@ import (
 	"github.com/khazaddev/narvi/internal/domain/gitstate"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/khazaddev/narvi/internal/sandboxagent/githarden"
 	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
 )
 
@@ -500,9 +501,15 @@ func logIfStashRecoveryNeeded(ctx context.Context, repoName, dir, branch string,
 // error.
 func runGit(ctx context.Context, sup *supervisor.Supervisor, args []string, stepTimeout, stopGrace time.Duration) (string, error) {
 	var stdout bytes.Buffer
+	// Hardened here rather than at each caller: every command routed
+	// through runGit runs against a workspace the agent runtime owns
+	// (§30.5), and the flags that make that safe are the same every time.
+	// See internal/sandboxagent/githarden for what they are and what
+	// happens without them. Callers still pass their own "-C <dir>";
+	// githarden.Harden rewrites the invocation around it.
 	proc, err := sup.Spawn(supervisor.Spec{
 		Path:   "git",
-		Args:   args,
+		Args:   githarden.Harden(args),
 		Stdout: &stdout,
 	})
 	if err != nil {
@@ -757,7 +764,7 @@ func gitFetchRef(ctx context.Context, sup *supervisor.Supervisor, credHelperArg,
 func refExistsQuiet(ctx context.Context, sup *supervisor.Supervisor, dir, fullRef string, stepTimeout, stopGrace time.Duration) (bool, error) {
 	proc, err := sup.Spawn(supervisor.Spec{
 		Path: "git",
-		Args: []string{"-C", dir, "rev-parse", "--verify", "--quiet", fullRef},
+		Args: githarden.Args(dir, "rev-parse", "--verify", "--quiet", fullRef),
 	})
 	if err != nil {
 		return false, fmt.Errorf("spawn git rev-parse --verify: %w", err)

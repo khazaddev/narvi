@@ -168,6 +168,7 @@ import (
 	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
 	"github.com/khazaddev/narvi/internal/sandboxagent/credentials"
 	"github.com/khazaddev/narvi/internal/sandboxagent/gitclone"
+	"github.com/khazaddev/narvi/internal/sandboxagent/githarden"
 	"github.com/khazaddev/narvi/internal/sandboxagent/opencodeproc"
 	"github.com/khazaddev/narvi/internal/sandboxagent/services"
 	"github.com/khazaddev/narvi/internal/sandboxagent/snapshotclient"
@@ -526,7 +527,7 @@ func (h *commandHandler) pushOneRepo(repoSpec sandboxws.PushReposElem) (string, 
 		// defense in depth alongside the validation above: even an
 		// already-validated remote/branch should never be positionally
 		// ambiguous to git's own argument parser.
-		Args:   []string{"-C", dir, "-c", "credential.helper=" + credHelperArg, "push", "--", remote, repoSpec.Branch},
+		Args:   githarden.Args(dir, "-c", "credential.helper="+credHelperArg, "push", "--", remote, repoSpec.Branch),
 		Stderr: &stderr,
 		// Env is DELIBERATELY left at its zero value (nil, "inherit this
 		// process's own environment") -- a reviewed choice, not an
@@ -582,7 +583,7 @@ func (h *commandHandler) headSHA(dir string) (string, error) {
 	var stdout bytes.Buffer
 	proc, err := h.sup.Spawn(supervisor.Spec{
 		Path:   "git",
-		Args:   []string{"-C", dir, "rev-parse", "HEAD"},
+		Args:   githarden.Args(dir, "rev-parse", "HEAD"),
 		Stdout: &stdout,
 		// Unlike pushOneRepo's own git push Spawn call just above (which
 		// deliberately keeps full env inheritance -- see its own comment),
