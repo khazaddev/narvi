@@ -29,8 +29,15 @@
 -- platform.CorrelationIDFromContext(ctx)'s value when the enclosing
 -- request/webhook context carried one, else NULL -- no id is ever invented
 -- at enqueue time for a row created outside such a context.
-INSERT INTO outbox (session_id, kind, payload, correlation_id)
-VALUES ($1, $2, $3, $4)
+--
+-- suppressed_in_shadow (migrations/000103_outbox_shadow_epoch.up.sql,
+-- §30.8) is ALWAYS computed by postgres.OutboxStore.Create itself, never
+-- left to a caller -- this is the single choke point every enqueue site
+-- shares (there is exactly one INSERT INTO outbox in this codebase), so
+-- the stamp cannot be forgotten one call site at a time. See that
+-- method's own doc comment for the resolution formula.
+INSERT INTO outbox (session_id, kind, payload, correlation_id, suppressed_in_shadow)
+VALUES ($1, $2, $3, $4, $5)
 RETURNING *;
 
 -- name: GetOutboxEntry :one
@@ -74,6 +81,25 @@ RETURNING *;
 -- own identical guard against a stale/already-superseded row.
 UPDATE outbox
 SET status = 'delivered', delivered_at = now()
+WHERE id = $1 AND status = 'pending'
+RETURNING *;
+
+-- name: MarkOutboxEntryDeliveredToLedger :one
+-- §30.6/§30.8's own terminal mark: records that this row's own effective
+-- egress mode was shadow at the moment outboxworker.Builder.attempt
+-- would otherwise have called notifier.Deliver, so it delivered the row
+-- into the suppression ledger instead of the world -- status='delivered'
+-- (the SAME terminal status a genuine delivery reaches; §30.6 is explicit
+-- this is "a flag column, deliberately not a new status enum"), plus
+-- delivered_to_ledger=true so a later reader (§30.6's own "UNION over
+-- marked outbox rows + shadow_scm_writes" read model) can tell the two
+-- apart. Same "AND status = 'pending'" guard as
+-- MarkOutboxEntryDelivered, for the identical reason -- and the same
+-- pgx.ErrNoRows-means-superseded handling: a caller must not proceed to
+-- treat this row as terminal if some other builder already raced ahead
+-- of it.
+UPDATE outbox
+SET status = 'delivered', delivered_at = now(), delivered_to_ledger = true
 WHERE id = $1 AND status = 'pending'
 RETURNING *;
 

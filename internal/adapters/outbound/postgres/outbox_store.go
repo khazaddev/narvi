@@ -13,28 +13,53 @@ import (
 // OutboxStore is a thin, pass-through wrapper around the sqlc-generated
 // outbox queries (§4.3 Outbox, §5.1 outbox pattern). No caching, no
 // retries, no business rules -- the claim/attempt/record delivery loop
-// lives in internal/app/outboxworker (§5.1, "outbox delivery").
+// lives in internal/app/outboxworker (§5.1, "outbox delivery"). The one
+// deliberate exception is Create's own §30.8 epoch stamp (outbox_shadow.
+// go) -- necessarily here, not in app/outboxworker, because it must be
+// computed and persisted in the SAME statement as the enqueue itself
+// (§30.6: "a single choke point for every enqueue site"), the same
+// reason RenewClaim's own compare-and-swap logic (H6) already lives at
+// this layer rather than one level up.
 type OutboxStore struct {
 	q *sqlcgen.Queries
+
+	// platformShadow is platform.Config.ShadowMode (NARVI_SHADOW_MODE,
+	// §30.8), read once at process boot and passed straight through here
+	// -- never re-read from the environment per call. Consulted by
+	// Create/ResolveEffectiveMode (outbox_shadow.go) whenever a row's own
+	// session names no single repo to check repo_settings.
+	// live_egress_enabled against.
+	platformShadow bool
 }
 
-// NewOutboxStore builds an OutboxStore backed by pool.
-func NewOutboxStore(pool *pgxpool.Pool) *OutboxStore {
-	return &OutboxStore{q: sqlcgen.New(pool)}
+// NewOutboxStore builds an OutboxStore backed by pool. platformShadow is
+// §30.8's own deployment-level master switch (platform.Config.ShadowMode)
+// -- a mandatory argument, not a convenience default, so a construction
+// site cannot silently forget it (mirrors shadowscm.New's own "every
+// argument required" idiom): every existing call site before this Step
+// passes false, preserving today's behavior exactly (nothing consulted
+// this bit before now).
+func NewOutboxStore(pool *pgxpool.Pool, platformShadow bool) *OutboxStore {
+	return &OutboxStore{q: sqlcgen.New(pool), platformShadow: platformShadow}
 }
 
 // WithTx returns an OutboxStore whose queries run on tx instead of the
 // pool this store was built with — mirrors the same WithTx convention
-// every other store in this package already follows (e.g. EventStore),
-// ready for app/sessionactor's transactional-write helper (§2) once a
-// caller starts writing outbox entries inside that transaction; no such
-// caller exists yet.
+// every other store in this package already follows (e.g. EventStore).
+// platformShadow carries over unchanged: it is a deployment-wide
+// constant, never transaction-scoped.
 func (s *OutboxStore) WithTx(tx pgx.Tx) *OutboxStore {
-	return &OutboxStore{q: s.q.WithTx(tx)}
+	return &OutboxStore{q: s.q.WithTx(tx), platformShadow: s.platformShadow}
 }
 
-// Create inserts a new outbox entry and returns it.
+// Create inserts a new outbox entry and returns it. arg.SuppressedInShadow
+// is OVERWRITTEN here, unconditionally, with this call's own freshly-
+// resolved §30.8 stamp (ResolveEffectiveMode, outbox_shadow.go) -- never
+// left to whatever a caller happened to set (or, far more likely, leave
+// at its own zero value) on the struct literal, so no enqueue call site
+// can ever forget or get this wrong: the single choke point §30.6 names.
 func (s *OutboxStore) Create(ctx context.Context, arg sqlcgen.CreateOutboxEntryParams) (sqlcgen.Outbox, error) {
+	arg.SuppressedInShadow = s.ResolveEffectiveMode(ctx, arg.SessionID)
 	return s.q.CreateOutboxEntry(ctx, arg)
 }
 

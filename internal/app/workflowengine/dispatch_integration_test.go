@@ -57,7 +57,7 @@ func testDeps(pool *pgxpool.Pool, turns *postgres.TurnStore, workflows *postgres
 		SlackThreadSessions: postgres.NewSlackThreadSessionStore(pool),
 		LinearAgentSessions: postgres.NewLinearAgentSessionStore(pool),
 		GitHubPRSessions:    postgres.NewGitHubPRSessionStore(pool),
-		Outbox:              postgres.NewOutboxStore(pool),
+		Outbox:              postgres.NewOutboxStore(pool, false),
 	}
 }
 

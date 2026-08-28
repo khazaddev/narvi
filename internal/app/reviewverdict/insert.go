@@ -8,6 +8,7 @@ import (
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/egressmode"
 	"github.com/khazaddev/narvi/internal/domain/review"
 	"github.com/khazaddev/narvi/internal/domain/reviewpost"
 	"github.com/khazaddev/narvi/internal/domain/reviewtriage"
@@ -82,10 +83,29 @@ import (
 // NULL only when this function is never reached by a real caller at all
 // (there is no "unset" VerdictInput.FactCheckKilled distinct from 0 --
 // factCheckKilledPtr below always returns a non-nil pointer).
-func Insert(ctx context.Context, store *postgres.ReviewVerdictStore, repoFullName string, prNumber int32, headSHA string, sessionID pgtype.UUID, verdict review.Verdict, digest reviewpost.Digest, reviewPath reviewtriage.ReviewDepth, counterReview review.CounterReviewStatus, factCheck reviewpost.FactCheckStatus, factCheckKilled int) (reviewverdict.Record, error) {
+//
+// repoSettings/platformShadow (§30.8) resolve this row's OWN epoch stamp
+// (suppressed_in_shadow, migrations/
+// 000105_review_verdicts_shadow_epoch.up.sql) via egressmode.Resolve --
+// the SAME single authority postgres.OutboxStore.Create already uses for
+// the outbox's own identical stamp -- computed here, at this table's one
+// INSERT, rather than trusted from any caller-supplied value: a verdict
+// is written once, synchronously, so (unlike the outbox's own async
+// retries) there is no delivery-time recheck to pair this stamp with --
+// see migrations/000105's own doc comment for why that asymmetry is
+// safe. The exclusion this stamp feeds lives entirely in the read
+// queries (GetLatestNonShadowReviewVerdict, ListLatestAutoApprovedInRepo,
+// ListNonShadowReviewVerdictsInWindow) -- §30.8: "never call-site
+// checks".
+func Insert(ctx context.Context, store *postgres.ReviewVerdictStore, repoSettings *postgres.RepoSettingsStore, platformShadow bool, repoFullName string, prNumber int32, headSHA string, sessionID pgtype.UUID, verdict review.Verdict, digest reviewpost.Digest, reviewPath reviewtriage.ReviewDepth, counterReview review.CounterReviewStatus, factCheck reviewpost.FactCheckStatus, factCheckKilled int) (reviewverdict.Record, error) {
 	if headSHA == "" {
 		return reviewverdict.Record{}, fmt.Errorf("reviewverdict: insert: refusing to persist a verdict with no known head sha for %s#%d", repoFullName, prNumber)
 	}
+
+	suppressedInShadow := egressmode.Resolve(ctx, egressmode.Deps{
+		RepoSettings:   repoSettings,
+		PlatformShadow: platformShadow,
+	}, repoFullName).Suppressed()
 
 	// hardening: sanitize a LOCAL copy of digest before anything
 	// below marshals or persists it -- see this function's own doc comment
@@ -130,6 +150,7 @@ func Insert(ctx context.Context, store *postgres.ReviewVerdictStore, repoFullNam
 		FactCheck:                 nonEmptyStringPtr(string(factCheck)),
 		FactCheckKilled:           factCheckKilledPtr(factCheckKilled),
 		DigestContestedPoints:     nonEmptyStringPtr(digest.ContestedPoints),
+		SuppressedInShadow:        suppressedInShadow,
 	})
 	if err != nil {
 		return reviewverdict.Record{}, err

@@ -149,6 +149,7 @@ func TestInsert_AllTenPlaceholderTokensStrippedFromStoredDigest(t *testing.T) {
 	pool := newTestPool(t)
 	ctx := context.Background()
 	reviewVerdicts := narvipg.NewReviewVerdictStore(pool)
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
 
 	const repoFullName = "acme/digest-sanitization-repo"
 	const prNumber = int32(42)
@@ -178,7 +179,7 @@ func TestInsert_AllTenPlaceholderTokensStrippedFromStoredDigest(t *testing.T) {
 		},
 	}
 
-	if _, err := appreviewverdict.Insert(ctx, reviewVerdicts, repoFullName, prNumber, headSHA, pgtype.UUID{}, verdict, digest, reviewtriage.DepthDeep, review.CounterReviewDone, reviewpost.FactCheckDone, 0); err != nil {
+	if _, err := appreviewverdict.Insert(ctx, reviewVerdicts, repoSettings, false, repoFullName, prNumber, headSHA, pgtype.UUID{}, verdict, digest, reviewtriage.DepthDeep, review.CounterReviewDone, reviewpost.FactCheckDone, 0); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 

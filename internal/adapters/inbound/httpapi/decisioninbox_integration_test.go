@@ -77,7 +77,7 @@ func (rig *decisionInboxTestRig) seedAutoApprovedVerdict(ctx context.Context, t 
 		FilesChanged:      3,
 	}
 	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise, review.DescriptionAdequacyOK, review.CounterReviewDone)
-	if _, err := appreviewverdict.Insert(ctx, rig.reviewVerdicts, repoFullName, prNumber, headSHA, pgtype.UUID{}, verdict, reviewpost.Digest{Summary: "Test-seeded verdict."}, "", review.CounterReviewDone, reviewpost.FactCheckDone, 0); err != nil {
+	if _, err := appreviewverdict.Insert(ctx, rig.reviewVerdicts, narvipg.NewRepoSettingsStore(rig.pool), false, repoFullName, prNumber, headSHA, pgtype.UUID{}, verdict, reviewpost.Digest{Summary: "Test-seeded verdict."}, "", review.CounterReviewDone, reviewpost.FactCheckDone, 0); err != nil {
 		t.Fatalf("seed auto-approved review_verdicts row for %s#%d: %v", repoFullName, prNumber, err)
 	}
 }
@@ -177,7 +177,7 @@ func newDecisionInboxTestRig(t *testing.T, sourceControl ports.SourceControl) *d
 		Sessions:           sessions,
 		Participants:       narvipg.NewParticipantStore(pool),
 		Automations:        narvipg.NewAutomationStore(pool),
-		Outbox:             narvipg.NewOutboxStore(pool),
+		Outbox:             narvipg.NewOutboxStore(pool, false),
 		ReviewFindings:     reviewFindings,
 		SentinelFixes:      narvipg.NewSentinelFixStore(pool),
 		Artifacts:          artifacts,
@@ -732,7 +732,7 @@ func TestListDecisionInbox_FindingsUnknownRendersNullNotTheFailClosedSentinel(t 
 		Sessions:           sessions,
 		Participants:       narvipg.NewParticipantStore(pool),
 		Automations:        narvipg.NewAutomationStore(pool),
-		Outbox:             narvipg.NewOutboxStore(pool),
+		Outbox:             narvipg.NewOutboxStore(pool, false),
 		ReviewFindings:     brokenReviewFindings,
 		SentinelFixes:      narvipg.NewSentinelFixStore(pool),
 		Artifacts:          artifacts,

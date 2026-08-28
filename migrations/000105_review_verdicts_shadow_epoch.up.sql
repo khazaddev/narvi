@@ -1,0 +1,27 @@
+-- §30.8's own epoch stamp, applied to review_verdicts: "Every
+-- review_verdicts row is stamped with its egress mode at write time and
+-- the exclusion lives in the query, never at call sites". Written by
+-- this table's own one INSERT (reviewverdict.Insert,
+-- queries/reviewverdicts.sql's own InsertReviewVerdict).
+--
+-- DEFAULT true (fail closed), mirroring outbox.suppressed_in_shadow's
+-- own identical polarity (migrations/000103_outbox_shadow_epoch.up.sql)
+-- and repo_settings.live_egress_enabled's own inverted-from-every-
+-- sibling-column precedent (migrations/
+-- 000101_repo_settings_live_egress_enabled.up.sql) -- a row inserted by
+-- some future write path that forgets to pass this column explicitly
+-- stays excluded from every candidate query, never silently arms
+-- auto-merge or a digest rollup.
+--
+-- Unlike the outbox's own suppressed_in_shadow, nothing here is EVER
+-- rechecked at a later "delivery" time -- a review_verdicts row is
+-- written once, synchronously, in the same request that posts (or
+-- suppresses) the matching GitHub comment/review, so there is no
+-- async retry gap for a later flag flip to race against the way the
+-- outbox's own ~35-minute-plus retries can. The per-row stamp here is
+-- purely a §30.8 candidate-exclusion input for
+-- ListLatestAutoApprovedInRepo/GetLatestNonShadowReviewVerdict/
+-- ListNonShadowReviewVerdictsInWindow, combined with repo_settings.
+-- live_egress_promoted_at's own independent promotion fence
+-- (migrations/000104_repo_settings_live_egress_promoted_at.up.sql).
+ALTER TABLE review_verdicts ADD COLUMN suppressed_in_shadow BOOLEAN NOT NULL DEFAULT true;

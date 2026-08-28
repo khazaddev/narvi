@@ -176,7 +176,7 @@ type storeBundle struct {
 	providerCredential *postgres.ProviderCredentialStore
 }
 
-func newStoreBundle(pool *pgxpool.Pool) storeBundle {
+func newStoreBundle(pool *pgxpool.Pool, platformShadow bool) storeBundle {
 	return storeBundle{
 		session:              postgres.NewSessionStore(pool),
 		turn:                 postgres.NewTurnStore(pool),
@@ -189,7 +189,7 @@ func newStoreBundle(pool *pgxpool.Pool) storeBundle {
 		imageBuild:           postgres.NewImageBuildStore(pool),
 		environment:          postgres.NewEnvironmentStore(pool),
 		contractDrift:        postgres.NewContractDriftStore(pool),
-		outbox:               postgres.NewOutboxStore(pool),
+		outbox:               postgres.NewOutboxStore(pool, platformShadow),
 		slackThreadSession:   postgres.NewSlackThreadSessionStore(pool),
 		githubPRSession:      postgres.NewGitHubPRSessionStore(pool),
 		linearAgentSession:   postgres.NewLinearAgentSessionStore(pool),
@@ -501,7 +501,7 @@ func NewRegistry(
 		actors:                 make(map[pgtype.UUID]*Actor),
 		pool:                   pool,
 		timeouts:               timeouts,
-		stores:                 newStoreBundle(pool),
+		stores:                 newStoreBundle(pool, opt.PlatformShadow),
 		broadcaster:            broadcaster,
 		commander:              commander,
 		provider:               provider,
@@ -575,6 +575,18 @@ type RegistryOptions struct {
 	// is this field's one real, non-test caller, and passes the actual
 	// cfg.RolloutMode value.
 	RolloutMode platform.RolloutMode
+
+	// PlatformShadow is §30.8's own deployment-level master switch
+	// (platform.Config.ShadowMode, NARVI_SHADOW_MODE), threaded through
+	// to storeBundle.outbox's own postgres.NewOutboxStore construction --
+	// mirrors RolloutMode's own reasoning immediately above field for
+	// field: the zero value (false) is not a distinct, weaker-but-
+	// plausible state, it IS "an ordinary, non-shadow deployment", the
+	// exact behavior every existing test/deployment already has today
+	// (nothing consulted this bit before this Step). Production wiring
+	// (cmd/control-plane/main.go) is this field's one real, non-test
+	// caller, and passes the actual cfg.ShadowMode value.
+	PlatformShadow bool
 }
 
 // Provider returns this Registry's own configured ports.SandboxProvider --

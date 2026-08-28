@@ -164,10 +164,36 @@ RETURNING *;
 -- level. Written ONLY by the seed tool in v1 (internal/app/seed/
 -- reposettings.go) -- no REST route calls this yet; see that file's own
 -- doc comment for why, and for how this write is journaled to audit_log.
-INSERT INTO repo_settings (repo_full_name, live_egress_enabled, updated_at)
-VALUES ($1, $2, now())
+--
+-- live_egress_promoted_at (migrations/
+-- 000104_repo_settings_live_egress_promoted_at.up.sql) moves WITH
+-- live_egress_enabled, but not identically -- it is §30.8's own
+-- promotion fence, and only a genuine false->true TRANSITION is a
+-- promotion:
+--   - false -> true (a genuine promotion, including the first-ever
+--     write for a repo that starts true): stamped to now(), a fresh
+--     fence for this promotion.
+--   - true -> true (re-affirming an already-live repo, e.g. a seed
+--     re-run): left UNCHANGED -- re-running the same promotion must
+--     never slide the fence forward and silently exclude verdicts that
+--     were already valid candidates under the earlier promotion.
+--   - anything -> false (a demotion, or a fresh row starting shadow):
+--     cleared to NULL. A demoted repo's fence must not survive to a
+--     later re-promotion -- §30.8's own "suppress wins both ways"
+--     applies here too: only verdicts after the MOST RECENT promotion
+--     are ever candidates, never a stale fence from a promotion this
+--     repo has since walked back.
+INSERT INTO repo_settings (repo_full_name, live_egress_enabled, live_egress_promoted_at, updated_at)
+VALUES ($1, $2, CASE WHEN $2 THEN now() ELSE NULL END, now())
 ON CONFLICT (repo_full_name)
-DO UPDATE SET live_egress_enabled = EXCLUDED.live_egress_enabled, updated_at = now()
+DO UPDATE SET
+    live_egress_enabled = EXCLUDED.live_egress_enabled,
+    live_egress_promoted_at = CASE
+        WHEN NOT EXCLUDED.live_egress_enabled THEN NULL
+        WHEN EXCLUDED.live_egress_enabled AND NOT repo_settings.live_egress_enabled THEN now()
+        ELSE repo_settings.live_egress_promoted_at
+    END,
+    updated_at = now()
 RETURNING *;
 
 -- name: ListAutoMergeEnabledRepos :many
@@ -232,3 +258,15 @@ DO UPDATE SET
     rwx_preview_dispatch_key = CASE WHEN sqlc.arg('dispatch_key_provided')::boolean THEN sqlc.narg('dispatch_key') ELSE repo_settings.rwx_preview_dispatch_key END,
     updated_at = now()
 RETURNING *;
+
+-- name: CountSuppressedRepos :one
+-- How many repositories this deployment will suppress outgoing effects for
+-- (§30.8). Read once at boot so an operator is TOLD, rather than finding
+-- out because a customer stopped receiving notifications.
+--
+-- Counts rows explicitly not promoted. It cannot count repositories with
+-- no settings row at all, which also resolve to shadow -- there is no
+-- table of "repositories this deployment knows about" to count against.
+-- The number is therefore a floor, and the boot message says so rather
+-- than presenting it as a total.
+SELECT COUNT(*) FROM repo_settings WHERE live_egress_enabled = false;

@@ -90,13 +90,28 @@ func newAutoRetriggerFixture(ctx context.Context, t *testing.T, pool *pgxpool.Po
 		t.Fatalf("set github pr session id: %v", err)
 	}
 
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
+	// §30.8: reviewretrigger.go now reads GetLatestNonShadow, which
+	// excludes any verdict predating this repo's own live_egress_
+	// promoted_at fence -- promote it here, once, so every scenario
+	// below that seeds a verdict (insertVerdict/insertVerdictWithReviewPath)
+	// gets a verdict this fixture's own repo genuinely counts as
+	// non-shadow, matching what every one of these tests already assumes
+	// ("the latest posted verdict for this PR" is visible to the
+	// auto-retrigger decision). Idempotent -- re-affirming an
+	// already-live repo never moves the fence (queries/reposettings.sql's
+	// own UpsertLiveEgressEnabled doc comment).
+	if _, err := repoSettings.UpsertLiveEgressEnabled(ctx, repoFullName, true); err != nil {
+		t.Fatalf("promote repo to live egress: %v", err)
+	}
+
 	return &autoRetriggerFixture{
 		pool:           pool,
 		sessionID:      sessionID,
 		repoFullName:   repoFullName,
 		prNumber:       prNumber,
 		prSessions:     prSessions,
-		repoSettings:   narvipg.NewRepoSettingsStore(pool),
+		repoSettings:   repoSettings,
 		reviewVerdicts: narvipg.NewReviewVerdictStore(pool),
 		turns:          narvipg.NewTurnStore(pool),
 		timers:         narvipg.NewTimerStore(pool),

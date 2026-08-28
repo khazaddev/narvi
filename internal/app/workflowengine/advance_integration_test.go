@@ -181,7 +181,7 @@ func TestCircuitBreaker_NeedsFixLoop_EscalatesAfterMaxAttempts_ExactlyOneNotice(
 		SlackThreadSessions: slackThreadSessions,
 		LinearAgentSessions: postgres.NewLinearAgentSessionStore(pool),
 		GitHubPRSessions:    postgres.NewGitHubPRSessionStore(pool),
-		Outbox:              postgres.NewOutboxStore(pool),
+		Outbox:              postgres.NewOutboxStore(pool, false),
 	}
 
 	runID, auditStepRunID, auditTurnID := startRawRun(t, ctx, turns, workflows, session, def)
@@ -289,7 +289,7 @@ func TestDispatchSameStepRevision_NeverEscalates_RegardlessOfLoopLength(t *testi
 		SlackThreadSessions: postgres.NewSlackThreadSessionStore(pool),
 		LinearAgentSessions: postgres.NewLinearAgentSessionStore(pool),
 		GitHubPRSessions:    postgres.NewGitHubPRSessionStore(pool),
-		Outbox:              postgres.NewOutboxStore(pool),
+		Outbox:              postgres.NewOutboxStore(pool, false),
 	}
 
 	run, err := workflows.CreateRun(ctx, session.ID, "request", def.definitionID, 1)

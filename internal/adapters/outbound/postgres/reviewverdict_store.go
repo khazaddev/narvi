@@ -53,6 +53,21 @@ func (s *ReviewVerdictStore) GetLatest(ctx context.Context, repoFullName string,
 	})
 }
 
+// GetLatestNonShadow fetches (repoFullName, prNumber)'s own most-
+// recently-posted verdict, excluding any verdict §30.8 says must never
+// arm a real, customer-visible effect (its own suppressed_in_shadow
+// stamp, or one that predates repoFullName's own live_egress_promoted_at
+// fence) -- see GetLatestNonShadowReviewVerdict's own generated doc
+// comment. pgx.ErrNoRows (unwrapped) means no NON-SHADOW verdict has
+// ever been posted for this PR -- callers must treat this identically to
+// GetLatest's own "no verdict at all" outcome, never distinguish the two.
+func (s *ReviewVerdictStore) GetLatestNonShadow(ctx context.Context, repoFullName string, prNumber int32) (sqlcgen.ReviewVerdict, error) {
+	return s.q.GetLatestNonShadowReviewVerdict(ctx, sqlcgen.GetLatestNonShadowReviewVerdictParams{
+		RepoFullName: repoFullName,
+		PrNumber:     prNumber,
+	})
+}
+
 // ListLatestAutoApproved returns repoFullName's own latest-per-PR
 // verdicts, posted after sinceTime, whose Shippable is 'auto' -- bounded
 // by limit. See ListLatestAutoApprovedInRepo's own generated doc comment
@@ -70,6 +85,21 @@ func (s *ReviewVerdictStore) ListLatestAutoApproved(ctx context.Context, repoFul
 // own shared bounded scan (§21.1).
 func (s *ReviewVerdictStore) ListInWindow(ctx context.Context, repoFullName string, sinceTime pgtype.Timestamptz, limit int32) ([]sqlcgen.ReviewVerdict, error) {
 	return s.q.ListReviewVerdictsInWindow(ctx, sqlcgen.ListReviewVerdictsInWindowParams{
+		RepoFullName: repoFullName,
+		CreatedAt:    sinceTime,
+		Limit:        limit,
+	})
+}
+
+// ListNonShadowInWindow returns every NON-SHADOW verdict posted for
+// repoFullName after sinceTime, oldest first, bounded by limit -- the
+// digest rollup's own §30.8 exclusion (ListNonShadowReviewVerdictsInWindow's
+// own generated doc comment): a shadow-era verdict must never reveal a
+// phantom review in a customer-facing digest, even though the SAME
+// history is deliberately left unfiltered for ListInWindow's own
+// internal-analytics callers.
+func (s *ReviewVerdictStore) ListNonShadowInWindow(ctx context.Context, repoFullName string, sinceTime pgtype.Timestamptz, limit int32) ([]sqlcgen.ReviewVerdict, error) {
+	return s.q.ListNonShadowReviewVerdictsInWindow(ctx, sqlcgen.ListNonShadowReviewVerdictsInWindowParams{
 		RepoFullName: repoFullName,
 		CreatedAt:    sinceTime,
 		Limit:        limit,

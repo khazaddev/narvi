@@ -46,9 +46,20 @@ func (c Capability) String() string {
 }
 
 // liveCapability is the ONLY function in this codebase that can produce a
-// Capability whose Live() reports true. Unexported: Resolve (resolve.go)
-// is its one caller, and every fail-closed path in Resolve returns
-// shadowCapability() instead, never this.
+// Capability whose Live() reports true. Unexported, and its callers are
+// enumerated here because this is the file an auditor comes to for that
+// answer:
+//
+//   - Resolve (resolve.go), whose every fail-closed path returns
+//     shadowCapability() instead, never this.
+//   - ResolvePlatform (resolve.go), which answers for artifacts naming no
+//     repository at all, and therefore returns live whenever the
+//     deployment-wide switch is off -- see its own doc comment for why
+//     that default is deliberate rather than an oversight.
+//
+// A third caller belongs in this list. The list said "one caller" while
+// there were two, which is the kind of stale enumeration that makes an
+// auditor stop looking one branch too early.
 func liveCapability() Capability {
 	return Capability{live: true}
 }

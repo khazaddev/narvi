@@ -11,8 +11,74 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const getLatestNonShadowReviewVerdict = `-- name: GetLatestNonShadowReviewVerdict :one
+SELECT id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits, digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body, review_path, counter_review, fact_check, fact_check_killed, digest_contested_points, suppressed_in_shadow FROM review_verdicts rv
+WHERE rv.repo_full_name = $1 AND rv.pr_number = $2
+    AND NOT rv.suppressed_in_shadow
+    AND rv.created_at > COALESCE(
+        (SELECT rs.live_egress_promoted_at FROM repo_settings rs WHERE rs.repo_full_name = $1),
+        'infinity'::timestamptz)
+ORDER BY rv.created_at DESC
+LIMIT 1
+`
+
+type GetLatestNonShadowReviewVerdictParams struct {
+	RepoFullName string `json:"repo_full_name"`
+	PrNumber     int32  `json:"pr_number"`
+}
+
+// §30.8's own customer-consequential sibling of GetLatestReviewVerdict
+// above: the SAME per-PR latest-verdict reduction, but excluding any
+// verdict whose own suppressed_in_shadow stamp is true OR that predates
+// this repo's own live_egress_promoted_at fence (belt and suspenders --
+// see migrations/000104_repo_settings_live_egress_promoted_at.up.sql's
+// own doc comment for why both checks are independent, not redundant).
+// internal/app/sessionactor/reviewretrigger.go's own auto-retrigger
+// decision is this query's one caller: a shadow-era "already reviewed"
+// fact must never suppress a REAL re-review once a repo goes live, and
+// a shadow-era risk level must never be quoted in a real, customer-
+// visible budget-exhausted notice (§30.8: "the same stamp gates
+// re-trigger"). pgx.ErrNoRows means no NON-SHADOW verdict has ever been
+// posted for this PR -- indistinguishable, by design, from "no verdict
+// at all" to this query's one caller, which already treats that outcome
+// as "nothing to compare against yet".
+func (q *Queries) GetLatestNonShadowReviewVerdict(ctx context.Context, arg GetLatestNonShadowReviewVerdictParams) (ReviewVerdict, error) {
+	row := q.db.QueryRow(ctx, getLatestNonShadowReviewVerdict, arg.RepoFullName, arg.PrNumber)
+	var i ReviewVerdict
+	err := row.Scan(
+		&i.ID,
+		&i.RepoFullName,
+		&i.PrNumber,
+		&i.HeadSha,
+		&i.RiskLevel,
+		&i.Premise,
+		&i.BlastRadius,
+		&i.FilesChanged,
+		&i.TestsCoverage,
+		&i.DocsDrift,
+		&i.ProposedShippable,
+		&i.Shippable,
+		&i.SessionID,
+		&i.CreatedAt,
+		&i.DigestSummary,
+		&i.DigestArchDecisions,
+		&i.DigestStackRisks,
+		&i.DigestUnverifiedLimits,
+		&i.DigestDescriptionAdequacy,
+		&i.DigestAdequacyExplanation,
+		&i.DigestProposedBody,
+		&i.ReviewPath,
+		&i.CounterReview,
+		&i.FactCheck,
+		&i.FactCheckKilled,
+		&i.DigestContestedPoints,
+		&i.SuppressedInShadow,
+	)
+	return i, err
+}
+
 const getLatestReviewVerdict = `-- name: GetLatestReviewVerdict :one
-SELECT id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits, digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body, review_path, counter_review, fact_check, fact_check_killed, digest_contested_points FROM review_verdicts
+SELECT id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits, digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body, review_path, counter_review, fact_check, fact_check_killed, digest_contested_points, suppressed_in_shadow FROM review_verdicts
 WHERE repo_full_name = $1 AND pr_number = $2
 ORDER BY created_at DESC
 LIMIT 1
@@ -32,6 +98,17 @@ type GetLatestReviewVerdictParams struct {
 // multi-row DISTINCT ON scan -- see ListLatestAutoApprovedInRepo below
 // for the multi-PR, per-repo shape that DOES need real DISTINCT ON.
 // pgx.ErrNoRows means no verdict has ever been posted for this PR.
+//
+// Deliberately UNFILTERED by suppressed_in_shadow: §30.6 is explicit
+// that review_verdicts "render in Narvi's own UI with zero new work",
+// and this is the shared read every internal, operator-facing caller
+// uses (the auto-approval eligibility engine, the decision inbox's own
+// classification, the revalidate-at-click/at-merge paths) -- excluding
+// shadow-era rows here would hide the very evaluation data those
+// surfaces exist to show an operator. GetLatestNonShadowReviewVerdict
+// below is the customer-consequential sibling this query is NOT: use
+// that one instead for anything that could arm a real, customer-visible
+// effect (§30.8: "never call-site checks").
 func (q *Queries) GetLatestReviewVerdict(ctx context.Context, arg GetLatestReviewVerdictParams) (ReviewVerdict, error) {
 	row := q.db.QueryRow(ctx, getLatestReviewVerdict, arg.RepoFullName, arg.PrNumber)
 	var i ReviewVerdict
@@ -62,6 +139,7 @@ func (q *Queries) GetLatestReviewVerdict(ctx context.Context, arg GetLatestRevie
 		&i.FactCheck,
 		&i.FactCheckKilled,
 		&i.DigestContestedPoints,
+		&i.SuppressedInShadow,
 	)
 	return i, err
 }
@@ -75,10 +153,11 @@ INSERT INTO review_verdicts (
     digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits,
     digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body,
     review_path,
-    counter_review, fact_check, fact_check_killed, digest_contested_points
+    counter_review, fact_check, fact_check_killed, digest_contested_points,
+    suppressed_in_shadow
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
-RETURNING id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits, digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body, review_path, counter_review, fact_check, fact_check_killed, digest_contested_points
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+RETURNING id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits, digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body, review_path, counter_review, fact_check, fact_check_killed, digest_contested_points, suppressed_in_shadow
 `
 
 type InsertReviewVerdictParams struct {
@@ -106,6 +185,7 @@ type InsertReviewVerdictParams struct {
 	FactCheck                 *string     `json:"fact_check"`
 	FactCheckKilled           *int32      `json:"fact_check_killed"`
 	DigestContestedPoints     *string     `json:"digest_contested_points"`
+	SuppressedInShadow        bool        `json:"suppressed_in_shadow"`
 }
 
 // Queries backing ReviewVerdictStore (§21.1) -- see
@@ -141,6 +221,13 @@ type InsertReviewVerdictParams struct {
 // own doc comment for why all four stay nullable at the schema level
 // despite fact_check being APPLICATION-required, unconditionally, on
 // every new post (unlike counter_review, deep-path-only-required).
+// suppressed_in_shadow (migrations/
+// 000105_review_verdicts_shadow_epoch.up.sql, §30.8) is ALWAYS computed
+// by internal/app/reviewverdict.Insert itself from the SAME repoFullName
+// this row is being written for, never left to a caller -- see that
+// function's own doc comment for the resolution formula (egressmode.
+// Resolve, the identical single-authority resolver postgres.OutboxStore.
+// Create already uses for the outbox's own enqueue-time stamp).
 func (q *Queries) InsertReviewVerdict(ctx context.Context, arg InsertReviewVerdictParams) (ReviewVerdict, error) {
 	row := q.db.QueryRow(ctx, insertReviewVerdict,
 		arg.RepoFullName,
@@ -167,6 +254,7 @@ func (q *Queries) InsertReviewVerdict(ctx context.Context, arg InsertReviewVerdi
 		arg.FactCheck,
 		arg.FactCheckKilled,
 		arg.DigestContestedPoints,
+		arg.SuppressedInShadow,
 	)
 	var i ReviewVerdict
 	err := row.Scan(
@@ -196,16 +284,21 @@ func (q *Queries) InsertReviewVerdict(ctx context.Context, arg InsertReviewVerdi
 		&i.FactCheck,
 		&i.FactCheckKilled,
 		&i.DigestContestedPoints,
+		&i.SuppressedInShadow,
 	)
 	return i, err
 }
 
 const listLatestAutoApprovedInRepo = `-- name: ListLatestAutoApprovedInRepo :many
-SELECT id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits, digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body, review_path, counter_review, fact_check, fact_check_killed, digest_contested_points FROM (
-    SELECT DISTINCT ON (repo_full_name, pr_number) id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits, digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body, review_path, counter_review, fact_check, fact_check_killed, digest_contested_points
-    FROM review_verdicts
-    WHERE repo_full_name = $1 AND created_at > $2
-    ORDER BY repo_full_name, pr_number, created_at DESC
+SELECT id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits, digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body, review_path, counter_review, fact_check, fact_check_killed, digest_contested_points, suppressed_in_shadow FROM (
+    SELECT DISTINCT ON (rv.repo_full_name, rv.pr_number) rv.id, rv.repo_full_name, rv.pr_number, rv.head_sha, rv.risk_level, rv.premise, rv.blast_radius, rv.files_changed, rv.tests_coverage, rv.docs_drift, rv.proposed_shippable, rv.shippable, rv.session_id, rv.created_at, rv.digest_summary, rv.digest_arch_decisions, rv.digest_stack_risks, rv.digest_unverified_limits, rv.digest_description_adequacy, rv.digest_adequacy_explanation, rv.digest_proposed_body, rv.review_path, rv.counter_review, rv.fact_check, rv.fact_check_killed, rv.digest_contested_points, rv.suppressed_in_shadow
+    FROM review_verdicts rv
+    WHERE rv.repo_full_name = $1 AND rv.created_at > $2
+        AND NOT rv.suppressed_in_shadow
+        AND rv.created_at > COALESCE(
+            (SELECT rs.live_egress_promoted_at FROM repo_settings rs WHERE rs.repo_full_name = $1),
+            'infinity'::timestamptz)
+    ORDER BY rv.repo_full_name, rv.pr_number, rv.created_at DESC
 ) latest
 WHERE shippable = 'auto'
 ORDER BY created_at ASC
@@ -233,6 +326,18 @@ type ListLatestAutoApprovedInRepoParams struct {
 // unchanged"), so a candidate this query returns that has since gone
 // stale (a new commit landed, CI flipped) is simply rejected there, never
 // trusted as authority here.
+//
+// §30.8: "Shadow-era verdicts must never arm auto-merge after
+// promotion... every review_verdicts row is stamped with its egress
+// mode at write time and the exclusion lives in the query, never at
+// call sites; promotion additionally sets a fence." Both checks below
+// are independent, deliberate redundancy (migrations/
+// 000104_repo_settings_live_egress_promoted_at.up.sql's own doc
+// comment): a bug in the per-row stamp alone must not be the only thing
+// standing between a shadow-era verdict and a real merge. The fence
+// join is scoped to the SAME repo_full_name this whole query is already
+// scoped to ($1), so it costs one extra indexed lookup, not a
+// correlated subquery per candidate row.
 func (q *Queries) ListLatestAutoApprovedInRepo(ctx context.Context, arg ListLatestAutoApprovedInRepoParams) ([]ReviewVerdict, error) {
 	rows, err := q.db.Query(ctx, listLatestAutoApprovedInRepo, arg.RepoFullName, arg.CreatedAt, arg.Limit)
 	if err != nil {
@@ -269,6 +374,85 @@ func (q *Queries) ListLatestAutoApprovedInRepo(ctx context.Context, arg ListLate
 			&i.FactCheck,
 			&i.FactCheckKilled,
 			&i.DigestContestedPoints,
+			&i.SuppressedInShadow,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNonShadowReviewVerdictsInWindow = `-- name: ListNonShadowReviewVerdictsInWindow :many
+SELECT rv.id, rv.repo_full_name, rv.pr_number, rv.head_sha, rv.risk_level, rv.premise, rv.blast_radius, rv.files_changed, rv.tests_coverage, rv.docs_drift, rv.proposed_shippable, rv.shippable, rv.session_id, rv.created_at, rv.digest_summary, rv.digest_arch_decisions, rv.digest_stack_risks, rv.digest_unverified_limits, rv.digest_description_adequacy, rv.digest_adequacy_explanation, rv.digest_proposed_body, rv.review_path, rv.counter_review, rv.fact_check, rv.fact_check_killed, rv.digest_contested_points, rv.suppressed_in_shadow FROM review_verdicts rv
+WHERE rv.repo_full_name = $1 AND rv.created_at > $2
+    AND NOT rv.suppressed_in_shadow
+    AND rv.created_at > COALESCE(
+        (SELECT rs.live_egress_promoted_at FROM repo_settings rs WHERE rs.repo_full_name = $1),
+        'infinity'::timestamptz)
+ORDER BY rv.created_at ASC
+LIMIT $3
+`
+
+type ListNonShadowReviewVerdictsInWindowParams struct {
+	RepoFullName string             `json:"repo_full_name"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	Limit        int32              `json:"limit"`
+}
+
+// §30.8's own customer-consequential sibling of
+// ListReviewVerdictsInWindow above: internal/app/digest's own daily
+// rollup (§21.3) is the ONE caller that needs this exclusion --
+// Timeseries/TopRiskDrivers above stay on the unfiltered query
+// deliberately (§30.6: shadow verdicts "render in Narvi's own UI with
+// zero new work", and those two feed exactly that internal, operator-
+// facing analytics surface, never a customer's own channel). §30.8's
+// own words: "a daily digest rollup would otherwise reveal phantom
+// reviews to the customer's channels." Same suppressed_in_shadow +
+// live_egress_promoted_at fence as ListLatestAutoApprovedInRepo/
+// GetLatestNonShadowReviewVerdict above -- see
+// migrations/000104_repo_settings_live_egress_promoted_at.up.sql's own
+// doc comment for why both checks are independent.
+func (q *Queries) ListNonShadowReviewVerdictsInWindow(ctx context.Context, arg ListNonShadowReviewVerdictsInWindowParams) ([]ReviewVerdict, error) {
+	rows, err := q.db.Query(ctx, listNonShadowReviewVerdictsInWindow, arg.RepoFullName, arg.CreatedAt, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReviewVerdict
+	for rows.Next() {
+		var i ReviewVerdict
+		if err := rows.Scan(
+			&i.ID,
+			&i.RepoFullName,
+			&i.PrNumber,
+			&i.HeadSha,
+			&i.RiskLevel,
+			&i.Premise,
+			&i.BlastRadius,
+			&i.FilesChanged,
+			&i.TestsCoverage,
+			&i.DocsDrift,
+			&i.ProposedShippable,
+			&i.Shippable,
+			&i.SessionID,
+			&i.CreatedAt,
+			&i.DigestSummary,
+			&i.DigestArchDecisions,
+			&i.DigestStackRisks,
+			&i.DigestUnverifiedLimits,
+			&i.DigestDescriptionAdequacy,
+			&i.DigestAdequacyExplanation,
+			&i.DigestProposedBody,
+			&i.ReviewPath,
+			&i.CounterReview,
+			&i.FactCheck,
+			&i.FactCheckKilled,
+			&i.DigestContestedPoints,
+			&i.SuppressedInShadow,
 		); err != nil {
 			return nil, err
 		}
@@ -281,7 +465,7 @@ func (q *Queries) ListLatestAutoApprovedInRepo(ctx context.Context, arg ListLate
 }
 
 const listReviewVerdictsForPR = `-- name: ListReviewVerdictsForPR :many
-SELECT id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits, digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body, review_path, counter_review, fact_check, fact_check_killed, digest_contested_points FROM review_verdicts
+SELECT id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits, digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body, review_path, counter_review, fact_check, fact_check_killed, digest_contested_points, suppressed_in_shadow FROM review_verdicts
 WHERE repo_full_name = $1 AND pr_number = $2
 ORDER BY created_at DESC
 LIMIT $3
@@ -335,6 +519,7 @@ func (q *Queries) ListReviewVerdictsForPR(ctx context.Context, arg ListReviewVer
 			&i.FactCheck,
 			&i.FactCheckKilled,
 			&i.DigestContestedPoints,
+			&i.SuppressedInShadow,
 		); err != nil {
 			return nil, err
 		}
@@ -347,7 +532,7 @@ func (q *Queries) ListReviewVerdictsForPR(ctx context.Context, arg ListReviewVer
 }
 
 const listReviewVerdictsInWindow = `-- name: ListReviewVerdictsInWindow :many
-SELECT id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits, digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body, review_path, counter_review, fact_check, fact_check_killed, digest_contested_points FROM review_verdicts
+SELECT id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits, digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body, review_path, counter_review, fact_check, fact_check_killed, digest_contested_points, suppressed_in_shadow FROM review_verdicts
 WHERE repo_full_name = $1 AND created_at > $2
 ORDER BY created_at ASC
 LIMIT $3
@@ -403,6 +588,7 @@ func (q *Queries) ListReviewVerdictsInWindow(ctx context.Context, arg ListReview
 			&i.FactCheck,
 			&i.FactCheckKilled,
 			&i.DigestContestedPoints,
+			&i.SuppressedInShadow,
 		); err != nil {
 			return nil, err
 		}

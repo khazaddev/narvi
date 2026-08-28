@@ -73,7 +73,7 @@ func newArchRecapTestRig(t *testing.T) (testRig, *narvipg.ReviewDigestSectionFee
 // real Digest.ArchDecisions content, the SAME shape appreviewverdict.
 // GetLatest (tryCaptureArchRecapContest's own read) reconstructs from --
 // this is what a maintainer's contest is reconciled against.
-func seedDeepVerdictWithArchDecisions(ctx context.Context, t *testing.T, reviewVerdicts *narvipg.ReviewVerdictStore, repoFullName string, prNumber int32, headSHA string, decisions []reviewpost.ArchDecision) {
+func seedDeepVerdictWithArchDecisions(ctx context.Context, t *testing.T, reviewVerdicts *narvipg.ReviewVerdictStore, repoSettings *narvipg.RepoSettingsStore, repoFullName string, prNumber int32, headSHA string, decisions []reviewpost.ArchDecision) {
 	t.Helper()
 	verdict := review.Verdict{
 		RiskLevel:         review.RiskLevelLow,
@@ -89,7 +89,7 @@ func seedDeepVerdictWithArchDecisions(ctx context.Context, t *testing.T, reviewV
 		AdequacyExplanation: "matches the diff",
 		ArchDecisions:       decisions,
 	}
-	if _, err := appreviewverdict.Insert(ctx, reviewVerdicts, repoFullName, prNumber, headSHA, pgtype.UUID{}, verdict, digest, "deep", review.CounterReviewDone, reviewpost.FactCheckDone, 0); err != nil {
+	if _, err := appreviewverdict.Insert(ctx, reviewVerdicts, repoSettings, false, repoFullName, prNumber, headSHA, pgtype.UUID{}, verdict, digest, "deep", review.CounterReviewDone, reviewpost.FactCheckDone, 0); err != nil {
 		t.Fatalf("seed deep review_verdicts row: %v", err)
 	}
 }
@@ -122,7 +122,7 @@ func TestGitHubIntegration_ArchRecapContest_MaintainerContests_FeedbackCreated(t
 	decisions := []reviewpost.ArchDecision{
 		{Decision: "Introduced a retry queue table", RejectedAlternative: "Extending the outbox", ConventionConformance: "Matches the one-table-per-concern pattern"},
 	}
-	seedDeepVerdictWithArchDecisions(ctx, t, narvipg.NewReviewVerdictStore(rig.pool), repoFullName, prNumber, "sha-arch-recap-1", decisions)
+	seedDeepVerdictWithArchDecisions(ctx, t, narvipg.NewReviewVerdictStore(rig.pool), narvipg.NewRepoSettingsStore(rig.pool), repoFullName, prNumber, "sha-arch-recap-1", decisions)
 
 	wantHash := reviewpost.ComputeDigestSectionIdentity(reviewpost.DigestSectionArchRecap, reviewpost.ArchRecapText(decisions))
 
@@ -173,7 +173,7 @@ func TestGitHubIntegration_ArchRecapContest_MemberDenied(t *testing.T) {
 	const commenterID = 80090002
 	createLinkedGitHubUser(ctx, t, rig.users, rig.identities, commenterID, sqlcgen.UserRoleMember)
 
-	seedDeepVerdictWithArchDecisions(ctx, t, narvipg.NewReviewVerdictStore(rig.pool), repoFullName, prNumber, "sha-arch-recap-2", []reviewpost.ArchDecision{{Decision: "x"}})
+	seedDeepVerdictWithArchDecisions(ctx, t, narvipg.NewReviewVerdictStore(rig.pool), narvipg.NewRepoSettingsStore(rig.pool), repoFullName, prNumber, "sha-arch-recap-2", []reviewpost.ArchDecision{{Decision: "x"}})
 
 	body := archRecapCommentBody(repoFullName, "arch-recap-member-repo", "https://github.com/acme/arch-recap-member-repo.git", prNumber, 800002, commenterID, "member-user", "arch recap wrong: nope")
 	status := postWebhook(t, rig, body, "delivery-arch-recap-member-1")
@@ -226,7 +226,7 @@ func TestGitHubIntegration_ArchRecapContest_RedeliveredComment_IdempotentNoDupli
 	const commenterID = 80090004
 	createLinkedGitHubUser(ctx, t, rig.users, rig.identities, commenterID, sqlcgen.UserRoleMaintainer)
 
-	seedDeepVerdictWithArchDecisions(ctx, t, narvipg.NewReviewVerdictStore(rig.pool), repoFullName, prNumber, "sha-arch-recap-3", []reviewpost.ArchDecision{{Decision: "Introduced a retry queue"}})
+	seedDeepVerdictWithArchDecisions(ctx, t, narvipg.NewReviewVerdictStore(rig.pool), narvipg.NewRepoSettingsStore(rig.pool), repoFullName, prNumber, "sha-arch-recap-3", []reviewpost.ArchDecision{{Decision: "Introduced a retry queue"}})
 
 	body := archRecapCommentBody(repoFullName, "arch-recap-redelivery-repo", "https://github.com/acme/arch-recap-redelivery-repo.git", prNumber, 800004, commenterID, "maintainer-user", "arch recap wrong: still wrong")
 

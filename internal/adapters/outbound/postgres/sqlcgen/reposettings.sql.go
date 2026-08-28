@@ -11,9 +11,29 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countSuppressedRepos = `-- name: CountSuppressedRepos :one
+SELECT COUNT(*) FROM repo_settings WHERE live_egress_enabled = false
+`
+
+// How many repositories this deployment will suppress outgoing effects for
+// (§30.8). Read once at boot so an operator is TOLD, rather than finding
+// out because a customer stopped receiving notifications.
+//
+// Counts rows explicitly not promoted. It cannot count repositories with
+// no settings row at all, which also resolve to shadow -- there is no
+// table of "repositories this deployment knows about" to count against.
+// The number is therefore a floor, and the boot message says so rather
+// than presenting it as a total.
+func (q *Queries) CountSuppressedRepos(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countSuppressedRepos)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const getRepoSettings = `-- name: GetRepoSettings :one
 
-SELECT repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled FROM repo_settings WHERE repo_full_name = $1
+SELECT repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled, live_egress_promoted_at FROM repo_settings WHERE repo_full_name = $1
 `
 
 // Queries backing RepoSettingsStore (§8.2, §21.2): a small,
@@ -46,12 +66,13 @@ func (q *Queries) GetRepoSettings(ctx context.Context, repoFullName string) (Rep
 		&i.ReviewCostBudgetDeepUsd,
 		&i.SessionsEnabled,
 		&i.LiveEgressEnabled,
+		&i.LiveEgressPromotedAt,
 	)
 	return i, err
 }
 
 const listAutoMergeEnabledRepos = `-- name: ListAutoMergeEnabledRepos :many
-SELECT repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled FROM repo_settings WHERE auto_merge_enabled = true
+SELECT repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled, live_egress_promoted_at FROM repo_settings WHERE auto_merge_enabled = true
 `
 
 // internal/app/automerge's own per-tick repo enumeration (§21.2 stage
@@ -91,6 +112,7 @@ func (q *Queries) ListAutoMergeEnabledRepos(ctx context.Context) ([]RepoSetting,
 			&i.ReviewCostBudgetDeepUsd,
 			&i.SessionsEnabled,
 			&i.LiveEgressEnabled,
+			&i.LiveEgressPromotedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -107,7 +129,7 @@ INSERT INTO repo_settings (repo_full_name, max_auto_approve_files_changed, sensi
 VALUES ($1, $2, $3, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET max_auto_approve_files_changed = EXCLUDED.max_auto_approve_files_changed, sensitive_blast_radius_tags = EXCLUDED.sensitive_blast_radius_tags, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled, live_egress_promoted_at
 `
 
 type UpsertAutoApprovalEligibilityParams struct {
@@ -146,6 +168,7 @@ func (q *Queries) UpsertAutoApprovalEligibility(ctx context.Context, arg UpsertA
 		&i.ReviewCostBudgetDeepUsd,
 		&i.SessionsEnabled,
 		&i.LiveEgressEnabled,
+		&i.LiveEgressPromotedAt,
 	)
 	return i, err
 }
@@ -156,7 +179,7 @@ INSERT INTO repo_settings (repo_full_name, auto_merge_enabled, updated_at)
 VALUES ($1, $2, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET auto_merge_enabled = EXCLUDED.auto_merge_enabled, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled, live_egress_promoted_at
 `
 
 type UpsertAutoMergeToggleParams struct {
@@ -215,6 +238,7 @@ func (q *Queries) UpsertAutoMergeToggle(ctx context.Context, arg UpsertAutoMerge
 		&i.ReviewCostBudgetDeepUsd,
 		&i.SessionsEnabled,
 		&i.LiveEgressEnabled,
+		&i.LiveEgressPromotedAt,
 	)
 	return i, err
 }
@@ -224,7 +248,7 @@ INSERT INTO repo_settings (repo_full_name, auto_retrigger_review_enabled, update
 VALUES ($1, $2, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET auto_retrigger_review_enabled = EXCLUDED.auto_retrigger_review_enabled, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled, live_egress_promoted_at
 `
 
 type UpsertAutoRetriggerReviewToggleParams struct {
@@ -264,6 +288,7 @@ func (q *Queries) UpsertAutoRetriggerReviewToggle(ctx context.Context, arg Upser
 		&i.ReviewCostBudgetDeepUsd,
 		&i.SessionsEnabled,
 		&i.LiveEgressEnabled,
+		&i.LiveEgressPromotedAt,
 	)
 	return i, err
 }
@@ -273,7 +298,7 @@ INSERT INTO repo_settings (repo_full_name, description_autofix_enabled, updated_
 VALUES ($1, $2, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET description_autofix_enabled = EXCLUDED.description_autofix_enabled, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled, live_egress_promoted_at
 `
 
 type UpsertDescriptionAutofixToggleParams struct {
@@ -312,16 +337,24 @@ func (q *Queries) UpsertDescriptionAutofixToggle(ctx context.Context, arg Upsert
 		&i.ReviewCostBudgetDeepUsd,
 		&i.SessionsEnabled,
 		&i.LiveEgressEnabled,
+		&i.LiveEgressPromotedAt,
 	)
 	return i, err
 }
 
 const upsertLiveEgressEnabled = `-- name: UpsertLiveEgressEnabled :one
-INSERT INTO repo_settings (repo_full_name, live_egress_enabled, updated_at)
-VALUES ($1, $2, now())
+INSERT INTO repo_settings (repo_full_name, live_egress_enabled, live_egress_promoted_at, updated_at)
+VALUES ($1, $2, CASE WHEN $2 THEN now() ELSE NULL END, now())
 ON CONFLICT (repo_full_name)
-DO UPDATE SET live_egress_enabled = EXCLUDED.live_egress_enabled, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled
+DO UPDATE SET
+    live_egress_enabled = EXCLUDED.live_egress_enabled,
+    live_egress_promoted_at = CASE
+        WHEN NOT EXCLUDED.live_egress_enabled THEN NULL
+        WHEN EXCLUDED.live_egress_enabled AND NOT repo_settings.live_egress_enabled THEN now()
+        ELSE repo_settings.live_egress_promoted_at
+    END,
+    updated_at = now()
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled, live_egress_promoted_at
 `
 
 type UpsertLiveEgressEnabledParams struct {
@@ -339,6 +372,25 @@ type UpsertLiveEgressEnabledParams struct {
 // level. Written ONLY by the seed tool in v1 (internal/app/seed/
 // reposettings.go) -- no REST route calls this yet; see that file's own
 // doc comment for why, and for how this write is journaled to audit_log.
+//
+// live_egress_promoted_at (migrations/
+// 000104_repo_settings_live_egress_promoted_at.up.sql) moves WITH
+// live_egress_enabled, but not identically -- it is §30.8's own
+// promotion fence, and only a genuine false->true TRANSITION is a
+// promotion:
+//   - false -> true (a genuine promotion, including the first-ever
+//     write for a repo that starts true): stamped to now(), a fresh
+//     fence for this promotion.
+//   - true -> true (re-affirming an already-live repo, e.g. a seed
+//     re-run): left UNCHANGED -- re-running the same promotion must
+//     never slide the fence forward and silently exclude verdicts that
+//     were already valid candidates under the earlier promotion.
+//   - anything -> false (a demotion, or a fresh row starting shadow):
+//     cleared to NULL. A demoted repo's fence must not survive to a
+//     later re-promotion -- §30.8's own "suppress wins both ways"
+//     applies here too: only verdicts after the MOST RECENT promotion
+//     are ever candidates, never a stale fence from a promotion this
+//     repo has since walked back.
 func (q *Queries) UpsertLiveEgressEnabled(ctx context.Context, arg UpsertLiveEgressEnabledParams) (RepoSetting, error) {
 	row := q.db.QueryRow(ctx, upsertLiveEgressEnabled, arg.RepoFullName, arg.LiveEgressEnabled)
 	var i RepoSetting
@@ -362,6 +414,7 @@ func (q *Queries) UpsertLiveEgressEnabled(ctx context.Context, arg UpsertLiveEgr
 		&i.ReviewCostBudgetDeepUsd,
 		&i.SessionsEnabled,
 		&i.LiveEgressEnabled,
+		&i.LiveEgressPromotedAt,
 	)
 	return i, err
 }
@@ -375,7 +428,7 @@ DO UPDATE SET
     rwx_preview_org_slug = EXCLUDED.rwx_preview_org_slug,
     rwx_preview_dispatch_key = CASE WHEN $5::boolean THEN $4 ELSE repo_settings.rwx_preview_dispatch_key END,
     updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled, live_egress_promoted_at
 `
 
 type UpsertPreviewConfigParams struct {
@@ -440,6 +493,7 @@ func (q *Queries) UpsertPreviewConfig(ctx context.Context, arg UpsertPreviewConf
 		&i.ReviewCostBudgetDeepUsd,
 		&i.SessionsEnabled,
 		&i.LiveEgressEnabled,
+		&i.LiveEgressPromotedAt,
 	)
 	return i, err
 }
@@ -449,7 +503,7 @@ INSERT INTO repo_settings (repo_full_name, rwx_preview_dispatch_key, rwx_preview
 VALUES ($1, $2, $3, $4, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET rwx_preview_dispatch_key = EXCLUDED.rwx_preview_dispatch_key, rwx_preview_endpoint_template = EXCLUDED.rwx_preview_endpoint_template, rwx_preview_org_slug = EXCLUDED.rwx_preview_org_slug, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled, live_egress_promoted_at
 `
 
 type UpsertRWXPreviewSettingsParams struct {
@@ -496,6 +550,7 @@ func (q *Queries) UpsertRWXPreviewSettings(ctx context.Context, arg UpsertRWXPre
 		&i.ReviewCostBudgetDeepUsd,
 		&i.SessionsEnabled,
 		&i.LiveEgressEnabled,
+		&i.LiveEgressPromotedAt,
 	)
 	return i, err
 }
@@ -505,7 +560,7 @@ INSERT INTO repo_settings (repo_full_name, block_on_high_risk, sentinel_autofix_
 VALUES ($1, $2, $3, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET block_on_high_risk = EXCLUDED.block_on_high_risk, sentinel_autofix_enabled = EXCLUDED.sentinel_autofix_enabled, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled, live_egress_promoted_at
 `
 
 type UpsertRepoSettingsParams struct {
@@ -545,6 +600,7 @@ func (q *Queries) UpsertRepoSettings(ctx context.Context, arg UpsertRepoSettings
 		&i.ReviewCostBudgetDeepUsd,
 		&i.SessionsEnabled,
 		&i.LiveEgressEnabled,
+		&i.LiveEgressPromotedAt,
 	)
 	return i, err
 }
@@ -554,7 +610,7 @@ INSERT INTO repo_settings (repo_full_name, review_cost_budget_light_usd, review_
 VALUES ($1, $2, $3, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET review_cost_budget_light_usd = EXCLUDED.review_cost_budget_light_usd, review_cost_budget_deep_usd = EXCLUDED.review_cost_budget_deep_usd, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled, live_egress_promoted_at
 `
 
 type UpsertReviewCostBudgetParams struct {
@@ -595,6 +651,7 @@ func (q *Queries) UpsertReviewCostBudget(ctx context.Context, arg UpsertReviewCo
 		&i.ReviewCostBudgetDeepUsd,
 		&i.SessionsEnabled,
 		&i.LiveEgressEnabled,
+		&i.LiveEgressPromotedAt,
 	)
 	return i, err
 }
@@ -604,7 +661,7 @@ INSERT INTO repo_settings (repo_full_name, review_depth_mode, review_depth_deep_
 VALUES ($1, $2, $3, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET review_depth_mode = EXCLUDED.review_depth_mode, review_depth_deep_paths = EXCLUDED.review_depth_deep_paths, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled, live_egress_promoted_at
 `
 
 type UpsertReviewDepthConfigParams struct {
@@ -645,6 +702,7 @@ func (q *Queries) UpsertReviewDepthConfig(ctx context.Context, arg UpsertReviewD
 		&i.ReviewCostBudgetDeepUsd,
 		&i.SessionsEnabled,
 		&i.LiveEgressEnabled,
+		&i.LiveEgressPromotedAt,
 	)
 	return i, err
 }
@@ -654,7 +712,7 @@ INSERT INTO repo_settings (repo_full_name, sessions_enabled, updated_at)
 VALUES ($1, $2, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET sessions_enabled = EXCLUDED.sessions_enabled, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths, review_cost_budget_light_usd, review_cost_budget_deep_usd, sessions_enabled, live_egress_enabled, live_egress_promoted_at
 `
 
 type UpsertSessionsEnabledParams struct {
@@ -694,6 +752,7 @@ func (q *Queries) UpsertSessionsEnabled(ctx context.Context, arg UpsertSessionsE
 		&i.ReviewCostBudgetDeepUsd,
 		&i.SessionsEnabled,
 		&i.LiveEgressEnabled,
+		&i.LiveEgressPromotedAt,
 	)
 	return i, err
 }

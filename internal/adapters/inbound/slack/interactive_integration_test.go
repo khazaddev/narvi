@@ -104,7 +104,7 @@ func newInteractiveTestRigWithTimeouts(t *testing.T, pool *pgxpool.Pool, timeout
 	sessions := narvipg.NewSessionStore(pool)
 	turns := narvipg.NewTurnStore(pool)
 	plans := narvipg.NewPlanStore(pool)
-	outbox := narvipg.NewOutboxStore(pool)
+	outbox := narvipg.NewOutboxStore(pool, false)
 	linearAgentSessions := narvipg.NewLinearAgentSessionStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
 

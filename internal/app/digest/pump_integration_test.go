@@ -46,7 +46,7 @@ func newDigestTestRig(t *testing.T) *digestTestRig {
 		prSessions:     narvipg.NewGitHubPRSessionStore(pool),
 		slackThreads:   narvipg.NewSlackThreadSessionStore(pool),
 		reviewVerdicts: narvipg.NewReviewVerdictStore(pool),
-		outbox:         narvipg.NewOutboxStore(pool),
+		outbox:         narvipg.NewOutboxStore(pool, false),
 	}
 }
 
@@ -97,7 +97,18 @@ func (rs *digestTestRig) seedRepoWithSlackChannel(ctx context.Context, t *testin
 		FilesChanged:      3,
 	}
 	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise, review.DescriptionAdequacyOK, review.CounterReviewDone)
-	if _, err := appreviewverdict.Insert(ctx, rs.reviewVerdicts, repoFullName, prNumber, "sha-digest", session.ID, verdict, reviewpost.Digest{Summary: "Test-seeded verdict."}, "", review.CounterReviewDone, reviewpost.FactCheckDone, 0); err != nil {
+
+	// §30.8: ListNonShadowReviewVerdictsInWindow (the digest's own
+	// customer-consequential read, rollup.go) excludes any verdict whose
+	// own repo has not been promoted past the live_egress_promoted_at
+	// fence -- promote first so this fixture's own "the resulting digest
+	// has real content" claim (this function's own doc comment above)
+	// stays true.
+	repoSettings := narvipg.NewRepoSettingsStore(rs.pool)
+	if _, err := repoSettings.UpsertLiveEgressEnabled(ctx, repoFullName, true); err != nil {
+		t.Fatalf("promote repo to live egress: %v", err)
+	}
+	if _, err := appreviewverdict.Insert(ctx, rs.reviewVerdicts, repoSettings, false, repoFullName, prNumber, "sha-digest", session.ID, verdict, reviewpost.Digest{Summary: "Test-seeded verdict."}, "", review.CounterReviewDone, reviewpost.FactCheckDone, 0); err != nil {
 		t.Fatalf("seed review_verdicts row: %v", err)
 	}
 }

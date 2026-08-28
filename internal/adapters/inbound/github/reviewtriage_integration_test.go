@@ -391,7 +391,7 @@ func TestGitHubIntegration_SensitiveGlobDiff_RoutesDeep_PersistsThroughVerdict(t
 		narvipg.NewRepoSettingsStore(rig.pool),
 		narvipg.NewReviewFindingStore(rig.pool),
 		narvipg.NewSentinelFixStore(rig.pool),
-		narvipg.NewOutboxStore(rig.pool),
+		narvipg.NewOutboxStore(rig.pool, false),
 		narvipg.NewReviewVerdictStore(rig.pool),
 		rig.turns,
 		narvipg.NewEventStore(rig.pool),
@@ -400,6 +400,7 @@ func TestGitHubIntegration_SensitiveGlobDiff_RoutesDeep_PersistsThroughVerdict(t
 		nil,
 		nil,
 		platform.DefaultTimeouts(),
+		false,
 	))
 	verdictServer := httptest.NewServer(verdictMux)
 	t.Cleanup(verdictServer.Close)

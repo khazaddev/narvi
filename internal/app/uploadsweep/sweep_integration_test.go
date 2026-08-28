@@ -226,7 +226,7 @@ func TestSweepOnce_AbandonsOnlyOldPendingRows(t *testing.T) {
 
 	artifacts := narvipg.NewArtifactStore(pool)
 	events := narvipg.NewEventStore(pool)
-	outbox := narvipg.NewOutboxStore(pool)
+	outbox := narvipg.NewOutboxStore(pool, false)
 	sandboxes := narvipg.NewSandboxStore(pool)
 	broadcaster := &recordingBroadcaster{}
 
@@ -315,7 +315,7 @@ func TestSweepOnce_NoRowsIsANoOp(t *testing.T) {
 
 	artifacts := narvipg.NewArtifactStore(pool)
 	events := narvipg.NewEventStore(pool)
-	outbox := narvipg.NewOutboxStore(pool)
+	outbox := narvipg.NewOutboxStore(pool, false)
 	sandboxes := narvipg.NewSandboxStore(pool)
 
 	sweeper, err := uploadsweep.NewSweeper(pool, artifacts, events, outbox, sandboxes, nil, platform.DefaultTimeouts())
