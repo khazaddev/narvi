@@ -788,6 +788,43 @@ func (a *Actor) tryPlanSpawn(
 				"session_id", a.sessionID.String(), "snapshot_id", action.SnapshotImageID)
 			action = sandbox.SpawnAction{Kind: sandbox.SpawnActionSpawn}
 		}
+
+		// §30.4(3)'s own fail-closed defense-in-depth (the PRIMARY fix is
+		// the mint-time credential-cache purge, cmd/sandbox-agent/main.go's
+		// own HandleSnapshot): refuse to restore a snapshot into a session
+		// whose own effective egress mode is currently shadow unless that
+		// snapshot's own row was itself stamped shadow at the moment it was
+		// taken (sandboxevent.go's own handleSnapshotReadyEvent). The
+		// polarity is explicit and deliberate, per §30.4(3) verbatim: "an
+		// absent bit (every pre-existing snapshot) is treated as live and
+		// restore into a shadow session is refused" -- so
+		// sandboxRow.SnapshotSuppressedInShadow == false (its own column
+		// DEFAULT, migrations/000106_sandbox_snapshot_shadow_bit.up.sql)
+		// is treated as "this snapshot may have been taken live", never as
+		// "safe to assume shadow". Resolved fresh here, at restore time,
+		// via the SAME session-repos-aggregated formula the stamp itself
+		// was written with (postgres.OutboxStore.ResolveEffectiveMode) --
+		// this is a genuinely different question ("is THIS session shadow
+		// RIGHT NOW") from the one the stamp itself answered ("was the
+		// ORIGINATING session shadow THEN"), so it is not the same kind of
+		// re-read §30.8's push/PR fix (pushpr.go) forbids -- there the bug
+		// was re-deriving the SAME decision a signal had already frozen;
+		// here the two reads are of two different sessions' egress modes,
+		// separated by however long the snapshot has sat unused, and
+		// neither one may be cached across that gap.
+		//
+		// Mirrors the Docker-required downgrade immediately above:
+		// downgrading to a fresh Spawn, never refusing the session
+		// outright, keeps §10-P2's "never block a spawn" intact -- the
+		// session still gets a live sandbox, just without whatever
+		// (untrusted, in this one case) state the snapshot would have
+		// restored.
+		if action.Kind == sandbox.SpawnActionRestore && !sandboxRow.SnapshotSuppressedInShadow &&
+			a.stores.outbox.WithTx(tx).ResolveEffectiveMode(ctx, a.sessionID) {
+			a.logger.Warn("sessionactor: refusing snapshot restore into a shadow session: the snapshot's own shadow bit is absent/false, treated as live (§30.4(3)); forcing a fresh spawn instead",
+				"session_id", a.sessionID.String(), "snapshot_id", action.SnapshotImageID)
+			action = sandbox.SpawnAction{Kind: sandbox.SpawnActionSpawn}
+		}
 	}
 
 	switch action.Kind {

@@ -764,12 +764,26 @@ func (a *Actor) handleSnapshotReadyEvent(ctx context.Context, tx pgx.Tx, row sql
 	}); err != nil {
 		return fmt.Errorf("sessionactor: update sandbox status to ready (snapshot complete): %w", err)
 	}
+	// §30.4(3)'s own fail-closed defense-in-depth (the primary fix is the
+	// mint-time cache purge, cmd/sandbox-agent/main.go's own
+	// HandleSnapshot): stamp this session's own effective egress mode onto
+	// the snapshot row, resolved exactly ONCE, right here, at the moment
+	// this snapshot is confirmed -- never re-derived by the restore-time
+	// check that later reads it back (dispatch.go's own tryPlanSpawn).
+	// Reuses postgres.OutboxStore.ResolveEffectiveMode -- the SAME
+	// session-repos-aggregated "any suppressed repo suppresses the whole
+	// thing" formula the outbox's own identical epoch-stamp need already
+	// established (outbox_shadow.go), rather than hand-rolling a second
+	// copy of that aggregation here.
+	suppressedInShadow := a.stores.outbox.WithTx(tx).ResolveEffectiveMode(ctx, a.sessionID)
+
 	// Also clears pending_snapshot_message_id back to nil in this SAME
 	// statement -- see UpdateSandboxSnapshotID's own generated doc
 	// comment (queries/sandboxes.sql).
 	if _, err := a.stores.sandbox.WithTx(tx).UpdateSnapshotID(ctx, sqlcgen.UpdateSandboxSnapshotIDParams{
-		SessionID:  a.sessionID,
-		SnapshotID: &evt.SnapshotId,
+		SessionID:                  a.sessionID,
+		SnapshotID:                 &evt.SnapshotId,
+		SnapshotSuppressedInShadow: suppressedInShadow,
 	}); err != nil {
 		return fmt.Errorf("sessionactor: record snapshot id: %w", err)
 	}

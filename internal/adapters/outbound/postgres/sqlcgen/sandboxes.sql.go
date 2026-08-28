@@ -15,7 +15,7 @@ const createSandbox = `-- name: CreateSandbox :one
 
 INSERT INTO sandboxes (session_id)
 VALUES ($1)
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow
 `
 
 // Queries backing SandboxStore (§4.3). Just enough to prove the pipeline
@@ -39,12 +39,13 @@ func (q *Queries) CreateSandbox(ctx context.Context, sessionID pgtype.UUID) (San
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
 		&i.PreSuspectStatus,
+		&i.SnapshotSuppressedInShadow,
 	)
 	return i, err
 }
 
 const getSandbox = `-- name: GetSandbox :one
-SELECT id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status FROM sandboxes
+SELECT id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow FROM sandboxes
 WHERE session_id = $1
 `
 
@@ -66,6 +67,7 @@ func (q *Queries) GetSandbox(ctx context.Context, sessionID pgtype.UUID) (Sandbo
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
 		&i.PreSuspectStatus,
+		&i.SnapshotSuppressedInShadow,
 	)
 	return i, err
 }
@@ -122,7 +124,7 @@ SET status = $2,
     last_seen_at = $3,
     updated_at = now()
 WHERE session_id = $1
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow
 `
 
 type RecoverSandboxFromSuspectParams struct {
@@ -167,6 +169,7 @@ func (q *Queries) RecoverSandboxFromSuspect(ctx context.Context, arg RecoverSand
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
 		&i.PreSuspectStatus,
+		&i.SnapshotSuppressedInShadow,
 	)
 	return i, err
 }
@@ -175,7 +178,7 @@ const updateSandboxCircuitBreaker = `-- name: UpdateSandboxCircuitBreaker :one
 UPDATE sandboxes
 SET spawn_failure_count = $2, last_spawn_failure_at = $3, updated_at = now()
 WHERE session_id = $1
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow
 `
 
 type UpdateSandboxCircuitBreakerParams struct {
@@ -210,6 +213,7 @@ func (q *Queries) UpdateSandboxCircuitBreaker(ctx context.Context, arg UpdateSan
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
 		&i.PreSuspectStatus,
+		&i.SnapshotSuppressedInShadow,
 	)
 	return i, err
 }
@@ -218,7 +222,7 @@ const updateSandboxPendingSnapshotMessageID = `-- name: UpdateSandboxPendingSnap
 UPDATE sandboxes
 SET pending_snapshot_message_id = $2, updated_at = now()
 WHERE session_id = $1
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow
 `
 
 type UpdateSandboxPendingSnapshotMessageIDParams struct {
@@ -257,6 +261,7 @@ func (q *Queries) UpdateSandboxPendingSnapshotMessageID(ctx context.Context, arg
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
 		&i.PreSuspectStatus,
+		&i.SnapshotSuppressedInShadow,
 	)
 	return i, err
 }
@@ -265,7 +270,7 @@ const updateSandboxProviderID = `-- name: UpdateSandboxProviderID :one
 UPDATE sandboxes
 SET provider_id = $2, updated_at = now()
 WHERE session_id = $1
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow
 `
 
 type UpdateSandboxProviderIDParams struct {
@@ -296,20 +301,22 @@ func (q *Queries) UpdateSandboxProviderID(ctx context.Context, arg UpdateSandbox
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
 		&i.PreSuspectStatus,
+		&i.SnapshotSuppressedInShadow,
 	)
 	return i, err
 }
 
 const updateSandboxSnapshotID = `-- name: UpdateSandboxSnapshotID :one
 UPDATE sandboxes
-SET snapshot_id = $2, pending_snapshot_message_id = NULL, updated_at = now()
+SET snapshot_id = $2, snapshot_suppressed_in_shadow = $3, pending_snapshot_message_id = NULL, updated_at = now()
 WHERE session_id = $1
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow
 `
 
 type UpdateSandboxSnapshotIDParams struct {
-	SessionID  pgtype.UUID `json:"session_id"`
-	SnapshotID *string     `json:"snapshot_id"`
+	SessionID                  pgtype.UUID `json:"session_id"`
+	SnapshotID                 *string     `json:"snapshot_id"`
+	SnapshotSuppressedInShadow bool        `json:"snapshot_suppressed_in_shadow"`
 }
 
 // §3.2 ("snapshots & restore"), design decision 3: records a real,
@@ -328,8 +335,17 @@ type UpdateSandboxSnapshotIDParams struct {
 // the one that column was tracking -- see that column's own migration
 // doc comment (migrations/000022_sandbox_snapshot_id.up.sql) for the full
 // race this closes.
+//
+// snapshot_suppressed_in_shadow (§30.4(3), migrations/
+// 000106_sandbox_snapshot_shadow_bit.up.sql) is stamped in this SAME
+// statement, at this SAME snapshot-confirmation moment -- the effective
+// egress mode this session was resolved to have while the snapshot that
+// just completed was live, computed ONCE by the caller
+// (handleSnapshotReadyEvent) and never re-derived by anything that later
+// reads this column back (app/sessionactor/dispatch.go's own restore-time
+// refusal check).
 func (q *Queries) UpdateSandboxSnapshotID(ctx context.Context, arg UpdateSandboxSnapshotIDParams) (Sandbox, error) {
-	row := q.db.QueryRow(ctx, updateSandboxSnapshotID, arg.SessionID, arg.SnapshotID)
+	row := q.db.QueryRow(ctx, updateSandboxSnapshotID, arg.SessionID, arg.SnapshotID, arg.SnapshotSuppressedInShadow)
 	var i Sandbox
 	err := row.Scan(
 		&i.ID,
@@ -346,6 +362,7 @@ func (q *Queries) UpdateSandboxSnapshotID(ctx context.Context, arg UpdateSandbox
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
 		&i.PreSuspectStatus,
+		&i.SnapshotSuppressedInShadow,
 	)
 	return i, err
 }
@@ -356,7 +373,7 @@ SET status = $2,
     last_seen_at = COALESCE($3, last_seen_at),
     updated_at = now()
 WHERE session_id = $1
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow
 `
 
 type UpdateSandboxStatusParams struct {
@@ -388,6 +405,7 @@ func (q *Queries) UpdateSandboxStatus(ctx context.Context, arg UpdateSandboxStat
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
 		&i.PreSuspectStatus,
+		&i.SnapshotSuppressedInShadow,
 	)
 	return i, err
 }
@@ -398,7 +416,7 @@ SET status = 'suspect',
     pre_suspect_status = $2,
     updated_at = now()
 WHERE session_id = $1
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow
 `
 
 type UpdateSandboxStatusToSuspectParams struct {
@@ -437,6 +455,7 @@ func (q *Queries) UpdateSandboxStatusToSuspect(ctx context.Context, arg UpdateSa
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
 		&i.PreSuspectStatus,
+		&i.SnapshotSuppressedInShadow,
 	)
 	return i, err
 }
@@ -450,7 +469,7 @@ SET gen = sandboxes.gen + 1,
     token_hash = $2,
     last_seen_at = now(),
     updated_at = now()
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow
 `
 
 type UpsertSandboxForSpawnParams struct {
@@ -516,6 +535,7 @@ func (q *Queries) UpsertSandboxForSpawn(ctx context.Context, arg UpsertSandboxFo
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
 		&i.PreSuspectStatus,
+		&i.SnapshotSuppressedInShadow,
 	)
 	return i, err
 }

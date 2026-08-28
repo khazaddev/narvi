@@ -117,8 +117,17 @@ RETURNING *;
 -- the one that column was tracking -- see that column's own migration
 -- doc comment (migrations/000022_sandbox_snapshot_id.up.sql) for the full
 -- race this closes.
+--
+-- snapshot_suppressed_in_shadow (§30.4(3), migrations/
+-- 000106_sandbox_snapshot_shadow_bit.up.sql) is stamped in this SAME
+-- statement, at this SAME snapshot-confirmation moment -- the effective
+-- egress mode this session was resolved to have while the snapshot that
+-- just completed was live, computed ONCE by the caller
+-- (handleSnapshotReadyEvent) and never re-derived by anything that later
+-- reads this column back (app/sessionactor/dispatch.go's own restore-time
+-- refusal check).
 UPDATE sandboxes
-SET snapshot_id = $2, pending_snapshot_message_id = NULL, updated_at = now()
+SET snapshot_id = $2, snapshot_suppressed_in_shadow = $3, pending_snapshot_message_id = NULL, updated_at = now()
 WHERE session_id = $1
 RETURNING *;
 
