@@ -70,7 +70,7 @@ func TestClient_AppPermissions(t *testing.T) {
 	})
 
 	t.Run("non-2xx is a plain error naming no body", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"message":"Bad credentials","secret_leak":"should never surface"}`))
 		}))
@@ -145,7 +145,7 @@ func TestClient_MintInstallationToken(t *testing.T) {
 
 	t.Run("no repo names is a local error, no request sent", func(t *testing.T) {
 		requested := false
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 			requested = true
 		}))
 		defer server.Close()
