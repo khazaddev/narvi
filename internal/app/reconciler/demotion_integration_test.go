@@ -65,7 +65,7 @@ func TestReconcileDemotions_TerminatesFlaggedSandboxAndClearsRequest(t *testing.
 	}
 
 	provider := &fakeReconcileProvider{}
-	r, err := reconciler.NewReconciler(sandboxes, provider, platform.DefaultTimeouts())
+	r, err := reconciler.NewReconciler(sandboxes, narvipg.NewRepoSettingsStore(pool), provider, platform.DefaultTimeouts())
 	if err != nil {
 		t.Fatalf("NewReconciler: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestReconcileDemotions_FailedStopSandbox_LeavesFlaggedForRetry(t *testing.T
 	provider := &fakeReconcileProvider{
 		stopErrFor: map[string]error{"will-fail-1": errors.New("provider: stop failed")},
 	}
-	r, err := reconciler.NewReconciler(sandboxes, provider, platform.DefaultTimeouts())
+	r, err := reconciler.NewReconciler(sandboxes, narvipg.NewRepoSettingsStore(pool), provider, platform.DefaultTimeouts())
 	if err != nil {
 		t.Fatalf("NewReconciler: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestReconcileDemotions_NoProviderIDYet_LeavesFlaggedWithoutCallingStop(t *t
 	}
 
 	provider := &fakeReconcileProvider{}
-	r, err := reconciler.NewReconciler(sandboxes, provider, platform.DefaultTimeouts())
+	r, err := reconciler.NewReconciler(sandboxes, narvipg.NewRepoSettingsStore(pool), provider, platform.DefaultTimeouts())
 	if err != nil {
 		t.Fatalf("NewReconciler: %v", err)
 	}
@@ -194,5 +194,102 @@ func TestReconcileDemotions_NoProviderIDYet_LeavesFlaggedWithoutCallingStop(t *t
 	}
 	if !row.DemotionTerminateRequestedAt.Valid {
 		t.Error("demotion_terminate_requested_at cleared with no provider_id ever stopped, want it left set for a later tick")
+	}
+}
+
+// TestReconcileDemotions_RecoversAnObligationNoSweepCleared is the
+// recoverability §30.4's demotion requirement was missing.
+//
+// The obligation used to live ONLY in the difference between a
+// pre-transaction read and the declared value — and the commit destroyed
+// it. A sweep that failed on its third sandbox abandoned the rest with
+// nothing recording they were owed a termination, and the operator's
+// obvious response (re-run the manifest) found false→false, reported
+// success, and swept nothing. Those sandboxes kept a usable write
+// credential for the full TTL window.
+//
+// This drives the state that failure leaves behind: the flip stamped the
+// obligation, no sweep cleared it. A tick must pick it up, flag the
+// repo's live sandbox, and only then clear.
+func TestReconcileDemotions_RecoversAnObligationNoSweepCleared(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sandboxes := narvipg.NewSandboxStore(pool)
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
+
+	const repoFullName = "acme/abandoned-sweep"
+	sessionID := createLiveSandboxForSession(ctx, t, pool, "abandoned-1", sqlcgen.SandboxStatusReady)
+	if _, err := pool.Exec(ctx, `UPDATE sessions SET repos = $2 WHERE id = $1`, sessionID,
+		[]byte(`[{"name":"repo","url":"https://github.com/`+repoFullName+`.git","branch":"main"}]`)); err != nil {
+		t.Fatalf("set session repos: %v", err)
+	}
+
+	// A genuine live -> shadow transition: the second call is the
+	// demotion, and its own statement stamps the obligation.
+	if _, err := repoSettings.UpsertLiveEgressEnabled(ctx, repoFullName, true); err != nil {
+		t.Fatalf("promote repo: %v", err)
+	}
+	if _, err := repoSettings.UpsertLiveEgressEnabled(ctx, repoFullName, false); err != nil {
+		t.Fatalf("demote repo: %v", err)
+	}
+
+	owed, err := repoSettings.ListOwedDemotionSweep(ctx, 10)
+	if err != nil {
+		t.Fatalf("list owed: %v", err)
+	}
+	if len(owed) != 1 {
+		t.Fatalf("repos owed a demotion sweep = %d, want 1: the flip itself must record the obligation, or a failed sweep is unrecoverable", len(owed))
+	}
+
+	provider := &fakeReconcileProvider{}
+	r, err := reconciler.NewReconciler(sandboxes, repoSettings, provider, platform.DefaultTimeouts())
+	if err != nil {
+		t.Fatalf("NewReconciler: %v", err)
+	}
+	if err := r.ReconcileDemotions(ctx); err != nil {
+		t.Fatalf("ReconcileDemotions: %v", err)
+	}
+
+	if got := provider.stopCallCount(); got != 1 {
+		t.Errorf("StopSandbox call count = %d, want 1: the recovered sweep must flag this repo's live sandbox and the same tick must terminate it", got)
+	}
+	after, err := repoSettings.ListOwedDemotionSweep(ctx, 10)
+	if err != nil {
+		t.Fatalf("list owed after: %v", err)
+	}
+	if len(after) != 0 {
+		t.Errorf("repos still owed a sweep = %d, want 0 after a clean sweep", len(after))
+	}
+}
+
+// TestUpsertLiveEgressEnabled_NonTransitionsOweNoSweep pins the other
+// half: only a genuine true->false transition owes a sweep. A repo whose
+// first-ever write is false has never been live, so no sandbox of it ever
+// held more than a read-only credential, and stamping an obligation there
+// would make every fresh onboarding look like a demotion.
+func TestUpsertLiveEgressEnabled_NonTransitionsOweNoSweep(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
+
+	if _, err := repoSettings.UpsertLiveEgressEnabled(ctx, "acme/born-shadow", false); err != nil {
+		t.Fatalf("first write false: %v", err)
+	}
+	if _, err := repoSettings.UpsertLiveEgressEnabled(ctx, "acme/born-shadow", false); err != nil {
+		t.Fatalf("re-affirm false: %v", err)
+	}
+	if _, err := repoSettings.UpsertLiveEgressEnabled(ctx, "acme/stays-live", true); err != nil {
+		t.Fatalf("first write true: %v", err)
+	}
+	if _, err := repoSettings.UpsertLiveEgressEnabled(ctx, "acme/stays-live", true); err != nil {
+		t.Fatalf("re-affirm true: %v", err)
+	}
+
+	owed, err := repoSettings.ListOwedDemotionSweep(ctx, 10)
+	if err != nil {
+		t.Fatalf("list owed: %v", err)
+	}
+	if len(owed) != 0 {
+		t.Errorf("repos owed a demotion sweep = %d, want 0: no true->false transition happened", len(owed))
 	}
 }

@@ -770,12 +770,32 @@ func (a *Actor) handleSnapshotReadyEvent(ctx context.Context, tx pgx.Tx, row sql
 	// the snapshot row, resolved exactly ONCE, right here, at the moment
 	// this snapshot is confirmed -- never re-derived by the restore-time
 	// check that later reads it back (dispatch.go's own tryPlanSpawn).
-	// Reuses postgres.OutboxStore.ResolveEffectiveMode -- the SAME
-	// session-repos-aggregated "any suppressed repo suppresses the whole
-	// thing" formula the outbox's own identical epoch-stamp need already
-	// established (outbox_shadow.go), rather than hand-rolling a second
-	// copy of that aggregation here.
-	suppressedInShadow := a.stores.outbox.WithTx(tx).ResolveEffectiveMode(ctx, a.sessionID)
+	// Reuses the SAME session-repos-aggregated "any suppressed repo
+	// suppresses the whole thing" formula the outbox's own identical
+	// epoch-stamp need already established (outbox_shadow.go), rather
+	// than hand-rolling a second copy of that aggregation here.
+	//
+	// But it takes the CONFIRMED variant, and the reason is the whole
+	// polarity of this column. For the outbox, "shadow" is the safe
+	// answer, so that resolver falls toward shadow whenever it cannot
+	// read the session or parse its repos. Here "shadow" is the
+	// PERMISSIVE answer: a true bit means "this snapshot never held more
+	// than a read-only credential, it is safe to restore into a shadow
+	// session", and dispatch.go only refuses a restore when the bit is
+	// FALSE. Stamping the plain resolver's output would therefore mark
+	// an unreadable session's snapshot as trusted -- turning a failure to
+	// read into a grant, which is exactly backwards.
+	//
+	// So the bit is true only when shadow was positively established.
+	// Anything else -- including "shadow, probably, but I could not read
+	// the repos to be sure" -- leaves it false, and false means the
+	// restore into a shadow session is refused.
+	shadow, confirmed := a.stores.outbox.WithTx(tx).ResolveEffectiveModeConfirmed(ctx, a.sessionID)
+	suppressedInShadow := shadow && confirmed
+	if shadow && !confirmed {
+		a.logger.Warn("sessionactor: snapshot: this session's egress mode could not be positively established; stamping the snapshot NOT shadow-clean, so a later restore into a shadow session is refused",
+			"session_id", a.sessionID.String(), "snapshot_id", evt.SnapshotId)
+	}
 
 	// Also clears pending_snapshot_message_id back to nil in this SAME
 	// statement -- see UpdateSandboxSnapshotID's own generated doc

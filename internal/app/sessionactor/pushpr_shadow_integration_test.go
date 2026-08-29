@@ -251,12 +251,18 @@ func TestHandleSandboxEvent_PushComplete_PersistedLiveDecision_NeverReReadShadow
 	}
 }
 
-// TestHandleSandboxEvent_PushComplete_CancelledPersistedPush_SkipsPRCreation
-// proves §30.4's own demotion-cancellation escape hatch: a push cycle
-// persisted live but subsequently CANCELLED by a repo-demotion sweep
-// (internal/app/seed) must not create a PR, regardless of the persisted
-// suppressedInShadow value.
-func TestHandleSandboxEvent_PushComplete_CancelledPersistedPush_SkipsPRCreation(t *testing.T) {
+// TestHandleSandboxEvent_PushComplete_CancelledPersistedPush_SuppressesAndRecords
+// proves §30.4's own demotion-cancellation path: a push cycle persisted
+// live but subsequently CANCELLED by a repo-demotion sweep must not
+// create a real PR -- and must not silently vanish either.
+//
+// The name matters here. This test was called SkipsPRCreation and
+// asserted only that CreatePR was not called, which doing nothing at all
+// satisfies. But a cancelled cycle IS a suppressed effect: the repo just
+// became shadow, and §30.6 makes an unrecorded suppression a contract
+// violation. An operator reading the ledger to answer "what did this
+// demotion stop" learns nothing from a cycle that left no row.
+func TestHandleSandboxEvent_PushComplete_CancelledPersistedPush_SuppressesAndRecords(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
 	user, _ := createUserWithGitHubIdentity(ctx, t, pool)
@@ -298,5 +304,8 @@ func TestHandleSandboxEvent_PushComplete_CancelledPersistedPush_SkipsPRCreation(
 
 	if got := sourceControl.callCount(); got != 0 {
 		t.Errorf("CreatePR called %d times, want 0 (a repo-demotion sweep cancelled this in-flight push signal)", got)
+	}
+	if got := sourceControl.suppressCallCount(); got != 1 {
+		t.Errorf("SuppressCreatePR called %d times, want 1: a demotion-cancelled cycle is a suppressed effect and must leave a ledger row, not vanish", got)
 	}
 }

@@ -147,3 +147,98 @@ func TestHandleSandboxEvent_PushComplete_SentinelFixPR_BaseIsOriginHeadBranch_Ne
 		return err == nil && row.Status == "fix_open" && row.FixPrNumber != nil && *row.FixPrNumber == 99 && row.StackRegistered
 	})
 }
+
+// TestHandleSandboxEvent_PushComplete_SentinelFixPR_HonorsFrozenShadowStamp
+// closes a gap the sentinel path had by construction: it was dispatched
+// BEFORE the frozen push/PR decision was ever read, so §30.8's stamp and
+// §30.4's demotion cancellation simply did not apply to it.
+//
+// Having no human creator to attribute a PR to is a reason for a separate
+// PR-BUILDING path. It is not a reason to sit outside the egress gate --
+// and this path is the one that opens a pull request with the shared BOT
+// token, so the consequence of missing the gate is a real PR in a
+// customer's repository from a cycle already decided to be shadow.
+//
+// The repo here is promoted to live, so a re-read would say "create it".
+// The frozen stamp says shadow. The stamp must win.
+func TestHandleSandboxEvent_PushComplete_SentinelFixPR_HonorsFrozenShadowStamp(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	sessionStore := narvipg.NewSessionStore(pool)
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	sentinelFixStore := narvipg.NewSentinelFixStore(pool)
+
+	originSession, err := sessionStore.Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceGithub})
+	if err != nil {
+		t.Fatalf("create origin session: %v", err)
+	}
+
+	tag := provenance.SentinelAutoFix
+	fixSession, err := sessionStore.Create(ctx, sqlcgen.CreateSessionParams{
+		SpawnSource:   sqlcgen.SessionSpawnSourceGithub,
+		Repos:         reposJSONForTest(t, "repo1", "https://github.com/acme/sentinel-frozen.git", "fix-branch"),
+		ProvenanceTag: &tag,
+	})
+	if err != nil {
+		t.Fatalf("create fix session: %v", err)
+	}
+	if _, err := sandboxStore.Create(ctx, fixSession.ID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+
+	// Promoted to live: a re-read of the CURRENT mode would say "create a
+	// real PR". Only the frozen stamp says otherwise.
+	if _, err := narvipg.NewRepoSettingsStore(pool).UpsertLiveEgressEnabled(ctx, "acme/sentinel-frozen", true); err != nil {
+		t.Fatalf("promote repo to live egress: %v", err)
+	}
+
+	claimed, err := sentinelFixStore.Claim(ctx, "acme/sentinel-frozen", 7, originSession.ID, "feature-x")
+	if err != nil {
+		t.Fatalf("claim sentinel_fixes row: %v", err)
+	}
+	if _, err := sentinelFixStore.UpdateChildSession(ctx, claimed.ID, fixSession.ID); err != nil {
+		t.Fatalf("update sentinel_fixes child session: %v", err)
+	}
+
+	// The frozen decision this turn resolved at push-send time.
+	shadow := true
+	if _, err := sandboxStore.SetPendingPush(ctx, sqlcgen.SetSandboxPendingPushParams{
+		SessionID: fixSession.ID, PendingPushSuppressedInShadow: &shadow,
+	}); err != nil {
+		t.Fatalf("persist the push/PR decision: %v", err)
+	}
+
+	sourceControl := &fakeSourceControl{
+		nextRef:           ports.PRRef{Number: 99, URL: "https://github.com/acme/sentinel-frozen/pull/99"},
+		defaultBranchName: "main",
+	}
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil, false, RegistryOptions{GitHubBotToken: "bot-static-token"})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, fixSession.ID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	sendSandboxEventForTest(ctx, t, a, SandboxEvent{
+		Type: "push_complete", Gen: 1,
+		Raw: pushCompleteRaw(t, fixSession.ID.String(), 1, "repo1", "fix-branch", "abc123"),
+	})
+
+	// Wait for the path to reach EITHER outcome, then say which it was --
+	// waiting only on the suppressed count would fail with a bare timeout
+	// and hide the fact that a real PR was created instead.
+	waitUntil(t, 5*time.Second, func() bool {
+		return sourceControl.callCount()+sourceControl.suppressCallCount() >= 1
+	})
+	if got := sourceControl.callCount(); got != 0 {
+		t.Fatalf("CreatePR called %d times, want 0: the frozen stamp said shadow, and this path opened a REAL pull request with the bot token because a later promotion was re-read", got)
+	}
+	if got := sourceControl.suppressCallCount(); got != 1 {
+		t.Errorf("SuppressCreatePR called %d times, want 1: the sentinel-fix PR must be suppressed AND recorded, never silently skipped", got)
+	}
+}

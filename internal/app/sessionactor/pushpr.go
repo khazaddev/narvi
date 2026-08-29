@@ -562,11 +562,6 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 	// SEPARATE, dedicated code path -- never resolvePRBaseBranch, never
 	// the per-repo loop below -- see createSentinelFixPRBestEffort's own
 	// doc comment.
-	if provenance.IsSentinelAutoFix(sessionRow.ProvenanceTag) {
-		a.createSentinelFixPRBestEffort(ctx, evt)
-		return
-	}
-
 	// §30.8's own "the push/PR pair resolves its mode ONCE per turn":
 	// honor the decision completeProcessingTurn already resolved and
 	// persisted at push-send time (pushSignal.suppressedInShadow's own
@@ -584,15 +579,7 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 	if _, clearErr := a.stores.sandbox.ClearPendingPush(ctx, a.sessionID); clearErr != nil {
 		a.logger.Warn("sessionactor: clear consumed push/PR egress-mode decision failed", "error", clearErr)
 	}
-	if pushCancelled {
-		// §30.4's own demotion fix: a repo-demotion sweep cancelled this
-		// in-flight push signal (the ScmCredentialTTL window) -- this
-		// push_complete's own result is no longer trustworthy enough to
-		// act on, regardless of what suppressedInShadow itself says.
-		a.logger.Warn("sessionactor: push_complete arrived for a push cycle cancelled by a repo-demotion sweep; skipping PR creation")
-		return
-	}
-	// stampSaysShadow carries the frozen decision INTO the loop below
+	// stampSaysShadow carries the frozen decision INTO the paths below
 	// rather than returning here.
 	//
 	// Returning early looks equivalent and is not: it skips the shadow
@@ -602,9 +589,33 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 	// existed a shadow repo's CreatePR reached the decorator and WAS
 	// recorded -- so an early return here would have quietly removed an
 	// entry the ledger used to get.
-	stampSaysShadow := suppressedInShadow != nil && *suppressedInShadow
-	if stampSaysShadow {
+	//
+	// A demotion-cancelled cycle takes the SAME path, for the same reason.
+	// §30.4's demotion fix cancels an in-flight push signal because the
+	// repo has just become shadow (the ScmCredentialTTL window), so the PR
+	// that would have followed is a suppressed effect like any other. It
+	// is not a reason to record LESS: an operator reading the ledger to
+	// answer "what did this demotion stop" learns nothing from a cycle
+	// that vanished.
+	stampSaysShadow := (suppressedInShadow != nil && *suppressedInShadow) || pushCancelled
+	switch {
+	case pushCancelled:
+		a.logger.Warn("sessionactor: push_complete arrived for a push cycle cancelled by a repo-demotion sweep; suppressing and recording PR creation (§30.4)")
+	case stampSaysShadow:
 		a.logger.Info("sessionactor: push_complete arrived for a push cycle whose own persisted decision is shadow; suppressing and recording PR creation (§30.4/§30.8)")
+	}
+
+	// The sentinel-auto-fix path is dispatched only AFTER the frozen
+	// decision is read, and carries it. It has no human creator to
+	// attribute a PR to (sessionRow.CreatedBy is NULL), so it never runs
+	// the creator guard or the per-repo loop below -- but that is a reason
+	// for a separate PR-BUILDING path, never a reason to be outside the
+	// egress gate. Dispatching above the read, as this first did, meant a
+	// sentinel fix ignored both the frozen stamp and the demotion
+	// cancellation and opened a real pull request with the bot token.
+	if provenance.IsSentinelAutoFix(sessionRow.ProvenanceTag) {
+		a.createSentinelFixPRBestEffort(ctx, evt, stampSaysShadow)
+		return
 	}
 	// suppressedInShadow == nil (no push cycle was ever recorded for this
 	// sandbox -- an honest gap: a push_complete this Step's own new
@@ -765,7 +776,12 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 // stack_registered) as an observability signal, never the authority on
 // whether registration actually took (§17.6: that authority is always a
 // FRESH GetPullRequest.Stack field, checked later, at merge-gating time).
-func (a *Actor) createSentinelFixPRBestEffort(ctx context.Context, evt sandboxws.PushComplete) {
+// stampSaysShadow is this turn's own frozen push/PR decision, resolved at
+// push send and read by the caller. It is passed in rather than resolved
+// here for the same reason the main path does not re-derive it: a repo
+// promoted between push send and this event must not turn a shadow-era
+// branch into a real pull request.
+func (a *Actor) createSentinelFixPRBestEffort(ctx context.Context, evt sandboxws.PushComplete, stampSaysShadow bool) {
 	fix, err := a.stores.sentinelFix.GetByFixSession(ctx, a.sessionID)
 	if err != nil {
 		a.logger.Error("sessionactor: get sentinel_fixes row by fix session failed; skipping fix PR creation", "error", err)
@@ -812,8 +828,7 @@ func (a *Actor) createSentinelFixPRBestEffort(ctx context.Context, evt sandboxws
 			continue
 		}
 
-		prCtx, cancel := context.WithTimeout(ctx, a.timeouts.PRCreateTimeout)
-		ref, createErr := a.sourceControl.CreatePR(prCtx, ports.CreatePRSpec{
+		prSpec := ports.CreatePRSpec{
 			Owner: owner,
 			Repo:  repoName,
 			Head:  pushed.Branch,
@@ -824,7 +839,27 @@ func (a *Actor) createSentinelFixPRBestEffort(ctx context.Context, evt sandboxws
 			Title: "Sentinel auto-fix: " + prTitle(sessionRow),
 			Body:  fmt.Sprintf("Automated sentinel-auto-fix remediation (Narvi, §17) for pull request #%d, branch %s.", fix.OriginPrNumber, pushed.Branch),
 			Token: a.githubBotToken,
-		})
+		}
+		prCtx, cancel := context.WithTimeout(ctx, a.timeouts.PRCreateTimeout)
+		var (
+			ref       ports.PRRef
+			createErr error
+		)
+		switch {
+		case !stampSaysShadow:
+			// CreatePR still consults the CURRENT mode itself, so a repo
+			// demoted between push and here is suppressed and recorded by
+			// the decorator -- the other direction of §30.8's monotone
+			// rule, needing nothing here.
+			ref, createErr = a.sourceControl.CreatePR(prCtx, prSpec)
+		default:
+			suppressor, ok := a.sourceControl.(stampedSuppressor)
+			if !ok {
+				createErr = errNoStampedSuppressor
+				break
+			}
+			ref, createErr = suppressor.SuppressCreatePR(prCtx, prSpec)
+		}
 		cancel()
 		if createErr != nil {
 			a.logger.Error("sessionactor: create sentinel-fix PR failed", "repo", pushed.Name, "error", createErr)

@@ -711,7 +711,7 @@ func serve() error {
 	// else, mirroring how registry/commander were threaded through rather
 	// than built twice. See internal/app/reconciler's own doc.go for what
 	// it does and why.
-	recon, err := reconciler.NewReconciler(sandboxStore, sandboxProvider, cfg.Timeouts)
+	recon, err := reconciler.NewReconciler(sandboxStore, repoSettingsStore, sandboxProvider, cfg.Timeouts)
 	if err != nil {
 		return fmt.Errorf("construct reconciler: %w", err)
 	}

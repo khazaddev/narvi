@@ -1955,6 +1955,7 @@ type RepoSetting struct {
 	SessionsEnabled            bool               `json:"sessions_enabled"`
 	LiveEgressEnabled          bool               `json:"live_egress_enabled"`
 	LiveEgressPromotedAt       pgtype.Timestamptz `json:"live_egress_promoted_at"`
+	DemotionSweepPendingAt     pgtype.Timestamptz `json:"demotion_sweep_pending_at"`
 }
 
 type ReviewDigestSectionFeedback struct {

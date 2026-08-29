@@ -184,8 +184,22 @@ func seedRepoSetting(ctx context.Context, deps Deps, s seedmanifest.RepoSetting,
 		// mandatory termination happened.
 		marked, sweepErr := repodemotion.Sweep(ctx, deps.Sandboxes, s.RepoFullName)
 		if sweepErr != nil {
+			// Reported loudly, and no longer only reported: the flip's own
+			// statement stamped demotion_sweep_pending_at, so the
+			// obligation is durable and internal/app/reconciler retries it
+			// until a sweep completes cleanly. Before that column existed
+			// this was the ONLY signal, and re-running the manifest -- the
+			// obvious response -- found false->false and swept nothing.
 			return Item{Kind: "repo_setting", Key: key, Outcome: OutcomeError,
-				Detail: fmt.Sprintf("%s (committed, but repo-demotion sweep failed: %s)", detail, sweepErr.Error())}
+				Detail: fmt.Sprintf("%s (committed, but repo-demotion sweep failed: %s; the obligation is recorded and the reconciler will retry it)", detail, sweepErr.Error())}
+		}
+		// Cleared only on a clean sweep, for the same reason the
+		// reconciler clears only on a clean sweep: a partially-swept repo
+		// whose obligation is cleared is the silent gap the column exists
+		// to close.
+		if _, clearErr := deps.RepoSettings.ClearDemotionSweepPending(ctx, s.RepoFullName); clearErr != nil {
+			return Item{Kind: "repo_setting", Key: key, Outcome: OutcomeError,
+				Detail: fmt.Sprintf("%s (swept %d sandbox(es), but clearing the demotion obligation failed: %s; the reconciler will sweep it again, which is harmless)", detail, marked, clearErr.Error())}
 		}
 		detail = fmt.Sprintf("%s, demotion sweep flagged %d live sandbox(es) for termination", detail, marked)
 	}

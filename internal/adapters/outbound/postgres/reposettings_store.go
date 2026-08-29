@@ -289,3 +289,17 @@ func (s *RepoSettingsStore) UpsertPreviewConfig(ctx context.Context, repoFullNam
 func (s *RepoSettingsStore) CountSuppressedRepos(ctx context.Context) (int64, error) {
 	return s.q.CountSuppressedRepos(ctx)
 }
+
+// ListOwedDemotionSweep returns every repo whose demotion stamped an
+// obligation no sweep has yet cleared (§30.4) -- internal/app/reconciler's
+// own retry. Empty on an ordinary deployment.
+func (s *RepoSettingsStore) ListOwedDemotionSweep(ctx context.Context, limit int32) ([]sqlcgen.RepoSetting, error) {
+	return s.q.ListReposOwedDemotionSweep(ctx, limit)
+}
+
+// ClearDemotionSweepPending clears the obligation, and must be called ONLY
+// after a sweep completed without error: a partially-swept repo whose
+// obligation is cleared is the silent gap the column exists to close.
+func (s *RepoSettingsStore) ClearDemotionSweepPending(ctx context.Context, repoFullName string) (int64, error) {
+	return s.q.ClearDemotionSweepPending(ctx, repoFullName)
+}
