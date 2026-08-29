@@ -11,6 +11,7 @@ import (
 	"github.com/khazaddev/narvi/tools/lint/narvichecks/execimportban"
 	"github.com/khazaddev/narvi/tools/lint/narvichecks/httpclientban"
 	"github.com/khazaddev/narvi/tools/lint/narvichecks/nakedgoroutine"
+	"github.com/khazaddev/narvi/tools/lint/narvichecks/nilhttpclient"
 	"github.com/khazaddev/narvi/tools/lint/narvichecks/notimeliteral"
 )
 
@@ -20,6 +21,7 @@ func main() {
 		execimportban.Analyzer,
 		httpclientban.Analyzer,
 		nakedgoroutine.Analyzer,
+		nilhttpclient.Analyzer,
 		notimeliteral.Analyzer,
 	)
 }

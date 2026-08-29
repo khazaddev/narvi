@@ -39,18 +39,27 @@
 //
 // # The ratcheted baseline
 //
-// Two pre-existing call sites outside every allowed tree are real,
-// audited, and pinned here rather than silently grandfathered (§30.3):
-// internal/adapters/inbound/auth/callback.go's own OAuth sign-in identity
-// reads (fetchGitHubUser/fetchVerifiedPrimaryEmail/checkOrgMembership/
-// checkAnyOrgMembership -- GETs, never a customer-repo write, no
-// different in kind from the API GETs §30.1 already excludes from the
-// suppression guarantee). A file not in this exact set, outside every
-// allowed tree, fails on ANY banned symbol -- there is no partial credit
-// and no directory-level exemption for anything beyond what is listed
-// below, by design: a 6th baseline entry, or a widened directory, both
-// require editing this file and are exactly the deliberate act this
-// arch-test exists to force.
+// §30.3 audited TWO pre-existing call sites outside every allowed tree
+// and required both pinned here rather than silently grandfathered. ONE
+// remains, because this Step retired the other:
+//
+//  1. internal/adapters/inbound/auth/callback.go -- the OAuth sign-in
+//     identity reads (fetchGitHubUser, fetchVerifiedPrimaryEmail,
+//     checkOrgMembership, checkAnyOrgMembership). All GETs, never a
+//     customer-repo write, no different in kind from the API GETs §30.1
+//     already excludes from the suppression guarantee.
+//
+//  2. internal/adapters/inbound/slack/{ack.go,handler.go} -- GONE. §30.3
+//     predicted this entry would "drop out of the baseline once this Step
+//     ships", because the same Step's first compensating control moves
+//     that construction behind an injected seam. It did: ack.go no longer
+//     exists and handler.go constructs no client. The list below is the
+//     evidence, not the intention.
+//
+// A file outside every allowed tree and not in that list fails on ANY
+// banned symbol -- no partial credit, no directory-level exemption. A
+// second entry, or a widened directory, requires editing this file, which
+// is exactly the deliberate act this arch-test exists to force.
 package httpclientban
 
 import (

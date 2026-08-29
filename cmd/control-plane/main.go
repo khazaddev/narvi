@@ -2156,7 +2156,11 @@ func serve() error {
 	// is a system-generated fact about a commit, never attributed to any
 	// individual PR author or reviewer.
 	if cfg.RWXAccessToken != "" {
-		rwxDispatchClient := rwx.NewDispatchClient(nil, "", cfg.RWXAccessToken)
+		// http.DefaultClient, not nil: §30.2 removed the nil default from
+		// this constructor, so nil here builds a client whose transport
+		// refuses every request -- RWX preview dispatch would have been
+		// dead the moment an operator configured it, silently.
+		rwxDispatchClient := rwx.NewDispatchClient(http.DefaultClient, "", cfg.RWXAccessToken)
 		outboxNotifiers[ports.NotificationKindRWXPreviewDispatch] = rwx.NewPreviewNotifier(rwxDispatchClient)
 		outboxNotifiers[ports.NotificationKindGitHubPreviewLink] = githubapi.NewPreviewLinkNotifier(liveSourceControl, cfg.GitHubBotToken)
 	}
