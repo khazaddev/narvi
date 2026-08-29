@@ -3745,10 +3745,30 @@ rather than being silently defaulted; none is resolved by this section:
   lane only runs coherently against a mirror (§30.7). Against: a real piece of per-session git
   infrastructure. The fallback (short-circuit before the claim + documented single-hop
   validation) is viable and smaller.
-- **Chat-originated triggers in shadow**: suppressing acks leaves Narvi silent in a real
-  workspace (confusing to anyone testing it there); refusing/ignoring Slack- and
-  Linear-originated triggers in shadow is cleaner but narrows the evaluation. One must be
-  chosen before Step 102 ships its Slack/Linear seams.
+- **Chat-originated triggers in shadow — RESOLVED: the trigger runs, and every outward effect
+  it produces is suppressed and recorded.** Narvi does not refuse Slack- or Linear-originated
+  work in shadow.
+
+  The framing that made this look like a trade-off was wrong, and naming the error is the
+  argument. "Refusing is cleaner, but the workspace goes silent" assumes refusal can announce
+  itself. It cannot: a "shadow mode, not running this" reply IS a message in the customer's
+  workspace, which is precisely the trace §30.1 calls total failure. **Refusal is exactly as
+  silent as suppression.** It buys no clarity for the person in chat, and costs the evaluation
+  every chat-originated path.
+
+  So the only real difference is whether the work happens at all, and there the case is
+  one-sided. Shadow exists to evaluate Narvi on live customer systems; the evaluator's own
+  visibility comes from the ledger surface (§30.6, Step 104), not from the workspace they are
+  deliberately being kept out of. A chat-triggered shadow session can read and can spend LLM
+  budget — the former is what §30.1 already excludes from the guarantee, the latter is surfaced
+  rather than suppressed by the same section. It cannot write: §30.4's read-only credential is
+  the structural control and does not care what triggered the turn.
+
+  Operative rule for Step 102's seams: an ack, an ephemeral, a `chat.update`, a view, a Linear
+  response or thought activity resolved shadow is suppressed at the client-method level and
+  written to the ledger with enough context for the evaluator to see what the workspace would
+  have shown. **Never a synthesized success and never a visible refusal** — the trigger is
+  honoured, its output is not sent.
 - **Customer LLM spend**: accept as inherent (surfaced per §30.6) or force an org-level
   evaluation key for shadow runs.
 - **RWX preview in shadow**: the public dispatch is suppressed either way (§30.1 — a public
