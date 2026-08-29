@@ -17,7 +17,6 @@ import (
 
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/linearapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/actorauthz"
@@ -25,6 +24,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/intentclassifier"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/app/shadowlinear"
 	"github.com/khazaddev/narvi/internal/domain/authz"
 	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
 	plandomain "github.com/khazaddev/narvi/internal/domain/plan"
@@ -115,7 +115,15 @@ type Deps struct {
 	Deliveries    *postgres.WebhookDeliveryStore
 	AgentSessions *postgres.LinearAgentSessionStore
 	Installations *postgres.LinearInstallationStore
-	LinearClient  *linearapi.Client
+	// LinearClient is typed as the shadowlinear.Client interface, never
+	// the concrete *linearapi.Client (§30.3's "mutation methods behind
+	// decorated interfaces") -- production wiring (cmd/control-plane/
+	// main.go) hands over a shadowlinear.Decorator wrapping the raw
+	// *linearapi.Client every OTHER caller in that binary (the OAuth
+	// install callback, the outbox's own LinearNotifier -- both reads or
+	// already covered by §30.2's outbox classification) still uses
+	// directly.
+	LinearClient shadowlinear.Client
 
 	// Plans/Outbox are §8.1's ("plan mode, cross-channel", §8.1/§13.3)
 	// own additions -- handlePrompted's new plan-verdict keyword check

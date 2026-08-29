@@ -48,6 +48,12 @@ func (MergePR) isShadowSpec()                  {}
 func (Transport) isShadowSpec()                {}
 func (ScmCredentialMintRefused) isShadowSpec() {}
 func (ScmCredentialSubstituted) isShadowSpec() {}
+func (SlackAck) isShadowSpec()                 {}
+func (SlackEphemeral) isShadowSpec()           {}
+func (SlackMessageUpdate) isShadowSpec()       {}
+func (SlackViewOpen) isShadowSpec()            {}
+func (LinearThoughtActivity) isShadowSpec()    {}
+func (LinearResponseActivity) isShadowSpec()   {}
 
 // CreatePR mirrors ports.CreatePRSpec without its Token.
 type CreatePR struct {
@@ -185,6 +191,68 @@ type ScmCredentialSubstituted struct {
 	GrantedPermissions map[string]string `json:"grantedPermissions"`
 }
 
+// SlackAck mirrors internal/app/shadowslack's PostAck argument list --
+// §30.3's family 2 (the in-thread chat.postMessage ack, formerly internal/
+// adapters/inbound/slack/ack.go's own private ackClient). No token field:
+// every Slack call in this codebase is authenticated with the ONE
+// configured bot token, never a per-call credential, so there is nothing
+// here to exclude in the first place -- unlike the GitHub specs above,
+// whose whole point is a field that ISN'T there.
+type SlackAck struct {
+	Channel  string `json:"channel"`
+	ThreadTS string `json:"threadTs"`
+	Text     string `json:"text"`
+}
+
+// SlackEphemeral mirrors chat.postEphemeral's own argument list -- §30.3's
+// family 3 (interactive.go's identity-link/denial notices) and the
+// identity-link notice handler.go posts on its own Events-API path.
+type SlackEphemeral struct {
+	Channel  string `json:"channel"`
+	UserID   string `json:"userId"`
+	ThreadTS string `json:"threadTs"`
+	Text     string `json:"text"`
+}
+
+// SlackMessageUpdate mirrors chat.update's own argument list -- §30.3's
+// family 3, interactive.go's own plan-decision-outcome rewrite of the
+// original approval message.
+type SlackMessageUpdate struct {
+	Channel string `json:"channel"`
+	Ts      string `json:"ts"`
+	Text    string `json:"text"`
+}
+
+// SlackViewOpen mirrors views.open's own argument list -- §30.3's family
+// 3, interactive.go's own "Request changes" feedback modal. TriggerID is
+// Slack's own short-lived interaction token, not a Narvi credential; it is
+// already expired by the time any operator could read this row.
+type SlackViewOpen struct {
+	TriggerID string `json:"triggerId"`
+	PlanID    string `json:"planId"`
+	SessionID string `json:"sessionId"`
+}
+
+// LinearThoughtActivity mirrors linearapi.Client.CreateThoughtActivity's
+// own argument list, minus accessToken -- §30.3's family 4. Linear's own
+// per-workspace installation token is exactly the kind of secret §30.6
+// requires excluded from every spec in this file, same as GitHub's above,
+// even though Linear's token is not itself an SCM write credential.
+type LinearThoughtActivity struct {
+	AgentSessionID string `json:"agentSessionId"`
+	Body           string `json:"body"`
+}
+
+// LinearResponseActivity mirrors linearapi.Client.CreateResponseActivity's
+// own argument list, minus accessToken -- §30.3's family 4 (the
+// synchronous plan-decision-outcome activity; the turn-outcome
+// CreateResponseActivity call is a SEPARATE, outbox-delivered path already
+// covered by the outbox's own §30.2 classification, not this decorator).
+type LinearResponseActivity struct {
+	AgentSessionID string `json:"agentSessionId"`
+	Body           string `json:"body"`
+}
+
 // These assertions pin the sealed set. Removing isShadowSpec from any of
 // them, or forgetting it on a type added later, is a build failure at the
 // point where someone would otherwise have widened the ledger's input
@@ -199,4 +267,10 @@ var (
 	_ Spec = Transport{}
 	_ Spec = ScmCredentialMintRefused{}
 	_ Spec = ScmCredentialSubstituted{}
+	_ Spec = SlackAck{}
+	_ Spec = SlackEphemeral{}
+	_ Spec = SlackMessageUpdate{}
+	_ Spec = SlackViewOpen{}
+	_ Spec = LinearThoughtActivity{}
+	_ Spec = LinearResponseActivity{}
 )

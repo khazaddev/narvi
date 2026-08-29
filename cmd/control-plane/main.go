@@ -65,8 +65,11 @@ import (
 	appreviewtriage "github.com/khazaddev/narvi/internal/app/reviewtriage"
 	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/app/shadowlinear"
 	"github.com/khazaddev/narvi/internal/app/shadowscm"
+	"github.com/khazaddev/narvi/internal/app/shadowslack"
 	"github.com/khazaddev/narvi/internal/app/uploadsweep"
+	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/domain/scmscope"
 	"github.com/khazaddev/narvi/internal/platform"
 	"github.com/khazaddev/narvi/migrations"
@@ -290,6 +293,38 @@ func serve() error {
 			RepoSettings:   repoSettingsForEgress,
 		}, repoFullName).Live()
 	}
+
+	// unattributedShadowRepoName is what internal/app/shadowslack and
+	// internal/app/shadowlinear attribute a suppressed write to when this
+	// deployment's own default repo is unparseable or unconfigured --
+	// isLiveEgress above still resolves a real answer for it (repo_settings.
+	// Get on a nonexistent row is pgx.ErrNoRows, which egressmode.Resolve's
+	// own fail-closed posture already treats as shadow), so this string
+	// only ever affects what an operator READS on the ledger row, never
+	// whether one is written or which mode governs it.
+	const unattributedShadowRepoName = "(no default repo configured)"
+
+	// shadowRepoFullName resolves rawRepoURL (platform.Config's
+	// SlackDefaultRepoURL/LinearDefaultRepoURL) into the single "owner/repo"
+	// isLiveEgress checks §30.8's per-repo flag against for that whole
+	// provider integration -- see internal/app/shadowslack's own doc
+	// comment ("why one fixed repository, not a per-call one") for why
+	// this is resolved ONCE, here, rather than per call or per session:
+	// every session either ingress package can ever create names exactly
+	// this one, deployment-wide-configured repository, so there is only
+	// ever one answer for this whole deployment.
+	shadowRepoFullName := func(rawRepoURL string) string {
+		if rawRepoURL == "" {
+			return unattributedShadowRepoName
+		}
+		owner, repo, err := reposource.ParseOwnerRepo(rawRepoURL)
+		if err != nil {
+			slog.Warn("narvi control-plane: could not parse a default repo URL for shadow-egress attribution; suppressed writes on it will be recorded unattributed", "error", err)
+			return unattributedShadowRepoName
+		}
+		return owner + "/" + repo
+	}
+
 	// Say out loud, at boot, what this deployment will and will not send.
 	//
 	// §30.8's polarity means a repository is suppressed unless something
@@ -518,8 +553,34 @@ func serve() error {
 	// and this route, mirroring how registry/commander are each
 	// constructed once and threaded through multiple call sites elsewhere
 	// in this same function.
-	slackNotifier := slackapi.New(nil, slackAPIBaseURL, cfg.SlackBotToken)
+	//
+	// http.DefaultClient here (not nil) is deliberate, and safe: this
+	// package's own New used to default a nil client to http.DefaultClient
+	// silently, which §30.2 calls an attractive nuisance and removed --
+	// New(nil, ...) now builds a client that can make NO request at all
+	// (slackapi.refusingTransport), so this call site must hand over a
+	// real one explicitly. Handing over a WORKING client here does not
+	// reopen the gap that removal closed: slackNotifier.Deliver (the
+	// outbox path, ports.NotificationKindSlack/SlackPlanApproval/...) is
+	// already suppressed at the outbox layer (outboxworker's own
+	// notificationKindClassification, §30.2), and slackNotifier's other
+	// synchronous methods are never called directly by any ingress
+	// handler any more -- every one of those calls goes through
+	// slackDecorated below instead (§30.3's "one client per provider").
+	slackNotifier := slackapi.New(http.DefaultClient, slackAPIBaseURL, cfg.SlackBotToken)
 	planSlackNotifier := outboxworker.NewPlanSlackNotifier(slackNotifier, planStore)
+
+	// slackDecorated is §30.3's second compensating control for Slack: the
+	// SAME slackNotifier instance above, wrapped so its ack/interactive
+	// mutation methods are suppressed-and-recorded in shadow -- handed to
+	// BOTH Slack ingress routes below (Deps.SlackClient, InteractiveDeps.
+	// SlackClient) as the shadowslack.Client interface, never the
+	// concrete *slackapi.Client, so neither route can construct (or reach
+	// past) a gate-free client of its own.
+	slackDecorated, err := shadowslack.New(slackNotifier, shadowLedger, shadowRepoFullName(cfg.SlackDefaultRepoURL), isLiveEgress)
+	if err != nil {
+		return fmt.Errorf("build shadow slack decorator: %w", err)
+	}
 
 	// webhookDeliveryStore is §5.1's own provider-agnostic dedupe claim,
 	// shared across §8.2/§8.10's own GitHub/Slack/Linear ingress (see
@@ -1035,19 +1096,18 @@ func serve() error {
 		RolloutMode:     cfg.RolloutMode,
 		RepoSettings:    repoSettingsStore,
 		SigningSecret:   cfg.SlackSigningSecret,
-		BotToken:        cfg.SlackBotToken,
 		DefaultRepoName: cfg.SlackDefaultRepoName,
 		DefaultRepoURL:  cfg.SlackDefaultRepoURL,
 		TimestampWindow: cfg.Timeouts.WebhookTimestampFreshnessWindow,
-		SlackAPIBaseURL: slackAPIBaseURL,
 		AckTimeout:      cfg.Timeouts.SlackAckTimeout,
 		// IdentityLink/SlackClient/Timeouts ("identities + full
-		// RBAC", §13.2): SlackClient reuses the SAME slackNotifier
-		// instance already constructed above (for the outbox delivery
-		// worker and the interactivity route immediately below), never a
-		// third, independently-constructed client.
+		// RBAC", §13.2): SlackClient is the shadowslack-decorated wrapper
+		// (§30.3) around the SAME slackNotifier instance already
+		// constructed above (for the outbox delivery worker and the
+		// interactivity route immediately below), never a third,
+		// independently-constructed, gate-free client.
 		IdentityLink: appIdentityLinkDeps,
-		SlackClient:  slackNotifier,
+		SlackClient:  slackDecorated,
 		Timeouts:     cfg.Timeouts,
 	}))
 
@@ -1068,7 +1128,7 @@ func serve() error {
 		Outbox:              outboxStore,
 		LinearAgentSessions: linearAgentSessionStore,
 		Registry:            registry,
-		SlackClient:         slackNotifier,
+		SlackClient:         slackDecorated,
 		AuditLog:            auditLogStore,
 		IdentityLink:        appIdentityLinkDeps,
 		// Participants ("identities + full RBAC", §13.2/§13.3):
@@ -1897,7 +1957,22 @@ func serve() error {
 	// minimal (§8.2/§8.10's own GitHub/Slack ingress land their own
 	// analogous blocks here independently, in separate worktrees).
 	linearOAuthConfig := linear.NewOAuthConfig(*cfg)
-	linearClient := linearapi.New(nil, linearAPIBaseURL)
+	// http.DefaultClient here (not nil) mirrors slackNotifier's own
+	// identical fix above, for the identical reason: linearapi.New used
+	// to default a nil client to http.DefaultClient silently, which
+	// §30.2 removed as an attractive nuisance, so this call site must now
+	// hand over a real transport explicitly. linearClient itself stays
+	// reachable directly by the OAuth install callback (a one-time
+	// identity READ, no different in kind from GitHub's own excluded
+	// OAuth GETs, §30.1) and by the outbox's own LinearNotifier (already
+	// suppressed at the outbox layer, ports.NotificationKindLinear is
+	// ClassSuppress) -- only the SYNCHRONOUS webhook-handler calls below
+	// go through linearDecorated instead (§30.3's family 4).
+	linearClient := linearapi.New(http.DefaultClient, linearAPIBaseURL)
+	linearDecorated, err := shadowlinear.New(linearClient, shadowLedger, shadowRepoFullName(cfg.LinearDefaultRepoURL), isLiveEgress)
+	if err != nil {
+		return fmt.Errorf("build shadow linear decorator: %w", err)
+	}
 	// linearAgentSessionStore is constructed earlier, alongside outboxStore
 	// -- see that construction site's own doc comment for why.
 	linearInstallationStore := postgres.NewLinearInstallationStore(pool)
@@ -1931,7 +2006,7 @@ func serve() error {
 		Deliveries:         webhookDeliveryStore,
 		AgentSessions:      linearAgentSessionStore,
 		Installations:      linearInstallationStore,
-		LinearClient:       linearClient,
+		LinearClient:       linearDecorated,
 		IntentClassifier:   intentClassifierSvc,
 		WebhookSecret:      []byte(cfg.LinearWebhookSecret),
 		TokenEncryptionKey: cfg.TokenEncryptionKey,
@@ -1965,10 +2040,11 @@ func serve() error {
 	// scenario 9): three real ports.Notifier implementations, one per
 	// NotificationKind, assembled into a single kind->Notifier routing map
 	// -- see internal/app/outboxworker's own doc.go for the full pump
-	// design this Builder runs. slackNotifier is a NEW, separate client
-	// from internal/adapters/inbound/slack's own ackClient (that one is
-	// §8.10's own synchronous in-thread ack, never reused here -- see
-	// that package's own doc.go). githubNotifier wraps the SAME
+	// design this Builder runs. slackNotifier is the SAME *slackapi.Client
+	// instance §8.10's own synchronous in-thread ack/interactivity routes
+	// reach (through slackDecorated, above) -- §30.3's "one client per
+	// provider", never a second, independently-constructed one.
+	// githubNotifier wraps the SAME
 	// sourceControl Adapter already constructed above (design decision:
 	// BotNotifier is a sibling type over the same Adapter/doPost
 	// machinery, not a second, independently-constructed client),

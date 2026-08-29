@@ -28,6 +28,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
 	"github.com/khazaddev/narvi/internal/app/actorauthz"
 	"github.com/khazaddev/narvi/internal/app/identitylink"
+	"github.com/khazaddev/narvi/internal/app/shadowslack"
 	"github.com/khazaddev/narvi/internal/domain/authz"
 	"github.com/khazaddev/narvi/internal/platform"
 )
@@ -62,16 +63,17 @@ const authzSurface = "slack"
 // CALLER decides how to deliver it, and every caller delivers it
 // EPHEMERALLY (visible only to the acting user), never appended to
 // whole-channel-visible text: handler.go delivers it via
-// ack.postEphemeralBounded; interactive.go delivers its own sibling
-// resolveSlackActorSingleAttempt's notice (below) via
-// SlackClient.PostEphemeral. This replaced this Step's own PREVIOUS
+// postEphemeralBounded (deps.SlackClient.PostEphemeral, bounded);
+// interactive.go delivers its own sibling resolveSlackActorSingleAttempt's
+// notice (below) via SlackClient.PostEphemeral directly. This replaced
+// this Step's own PREVIOUS
 // behavior -- appending the notice to the existing in-thread ack
 // (handler.go) or to the plan-decision outcome text posted via
 // chat.update (interactive.go) -- which a confirmed security review
 // found let anyone in the channel read another user's link-prompt
 // notice; do not reintroduce that whole-channel-visible hijack path by
 // trusting a future edit of this comment over the actual delivery code.
-func resolveSlackActor(ctx context.Context, logger *slog.Logger, slackClient *slackapi.Client, identityLinkDeps identitylink.Deps, timeouts platform.Timeouts, slackUserID string) (actorUserID pgtype.UUID, notice string) {
+func resolveSlackActor(ctx context.Context, logger *slog.Logger, slackClient shadowslack.Client, identityLinkDeps identitylink.Deps, timeouts platform.Timeouts, slackUserID string) (actorUserID pgtype.UUID, notice string) {
 	if slackUserID == "" {
 		return pgtype.UUID{}, ""
 	}
@@ -134,7 +136,7 @@ func resolveSlackActor(ctx context.Context, logger *slog.Logger, slackClient *sl
 // fetch here eats directly into the sliver of Slack's ~3s non-retryable
 // interactivity-ack window this function's own doc comment above says is
 // already fully spoken for by other work.
-func resolveSlackActorSingleAttempt(ctx context.Context, logger *slog.Logger, slackClient *slackapi.Client, identityLinkDeps identitylink.Deps, fetchTimeout time.Duration, slackUserID string) (actorUserID pgtype.UUID, notice string) {
+func resolveSlackActorSingleAttempt(ctx context.Context, logger *slog.Logger, slackClient shadowslack.Client, identityLinkDeps identitylink.Deps, fetchTimeout time.Duration, slackUserID string) (actorUserID pgtype.UUID, notice string) {
 	if slackUserID == "" {
 		return pgtype.UUID{}, ""
 	}

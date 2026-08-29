@@ -81,9 +81,9 @@ func New(httpClient *http.Client, apiBaseURL, botToken string) *Client {
 }
 
 // postMessageRequest is the subset of Slack's real chat.postMessage
-// request body this client needs -- mirrors internal/adapters/inbound/
-// slack/ack.go's own postMessageRequest shape exactly (a deliberate, small
-// duplication -- see this package's own doc.go).
+// request body this client needs for a plain, unthreaded post (the
+// outbox's own Deliver, below) -- see postThreadMessageRequest
+// (blockkit.go) for PostAck's own threaded sibling shape.
 type postMessageRequest struct {
 	Channel  string `json:"channel"`
 	ThreadTS string `json:"thread_ts"`

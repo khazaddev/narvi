@@ -230,11 +230,9 @@ func newSlackTestRigWithEpistemicCheckDefault(t *testing.T, pool *pgxpool.Pool, 
 		// other Deps field here, always a real, non-nil store.
 		Participants:    narvipg.NewParticipantStore(pool),
 		SigningSecret:   testSigningSecret,
-		BotToken:        "test-bot-token",
 		DefaultRepoName: "narvi",
 		DefaultRepoURL:  "https://github.com/khazaddev/narvi",
 		TimestampWindow: 5 * time.Minute,
-		SlackAPIBaseURL: ackServer.URL,
 		AckTimeout:      platform.DefaultTimeouts().SlackAckTimeout,
 		// IdentityLink/SlackClient/Timeouts ("identities + full
 		// RBAC", §13.2): ackServer above answers EVERY path (including
