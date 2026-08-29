@@ -30,22 +30,27 @@ SELECT * FROM review_findings
 WHERE repo_full_name = $1 AND pr_number = $2 AND identity_hash = $3;
 
 -- name: ListOpenAndRebuttedReviewFindings :many
--- §22.1's own reconciliation read: every 'open' or 'rebutted' finding for
--- one PR, oldest-first (a stable, deterministic order — see
--- internal/domain/reviewpost.RenderAlreadyAnsweredFacts' own doc comment
--- on why ordering matters for a byte-for-byte-repeatable render). 'open'
--- is included deliberately, not just 'rebutted': an already-reported-but-
--- not-yet-rebutted finding should still read as "already told you about
--- this" to a re-reviewing agent, not as brand new -- see reviewpost.
--- ReconciledFinding's own doc comment. fix_pending/fix_open/fix_merged/
--- fix_applied findings are DELIBERATELY excluded here: those already have
--- their own separate, stronger signal (a referenced fix PR, or a merged
--- one) that the verdict-update step (§17.3) posts directly onto the PR,
--- and re-surfacing them in the SAME "already answered, do not re-report"
--- block a plain rebuttal uses would blur two different kinds of
--- resolution together.
+-- §22.1's own reconciliation read: every 'open', 'rebutted', or
+-- 'fix_recorded' finding for one PR, oldest-first (a stable, deterministic
+-- order — see internal/domain/reviewpost.RenderAlreadyAnsweredFacts' own
+-- doc comment on why ordering matters for a byte-for-byte-repeatable
+-- render). 'open' is included deliberately, not just 'rebutted': an
+-- already-reported-but-not-yet-rebutted finding should still read as
+-- "already told you about this" to a re-reviewing agent, not as brand new
+-- -- see reviewpost.ReconciledFinding's own doc comment. fix_pending/
+-- fix_open/fix_merged/fix_applied findings are DELIBERATELY excluded
+-- here: those already have their own separate, stronger signal (a
+-- referenced fix PR, or a merged one) that the verdict-update step
+-- (§17.3) posts directly onto the PR, and re-surfacing them in the SAME
+-- "already answered, do not re-report" block a plain rebuttal uses would
+-- blur two different kinds of resolution together. 'fix_recorded'
+-- (§30.7/§30.9 -- the manual apply-suggestion endpoint's own commit was
+-- shadow-suppressed) is included for the OPPOSITE reason: it claims no
+-- such stronger signal at all -- nothing reached the real repository -- so
+-- a re-reviewing agent must keep treating it as still open, never as
+-- already resolved.
 SELECT * FROM review_findings
-WHERE repo_full_name = $1 AND pr_number = $2 AND status IN ('open', 'rebutted')
+WHERE repo_full_name = $1 AND pr_number = $2 AND status IN ('open', 'rebutted', 'fix_recorded')
 ORDER BY first_seen_at ASC;
 
 -- name: ListAllReviewFindingsForPR :many
@@ -109,6 +114,24 @@ RETURNING *;
 -- OTHER of the two mutually-exclusive remediation paths.
 UPDATE review_findings
 SET status = 'fix_applied'
+WHERE repo_full_name = $1 AND pr_number = $2 AND identity_hash = $3
+RETURNING *;
+
+-- name: MarkReviewFindingFixRecorded :one
+-- Set by the manual apply-suggestion endpoint instead of
+-- MarkReviewFindingFixApplied when the endpoint's own UpdateFileContent
+-- call came back shadow-suppressed (§30.7/§30.9): the commit SHA it
+-- received is shadowscm's own self-evidently synthetic value, not a real
+-- git object, so nothing was actually committed to the repository.
+-- Deliberately a DISTINCT status from 'fix_applied' -- see
+-- reviewpost.FindingStatusFixRecorded's own doc comment for why marking
+-- this 'fix_applied' would let §24's automatic re-review re-detect the
+-- SAME unfixed defect while this row still claims it was already
+-- resolved, and ListOpenAndRebuttedReviewFindings' own doc comment (above)
+-- for why this status is included in re-review reconciliation while
+-- 'fix_applied' is not.
+UPDATE review_findings
+SET status = 'fix_recorded'
 WHERE repo_full_name = $1 AND pr_number = $2 AND identity_hash = $3
 RETURNING *;
 

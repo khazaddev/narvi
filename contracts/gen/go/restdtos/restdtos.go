@@ -12,13 +12,27 @@ import "unicode/utf8"
 
 // 200 response body for POST
 // /api/sessions/:id/review/findings/:identityHash/apply-suggestion (§12.2 item 2).
+// On a repository whose outgoing changes are currently suppressed (platform shadow
+// mode, §30.7/§30.9), applied is false and commitSha carries the shadow-suppressed
+// synthetic value -- never a real commit -- and the finding is marked fix_recorded
+// rather than fix_applied.
 type ApplySuggestionResponse struct {
+	// True only when this call genuinely committed the suggested fix to the real
+	// repository. False means the commit was recorded, not committed (platform shadow
+	// mode) -- the finding is marked fix_recorded, not fix_applied.
+	Applied bool `json:"applied" yaml:"applied" mapstructure:"applied"`
+
 	// The new commit this call created on the PR's own head branch, applying the
-	// finding's suggestedFix.
+	// finding's suggestedFix -- or, when applied is false, the shadow-suppressed
+	// synthetic value this call recorded instead of committing anything real.
 	CommitSha string `json:"commitSha" yaml:"commitSha" mapstructure:"commitSha"`
 
 	// IdentityHash corresponds to the JSON schema field "identityHash".
 	IdentityHash string `json:"identityHash" yaml:"identityHash" mapstructure:"identityHash"`
+
+	// A human-readable summary of what happened -- "Suggested fix applied" or an
+	// honest "Recorded, not committed: ..." explanation.
+	Message string `json:"message" yaml:"message" mapstructure:"message"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -27,11 +41,17 @@ func (j *ApplySuggestionResponse) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
+	if _, ok := raw["applied"]; raw != nil && !ok {
+		return fmt.Errorf("field applied in ApplySuggestionResponse: required")
+	}
 	if _, ok := raw["commitSha"]; raw != nil && !ok {
 		return fmt.Errorf("field commitSha in ApplySuggestionResponse: required")
 	}
 	if _, ok := raw["identityHash"]; raw != nil && !ok {
 		return fmt.Errorf("field identityHash in ApplySuggestionResponse: required")
+	}
+	if _, ok := raw["message"]; raw != nil && !ok {
+		return fmt.Errorf("field message in ApplySuggestionResponse: required")
 	}
 	type Plain ApplySuggestionResponse
 	var plain Plain
@@ -7127,6 +7147,7 @@ const ReviewAnalyticsFindingStatusCountStatusFixApplied ReviewAnalyticsFindingSt
 const ReviewAnalyticsFindingStatusCountStatusFixMerged ReviewAnalyticsFindingStatusCountStatus = "fix_merged"
 const ReviewAnalyticsFindingStatusCountStatusFixOpen ReviewAnalyticsFindingStatusCountStatus = "fix_open"
 const ReviewAnalyticsFindingStatusCountStatusFixPending ReviewAnalyticsFindingStatusCountStatus = "fix_pending"
+const ReviewAnalyticsFindingStatusCountStatusFixRecorded ReviewAnalyticsFindingStatusCountStatus = "fix_recorded"
 const ReviewAnalyticsFindingStatusCountStatusOpen ReviewAnalyticsFindingStatusCountStatus = "open"
 const ReviewAnalyticsFindingStatusCountStatusRebutted ReviewAnalyticsFindingStatusCountStatus = "rebutted"
 
@@ -7137,6 +7158,7 @@ var enumValues_ReviewAnalyticsFindingStatusCountStatus = []interface{}{
 	"fix_open",
 	"fix_merged",
 	"fix_applied",
+	"fix_recorded",
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -7389,6 +7411,7 @@ const ReviewFindingStatusFixApplied ReviewFindingStatus = "fix_applied"
 const ReviewFindingStatusFixMerged ReviewFindingStatus = "fix_merged"
 const ReviewFindingStatusFixOpen ReviewFindingStatus = "fix_open"
 const ReviewFindingStatusFixPending ReviewFindingStatus = "fix_pending"
+const ReviewFindingStatusFixRecorded ReviewFindingStatus = "fix_recorded"
 const ReviewFindingStatusOpen ReviewFindingStatus = "open"
 const ReviewFindingStatusRebutted ReviewFindingStatus = "rebutted"
 
@@ -7399,6 +7422,7 @@ var enumValues_ReviewFindingStatus = []interface{}{
 	"fix_open",
 	"fix_merged",
 	"fix_applied",
+	"fix_recorded",
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -7609,6 +7633,7 @@ const ReviewReadoutFindingStatusFixApplied ReviewReadoutFindingStatus = "fix_app
 const ReviewReadoutFindingStatusFixMerged ReviewReadoutFindingStatus = "fix_merged"
 const ReviewReadoutFindingStatusFixOpen ReviewReadoutFindingStatus = "fix_open"
 const ReviewReadoutFindingStatusFixPending ReviewReadoutFindingStatus = "fix_pending"
+const ReviewReadoutFindingStatusFixRecorded ReviewReadoutFindingStatus = "fix_recorded"
 const ReviewReadoutFindingStatusOpen ReviewReadoutFindingStatus = "open"
 const ReviewReadoutFindingStatusRebutted ReviewReadoutFindingStatus = "rebutted"
 
@@ -7619,6 +7644,7 @@ var enumValues_ReviewReadoutFindingStatus = []interface{}{
 	"fix_open",
 	"fix_merged",
 	"fix_applied",
+	"fix_recorded",
 }
 
 // UnmarshalJSON implements json.Unmarshaler.

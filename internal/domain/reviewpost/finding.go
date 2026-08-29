@@ -75,6 +75,28 @@ const (
 	// mutually-exclusive remediation path from FindingStatusFixPending/
 	// FixOpen/FixMerged above.
 	FindingStatusFixApplied FindingStatus = "fix_applied"
+	// FindingStatusFixRecorded is a finding whose SuggestedFix was
+	// submitted through the manual apply-suggestion endpoint on a
+	// repository whose outgoing changes are currently suppressed
+	// (platform shadow mode, TECHNICAL_PLAN.md §30.7/§30.9): the
+	// endpoint's own UpdateFileContent call is honored and recorded in
+	// the shadow ledger, but nothing reaches the customer's real
+	// repository -- the commit SHA it returns is a self-evidently
+	// synthetic value (shadowscm.IsSyntheticCommitSHA), never a real git
+	// object.
+	//
+	// Unlike FindingStatusFixApplied, this status is NOT a claim of
+	// resolution: the finding's own file/description are unchanged on
+	// the real head, so an automatic re-review (§24) still detects the
+	// same defect and re-ingests it under the SAME identity hash
+	// (UpsertReviewFinding's own ON CONFLICT preserves this status,
+	// bumping only last_seen_at) -- an honest UPDATE to a still-open
+	// finding, never a contradiction the way re-detecting a
+	// FindingStatusFixApplied finding would be. Re-review reconciliation
+	// (ListOpenAndRebuttedReviewFindings) includes this status alongside
+	// Open/Rebutted for exactly that reason: a re-reviewing agent must
+	// see it as still live, never as already resolved.
+	FindingStatusFixRecorded FindingStatus = "fix_recorded"
 )
 
 // FindingInput is a review-verdict-posting-tool call's own typed

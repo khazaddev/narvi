@@ -41,3 +41,22 @@ func syntheticPRRef(owner, repo string) ports.PRRef {
 		URL:    "shadow-suppressed://" + owner + "/" + repo + "/pull/not-created",
 	}
 }
+
+// IsSyntheticCommitSHA reports whether sha is exactly the value a
+// suppressed UpdateFileContent returns (syntheticCommitSHA, above).
+//
+// UpdateFileContent's own suppressed branch deliberately returns this
+// value with a nil error, never a sentinel error the way MergePR's own
+// suppression does (Decorator.MergePR's doc comment) -- keeping the
+// result coherent for callers that only need SOMETHING SHA-shaped to keep
+// flowing. But httpapi's own apply-suggestion handler (reviewfindings.go)
+// is not one of those callers: it decides a review finding's own status
+// from the result, and crediting a shadow-suppressed "commit" as a real
+// one there is exactly the naive-suppression bug §30.7 names by name
+// ("marks the finding fix_applied with a SHA that exists nowhere"). This
+// is that caller's one way to tell the two apart without this package
+// handing out anything that could itself be mistaken for a credential or
+// a real object id.
+func IsSyntheticCommitSHA(sha string) bool {
+	return sha == syntheticCommitSHA
+}

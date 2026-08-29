@@ -1211,7 +1211,8 @@
             "fix_pending",
             "fix_open",
             "fix_merged",
-            "fix_applied"
+            "fix_applied",
+            "fix_recorded"
           ],
           "description": "Matches internal/domain/reviewpost.FindingStatus exactly."
         },
@@ -1241,10 +1242,12 @@
     "ApplySuggestionResponse": {
       "type": "object",
       "additionalProperties": false,
-      "description": "200 response body for POST /api/sessions/:id/review/findings/:identityHash/apply-suggestion (\u00a712.2 item 2).",
+      "description": "200 response body for POST /api/sessions/:id/review/findings/:identityHash/apply-suggestion (\u00a712.2 item 2). On a repository whose outgoing changes are currently suppressed (platform shadow mode, \u00a730.7/\u00a730.9), applied is false and commitSha carries the shadow-suppressed synthetic value -- never a real commit -- and the finding is marked fix_recorded rather than fix_applied.",
       "required": [
         "identityHash",
-        "commitSha"
+        "commitSha",
+        "applied",
+        "message"
       ],
       "properties": {
         "identityHash": {
@@ -1252,7 +1255,15 @@
         },
         "commitSha": {
           "type": "string",
-          "description": "The new commit this call created on the PR's own head branch, applying the finding's suggestedFix."
+          "description": "The new commit this call created on the PR's own head branch, applying the finding's suggestedFix -- or, when applied is false, the shadow-suppressed synthetic value this call recorded instead of committing anything real."
+        },
+        "applied": {
+          "type": "boolean",
+          "description": "True only when this call genuinely committed the suggested fix to the real repository. False means the commit was recorded, not committed (platform shadow mode) -- the finding is marked fix_recorded, not fix_applied."
+        },
+        "message": {
+          "type": "string",
+          "description": "A human-readable summary of what happened -- \"Suggested fix applied\" or an honest \"Recorded, not committed: ...\" explanation."
         }
       }
     },
@@ -1552,7 +1563,7 @@
         "suggestedFix": { "type": ["string", "null"] },
         "status": {
           "type": "string",
-          "enum": ["open", "rebutted", "fix_pending", "fix_open", "fix_merged", "fix_applied"]
+          "enum": ["open", "rebutted", "fix_pending", "fix_open", "fix_merged", "fix_applied", "fix_recorded"]
         },
         "rebuttalText": { "type": ["string", "null"] },
         "startLine": {
@@ -2126,7 +2137,8 @@
             "fix_pending",
             "fix_open",
             "fix_merged",
-            "fix_applied"
+            "fix_applied",
+            "fix_recorded"
           ]
         },
         "count": {
