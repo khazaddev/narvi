@@ -56,6 +56,7 @@ func (SlackViewOpen) isShadowSpec()            {}
 func (LinearThoughtActivity) isShadowSpec()    {}
 func (LinearResponseActivity) isShadowSpec()   {}
 func (Push) isShadowSpec()                     {}
+func (SentinelAutoFix) isShadowSpec()          {}
 
 // CreatePR mirrors ports.CreatePRSpec without its Token.
 type CreatePR struct {
@@ -309,6 +310,37 @@ type Push struct {
 	WouldOpenPR bool `json:"wouldOpenPr"`
 }
 
+// SentinelAutoFix is what the sentinel-auto-fix outbox notifier
+// (internal/app/outboxworker/sentinelautofix.go) records when its own
+// origin repository is shadow and no fix child session has been claimed
+// yet -- §30.7's own state-coherence resolution for this lane, per §30.9
+// (resolved: no git mirror; short-circuit before the claim). A suppressed
+// CreateBranch would leave the fix branch created nowhere real; a child
+// session pinned to check it out would fail its own `git clone --branch`
+// and, by the time that failure surfaced, the one-shot claim
+// (sentinel_fixes.fix_child_session_id) would already be committed and
+// every addressed finding already flipped to fix_pending -- wedging the
+// lane permanently and disabling the manual apply-suggestion action
+// (§17.3) for a fix nothing is actually working on. So the whole lane
+// stops here instead: no branch is created, no child session is spawned,
+// and the caller never calls markFindingsFixPending -- every addressed
+// finding stays exactly 'open'.
+//
+// This ONE row records what the lane would have done, combining what
+// would otherwise have been a separate create_branch ledger row and a
+// separate session-spawn fact: WouldCreateBranch is never actually
+// created (createFixBranch is never called on this path), and
+// FindingIdentityHashes names every finding this delivery's own payload
+// addresses, exactly as markFindingsFixPending would have.
+type SentinelAutoFix struct {
+	Owner                 string   `json:"owner"`
+	Repo                  string   `json:"repo"`
+	OriginPRNumber        int      `json:"originPrNumber"`
+	OriginHeadBranch      string   `json:"originHeadBranch"`
+	WouldCreateBranch     string   `json:"wouldCreateBranch"`
+	FindingIdentityHashes []string `json:"findingIdentityHashes"`
+}
+
 // These assertions pin the sealed set. Removing isShadowSpec from any of
 // them, or forgetting it on a type added later, is a build failure at the
 // point where someone would otherwise have widened the ledger's input
@@ -331,4 +363,5 @@ var (
 	_ Spec = LinearThoughtActivity{}
 	_ Spec = LinearResponseActivity{}
 	_ Spec = Push{}
+	_ Spec = SentinelAutoFix{}
 )

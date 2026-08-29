@@ -16,6 +16,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/app/shadowledger"
 	"github.com/khazaddev/narvi/internal/domain/provenance"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/platform"
@@ -123,6 +124,22 @@ type sentinelAutoFixNotifier struct {
 	// dead-letter path.
 	rolloutMode  platform.RolloutMode
 	repoSettings *postgres.RepoSettingsStore
+
+	// isLive and ledger are §30.7/§30.9's own resolved sentinel-fix lane
+	// short-circuit (no git mirror; suppression happens BEFORE the
+	// one-shot claim, never per-write inside it -- see Deliver's own doc
+	// comment for the full "why"). isLive resolves whether payload.
+	// RepoFullName may currently be written to for real -- the SAME
+	// closure production wiring already builds for shadowscm.Decorator
+	// (cmd/control-plane/main.go's own isLiveEgress), consulted once per
+	// Deliver call rather than letting createFixBranch's own decorated
+	// CreateBranch discover shadow mode on its own. ledger is the SAME
+	// shadowledger.Store that decorator already writes to -- recordShortCircuit
+	// (below) writes here directly when isLive says shadow, so an operator
+	// reading the ledger sees this lane's own suppression alongside every
+	// other one.
+	isLive func(ctx context.Context, repoFullName string) bool
+	ledger shadowledger.Store
 }
 
 var _ ports.Notifier = (*sentinelAutoFixNotifier)(nil)
@@ -134,7 +151,12 @@ var _ ports.Notifier = (*sentinelAutoFixNotifier)(nil)
 // sourceControl/githubBotToken/timeouts are the SAME instances/values
 // production wiring already constructs for every other GitHub-flavored
 // notifier (e.g. githubapi.NewVerdictNotifier's own sourceControl/
-// cfg.GitHubBotToken, cmd/control-plane/main.go).
+// cfg.GitHubBotToken, cmd/control-plane/main.go). isLive/ledger (§30.7/
+// §30.9, resolved: no git mirror -- short-circuit the lane before the
+// claim) are the SAME isLiveEgress closure and shadowLedger instance
+// production wiring already constructs for shadowscm.Decorator -- see
+// this notifier's own isLive/ledger field doc comments for what each is
+// used for.
 func NewSentinelAutoFixNotifier(
 	pool *pgxpool.Pool,
 	sessions *postgres.SessionStore,
@@ -150,6 +172,8 @@ func NewSentinelAutoFixNotifier(
 	epistemicCheckDefault bool,
 	rolloutMode platform.RolloutMode,
 	repoSettings *postgres.RepoSettingsStore,
+	isLive func(ctx context.Context, repoFullName string) bool,
+	ledger shadowledger.Store,
 ) ports.Notifier {
 	return &sentinelAutoFixNotifier{
 		pool: pool, sessions: sessions, turns: turns, environments: environments,
@@ -158,6 +182,8 @@ func NewSentinelAutoFixNotifier(
 		epistemicCheckDefault: epistemicCheckDefault,
 		rolloutMode:           rolloutMode,
 		repoSettings:          repoSettings,
+		isLive:                isLive,
+		ledger:                ledger,
 	}
 }
 
@@ -304,6 +330,55 @@ func (n *sentinelAutoFixNotifier) Deliver(ctx context.Context, notification port
 
 	fixChildSessionID := fix.FixChildSessionID
 	if !fixChildSessionID.Valid {
+		// §30.7/§30.9 (resolved: no git mirror; short-circuit before the
+		// claim, done properly): checked BEFORE spawnClaimedChildSession
+		// -- and therefore before createFixBranch, its own first action --
+		// ever runs. A suppressed CreateBranch would create nothing on the
+		// remote; the child session spawnClaimedChildSession pins to check
+		// that branch OUT would fail its own `git clone --branch`
+		// (internal/sandboxagent/gitclone.CloneAll); by the time that
+		// failure surfaced, the one-shot claim
+		// (sentinel_fixes.fix_child_session_id) would already be
+		// committed and markFindingsFixPending would already have flipped
+		// every addressed finding to fix_pending -- wedging the lane
+		// permanently and disabling the manual apply-suggestion action
+		// (§17.3) for a fix nothing is actually working on. The evaluator
+		// would conclude the sentinel lane itself is broken -- a
+		// falsified evaluation.
+		//
+		// So the whole lane stops HERE instead: recordShortCircuit writes
+		// ONE ledger row naming the branch and child session that would
+		// have followed, Deliver returns nil (a confirmed, permanent
+		// decision for THIS repo's current mode, mirroring
+		// errRolloutRefused's own "terminal-skip, never retried"
+		// precedent below), and -- critically -- markFindingsFixPending
+		// is NEVER called: every addressed finding stays exactly 'open',
+		// never 'fix_pending'.
+		//
+		// Checked only on the not-yet-claimed path: a fix that has
+		// ALREADY been claimed (fixChildSessionID.Valid, the outer `if`
+		// above) has a real branch and a real child session already
+		// running from before this check could ever apply (created while
+		// the repo was live, or by a concurrent winner) -- suppressing
+		// the bookkeeping below for those would misreport work that
+		// genuinely happened.
+		if n.isLive == nil {
+			// A missing required collaborator, never guessed at in either
+			// direction: mirrors createFixBranch's own identical
+			// "n.sourceControl == nil -> a real error" handling below,
+			// rather than defaulting silently toward "assume live" (which
+			// would reintroduce exactly the wedge this check exists to
+			// prevent on the very first shadow repo it saw) or toward
+			// "assume shadow" (which would silently disable the sentinel
+			// lane for every repo, live ones included, on a wiring bug
+			// nobody could see from here). The outbox retries a real
+			// error; nothing user-visible has happened yet.
+			return errors.New("outboxworker: sentinelAutoFixNotifier: no egress-mode resolver configured")
+		}
+		if !n.isLive(ctx, payload.RepoFullName) {
+			return n.recordShortCircuit(ctx, payload)
+		}
+
 		// Cheap, non-atomic fast path: skips createFixBranch's two GitHub
 		// round trips and the claim transaction entirely on the common
 		// "nothing left to do" redelivery. NOT the correctness guard --
@@ -332,6 +407,53 @@ func (n *sentinelAutoFixNotifier) Deliver(ctx context.Context, notification port
 	}
 
 	return n.markFindingsFixPending(ctx, payload, fixChildSessionID)
+}
+
+// recordShortCircuit implements Deliver's own shadow half of the pre-claim
+// check above: ONE ledger row naming both the branch that would have been
+// created (sentinelFixBranchName's own deterministic name -- never
+// actually created, since createFixBranch is never called on this path)
+// and that a fix child session would have followed it, for every finding
+// this delivery's own payload addresses -- see shadowledger.SentinelAutoFix's
+// own doc comment for why this is ONE combined row rather than a
+// create_branch row plus a separate session-spawn fact.
+//
+// Returns nil (success) on a successful record, mirroring errRolloutRefused's
+// own "terminal-skip, never retried" precedent (Deliver's own doc
+// comment): this repo's current egress mode is exactly as permanent an
+// answer, for THIS delivery attempt, as a rollout refusal is, and
+// retrying would just record the identical suppression again. A ledger
+// write failure is returned as a real error instead: §30.6's own
+// record-or-fail rule (shadowledger.Record's own doc comment) applies
+// here exactly as it does to every other suppressed write -- the outbox
+// worker retries the whole delivery, and nothing user-visible has
+// happened yet (no branch, no session, no finding status change).
+func (n *sentinelAutoFixNotifier) recordShortCircuit(ctx context.Context, payload ports.SentinelAutoFixPayload) error {
+	owner, repo, ok := reposource.SplitFullName(payload.RepoFullName)
+	if !ok {
+		return fmt.Errorf("outboxworker: sentinelAutoFixNotifier: repoFullName not shaped owner/repo: %q", payload.RepoFullName)
+	}
+	branch := sentinelFixBranchName(payload.SentinelFixID)
+
+	if err := shadowledger.Record(ctx, n.ledger, shadowledger.Entry{
+		Operation:    "sentinel_auto_fix",
+		RepoFullName: payload.RepoFullName,
+		Target:       branch,
+		Spec: shadowledger.SentinelAutoFix{
+			Owner:                 owner,
+			Repo:                  repo,
+			OriginPRNumber:        int(payload.OriginPRNumber),
+			OriginHeadBranch:      payload.OriginHeadBranch,
+			WouldCreateBranch:     branch,
+			FindingIdentityHashes: payload.FindingIdentityHashes,
+		},
+	}); err != nil {
+		return fmt.Errorf("outboxworker: sentinelAutoFixNotifier: record shadow short-circuit: %w", err)
+	}
+
+	platform.Logger(ctx).Info("outboxworker: sentinelAutoFixNotifier: repository egress is suppressed; recording would-have-created-branch and would-have-spawned-fix-session, never claiming (§30.7/§30.9)",
+		"repo_full_name", payload.RepoFullName, "origin_pr_number", payload.OriginPRNumber, "would_create_branch", branch)
+	return nil
 }
 
 // spawnClaimedChildSession creates the fix session's own distinct
