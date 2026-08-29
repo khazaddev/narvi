@@ -10,6 +10,7 @@ import (
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/khazaddev/narvi/internal/app/repodemotion"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -28,7 +29,22 @@ type Reconciler struct {
 	provider  ports.SandboxProvider
 	timeouts  platform.Timeouts
 
+	// repoSettings backs the demotion-obligation retry in
+	// ReconcileDemotions. A demotion stamps demotion_sweep_pending_at in
+	// the same statement that flips the flag, precisely so the obligation
+	// outlives the transition that created it; this store is how a sweep
+	// that failed halfway, or never ran because its process died, is
+	// picked up again rather than lost.
+	repoSettings *postgres.RepoSettingsStore
+
 	orphansReaped metric.Int64Counter
+
+	// demotionsTerminated (§30.4) counts every sandbox this reconciler has
+	// actually terminated because a repo-demotion sweep
+	// (internal/app/repodemotion.Sweep, called from internal/app/seed's
+	// own live_egress_enabled writer) flagged it -- see
+	// ReconcileDemotions' own doc comment.
+	demotionsTerminated metric.Int64Counter
 
 	// unexplained is ReconcileOnce's own in-memory, cross-tick debounce
 	// state: for each ProviderID currently suspected of being an orphan
@@ -70,7 +86,7 @@ type Reconciler struct {
 // the real one in production; a test that wants to assert on the
 // counter's value registers its own before constructing a Reconciler,
 // there being no other way to intercept a package-level otel.Meter call).
-func NewReconciler(sandboxes *postgres.SandboxStore, provider ports.SandboxProvider, timeouts platform.Timeouts) (*Reconciler, error) {
+func NewReconciler(sandboxes *postgres.SandboxStore, repoSettings *postgres.RepoSettingsStore, provider ports.SandboxProvider, timeouts platform.Timeouts) (*Reconciler, error) {
 	meter := otel.Meter(meterName)
 
 	orphansReaped, err := meter.Int64Counter(
@@ -82,23 +98,35 @@ func NewReconciler(sandboxes *postgres.SandboxStore, provider ports.SandboxProvi
 		return nil, fmt.Errorf("reconciler: construct orphans_reaped counter: %w", err)
 	}
 
+	demotionsTerminated, err := meter.Int64Counter(
+		"demotions_terminated",
+		metric.WithDescription("Number of live sandboxes stopped because a repo-demotion sweep flagged them (§30.4)."),
+		metric.WithUnit("{sandbox}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("reconciler: construct demotions_terminated counter: %w", err)
+	}
+
 	return &Reconciler{
-		sandboxes:     sandboxes,
-		provider:      provider,
-		timeouts:      timeouts,
-		orphansReaped: orphansReaped,
-		unexplained:   make(map[string]time.Time),
+		sandboxes:           sandboxes,
+		repoSettings:        repoSettings,
+		provider:            provider,
+		timeouts:            timeouts,
+		orphansReaped:       orphansReaped,
+		demotionsTerminated: demotionsTerminated,
+		unexplained:         make(map[string]time.Time),
 	}, nil
 }
 
 // Run runs the process-wide reconciler loop (§5.3: "60s loop against the
 // provider API") until ctx is done -- mirrors app/sessionactor's own
 // RunTimerPump exactly (timerpump.go): a ticker on
-// platform.Timeouts.ReconcilerInterval, calling ReconcileOnce each tick,
-// logging (never propagating) any per-tick error so one bad tick never
-// kills the whole loop. The caller starts this via its own errgroup.Go
-// exactly once per process, same as RunTimerPump's own doc comment
-// describes.
+// platform.Timeouts.ReconcilerInterval, calling ReconcileOnce (orphan GC)
+// and ReconcileDemotions (§30.4) each tick, logging (never propagating)
+// either one's error so one bad tick never kills the whole loop, and
+// never lets one starve the other of its own tick. The caller starts
+// this via its own errgroup.Go exactly once per process, same as
+// RunTimerPump's own doc comment describes.
 func (r *Reconciler) Run(ctx context.Context) error {
 	ticker := time.NewTicker(r.timeouts.ReconcilerInterval)
 	defer ticker.Stop()
@@ -110,6 +138,9 @@ func (r *Reconciler) Run(ctx context.Context) error {
 		case <-ticker.C:
 			if err := r.ReconcileOnce(ctx); err != nil {
 				platform.Logger(ctx).Error("reconciler: tick failed", "error", err)
+			}
+			if err := r.ReconcileDemotions(ctx); err != nil {
+				platform.Logger(ctx).Error("reconciler: demotion-sweep tick failed", "error", err)
 			}
 		}
 	}
@@ -240,5 +271,127 @@ func (r *Reconciler) ReconcileOnce(ctx context.Context) error {
 
 	r.unexplained = stillUnexplained
 
+	return nil
+}
+
+// ReconcileDemotions implements §30.4's own mandatory-termination half:
+// "demotion ... must terminate (or respawn) every sandbox of the repo".
+// internal/app/repodemotion.Sweep (called from internal/app/seed's own
+// live_egress_enabled writer, the ONLY place that flag flips today) is
+// Postgres-only -- it never touches a real provider, since the seed CLI
+// that calls it never constructs one -- so it merely FLAGS every
+// affected sandbox (sandboxes.demotion_terminate_requested_at,
+// migrations/000108_sandbox_demotion_termination.up.sql). This method is
+// what actually terminates the real cloud resource: it runs inside
+// "control-plane serve", the one process that holds a real
+// ports.SandboxProvider, on the SAME ReconcilerInterval-ticking loop
+// ReconcileOnce already uses (Run, above) -- so a demotion recorded on
+// any pod, at any time, is acted on by whichever pod's own reconciler
+// next ticks, with no direct coupling between the seed CLI and this one.
+//
+// A sandbox flagged with no provider_id yet (a spawn attempt genuinely
+// in flight -- dispatch.go's own three-step spawn sequencing can commit
+// a live-status row before provider_id is recorded, mirroring
+// ReconcileOnce's own identical, already-documented race) is left FLAGGED
+// for the next tick to retry, exactly like a failed StopSandbox call
+// below: there is nothing yet to stop, but the flag must not be dropped
+// just because this tick was too early.
+//
+// One failed StopSandbox call is logged and does NOT abort the rest of
+// the batch, mirroring ReconcileOnce's own per-orphan error isolation --
+// and stays flagged so the very next tick retries.
+func (r *Reconciler) ReconcileDemotions(ctx context.Context) error {
+	// Stage 1: any demotion that stamped an obligation no sweep has
+	// cleared. This runs BEFORE the termination pass below so a sweep
+	// recovered here flags its sandboxes in time for this same tick.
+	if err := r.sweepOwedDemotions(ctx); err != nil {
+		// Logged, never propagated past the termination pass: an
+		// unreachable repo_settings must not also stop sandboxes already
+		// flagged by an earlier, successful sweep from being terminated.
+		platform.Logger(ctx).Error("reconciler: retry owed demotion sweeps failed; continuing to the termination pass", "error", err)
+	}
+
+	rows, err := r.sandboxes.ListPendingDemotionTermination(ctx)
+	if err != nil {
+		return fmt.Errorf("reconciler: list sandboxes pending demotion termination: %w", err)
+	}
+
+	for _, row := range rows {
+		if row.ProviderID == nil {
+			platform.Logger(ctx).Warn("reconciler: sandbox flagged for demotion termination has no provider_id yet; leaving flagged for a later tick",
+				"session_id", row.SessionID.String())
+			continue
+		}
+
+		if err := r.provider.StopSandbox(ctx, ports.SandboxRef{ProviderID: *row.ProviderID}); err != nil {
+			platform.Logger(ctx).Error("reconciler: stop demoted sandbox failed; leaving flagged for retry",
+				"error", err, "session_id", row.SessionID.String(), "provider_id", *row.ProviderID)
+			continue
+		}
+
+		if _, err := r.sandboxes.ClearDemotionTerminationRequested(ctx, row.SessionID); err != nil {
+			// The sandbox was genuinely stopped -- a failure to clear the
+			// flag only means the NEXT tick harmlessly calls StopSandbox
+			// again against an already-gone resource (most provider APIs
+			// treat a double-stop as a benign no-op), never a correctness
+			// problem, but still logged so it stays observable.
+			platform.Logger(ctx).Error("reconciler: clear demotion termination request failed after a successful stop",
+				"error", err, "session_id", row.SessionID.String())
+		}
+
+		r.demotionsTerminated.Add(ctx, 1)
+	}
+
+	return nil
+}
+
+// demotionSweepBatch bounds one tick's recovery work. Demotions are rare
+// and this list is empty on an ordinary deployment, so the bound exists
+// only to keep a pathological backlog from monopolising a tick -- what it
+// does not sweep this tick, the next one does.
+const demotionSweepBatch = 50
+
+// sweepOwedDemotions is §30.4's demotion requirement made recoverable.
+//
+// The obligation used to live only in the difference between a
+// pre-transaction read and a declared value -- and the commit destroyed
+// it. A sweep that failed on its third sandbox abandoned the rest with
+// nothing anywhere recording that they were owed a termination, and the
+// operator's obvious response (re-run the manifest) found false -> false,
+// reported success, and swept nothing. The write credential those
+// sandboxes still held stayed usable for its full TTL.
+//
+// Now the flip stamps demotion_sweep_pending_at in its own statement, and
+// this retries until a sweep completes without error. Clearing ONLY on a
+// clean sweep is the point: a partial sweep leaves the obligation
+// standing, so the next tick starts over. Sweep is idempotent -- flagging
+// an already-flagged sandbox and cancelling an already-cancelled push are
+// both no-ops -- so repeating it costs nothing but the query.
+func (r *Reconciler) sweepOwedDemotions(ctx context.Context) error {
+	owed, err := r.repoSettings.ListOwedDemotionSweep(ctx, demotionSweepBatch)
+	if err != nil {
+		return fmt.Errorf("reconciler: list repos owed a demotion sweep: %w", err)
+	}
+
+	for _, row := range owed {
+		marked, sweepErr := repodemotion.Sweep(ctx, r.sandboxes, row.RepoFullName)
+		if sweepErr != nil {
+			// Left standing deliberately -- the next tick retries. A
+			// partially-swept repo whose obligation was cleared is the
+			// exact silent gap this column exists to close.
+			platform.Logger(ctx).Error("reconciler: demotion sweep failed; leaving the obligation standing for a later tick",
+				"error", sweepErr, "repo_full_name", row.RepoFullName)
+			continue
+		}
+		if _, err := r.repoSettings.ClearDemotionSweepPending(ctx, row.RepoFullName); err != nil {
+			// The sweep itself succeeded; failing to clear only means the
+			// next tick sweeps the same repo again, which is harmless.
+			platform.Logger(ctx).Error("reconciler: clear demotion sweep obligation failed after a clean sweep",
+				"error", err, "repo_full_name", row.RepoFullName)
+			continue
+		}
+		platform.Logger(ctx).Warn("reconciler: recovered a demotion sweep that had not completed; sandboxes flagged for termination",
+			"repo_full_name", row.RepoFullName, "sandboxes_flagged", marked)
+	}
 	return nil
 }

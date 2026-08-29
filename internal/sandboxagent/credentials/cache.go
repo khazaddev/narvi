@@ -168,9 +168,10 @@ func (c *Cache) Erase(host string) error {
 // to capture. Also called unconditionally at the START of every boot
 // (cmd/sandbox-agent/main.go's own runBootSequence), regardless of mode --
 // §30.4(3)'s own "a boot-time cache purge in all modes is also required,"
-// though NOT load-bearing on its own there -- the control that would be
-// load-bearing, a purge at snapshot-mint time, is not written yet (see
-// that call site's own doc comment).
+// though NOT load-bearing on its own there -- the load-bearing control is
+// the purge at snapshot-MINT time, which cmd/sandbox-agent's own
+// HandleSnapshot now performs before every mint request. See that call
+// site for the residual window it does and does not close.
 //
 // A missing Dir is not an error (os.RemoveAll's own documented behavior)
 // -- a sandbox that never minted any credential at all has nothing to

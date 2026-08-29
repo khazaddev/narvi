@@ -1955,6 +1955,7 @@ type RepoSetting struct {
 	SessionsEnabled            bool               `json:"sessions_enabled"`
 	LiveEgressEnabled          bool               `json:"live_egress_enabled"`
 	LiveEgressPromotedAt       pgtype.Timestamptz `json:"live_egress_promoted_at"`
+	DemotionSweepPendingAt     pgtype.Timestamptz `json:"demotion_sweep_pending_at"`
 }
 
 type ReviewDigestSectionFeedback struct {
@@ -2036,30 +2037,35 @@ type ReviewVerdict struct {
 }
 
 type Sandbox struct {
-	ID                       pgtype.UUID        `json:"id"`
-	SessionID                pgtype.UUID        `json:"session_id"`
-	Gen                      int32              `json:"gen"`
-	Status                   SandboxStatus      `json:"status"`
-	LastSeenAt               pgtype.Timestamptz `json:"last_seen_at"`
-	CreatedAt                pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt                pgtype.Timestamptz `json:"updated_at"`
-	TokenHash                *string            `json:"token_hash"`
-	ProviderID               *string            `json:"provider_id"`
-	SpawnFailureCount        int32              `json:"spawn_failure_count"`
-	LastSpawnFailureAt       pgtype.Timestamptz `json:"last_spawn_failure_at"`
-	SnapshotID               *string            `json:"snapshot_id"`
-	PendingSnapshotMessageID *string            `json:"pending_snapshot_message_id"`
-	PreSuspectStatus         *SandboxStatus     `json:"pre_suspect_status"`
+	ID                            pgtype.UUID        `json:"id"`
+	SessionID                     pgtype.UUID        `json:"session_id"`
+	Gen                           int32              `json:"gen"`
+	Status                        SandboxStatus      `json:"status"`
+	LastSeenAt                    pgtype.Timestamptz `json:"last_seen_at"`
+	CreatedAt                     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                     pgtype.Timestamptz `json:"updated_at"`
+	TokenHash                     *string            `json:"token_hash"`
+	ProviderID                    *string            `json:"provider_id"`
+	SpawnFailureCount             int32              `json:"spawn_failure_count"`
+	LastSpawnFailureAt            pgtype.Timestamptz `json:"last_spawn_failure_at"`
+	SnapshotID                    *string            `json:"snapshot_id"`
+	PendingSnapshotMessageID      *string            `json:"pending_snapshot_message_id"`
+	PreSuspectStatus              *SandboxStatus     `json:"pre_suspect_status"`
+	SnapshotSuppressedInShadow    bool               `json:"snapshot_suppressed_in_shadow"`
+	PendingPushSuppressedInShadow *bool              `json:"pending_push_suppressed_in_shadow"`
+	PendingPushCancelled          bool               `json:"pending_push_cancelled"`
+	DemotionTerminateRequestedAt  pgtype.Timestamptz `json:"demotion_terminate_requested_at"`
 }
 
 type SandboxHistory struct {
-	ID         pgtype.UUID        `json:"id"`
-	SessionID  pgtype.UUID        `json:"session_id"`
-	Gen        int32              `json:"gen"`
-	Status     SandboxStatus      `json:"status"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	ArchivedAt pgtype.Timestamptz `json:"archived_at"`
-	SnapshotID *string            `json:"snapshot_id"`
+	ID                         pgtype.UUID        `json:"id"`
+	SessionID                  pgtype.UUID        `json:"session_id"`
+	Gen                        int32              `json:"gen"`
+	Status                     SandboxStatus      `json:"status"`
+	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
+	ArchivedAt                 pgtype.Timestamptz `json:"archived_at"`
+	SnapshotID                 *string            `json:"snapshot_id"`
+	SnapshotSuppressedInShadow bool               `json:"snapshot_suppressed_in_shadow"`
 }
 
 type SandboxSecret struct {

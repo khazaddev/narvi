@@ -1,0 +1,37 @@
+-- §30.4's own demotion-TTL-window fix: "a write credential minted just
+-- before a live->shadow flip stays served until ScmCredentialTTL (15min,
+-- internal/platform/timeouts.go) plus the helper's cache buffer elapse,
+-- and the underlying OAuth token itself never expires on that clock.
+-- Demotion therefore must terminate (or respawn) every sandbox of the
+-- repo and cancel in-flight push signals."
+--
+-- demotion_terminate_requested_at: stamped by the repo-demotion sweep
+-- (internal/app/seed's own live_egress_enabled writer, seedRepoSetting --
+-- currently the ONLY writer of repo_settings.live_egress_enabled,
+-- migrations/000101's own doc comment: "no REST route calls this yet")
+-- the moment it detects a genuine true->false transition for a repo,
+-- for every LIVE sandbox (internal/adapters/outbound/postgres's own
+-- "live status" set: spawning/connecting/booting/ready/snapshotting/
+-- suspect, mirroring ListLiveSandboxProviderIDs' own identical set)
+-- belonging to a session naming that repo. Cleared back to NULL by
+-- internal/app/reconciler.Reconciler's own new demotion-sweep tick (the
+-- SAME process-wide, ReconcilerInterval-ticking loop that already calls
+-- ports.SandboxProvider.StopSandbox for orphan reaping -- §5.3) once it
+-- has successfully issued a real StopSandbox call for this sandbox's own
+-- provider_id; left set (so the very next tick retries) on a failed
+-- StopSandbox call, mirroring that same reconciler's own orphan-retry
+-- precedent.
+--
+-- This is deliberately a plain timestamp, not a boolean: NULL means
+-- "no demotion-termination outstanding", matching every other
+-- pending-signal column's own "absent means nothing outstanding"
+-- convention on this table (pending_snapshot_message_id, migrations/
+-- 000022; pending_push_suppressed_in_shadow, migrations/000107) rather
+-- than inventing a fourth polarity convention for the same shape of
+-- fact.
+--
+-- Under shadow-by-default-at-onboarding (§30.8), this window -- and
+-- therefore this column's only real writer -- exists ONLY for demotion of
+-- a formerly-live repo: a fresh evaluation's own sandboxes have never
+-- held write, so they have nothing this column protects against.
+ALTER TABLE sandboxes ADD COLUMN demotion_terminate_requested_at TIMESTAMPTZ;

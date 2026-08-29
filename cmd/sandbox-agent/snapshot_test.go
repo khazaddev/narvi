@@ -19,6 +19,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +32,7 @@ import (
 	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 	"github.com/khazaddev/narvi/internal/platform"
 	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
+	"github.com/khazaddev/narvi/internal/sandboxagent/credentials"
 	"github.com/khazaddev/narvi/internal/sandboxagent/wsbridge"
 )
 
@@ -56,6 +59,12 @@ type fakeSnapshotCP struct {
 	// client.Mint call to the real outbound HTTP request, not merely that
 	// Mint's own unit tests set the header correctly in isolation.
 	gotMintGenHeader string
+	// mintCalled records whether the snapshot-mint endpoint was ever hit at
+	// all -- §30.4(3)'s own mint-time purge must abort HandleSnapshot
+	// BEFORE the mint request is even built when the purge itself fails,
+	// so a test proving that abort needs a way to observe "the mint
+	// endpoint was never reached", not merely "no snapshot_ready arrived".
+	mintCalled bool
 }
 
 func newFakeSnapshotCP(t *testing.T, sessionID string) *fakeSnapshotCP {
@@ -67,6 +76,7 @@ func newFakeSnapshotCP(t *testing.T, sessionID string) *fakeSnapshotCP {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/sessions/"+sessionID+"/snapshot", func(w http.ResponseWriter, r *http.Request) {
+		fcp.mintCalled = true
 		fcp.gotMintGenHeader = r.Header.Get("X-Sandbox-Gen")
 		if fcp.mintStatus != 0 {
 			http.Error(w, "mint failed", fcp.mintStatus)
@@ -138,8 +148,12 @@ func waitForFrameType(t *testing.T, fcp *fakeSnapshotCP, want string, timeout ti
 // pair against fcp's own fake server, running Bridge.Run in the
 // background (t.Cleanup tears it down) -- mirrors main.go's own two-phase
 // commandHandler/Bridge construction (commandHandler's own doc comment)
-// exactly.
-func newTestBridgeHandler(ctx context.Context, t *testing.T, fcp *fakeSnapshotCP, gen int) *commandHandler {
+// exactly. credentialCacheDir is threaded straight into cfg.
+// CredentialCacheDir (empty string for every pre-existing test here,
+// exactly matching this function's own prior, implicit zero-value
+// behavior) so §30.4(3)'s own new snapshot-mint-time purge (HandleSnapshot)
+// has a real, test-owned directory to purge for the tests that care.
+func newTestBridgeHandler(ctx context.Context, t *testing.T, fcp *fakeSnapshotCP, gen int, credentialCacheDir string) *commandHandler {
 	t.Helper()
 
 	cfg := sessionconfig.SessionConfig{
@@ -151,7 +165,7 @@ func newTestBridgeHandler(ctx context.Context, t *testing.T, fcp *fakeSnapshotCP
 	}
 	timeouts := platform.DefaultTimeouts()
 
-	handler := &commandHandler{runCtx: ctx, cfg: boot.Config{SessionConfig: &cfg}, timeouts: timeouts}
+	handler := &commandHandler{runCtx: ctx, cfg: boot.Config{SessionConfig: &cfg, CredentialCacheDir: credentialCacheDir}, timeouts: timeouts}
 	bridge := wsbridge.New(cfg, "sbx-1", handler,
 		timeouts.SandboxWSDialTimeout, timeouts.SandboxWSHeartbeatInterval,
 		timeouts.SandboxWSReconnectMinBackoff, timeouts.SandboxWSReconnectMaxBackoff)
@@ -176,7 +190,7 @@ func TestHandleSnapshot_Success_SendsRealSnapshotReady(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), snapshotTestWait)
 	t.Cleanup(cancel)
 
-	handler := newTestBridgeHandler(ctx, t, fcp, 3)
+	handler := newTestBridgeHandler(ctx, t, fcp, 3, "")
 
 	handler.HandleSnapshot(ctx, sandboxws.Snapshot{
 		Type: "snapshot", MessageId: "msg-1", SessionId: fcp.sessionID, Gen: 3,
@@ -237,7 +251,7 @@ func TestHandleSnapshot_MintFailure_SendsNothing(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), snapshotTestWait)
 	t.Cleanup(cancel)
 
-	handler := newTestBridgeHandler(ctx, t, fcp, 1)
+	handler := newTestBridgeHandler(ctx, t, fcp, 1, "")
 
 	handler.HandleSnapshot(ctx, sandboxws.Snapshot{
 		Type: "snapshot", MessageId: "msg-1", SessionId: fcp.sessionID, Gen: 1,
@@ -256,5 +270,93 @@ func TestHandleSnapshot_MintFailure_SendsNothing(t *testing.T) {
 		// asserting something did NOT happen (same reasoning
 		// dispatch_integration_test.go's own circuit-breaker-blocks-spawn
 		// test uses its own fixed sleep for).
+	}
+}
+
+// TestHandleSnapshot_PurgesCredentialCacheBeforeMint proves §30.4(3)'s own
+// primary fix: HandleSnapshot purges cfg.CredentialCacheDir BEFORE ever
+// building the mint request, so a credential cached by an earlier, live
+// credential-helper "get" is gone from disk by the time the snapshot
+// completes -- regardless of whether the mint itself then succeeds.
+func TestHandleSnapshot_PurgesCredentialCacheBeforeMint(t *testing.T) {
+	fcp := newFakeSnapshotCP(t, "snapshot-purge-session")
+	fcp.mintSnapshotID = "snap-purge-abc"
+
+	cacheDir := t.TempDir()
+	cache := &credentials.Cache{Dir: cacheDir}
+	if err := cache.Store("github.com", credentials.Credential{Username: "x-access-token", Password: "leftover-write-token"}); err != nil {
+		t.Fatalf("seed credential cache: %v", err)
+	}
+	if entries, err := os.ReadDir(cacheDir); err != nil || len(entries) == 0 {
+		t.Fatalf("precondition failed: cache dir has no seeded entries (err=%v)", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), snapshotTestWait)
+	t.Cleanup(cancel)
+
+	handler := newTestBridgeHandler(ctx, t, fcp, 1, cacheDir)
+
+	handler.HandleSnapshot(ctx, sandboxws.Snapshot{
+		Type: "snapshot", MessageId: "msg-1", SessionId: fcp.sessionID, Gen: 1,
+	})
+
+	// The happy path still completes: purging the cache must never block a
+	// real mint from proceeding.
+	waitForFrameType(t, fcp, "snapshot_ready", snapshotTestWait)
+
+	if _, err := os.Stat(cacheDir); !os.IsNotExist(err) {
+		t.Fatalf("credential cache dir %s still exists after HandleSnapshot (stat err=%v), want it purged (PurgeAll removes the whole dir)", cacheDir, err)
+	}
+}
+
+// TestHandleSnapshot_PurgeFailure_AbortsWithoutMinting proves this Step's
+// own chosen fail direction: when the mint-time credential-cache purge
+// itself fails, HandleSnapshot aborts the ENTIRE snapshot attempt --
+// never building the mint request, never contacting the control plane,
+// never sending a snapshot_ready -- rather than proceeding and risking a
+// snapshot that captures a leftover credential. The purge is forced to
+// fail by making cacheDir's own PARENT directory unwritable (0o500, no
+// write bit), so os.RemoveAll(cacheDir) cannot unlink the cacheDir entry
+// itself from the (real, existing) directory it sits in.
+func TestHandleSnapshot_PurgeFailure_AbortsWithoutMinting(t *testing.T) {
+	fcp := newFakeSnapshotCP(t, "snapshot-purge-failure-session")
+	fcp.mintSnapshotID = "snap-should-never-be-sent"
+
+	parentDir := t.TempDir()
+	cacheDir := filepath.Join(parentDir, "narvi-credentials")
+	if err := os.Mkdir(cacheDir, 0o700); err != nil {
+		t.Fatalf("Mkdir(cacheDir): %v", err)
+	}
+	if err := os.Chmod(parentDir, 0o500); err != nil {
+		t.Fatalf("Chmod(parentDir, 0o500): %v", err)
+	}
+	// Restore write permission before t.TempDir()'s own cleanup tries to
+	// remove parentDir, or that cleanup itself would fail for the exact
+	// same reason this test forces PurgeAll to fail.
+	t.Cleanup(func() { _ = os.Chmod(parentDir, 0o700) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), snapshotTestWait)
+	t.Cleanup(cancel)
+
+	handler := newTestBridgeHandler(ctx, t, fcp, 1, cacheDir)
+
+	handler.HandleSnapshot(ctx, sandboxws.Snapshot{
+		Type: "snapshot", MessageId: "msg-1", SessionId: fcp.sessionID, Gen: 1,
+	})
+
+	select {
+	case data := <-fcp.frames:
+		var peek struct {
+			Type string `json:"type"`
+		}
+		_ = json.Unmarshal(data, &peek)
+		t.Fatalf("HandleSnapshot sent a frame after a purge failure (type=%q), want nothing", peek.Type)
+	case <-time.After(500 * time.Millisecond):
+		// Expected: nothing sent -- same fixed-wait reasoning as
+		// TestHandleSnapshot_MintFailure_SendsNothing above.
+	}
+
+	if fcp.mintCalled {
+		t.Error("HandleSnapshot called the snapshot-mint endpoint despite a failed cache purge; want the mint request never built at all")
 	}
 }

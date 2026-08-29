@@ -56,6 +56,7 @@ package sessionactor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -123,6 +124,20 @@ func executionOutcomeTrigger(outcome sandboxws.ExecutionCompleteOutcome) (turn.T
 		return 0, false
 	}
 }
+
+// stampedSuppressor is the narrow, consumer-side view of the shadow SCM
+// decorator this file needs: suppress-and-record a PR creation on a
+// decision frozen earlier, ignoring the repo's current egress mode.
+// Declared here rather than in ports because it exists for §30.8's
+// stamp discipline alone and has exactly one implementation.
+type stampedSuppressor interface {
+	SuppressCreatePR(ctx context.Context, spec ports.CreatePRSpec) (ports.PRRef, error)
+}
+
+// errNoStampedSuppressor is returned when a cycle stamped shadow reaches
+// a source control that cannot suppress-and-record. Failing is the safe
+// direction: the alternative is a real pull request in a customer repo.
+var errNoStampedSuppressor = errors.New("sessionactor: push cycle stamped shadow but source control cannot suppress-and-record; refusing to create a PR")
 
 // pushSignal is what completeProcessingTurn hands back to
 // handleSandboxEvent when (and only when) a turn just completed
@@ -322,6 +337,28 @@ func (a *Actor) completeProcessingTurn(ctx context.Context, tx pgx.Tx, sandboxRo
 	if len(repos) == 0 {
 		return nil, nil
 	}
+
+	// §30.8's own epoch discipline, applied to this turn's own push/PR
+	// pair: "the push/PR pair resolves its mode ONCE per turn... resolved
+	// at push send, persisted with the signal, and createPRBestEffort
+	// honors the persisted decision -- never a re-read." Resolved EXACTLY
+	// ONCE, right here (the SAME session-repos-aggregated formula
+	// postgres.OutboxStore.ResolveEffectiveMode already centralizes for
+	// the outbox's own identical epoch-stamp need), and persisted onto the
+	// sandbox row in this SAME transact -- NOT carried on pushSignal
+	// itself: sendPushBestEffort (which consumes this signal) and
+	// createPRBestEffort (which reads this persisted column back, below)
+	// are two SEPARATE wire-event handler invocations, with nothing in
+	// memory surviving between them, so the column is the only thing that
+	// can actually carry this decision across that gap.
+	suppressedInShadow := a.stores.outbox.WithTx(tx).ResolveEffectiveMode(ctx, a.sessionID)
+	if _, err := a.stores.sandbox.WithTx(tx).SetPendingPush(ctx, sqlcgen.SetSandboxPendingPushParams{
+		SessionID:                     a.sessionID,
+		PendingPushSuppressedInShadow: &suppressedInShadow,
+	}); err != nil {
+		return nil, fmt.Errorf("sessionactor: persist push/PR egress-mode decision: %w", err)
+	}
+
 	return &pushSignal{gen: int(sandboxRow.Gen), repos: repos}, nil
 }
 
@@ -418,6 +455,19 @@ func (a *Actor) recordFalseFailureIfApplicable(ctx context.Context, tx pgx.Tx) e
 // a real `git symbolic-ref` round trip through the sandbox this Step's own
 // wire contract has no command for -- an honest, documented gap, not a
 // silent shortcut.
+//
+// sig.suppressedInShadow is resolved and persisted by completeProcessingTurn
+// (pushSignal's own doc comment) but deliberately NOT consulted here to
+// decide whether to send the WS push command at all -- §30.8's own fix is
+// the push/PR pair's CONSISTENCY (one resolved decision, honored without
+// a re-read at PR-creation time, below), not a brand-new suppression
+// point at the WS layer: the sandbox-side credential the push actually
+// uses is already governed by §30.4's read-only substitution regardless
+// of what this function does, and every consumer of ports.SourceControl.
+// CreatePR (createPRBestEffort included) already goes through the §30.2
+// port decorator in production, which independently suppresses a shadow
+// repo's CreatePR call. sig.suppressedInShadow's OWN read happens in
+// createPRBestEffort, below.
 func (a *Actor) sendPushBestEffort(sessionID string, sig *pushSignal) {
 	if sig == nil {
 		return
@@ -512,10 +562,67 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 	// SEPARATE, dedicated code path -- never resolvePRBaseBranch, never
 	// the per-repo loop below -- see createSentinelFixPRBestEffort's own
 	// doc comment.
-	if provenance.IsSentinelAutoFix(sessionRow.ProvenanceTag) {
-		a.createSentinelFixPRBestEffort(ctx, evt)
+	// §30.8's own "the push/PR pair resolves its mode ONCE per turn":
+	// honor the decision completeProcessingTurn already resolved and
+	// persisted at push-send time (pushSignal.suppressedInShadow's own
+	// doc comment) -- NEVER re-derive it here via egressmode.Resolve or
+	// postgres.OutboxStore.ResolveEffectiveMode. That re-read is exactly
+	// the bug this part of the Step exists to prevent: a repo demoted (or
+	// promoted) between this turn's own push send and this push_complete
+	// arriving must not flip what this ONE turn's PR creation does.
+	sandboxRow, err := a.stores.sandbox.Get(ctx, a.sessionID)
+	if err != nil {
+		a.logger.Error("sessionactor: get sandbox for push/PR egress-mode decision failed; skipping PR creation (fail-closed)", "error", err)
 		return
 	}
+	suppressedInShadow, pushCancelled := sandboxRow.PendingPushSuppressedInShadow, sandboxRow.PendingPushCancelled
+	if _, clearErr := a.stores.sandbox.ClearPendingPush(ctx, a.sessionID); clearErr != nil {
+		a.logger.Warn("sessionactor: clear consumed push/PR egress-mode decision failed", "error", clearErr)
+	}
+	// stampSaysShadow carries the frozen decision INTO the paths below
+	// rather than returning here.
+	//
+	// Returning early looks equivalent and is not: it skips the shadow
+	// decorator, and the decorator is what writes the ledger row and mints
+	// the synthetic PR ref. A suppressed effect that leaves no record is
+	// §30.6's named contract violation, and before this bookkeeping
+	// existed a shadow repo's CreatePR reached the decorator and WAS
+	// recorded -- so an early return here would have quietly removed an
+	// entry the ledger used to get.
+	//
+	// A demotion-cancelled cycle takes the SAME path, for the same reason.
+	// §30.4's demotion fix cancels an in-flight push signal because the
+	// repo has just become shadow (the ScmCredentialTTL window), so the PR
+	// that would have followed is a suppressed effect like any other. It
+	// is not a reason to record LESS: an operator reading the ledger to
+	// answer "what did this demotion stop" learns nothing from a cycle
+	// that vanished.
+	stampSaysShadow := (suppressedInShadow != nil && *suppressedInShadow) || pushCancelled
+	switch {
+	case pushCancelled:
+		a.logger.Warn("sessionactor: push_complete arrived for a push cycle cancelled by a repo-demotion sweep; suppressing and recording PR creation (§30.4)")
+	case stampSaysShadow:
+		a.logger.Info("sessionactor: push_complete arrived for a push cycle whose own persisted decision is shadow; suppressing and recording PR creation (§30.4/§30.8)")
+	}
+
+	// The sentinel-auto-fix path is dispatched only AFTER the frozen
+	// decision is read, and carries it. It has no human creator to
+	// attribute a PR to (sessionRow.CreatedBy is NULL), so it never runs
+	// the creator guard or the per-repo loop below -- but that is a reason
+	// for a separate PR-BUILDING path, never a reason to be outside the
+	// egress gate. Dispatching above the read, as this first did, meant a
+	// sentinel fix ignored both the frozen stamp and the demotion
+	// cancellation and opened a real pull request with the bot token.
+	if provenance.IsSentinelAutoFix(sessionRow.ProvenanceTag) {
+		a.createSentinelFixPRBestEffort(ctx, evt, stampSaysShadow)
+		return
+	}
+	// suppressedInShadow == nil (no push cycle was ever recorded for this
+	// sandbox -- an honest gap: a push_complete this Step's own new
+	// bookkeeping never saw resolved/persisted, e.g. one already in flight
+	// across a rollout of this exact change) falls through to the
+	// pre-existing, unconditional behavior below, exactly as it always
+	// was before this Step.
 
 	if !a.creatorMayGetPRAttribution(ctx, sessionRow.CreatedBy) {
 		return // already logged by creatorMayGetPRAttribution
@@ -578,8 +685,7 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 			continue
 		}
 
-		prCtx, cancel := context.WithTimeout(ctx, a.timeouts.PRCreateTimeout)
-		ref, createErr := a.sourceControl.CreatePR(prCtx, ports.CreatePRSpec{
+		prSpec := ports.CreatePRSpec{
 			Owner: owner,
 			Repo:  repoName,
 			Head:  pushed.Branch,
@@ -587,7 +693,32 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 			Title: title,
 			Body:  prBody(pushed),
 			Token: token,
-		})
+		}
+		prCtx, cancel := context.WithTimeout(ctx, a.timeouts.PRCreateTimeout)
+		var (
+			ref       ports.PRRef
+			createErr error
+		)
+		switch {
+		case !stampSaysShadow:
+			// The frozen stamp says live. CreatePR still consults the
+			// CURRENT mode itself, so a repo demoted live->shadow between
+			// push and here is suppressed and recorded by the decorator --
+			// the other direction of §30.8's monotone rule, already
+			// covered without anything here.
+			ref, createErr = a.sourceControl.CreatePR(prCtx, prSpec)
+		default:
+			suppressor, ok := a.sourceControl.(stampedSuppressor)
+			if !ok {
+				// Never reachable in production (cmd/control-plane wires
+				// the decorator), and loud rather than silent if it ever
+				// becomes so: proceeding would open a real pull request
+				// for a cycle already decided to be shadow.
+				createErr = errNoStampedSuppressor
+				break
+			}
+			ref, createErr = suppressor.SuppressCreatePR(prCtx, prSpec)
+		}
 		cancel()
 		if createErr != nil {
 			a.logger.Error("sessionactor: create PR failed", "repo", pushed.Name, "error", createErr)
@@ -645,7 +776,12 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 // stack_registered) as an observability signal, never the authority on
 // whether registration actually took (§17.6: that authority is always a
 // FRESH GetPullRequest.Stack field, checked later, at merge-gating time).
-func (a *Actor) createSentinelFixPRBestEffort(ctx context.Context, evt sandboxws.PushComplete) {
+// stampSaysShadow is this turn's own frozen push/PR decision, resolved at
+// push send and read by the caller. It is passed in rather than resolved
+// here for the same reason the main path does not re-derive it: a repo
+// promoted between push send and this event must not turn a shadow-era
+// branch into a real pull request.
+func (a *Actor) createSentinelFixPRBestEffort(ctx context.Context, evt sandboxws.PushComplete, stampSaysShadow bool) {
 	fix, err := a.stores.sentinelFix.GetByFixSession(ctx, a.sessionID)
 	if err != nil {
 		a.logger.Error("sessionactor: get sentinel_fixes row by fix session failed; skipping fix PR creation", "error", err)
@@ -692,8 +828,7 @@ func (a *Actor) createSentinelFixPRBestEffort(ctx context.Context, evt sandboxws
 			continue
 		}
 
-		prCtx, cancel := context.WithTimeout(ctx, a.timeouts.PRCreateTimeout)
-		ref, createErr := a.sourceControl.CreatePR(prCtx, ports.CreatePRSpec{
+		prSpec := ports.CreatePRSpec{
 			Owner: owner,
 			Repo:  repoName,
 			Head:  pushed.Branch,
@@ -704,7 +839,27 @@ func (a *Actor) createSentinelFixPRBestEffort(ctx context.Context, evt sandboxws
 			Title: "Sentinel auto-fix: " + prTitle(sessionRow),
 			Body:  fmt.Sprintf("Automated sentinel-auto-fix remediation (Narvi, §17) for pull request #%d, branch %s.", fix.OriginPrNumber, pushed.Branch),
 			Token: a.githubBotToken,
-		})
+		}
+		prCtx, cancel := context.WithTimeout(ctx, a.timeouts.PRCreateTimeout)
+		var (
+			ref       ports.PRRef
+			createErr error
+		)
+		switch {
+		case !stampSaysShadow:
+			// CreatePR still consults the CURRENT mode itself, so a repo
+			// demoted between push and here is suppressed and recorded by
+			// the decorator -- the other direction of §30.8's monotone
+			// rule, needing nothing here.
+			ref, createErr = a.sourceControl.CreatePR(prCtx, prSpec)
+		default:
+			suppressor, ok := a.sourceControl.(stampedSuppressor)
+			if !ok {
+				createErr = errNoStampedSuppressor
+				break
+			}
+			ref, createErr = suppressor.SuppressCreatePR(prCtx, prSpec)
+		}
 		cancel()
 		if createErr != nil {
 			a.logger.Error("sessionactor: create sentinel-fix PR failed", "repo", pushed.Name, "error", createErr)

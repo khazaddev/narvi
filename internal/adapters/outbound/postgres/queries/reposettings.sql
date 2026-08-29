@@ -183,6 +183,13 @@ RETURNING *;
 --     applies here too: only verdicts after the MOST RECENT promotion
 --     are ever candidates, never a stale fence from a promotion this
 --     repo has since walked back.
+-- demotion_sweep_pending_at (migrations/
+-- 000109_repo_settings_demotion_sweep_pending.up.sql) is stamped by THIS
+-- statement, on a genuine true->false transition only, so §30.4's own
+-- mandatory sandbox termination survives the commit that used to consume
+-- the evidence it was owed. It is never stamped by a fresh INSERT: a repo
+-- whose first-ever write is false has never been live, so no sandbox of
+-- it ever held more than read-only, and nothing is owed.
 INSERT INTO repo_settings (repo_full_name, live_egress_enabled, live_egress_promoted_at, updated_at)
 VALUES ($1, $2, CASE WHEN $2 THEN now() ELSE NULL END, now())
 ON CONFLICT (repo_full_name)
@@ -193,8 +200,29 @@ DO UPDATE SET
         WHEN EXCLUDED.live_egress_enabled AND NOT repo_settings.live_egress_enabled THEN now()
         ELSE repo_settings.live_egress_promoted_at
     END,
+    demotion_sweep_pending_at = CASE
+        WHEN repo_settings.live_egress_enabled AND NOT EXCLUDED.live_egress_enabled THEN now()
+        ELSE repo_settings.demotion_sweep_pending_at
+    END,
     updated_at = now()
 RETURNING *;
+
+-- name: ListReposOwedDemotionSweep :many
+-- internal/app/reconciler's own demotion-sweep retry: every repo whose
+-- demotion stamped an obligation that no sweep has yet cleared. Empty on
+-- an ordinary deployment -- see the partial index this rides.
+SELECT * FROM repo_settings
+WHERE demotion_sweep_pending_at IS NOT NULL
+ORDER BY demotion_sweep_pending_at
+LIMIT $1;
+
+-- name: ClearDemotionSweepPending :execrows
+-- Clears the obligation, and ONLY after a sweep completed without error.
+-- Guarded on the column still being set so a concurrent second sweeper
+-- clearing it first is a no-op here rather than a lost update.
+UPDATE repo_settings
+SET demotion_sweep_pending_at = NULL, updated_at = now()
+WHERE repo_full_name = $1 AND demotion_sweep_pending_at IS NOT NULL;
 
 -- name: ListAutoMergeEnabledRepos :many
 -- internal/app/automerge's own per-tick repo enumeration (§21.2 stage

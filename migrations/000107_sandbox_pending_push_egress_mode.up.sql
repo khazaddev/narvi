@@ -1,0 +1,36 @@
+-- §30.8's own "the push/PR pair resolves its mode ONCE per turn": Push
+-- and CreatePR are two separate async stages (internal/app/sessionactor/
+-- pushpr.go), and a flip between them yields either an orphan branch in
+-- a customer repo or a live CreatePR on a never-pushed branch. The fix is
+-- to resolve the mode exactly once, at push send, and persist it
+-- DURABLY -- sendPushBestEffort and createPRBestEffort are two SEPARATE
+-- wire-event handler invocations (the first runs when a turn's own
+-- execution_complete arrives, the second only later, when that push's
+-- own push_complete arrives), so there is no in-memory value that
+-- survives between them; it must live in Postgres.
+--
+-- pending_push_suppressed_in_shadow: the effective egress mode (§30.8's
+-- own formula, internal/app/egressmode.Resolve, aggregated across the
+-- pushing session's own repos exactly like postgres.OutboxStore.
+-- ResolveEffectiveMode already does for the outbox's identical need),
+-- resolved and stamped ONCE by completeProcessingTurn (pushpr.go) in the
+-- SAME transact that completes the turn and builds the pushSignal, never
+-- re-derived by createPRBestEffort later. NULL means "no push is
+-- currently outstanding for this sandbox" -- overwritten by the next real
+-- push cycle exactly like sandboxes.snapshot_id is simply overwritten by
+-- the next real snapshot_ready (migrations/
+-- 000022_sandbox_snapshot_id.up.sql's own precedent), and cleared back to
+-- NULL once createPRBestEffort has consumed it for this cycle.
+--
+-- pending_push_cancelled: §30.4's own "demotion ... must terminate (or
+-- respawn) every sandbox of the repo and cancel in-flight push signals"
+-- (the ScmCredentialTTL window) -- set by the repo-demotion sweep
+-- (internal/app/seed's own live_egress_enabled writer, see migrations/
+-- 000108's own doc comment) for any sandbox with a push currently
+-- outstanding, so createPRBestEffort can tell "this push cycle's own
+-- persisted decision is no longer trustworthy" apart from an ordinary,
+-- uneventful one -- honored the same way, by reading, never by
+-- re-resolving. DEFAULT false: an ordinary push cycle is not cancelled
+-- unless something explicitly says so.
+ALTER TABLE sandboxes ADD COLUMN pending_push_suppressed_in_shadow BOOLEAN;
+ALTER TABLE sandboxes ADD COLUMN pending_push_cancelled BOOLEAN NOT NULL DEFAULT false;

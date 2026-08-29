@@ -453,7 +453,7 @@ func TestReconcileOnce_ReapsOrphansLeavesLiveRowAlone(t *testing.T) {
 	timeouts := platform.DefaultTimeouts()
 	timeouts.ReconcilerOrphanConfirmationPeriod = 0
 
-	r, err := reconciler.NewReconciler(sandboxes, provider, timeouts)
+	r, err := reconciler.NewReconciler(sandboxes, narvipg.NewRepoSettingsStore(pool), provider, timeouts)
 	if err != nil {
 		t.Fatalf("NewReconciler: %v", err)
 	}
@@ -525,7 +525,7 @@ func TestReconcileOnce_OneStopSandboxFailureDoesNotAbortBatch(t *testing.T) {
 	timeouts := platform.DefaultTimeouts()
 	timeouts.ReconcilerOrphanConfirmationPeriod = 0
 
-	r, err := reconciler.NewReconciler(sandboxes, provider, timeouts)
+	r, err := reconciler.NewReconciler(sandboxes, narvipg.NewRepoSettingsStore(pool), provider, timeouts)
 	if err != nil {
 		t.Fatalf("NewReconciler: %v", err)
 	}
@@ -624,7 +624,7 @@ func TestReconcileOnce_DebouncesOrphanConfirmationBeforeReaping(t *testing.T) {
 	timeouts := platform.DefaultTimeouts()
 	timeouts.ReconcilerOrphanConfirmationPeriod = 0
 
-	r, err := reconciler.NewReconciler(sandboxes, provider, timeouts)
+	r, err := reconciler.NewReconciler(sandboxes, narvipg.NewRepoSettingsStore(pool), provider, timeouts)
 	if err != nil {
 		t.Fatalf("NewReconciler: %v", err)
 	}

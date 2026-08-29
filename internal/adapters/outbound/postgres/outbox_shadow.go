@@ -83,8 +83,32 @@ func (r repoSettingsReader) Get(ctx context.Context, repoFullName string) (sqlcg
 // See this file's own top doc comment for the three-way session/repo
 // resolution this shares with Create.
 func (s *OutboxStore) ResolveEffectiveMode(ctx context.Context, sessionID pgtype.UUID) bool {
+	shadow, _ := s.ResolveEffectiveModeConfirmed(ctx, sessionID)
+	return shadow
+}
+
+// ResolveEffectiveModeConfirmed is ResolveEffectiveMode plus the fact its
+// boolean cannot carry: whether "shadow" was POSITIVELY ESTABLISHED, or
+// merely the direction this resolver falls in when it cannot tell.
+//
+// The distinction has no meaning for the outbox, where suppressing is
+// always the safe answer and both cases lead to the same place. It is
+// load-bearing for any caller where "shadow" is the PERMISSIVE value --
+// sandboxes.snapshot_suppressed_in_shadow being the one that exists
+// today, where true means "this snapshot never held more than a
+// read-only credential, it is safe to restore into a shadow session".
+// Stamping that from an unconfirmed shadow inverts the fail direction:
+// a snapshot whose mode could not be read would be marked trusted,
+// which is the opposite of what a failure to read should ever buy.
+//
+// confirmed is false exactly when this function resolved shadow WITHOUT
+// reading a real answer: a failed session read, or session repos it
+// could not parse. Every other path -- including a genuinely repo-less
+// session and every per-repo resolution -- is confirmed, because those
+// read what they needed and got it.
+func (s *OutboxStore) ResolveEffectiveModeConfirmed(ctx context.Context, sessionID pgtype.UUID) (shadow, confirmed bool) {
 	if !sessionID.Valid {
-		return egressmode.ResolvePlatform(s.platformShadow).Suppressed()
+		return egressmode.ResolvePlatform(s.platformShadow).Suppressed(), true
 	}
 
 	session, err := s.q.GetSession(ctx, sessionID)
@@ -101,7 +125,7 @@ func (s *OutboxStore) ResolveEffectiveMode(ctx context.Context, sessionID pgtype
 		// alone, the wrong, more permissive path for an anomaly this
 		// significant).
 		platform.Logger(ctx).Warn("postgres: outbox: resolve session for egress-mode stamp failed -- resolving shadow (fail-closed)", "error", err, "session_id", sessionID.String())
-		return true
+		return true, false
 	}
 
 	repoFullNames, parsed := sessionRepoFullNames(session.Repos)
@@ -111,12 +135,12 @@ func (s *OutboxStore) ResolveEffectiveMode(ctx context.Context, sessionID pgtype
 		// -- the same posture as a failed session read above, for the same
 		// reason: a thing we cannot evaluate must not be sent.
 		platform.Logger(ctx).Warn("postgres: outbox: could not read this session's repositories for the egress-mode stamp -- resolving shadow (fail-closed)", "session_id", sessionID.String())
-		return true
+		return true, false
 	}
 	if len(repoFullNames) == 0 {
 		// Genuinely repo-less (a digest, a platform notice). The per-repo
 		// axis does not apply, so only the deployment-wide switch decides.
-		return egressmode.ResolvePlatform(s.platformShadow).Suppressed()
+		return egressmode.ResolvePlatform(s.platformShadow).Suppressed(), true
 	}
 
 	// ANY suppressed repository suppresses the whole notification.
@@ -135,10 +159,10 @@ func (s *OutboxStore) ResolveEffectiveMode(ctx context.Context, sessionID pgtype
 			RepoSettings:   repoSettingsReader{q: s.q},
 			PlatformShadow: s.platformShadow,
 		}, repoFullName).Suppressed() {
-			return true
+			return true, true
 		}
 	}
-	return false
+	return false, true
 }
 
 // sessionRepoFullNames derives every "owner/repo" full name from a

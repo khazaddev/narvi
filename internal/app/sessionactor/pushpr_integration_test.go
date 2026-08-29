@@ -60,6 +60,14 @@ type fakeSourceControl struct {
 	nextRef ports.PRRef
 	nextErr error
 
+	// suppressCalls records SuppressCreatePR, the shadow decorator's own
+	// suppress-and-record entry point (internal/app/shadowscm). Kept
+	// SEPARATE from calls so a test can tell the two apart: "the PR was
+	// suppressed" and "nothing happened at all" are different outcomes,
+	// and only one of them leaves a ledger row. A count of zero on BOTH
+	// is the silent-skip regression, not a pass.
+	suppressCalls []ports.CreatePRSpec
+
 	shaCalls   []ports.ResolveBranchSHASpec
 	shaFor     map[string]string // keyed by repo name; falls back to nextSHA if absent
 	nextSHA    string
@@ -1202,4 +1210,22 @@ func TestHandleSandboxEvent_PushComplete_UnsupportedRepoHost_SkipsPRCreation(t *
 	if len(rows) != 0 {
 		t.Errorf("artifact count = %d, want 0 (no PR ever created for an unsupported repo-url host)", len(rows))
 	}
+}
+
+// SuppressCreatePR makes this fake satisfy sessionactor's own
+// stampedSuppressor, so a cycle whose persisted decision is shadow
+// reaches a recording path here exactly as it does in production.
+func (f *fakeSourceControl) SuppressCreatePR(_ context.Context, spec ports.CreatePRSpec) (ports.PRRef, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.suppressCalls = append(f.suppressCalls, spec)
+	return ports.PRRef{Number: 0, URL: "narvi-shadow://" + spec.Owner + "/" + spec.Repo}, nil
+}
+
+// suppressCallCount is the companion to callCount: how many PR creations
+// were suppressed-and-recorded rather than performed.
+func (f *fakeSourceControl) suppressCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.suppressCalls)
 }

@@ -11,11 +11,131 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const cancelSandboxPendingPush = `-- name: CancelSandboxPendingPush :one
+UPDATE sandboxes
+SET pending_push_cancelled = true, updated_at = now()
+WHERE session_id = $1 AND pending_push_suppressed_in_shadow IS NOT NULL
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow, pending_push_suppressed_in_shadow, pending_push_cancelled, demotion_terminate_requested_at
+`
+
+// §30.4's own "demotion ... must cancel in-flight push signals" -- sets
+// pending_push_cancelled = true for a sandbox that currently has one
+// outstanding (pending_push_suppressed_in_shadow IS NOT NULL), called by
+// the repo-demotion sweep (internal/app/seed) for every live sandbox of a
+// just-demoted repo. A no-op (pgx.ErrNoRows, the caller's own job to
+// treat as "nothing to cancel") when this sandbox has no push currently
+// outstanding -- there is nothing to cancel, and this must never
+// fabricate a pending_push_suppressed_in_shadow value that was never
+// resolved.
+func (q *Queries) CancelSandboxPendingPush(ctx context.Context, sessionID pgtype.UUID) (Sandbox, error) {
+	row := q.db.QueryRow(ctx, cancelSandboxPendingPush, sessionID)
+	var i Sandbox
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.Gen,
+		&i.Status,
+		&i.LastSeenAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TokenHash,
+		&i.ProviderID,
+		&i.SpawnFailureCount,
+		&i.LastSpawnFailureAt,
+		&i.SnapshotID,
+		&i.PendingSnapshotMessageID,
+		&i.PreSuspectStatus,
+		&i.SnapshotSuppressedInShadow,
+		&i.PendingPushSuppressedInShadow,
+		&i.PendingPushCancelled,
+		&i.DemotionTerminateRequestedAt,
+	)
+	return i, err
+}
+
+const clearSandboxDemotionTerminationRequested = `-- name: ClearSandboxDemotionTerminationRequested :one
+UPDATE sandboxes
+SET demotion_terminate_requested_at = NULL, updated_at = now()
+WHERE session_id = $1
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow, pending_push_suppressed_in_shadow, pending_push_cancelled, demotion_terminate_requested_at
+`
+
+// Consumes a sandbox's own demotion-termination request once
+// app/reconciler.Reconciler has successfully issued a real StopSandbox
+// call for it -- left set (so the very next tick retries) when that call
+// fails, mirroring this reconciler's own existing orphan-reap retry
+// precedent (ReconcileOnce's own doc comment).
+func (q *Queries) ClearSandboxDemotionTerminationRequested(ctx context.Context, sessionID pgtype.UUID) (Sandbox, error) {
+	row := q.db.QueryRow(ctx, clearSandboxDemotionTerminationRequested, sessionID)
+	var i Sandbox
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.Gen,
+		&i.Status,
+		&i.LastSeenAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TokenHash,
+		&i.ProviderID,
+		&i.SpawnFailureCount,
+		&i.LastSpawnFailureAt,
+		&i.SnapshotID,
+		&i.PendingSnapshotMessageID,
+		&i.PreSuspectStatus,
+		&i.SnapshotSuppressedInShadow,
+		&i.PendingPushSuppressedInShadow,
+		&i.PendingPushCancelled,
+		&i.DemotionTerminateRequestedAt,
+	)
+	return i, err
+}
+
+const clearSandboxPendingPush = `-- name: ClearSandboxPendingPush :one
+UPDATE sandboxes
+SET pending_push_suppressed_in_shadow = NULL, pending_push_cancelled = false, updated_at = now()
+WHERE session_id = $1
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow, pending_push_suppressed_in_shadow, pending_push_cancelled, demotion_terminate_requested_at
+`
+
+// Consumes this sandbox's own persisted push/PR decision -- called by
+// createPRBestEffort (pushpr.go) once it has read and acted on
+// pending_push_suppressed_in_shadow/pending_push_cancelled for the
+// current push cycle, so a LATER, unrelated push_complete redelivery (or
+// the next real push cycle) never reads a stale decision back. Mirrors
+// UpdateSandboxSnapshotID's own "clear the now-satisfied outstanding
+// column" idiom.
+func (q *Queries) ClearSandboxPendingPush(ctx context.Context, sessionID pgtype.UUID) (Sandbox, error) {
+	row := q.db.QueryRow(ctx, clearSandboxPendingPush, sessionID)
+	var i Sandbox
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.Gen,
+		&i.Status,
+		&i.LastSeenAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TokenHash,
+		&i.ProviderID,
+		&i.SpawnFailureCount,
+		&i.LastSpawnFailureAt,
+		&i.SnapshotID,
+		&i.PendingSnapshotMessageID,
+		&i.PreSuspectStatus,
+		&i.SnapshotSuppressedInShadow,
+		&i.PendingPushSuppressedInShadow,
+		&i.PendingPushCancelled,
+		&i.DemotionTerminateRequestedAt,
+	)
+	return i, err
+}
+
 const createSandbox = `-- name: CreateSandbox :one
 
 INSERT INTO sandboxes (session_id)
 VALUES ($1)
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow, pending_push_suppressed_in_shadow, pending_push_cancelled, demotion_terminate_requested_at
 `
 
 // Queries backing SandboxStore (§4.3). Just enough to prove the pipeline
@@ -39,12 +159,16 @@ func (q *Queries) CreateSandbox(ctx context.Context, sessionID pgtype.UUID) (San
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
 		&i.PreSuspectStatus,
+		&i.SnapshotSuppressedInShadow,
+		&i.PendingPushSuppressedInShadow,
+		&i.PendingPushCancelled,
+		&i.DemotionTerminateRequestedAt,
 	)
 	return i, err
 }
 
 const getSandbox = `-- name: GetSandbox :one
-SELECT id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status FROM sandboxes
+SELECT id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow, pending_push_suppressed_in_shadow, pending_push_cancelled, demotion_terminate_requested_at FROM sandboxes
 WHERE session_id = $1
 `
 
@@ -66,6 +190,10 @@ func (q *Queries) GetSandbox(ctx context.Context, sessionID pgtype.UUID) (Sandbo
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
 		&i.PreSuspectStatus,
+		&i.SnapshotSuppressedInShadow,
+		&i.PendingPushSuppressedInShadow,
+		&i.PendingPushCancelled,
+		&i.DemotionTerminateRequestedAt,
 	)
 	return i, err
 }
@@ -115,6 +243,137 @@ func (q *Queries) ListLiveSandboxProviderIDs(ctx context.Context) ([]*string, er
 	return items, nil
 }
 
+const listLiveSandboxesWithSessionRepos = `-- name: ListLiveSandboxesWithSessionRepos :many
+SELECT sandboxes.session_id AS session_id,
+       sandboxes.provider_id AS provider_id,
+       sessions.repos AS repos
+FROM sandboxes
+JOIN sessions ON sessions.id = sandboxes.session_id
+WHERE sandboxes.status IN ('spawning', 'connecting', 'booting', 'ready', 'snapshotting', 'suspect')
+`
+
+type ListLiveSandboxesWithSessionReposRow struct {
+	SessionID  pgtype.UUID `json:"session_id"`
+	ProviderID *string     `json:"provider_id"`
+	Repos      []byte      `json:"repos"`
+}
+
+// §30.4's own repo-demotion sweep (internal/app/seed): every LIVE sandbox
+// (the SAME "live status" set ListLiveSandboxProviderIDs already defines
+// above), joined with its owning session's own raw repos JSONB column
+// (sessions.repos, migrations/000018_session_repos.up.sql) -- the sweep
+// parses this in Go (mirroring postgres.outboxShadow's own
+// sessionRepoFullNames, and app/sessionactor's own reposFromJSON/
+// rolloutDecisionForSession, this codebase's established "duplicate the
+// small per-package repo-JSON helper rather than share one" convention)
+// to decide which of these sandboxes belong to the just-demoted repo.
+func (q *Queries) ListLiveSandboxesWithSessionRepos(ctx context.Context) ([]ListLiveSandboxesWithSessionReposRow, error) {
+	rows, err := q.db.Query(ctx, listLiveSandboxesWithSessionRepos)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListLiveSandboxesWithSessionReposRow
+	for rows.Next() {
+		var i ListLiveSandboxesWithSessionReposRow
+		if err := rows.Scan(&i.SessionID, &i.ProviderID, &i.Repos); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSandboxesPendingDemotionTermination = `-- name: ListSandboxesPendingDemotionTermination :many
+SELECT id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow, pending_push_suppressed_in_shadow, pending_push_cancelled, demotion_terminate_requested_at FROM sandboxes WHERE demotion_terminate_requested_at IS NOT NULL
+`
+
+// app/reconciler.Reconciler's own new demotion-sweep tick reads every
+// sandbox row a repo-demotion sweep has flagged, so it can issue a real
+// ports.SandboxProvider.StopSandbox call for each -- mirrors this
+// reconciler's own existing orphan-reaping query
+// (ListLiveSandboxProviderIDs) in spirit, but scoped to rows an explicit
+// demotion flagged rather than every live row.
+func (q *Queries) ListSandboxesPendingDemotionTermination(ctx context.Context) ([]Sandbox, error) {
+	rows, err := q.db.Query(ctx, listSandboxesPendingDemotionTermination)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Sandbox
+	for rows.Next() {
+		var i Sandbox
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.Gen,
+			&i.Status,
+			&i.LastSeenAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.TokenHash,
+			&i.ProviderID,
+			&i.SpawnFailureCount,
+			&i.LastSpawnFailureAt,
+			&i.SnapshotID,
+			&i.PendingSnapshotMessageID,
+			&i.PreSuspectStatus,
+			&i.SnapshotSuppressedInShadow,
+			&i.PendingPushSuppressedInShadow,
+			&i.PendingPushCancelled,
+			&i.DemotionTerminateRequestedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markSandboxDemotionTerminationRequested = `-- name: MarkSandboxDemotionTerminationRequested :one
+UPDATE sandboxes
+SET demotion_terminate_requested_at = now(), updated_at = now()
+WHERE session_id = $1
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow, pending_push_suppressed_in_shadow, pending_push_cancelled, demotion_terminate_requested_at
+`
+
+// §30.4's own "demotion ... must terminate (or respawn) every sandbox of
+// the repo" (migrations/000108_sandbox_demotion_termination.up.sql):
+// stamped by the repo-demotion sweep (internal/app/seed) for every live
+// sandbox it finds belonging to a just-demoted repo. Read back, and acted
+// on, by app/reconciler.Reconciler's own new demotion-sweep tick.
+func (q *Queries) MarkSandboxDemotionTerminationRequested(ctx context.Context, sessionID pgtype.UUID) (Sandbox, error) {
+	row := q.db.QueryRow(ctx, markSandboxDemotionTerminationRequested, sessionID)
+	var i Sandbox
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.Gen,
+		&i.Status,
+		&i.LastSeenAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TokenHash,
+		&i.ProviderID,
+		&i.SpawnFailureCount,
+		&i.LastSpawnFailureAt,
+		&i.SnapshotID,
+		&i.PendingSnapshotMessageID,
+		&i.PreSuspectStatus,
+		&i.SnapshotSuppressedInShadow,
+		&i.PendingPushSuppressedInShadow,
+		&i.PendingPushCancelled,
+		&i.DemotionTerminateRequestedAt,
+	)
+	return i, err
+}
+
 const recoverSandboxFromSuspect = `-- name: RecoverSandboxFromSuspect :one
 UPDATE sandboxes
 SET status = $2,
@@ -122,7 +381,7 @@ SET status = $2,
     last_seen_at = $3,
     updated_at = now()
 WHERE session_id = $1
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow, pending_push_suppressed_in_shadow, pending_push_cancelled, demotion_terminate_requested_at
 `
 
 type RecoverSandboxFromSuspectParams struct {
@@ -167,6 +426,58 @@ func (q *Queries) RecoverSandboxFromSuspect(ctx context.Context, arg RecoverSand
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
 		&i.PreSuspectStatus,
+		&i.SnapshotSuppressedInShadow,
+		&i.PendingPushSuppressedInShadow,
+		&i.PendingPushCancelled,
+		&i.DemotionTerminateRequestedAt,
+	)
+	return i, err
+}
+
+const setSandboxPendingPush = `-- name: SetSandboxPendingPush :one
+UPDATE sandboxes
+SET pending_push_suppressed_in_shadow = $2, pending_push_cancelled = false, updated_at = now()
+WHERE session_id = $1
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow, pending_push_suppressed_in_shadow, pending_push_cancelled, demotion_terminate_requested_at
+`
+
+type SetSandboxPendingPushParams struct {
+	SessionID                     pgtype.UUID `json:"session_id"`
+	PendingPushSuppressedInShadow *bool       `json:"pending_push_suppressed_in_shadow"`
+}
+
+// §30.8's own "the push/PR pair resolves its mode ONCE per turn"
+// (migrations/000107_sandbox_pending_push_egress_mode.up.sql): stamps
+// this session's own effective egress mode, resolved exactly once by
+// completeProcessingTurn (app/sessionactor/pushpr.go) at the moment it
+// builds the turn's own pushSignal, in the SAME transact that completes
+// the turn. Also resets pending_push_cancelled back to false in the SAME
+// statement -- a brand-new push cycle starting now supersedes whatever a
+// STALE prior cycle may have left behind (mirrors
+// UpdateSandboxSnapshotID's own "clear the prior cycle's own leftover
+// state in the same write" precedent).
+func (q *Queries) SetSandboxPendingPush(ctx context.Context, arg SetSandboxPendingPushParams) (Sandbox, error) {
+	row := q.db.QueryRow(ctx, setSandboxPendingPush, arg.SessionID, arg.PendingPushSuppressedInShadow)
+	var i Sandbox
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.Gen,
+		&i.Status,
+		&i.LastSeenAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TokenHash,
+		&i.ProviderID,
+		&i.SpawnFailureCount,
+		&i.LastSpawnFailureAt,
+		&i.SnapshotID,
+		&i.PendingSnapshotMessageID,
+		&i.PreSuspectStatus,
+		&i.SnapshotSuppressedInShadow,
+		&i.PendingPushSuppressedInShadow,
+		&i.PendingPushCancelled,
+		&i.DemotionTerminateRequestedAt,
 	)
 	return i, err
 }
@@ -175,7 +486,7 @@ const updateSandboxCircuitBreaker = `-- name: UpdateSandboxCircuitBreaker :one
 UPDATE sandboxes
 SET spawn_failure_count = $2, last_spawn_failure_at = $3, updated_at = now()
 WHERE session_id = $1
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow, pending_push_suppressed_in_shadow, pending_push_cancelled, demotion_terminate_requested_at
 `
 
 type UpdateSandboxCircuitBreakerParams struct {
@@ -210,6 +521,10 @@ func (q *Queries) UpdateSandboxCircuitBreaker(ctx context.Context, arg UpdateSan
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
 		&i.PreSuspectStatus,
+		&i.SnapshotSuppressedInShadow,
+		&i.PendingPushSuppressedInShadow,
+		&i.PendingPushCancelled,
+		&i.DemotionTerminateRequestedAt,
 	)
 	return i, err
 }
@@ -218,7 +533,7 @@ const updateSandboxPendingSnapshotMessageID = `-- name: UpdateSandboxPendingSnap
 UPDATE sandboxes
 SET pending_snapshot_message_id = $2, updated_at = now()
 WHERE session_id = $1
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow, pending_push_suppressed_in_shadow, pending_push_cancelled, demotion_terminate_requested_at
 `
 
 type UpdateSandboxPendingSnapshotMessageIDParams struct {
@@ -257,6 +572,10 @@ func (q *Queries) UpdateSandboxPendingSnapshotMessageID(ctx context.Context, arg
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
 		&i.PreSuspectStatus,
+		&i.SnapshotSuppressedInShadow,
+		&i.PendingPushSuppressedInShadow,
+		&i.PendingPushCancelled,
+		&i.DemotionTerminateRequestedAt,
 	)
 	return i, err
 }
@@ -265,7 +584,7 @@ const updateSandboxProviderID = `-- name: UpdateSandboxProviderID :one
 UPDATE sandboxes
 SET provider_id = $2, updated_at = now()
 WHERE session_id = $1
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow, pending_push_suppressed_in_shadow, pending_push_cancelled, demotion_terminate_requested_at
 `
 
 type UpdateSandboxProviderIDParams struct {
@@ -296,20 +615,25 @@ func (q *Queries) UpdateSandboxProviderID(ctx context.Context, arg UpdateSandbox
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
 		&i.PreSuspectStatus,
+		&i.SnapshotSuppressedInShadow,
+		&i.PendingPushSuppressedInShadow,
+		&i.PendingPushCancelled,
+		&i.DemotionTerminateRequestedAt,
 	)
 	return i, err
 }
 
 const updateSandboxSnapshotID = `-- name: UpdateSandboxSnapshotID :one
 UPDATE sandboxes
-SET snapshot_id = $2, pending_snapshot_message_id = NULL, updated_at = now()
+SET snapshot_id = $2, snapshot_suppressed_in_shadow = $3, pending_snapshot_message_id = NULL, updated_at = now()
 WHERE session_id = $1
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow, pending_push_suppressed_in_shadow, pending_push_cancelled, demotion_terminate_requested_at
 `
 
 type UpdateSandboxSnapshotIDParams struct {
-	SessionID  pgtype.UUID `json:"session_id"`
-	SnapshotID *string     `json:"snapshot_id"`
+	SessionID                  pgtype.UUID `json:"session_id"`
+	SnapshotID                 *string     `json:"snapshot_id"`
+	SnapshotSuppressedInShadow bool        `json:"snapshot_suppressed_in_shadow"`
 }
 
 // §3.2 ("snapshots & restore"), design decision 3: records a real,
@@ -328,8 +652,17 @@ type UpdateSandboxSnapshotIDParams struct {
 // the one that column was tracking -- see that column's own migration
 // doc comment (migrations/000022_sandbox_snapshot_id.up.sql) for the full
 // race this closes.
+//
+// snapshot_suppressed_in_shadow (§30.4(3), migrations/
+// 000106_sandbox_snapshot_shadow_bit.up.sql) is stamped in this SAME
+// statement, at this SAME snapshot-confirmation moment -- the effective
+// egress mode this session was resolved to have while the snapshot that
+// just completed was live, computed ONCE by the caller
+// (handleSnapshotReadyEvent) and never re-derived by anything that later
+// reads this column back (app/sessionactor/dispatch.go's own restore-time
+// refusal check).
 func (q *Queries) UpdateSandboxSnapshotID(ctx context.Context, arg UpdateSandboxSnapshotIDParams) (Sandbox, error) {
-	row := q.db.QueryRow(ctx, updateSandboxSnapshotID, arg.SessionID, arg.SnapshotID)
+	row := q.db.QueryRow(ctx, updateSandboxSnapshotID, arg.SessionID, arg.SnapshotID, arg.SnapshotSuppressedInShadow)
 	var i Sandbox
 	err := row.Scan(
 		&i.ID,
@@ -346,6 +679,10 @@ func (q *Queries) UpdateSandboxSnapshotID(ctx context.Context, arg UpdateSandbox
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
 		&i.PreSuspectStatus,
+		&i.SnapshotSuppressedInShadow,
+		&i.PendingPushSuppressedInShadow,
+		&i.PendingPushCancelled,
+		&i.DemotionTerminateRequestedAt,
 	)
 	return i, err
 }
@@ -356,7 +693,7 @@ SET status = $2,
     last_seen_at = COALESCE($3, last_seen_at),
     updated_at = now()
 WHERE session_id = $1
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow, pending_push_suppressed_in_shadow, pending_push_cancelled, demotion_terminate_requested_at
 `
 
 type UpdateSandboxStatusParams struct {
@@ -388,6 +725,10 @@ func (q *Queries) UpdateSandboxStatus(ctx context.Context, arg UpdateSandboxStat
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
 		&i.PreSuspectStatus,
+		&i.SnapshotSuppressedInShadow,
+		&i.PendingPushSuppressedInShadow,
+		&i.PendingPushCancelled,
+		&i.DemotionTerminateRequestedAt,
 	)
 	return i, err
 }
@@ -398,7 +739,7 @@ SET status = 'suspect',
     pre_suspect_status = $2,
     updated_at = now()
 WHERE session_id = $1
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow, pending_push_suppressed_in_shadow, pending_push_cancelled, demotion_terminate_requested_at
 `
 
 type UpdateSandboxStatusToSuspectParams struct {
@@ -437,6 +778,10 @@ func (q *Queries) UpdateSandboxStatusToSuspect(ctx context.Context, arg UpdateSa
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
 		&i.PreSuspectStatus,
+		&i.SnapshotSuppressedInShadow,
+		&i.PendingPushSuppressedInShadow,
+		&i.PendingPushCancelled,
+		&i.DemotionTerminateRequestedAt,
 	)
 	return i, err
 }
@@ -450,7 +795,7 @@ SET gen = sandboxes.gen + 1,
     token_hash = $2,
     last_seen_at = now(),
     updated_at = now()
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status, snapshot_suppressed_in_shadow, pending_push_suppressed_in_shadow, pending_push_cancelled, demotion_terminate_requested_at
 `
 
 type UpsertSandboxForSpawnParams struct {
@@ -516,6 +861,10 @@ func (q *Queries) UpsertSandboxForSpawn(ctx context.Context, arg UpsertSandboxFo
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
 		&i.PreSuspectStatus,
+		&i.SnapshotSuppressedInShadow,
+		&i.PendingPushSuppressedInShadow,
+		&i.PendingPushCancelled,
+		&i.DemotionTerminateRequestedAt,
 	)
 	return i, err
 }

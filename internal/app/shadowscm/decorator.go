@@ -74,6 +74,28 @@ func (d *Decorator) CreatePR(ctx context.Context, spec ports.CreatePRSpec) (port
 	if d.isLive(ctx, repoName(spec.Owner, spec.Repo)) {
 		return d.live.CreatePR(ctx, spec)
 	}
+	return d.SuppressCreatePR(ctx, spec)
+}
+
+// SuppressCreatePR records what a CreatePR would have done and returns the
+// synthetic ref, WITHOUT consulting the current egress mode at all.
+//
+// It exists for one caller shape: a decision already frozen earlier in the
+// same cycle. §30.8 resolves the push/PR pair's mode ONCE, at push send,
+// and persists it -- so by the time the PR stage runs, a repo promoted
+// shadow->live in between would make CreatePR's own isLive check say
+// "live" and open a real pull request on a branch that was only ever
+// pushed under shadow. The caller holding that frozen stamp calls here
+// instead, which is the "stamp" half of §30.8's rule: suppress if the
+// stamp OR the current flag says shadow, monotone toward suppression in
+// both directions. The other half needs nothing extra -- a repo demoted
+// live->shadow mid-cycle is caught by CreatePR's own check above.
+//
+// Recording is the reason this is a method rather than an early return in
+// the caller. A suppressed effect that leaves no ledger row is §30.6's
+// named contract violation, and the synthetic ref is what keeps the
+// caller's own downstream state (the PR artifact) coherent, §30.7.
+func (d *Decorator) SuppressCreatePR(ctx context.Context, spec ports.CreatePRSpec) (ports.PRRef, error) {
 	synthetic := syntheticPRRef(spec.Owner, spec.Repo)
 	if err := d.record(ctx, shadowledger.Entry{
 		Operation:    "create_pr",

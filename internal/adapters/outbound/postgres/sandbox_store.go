@@ -137,3 +137,61 @@ func (s *SandboxStore) ListLiveProviderIDs(ctx context.Context) ([]string, error
 func (s *SandboxStore) UpdatePendingSnapshotMessageID(ctx context.Context, arg sqlcgen.UpdateSandboxPendingSnapshotMessageIDParams) (sqlcgen.Sandbox, error) {
 	return s.q.UpdateSandboxPendingSnapshotMessageID(ctx, arg)
 }
+
+// SetPendingPush stamps this sandbox's own persisted push/PR egress-mode
+// decision (§30.8's "resolved at push send, persisted with the signal") --
+// called by completeProcessingTurn (app/sessionactor/pushpr.go) in the
+// same transact that completes the turn and builds its pushSignal. Also
+// resets pending_push_cancelled to false (a fresh cycle), per
+// SetSandboxPendingPush's own generated doc comment.
+func (s *SandboxStore) SetPendingPush(ctx context.Context, arg sqlcgen.SetSandboxPendingPushParams) (sqlcgen.Sandbox, error) {
+	return s.q.SetSandboxPendingPush(ctx, arg)
+}
+
+// ClearPendingPush consumes this sandbox's own persisted push/PR
+// decision, once createPRBestEffort has read and acted on it -- see
+// ClearSandboxPendingPush's own generated doc comment.
+func (s *SandboxStore) ClearPendingPush(ctx context.Context, sessionID pgtype.UUID) (sqlcgen.Sandbox, error) {
+	return s.q.ClearSandboxPendingPush(ctx, sessionID)
+}
+
+// CancelPendingPush marks a sandbox's own currently-outstanding push
+// decision cancelled -- §30.4's own "demotion ... must cancel in-flight
+// push signals", called by the repo-demotion sweep (internal/app/seed).
+// Returns pgx.ErrNoRows (unwrapped) when this sandbox has no push
+// currently outstanding -- see CancelSandboxPendingPush's own generated
+// doc comment; callers treat that as "nothing to cancel", not an error.
+func (s *SandboxStore) CancelPendingPush(ctx context.Context, sessionID pgtype.UUID) (sqlcgen.Sandbox, error) {
+	return s.q.CancelSandboxPendingPush(ctx, sessionID)
+}
+
+// ListLiveWithSessionRepos returns every live sandbox alongside its
+// owning session's own raw repos JSONB -- the repo-demotion sweep's
+// (internal/app/seed) own input; see ListLiveSandboxesWithSessionRepos's
+// own generated doc comment.
+func (s *SandboxStore) ListLiveWithSessionRepos(ctx context.Context) ([]sqlcgen.ListLiveSandboxesWithSessionReposRow, error) {
+	return s.q.ListLiveSandboxesWithSessionRepos(ctx)
+}
+
+// MarkDemotionTerminationRequested flags a sandbox for the process-wide
+// reconciler (internal/app/reconciler) to really terminate -- §30.4's own
+// "demotion ... must terminate (or respawn) every sandbox of the repo",
+// called by the repo-demotion sweep (internal/app/seed) for every live
+// sandbox it finds belonging to a just-demoted repo.
+func (s *SandboxStore) MarkDemotionTerminationRequested(ctx context.Context, sessionID pgtype.UUID) (sqlcgen.Sandbox, error) {
+	return s.q.MarkSandboxDemotionTerminationRequested(ctx, sessionID)
+}
+
+// ListPendingDemotionTermination returns every sandbox a repo-demotion
+// sweep has flagged for termination -- app/reconciler.Reconciler's own
+// new demotion-sweep tick reads this every ReconcilerInterval.
+func (s *SandboxStore) ListPendingDemotionTermination(ctx context.Context) ([]sqlcgen.Sandbox, error) {
+	return s.q.ListSandboxesPendingDemotionTermination(ctx)
+}
+
+// ClearDemotionTerminationRequested consumes a sandbox's own
+// demotion-termination request once app/reconciler.Reconciler has
+// successfully issued a real StopSandbox call for it.
+func (s *SandboxStore) ClearDemotionTerminationRequested(ctx context.Context, sessionID pgtype.UUID) (sqlcgen.Sandbox, error) {
+	return s.q.ClearSandboxDemotionTerminationRequested(ctx, sessionID)
+}

@@ -1,0 +1,55 @@
+-- §30.4(3)'s own fail-closed defense-in-depth: a shadow bit recorded on
+-- each snapshot row, checked at restore. The PRIMARY fix for "a snapshot
+-- must never contain a token" is purging the credential cache at
+-- snapshot-mint time (cmd/sandbox-agent/main.go's own HandleSnapshot,
+-- credentials.Cache.PurgeAll) -- this column is the fail-closed backstop
+-- for whatever that primary fix does not reach (a purge that silently
+-- fails, a future code path that mints outside HandleSnapshot, ...).
+--
+-- snapshot_suppressed_in_shadow: true means this sandbox's most recently
+-- completed snapshot (sandboxes.snapshot_id, migrations/
+-- 000022_sandbox_snapshot_id.up.sql) was taken while this session's own
+-- effective egress mode (internal/app/egressmode.Resolve, aggregated
+-- across the session's repos exactly like postgres.OutboxStore.
+-- ResolveEffectiveMode already does for the outbox's own identical need)
+-- was SHADOW -- i.e. this sandbox never held more than a read-only
+-- credential for the whole of that snapshot cycle. Stamped once, at
+-- snapshot_ready handling time (app/sessionactor/sandboxevent.go's own
+-- handleSnapshotReadyEvent, the SAME transact that already calls
+-- UpdateSnapshotID), never re-derived later.
+--
+-- The polarity is the entire point, spelled out verbatim in §30.4(3):
+-- "an absent bit (every pre-existing snapshot) is treated as live and
+-- restore into a shadow session is refused" -- the same fail-toward-
+-- suppression polarity §30.8 imposes on the live_egress_enabled flag
+-- itself (migrations/000101_repo_settings_live_egress_enabled.up.sql).
+-- DEFAULT false achieves exactly that: every snapshot taken before this
+-- Step existed, and any future write path that forgets to pass this
+-- column explicitly, is backfilled/defaulted to false -- "not confirmed
+-- shadow" -- which app/sessionactor/dispatch.go's own restore-time check
+-- (tryPlanSpawn) then treats as "presumed live", refusing to restore it
+-- into a session whose OWN current mode is shadow. A row can only ever
+-- be trusted as shadow-safe by an explicit true, written by the one real
+-- writer (handleSnapshotReadyEvent) at the moment it confirms this
+-- session's own effective mode.
+--
+-- Unlike outbox.suppressed_in_shadow/review_verdicts.suppressed_in_shadow
+-- (migrations/000103, 000105), whose DEFAULT true encodes "fail toward
+-- staying suppressed forever", this column's DEFAULT false encodes the
+-- SAME underlying fail-toward-suppression posture applied to a DIFFERENT
+-- artifact shape: those two columns gate whether an effect reaches the
+-- world; this one gates whether a snapshot may be TRUSTED as
+-- shadow-clean, so its safe default is "not trusted" (false), not
+-- "trusted shadow" (true) -- a stray future INSERT/UPDATE that forgets
+-- this column must never accidentally mark an unverified snapshot safe
+-- to restore into shadow.
+ALTER TABLE sandboxes ADD COLUMN snapshot_suppressed_in_shadow BOOLEAN NOT NULL DEFAULT false;
+
+-- sandbox_history.snapshot_suppressed_in_shadow: forward-compatible
+-- mirror of the column above, added for schema symmetry -- mirrors
+-- sandbox_history.snapshot_id's own identical precedent (migrations/
+-- 000022_sandbox_snapshot_id.up.sql's own doc comment: no real,
+-- non-test call site anywhere in this codebase inserts into
+-- sandbox_history yet, so this is cheap and harmless to add now, and left
+-- unpopulated until a later Step builds real sandbox_history archival).
+ALTER TABLE sandbox_history ADD COLUMN snapshot_suppressed_in_shadow BOOLEAN NOT NULL DEFAULT false;

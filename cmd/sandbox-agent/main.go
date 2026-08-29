@@ -698,9 +698,58 @@ func (h *commandHandler) sendPushError(cmd sandboxws.Push, pushErr error) {
 // Step adds a real NACK/timeout mechanism this Step's own plan-row text
 // does not ask for (explicitly out of THIS Step's own scope: no new
 // dedicated snapshot-timeout timer, no broader NACK mechanism).
+//
+// §30.4(3)'s own PRIMARY fix ("snapshots must never contain a token,
+// enforced at snapshot mint time") lives here, first, before the mint
+// request is even built: purge the credential cache
+// (credentials.Cache.PurgeAll, the SAME call runBootSequence already
+// makes unconditionally at boot, and gitclone.CleanForImageBuild already
+// makes on the image-build path) so no cached credential -- read-only or
+// write-capable, live-minted or shadow-substituted -- is on disk when the
+// provider goes on to actually take the snapshot.
+//
+// "Is on disk" rather than "can possibly be captured", because this
+// purges at the last moment this process controls, not at the instant of
+// capture. The provider captures the filesystem some time AFTER the
+// snapshot_ready this function sends, and an agent running a git command
+// in that window makes the credential helper mint and cache again. What
+// bounds that residue is the layer above, not this call: a snapshot taken
+// during a live session may legitimately carry a write token, and
+// §30.4(3)'s shadow bit is what refuses to restore it into a shadow
+// session. A shadow session's own re-mint can only produce the read-only
+// substitute. Stating the window rather than implying it is closed is the
+// point -- a reader who believes this call is airtight would see no
+// reason to keep that bit fail-closed. This runs regardless of the session's own current egress
+// mode: a LIVE session's sandbox may legitimately hold a real write
+// credential on disk right now, and that is exactly the case this purge
+// exists to remove from the snapshot, since a later restore (§30.4(3)'s
+// own fail-closed shadow-bit check, app/sessionactor/dispatch.go) might
+// land in a SHADOW session with zero control-plane cooperation.
+//
+// A failed purge ABORTS the snapshot -- the mint is never even attempted,
+// and no snapshot_ready is ever sent. Argued from which direction fails
+// safe: this function's own existing "no NACK on the wire" gap (see
+// above) already means a real Mint failure leaves the control plane stuck
+// Snapshotting until a later reconnect/revert cycle recovers it -- an
+// honest, already-accepted cost. Proceeding past a FAILED purge, by
+// contrast, risks the one outcome this whole Step exists to close: a
+// snapshot that captures a leftover write credential from disk, silently,
+// with no later signal anywhere that it happened. A stuck Snapshotting
+// state is recoverable (a future reconnect, or an operator's own
+// intervention); a token baked into a snapshot is not something any later
+// step can un-bake. So: proceeding on a failed purge fails OPEN on the
+// one guarantee that matters most here, while aborting fails CLOSED at
+// the cost this function's own doc comment already accepts elsewhere --
+// abort wins.
 func (h *commandHandler) HandleSnapshot(_ context.Context, cmd sandboxws.Snapshot) {
 	if h.cfg.SessionConfig == nil {
 		slog.Warn("sandbox-agent: received snapshot but no live session is configured", "messageId", cmd.MessageId)
+		return
+	}
+
+	if err := (&credentials.Cache{Dir: h.cfg.CredentialCacheDir}).PurgeAll(); err != nil {
+		slog.Error("sandbox-agent: snapshot: purge credential cache before mint failed; aborting snapshot rather than risking a token captured in it",
+			"messageId", cmd.MessageId, "error", err)
 		return
 	}
 
@@ -2053,12 +2102,12 @@ func runBootSequence(
 	// not) is the open Modal question §30.9 names, and nothing here may
 	// rest on the unverified answer. The load-bearing control for a
 	// restored snapshot is a purge at snapshot-MINT time, so that no
-	// snapshot ever contains a credential in the first place. That purge
-	// is NOT written yet -- HandleSnapshot mints and reports, and touches
-	// no cache -- so today a restored snapshot is defended only by the
-	// forced read-only mint on the build path, and by this call on
-	// whichever boots re-run this far. Read that as the gap it is: this
-	// call is cheap insurance, not the control.
+	// snapshot ever contains a credential in the first place -- THAT purge
+	// now IS written (HandleSnapshot, above, purges before ever building
+	// the mint request, and aborts the whole snapshot attempt if the purge
+	// itself fails), so a restored snapshot is defended primarily by that
+	// mint-time purge, with this boot-time call and the forced read-only
+	// mint on the build path as its own, independent defense-in-depth.
 	//
 	// A failure purging a directory that may not even exist yet is
 	// unexpected enough to be worth failing loudly rather than silently
