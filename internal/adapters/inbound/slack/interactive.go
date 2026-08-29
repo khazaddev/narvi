@@ -552,7 +552,7 @@ func (deps InteractiveDeps) decideAndUpdateMessage(ctx context.Context, logger *
 	// PostEphemeral's own doc comment describes. Best-effort: a failure
 	// here never blocks the actual plan decision below.
 	if notice != "" {
-		if err := deps.SlackClient.PostEphemeral(decideCtx, channel, slackUserID, messageTS, notice); err != nil {
+		if err := deps.SlackClient.PostIdentityLinkNotice(decideCtx, channel, slackUserID, messageTS, notice); err != nil {
 			logger.Warn("slack: interactivity: post identity-link ephemeral notice failed", "error", err)
 		}
 	}
@@ -944,7 +944,7 @@ func (deps InteractiveDeps) postViewSubmissionLinkNotice(ctx context.Context, lo
 		return
 	}
 
-	if err := deps.SlackClient.PostEphemeral(ctx, *plan.SlackChannelID, slackUserID, *plan.SlackMessageTs, notice); err != nil {
+	if err := deps.SlackClient.PostIdentityLinkNotice(ctx, *plan.SlackChannelID, slackUserID, *plan.SlackMessageTs, notice); err != nil {
 		logger.Warn("slack: interactivity: post identity-link ephemeral notice failed", "error", err)
 	}
 }

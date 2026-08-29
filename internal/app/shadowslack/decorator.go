@@ -32,9 +32,18 @@ type Client interface {
 	// (formerly ack.go's private ackClient.postAck).
 	PostAck(ctx context.Context, channel, threadTS, text string) error
 
+	// PostIdentityLinkNotice posts the identity-link prompt, visible only
+	// to userID. Separate from PostEphemeral because its text carries a
+	// live magic-link nonce that must never reach the ledger -- see the
+	// Decorator method's own doc comment. Use this for the identity-link
+	// notice and nothing else.
+	PostIdentityLinkNotice(ctx context.Context, channel, userID, threadTS, text string) error
+
 	// PostEphemeral posts a chat.postEphemeral message visible only to
-	// userID -- the identity-link/denial notices both Slack ingress
-	// routes post.
+	// userID -- the denial notices Slack ingress posts. NEVER the
+	// identity-link notice: its text is recorded verbatim into a
+	// permanent ledger, so a secret-bearing body must use
+	// PostIdentityLinkNotice above.
 	PostEphemeral(ctx context.Context, channel, userID, threadTS, text string) error
 
 	// UpdateMessage calls chat.update against an existing message --
@@ -117,6 +126,30 @@ func (d *Decorator) PostEphemeral(ctx context.Context, channel, userID, threadTS
 		Operation: "slack_post_ephemeral",
 		Target:    channel,
 		Spec:      shadowledger.SlackEphemeral{Channel: channel, UserID: userID, ThreadTS: threadTS, Text: text},
+	})
+}
+
+// PostIdentityLinkNotice posts the identity-link prompt, or records that
+// it would have -- WITHOUT its text.
+//
+// It exists as a separate method from PostEphemeral for one reason: the
+// text carries a live magic-link nonce, and PostEphemeral records text
+// verbatim into a permanent, append-only ledger. Routing this through
+// there would durably store a credential-equivalent secret, which is the
+// thing §30.6's record types exist to make impossible.
+//
+// The exclusion is structural rather than a redaction: SlackIdentityLinkNotice
+// has no text field, so there is nowhere for the nonce to go. Stripping a
+// URL out of a text field instead would hold only until someone rewords
+// the notice.
+func (d *Decorator) PostIdentityLinkNotice(ctx context.Context, channel, userID, threadTS, text string) error {
+	if d.isLive(ctx, d.repoFullName) {
+		return d.live.PostEphemeral(ctx, channel, userID, threadTS, text)
+	}
+	return d.record(ctx, shadowledger.Entry{
+		Operation: "slack_post_identity_link_notice",
+		Target:    channel,
+		Spec:      shadowledger.SlackIdentityLinkNotice{Channel: channel, UserID: userID, ThreadTS: threadTS},
 	})
 }
 

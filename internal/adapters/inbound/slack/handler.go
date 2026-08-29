@@ -323,13 +323,23 @@ func postAckBounded(ctx context.Context, client shadowslack.Client, timeout time
 	return client.PostAck(ackCtx, channel, threadTS, text)
 }
 
-// postEphemeralBounded is postAckBounded's own chat.postEphemeral sibling
-// -- see that function's own doc comment for the identical "why bounded"
-// reasoning.
-func postEphemeralBounded(ctx context.Context, client shadowslack.Client, timeout time.Duration, channel, userID, threadTS, text string) error {
-	ephemeralCtx, cancel := context.WithTimeout(ctx, timeout)
+// postIdentityLinkNoticeBounded is postAckBounded's own sibling for the
+// identity-link prompt -- see that function's own doc comment for the
+// identical "why bounded" reasoning.
+//
+// It calls PostIdentityLinkNotice, never PostEphemeral, and the
+// difference is not cosmetic: this text carries a live magic-link nonce,
+// and PostEphemeral's shadow record stores its text verbatim in a
+// permanent, append-only ledger. The method used here records the fact
+// with no text field at all. Do not "simplify" the two back together.
+//
+// (This replaced a general postEphemeralBounded, which had exactly one
+// caller -- this one. The remaining PostEphemeral call site posts a fixed
+// constant and needs no helper.)
+func postIdentityLinkNoticeBounded(ctx context.Context, client shadowslack.Client, timeout time.Duration, channel, userID, threadTS, text string) error {
+	noticeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return client.PostEphemeral(ephemeralCtx, channel, userID, threadTS, text)
+	return client.PostIdentityLinkNotice(noticeCtx, channel, userID, threadTS, text)
 }
 
 // NewHandler builds the POST /webhooks/slack handler (§8.10 --
@@ -648,7 +658,7 @@ func handleEvent(ctx context.Context, deps Deps, logger *slog.Logger, ev slackEv
 	// have nothing to scope to -- never expected in practice, see
 	// resolveSlackActor's own identical defensive short-circuit).
 	if notice != "" && ev.User != "" {
-		if err := postEphemeralBounded(ctx, deps.SlackClient, deps.AckTimeout, channel, ev.User, key, notice); err != nil {
+		if err := postIdentityLinkNoticeBounded(ctx, deps.SlackClient, deps.AckTimeout, channel, ev.User, key, notice); err != nil {
 			logger.Warn("slack: post identity-link ephemeral notice failed", "error", err)
 		}
 	}

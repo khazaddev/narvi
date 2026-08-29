@@ -1,4 +1,4 @@
-.PHONY: build vet fmt tidy lint test test-integration \
+.PHONY: build vet fmt tidy lint lint-web-assets test test-integration \
 	test-integration-group-1 test-integration-group-2 test-integration-group-3 test-integration-group-4 \
 	contracts-generate contracts-check dev \
 	web-typecheck web-lint web-check-dto-types web-test web-build web-check dist
@@ -23,6 +23,14 @@ tidy:
 lint:
 	golangci-lint run ./...
 	go run ./tools/lint/narvichecks ./...
+	# NOTE: this pass uses the DEFAULT build context, so any file behind a
+	# build tag is absent from it and is analyzed by nothing. Exactly one
+	# non-test file in this repo is tagged today
+	# (internal/adapters/inbound/webui's embed file, //go:build
+	# web_assets) and it SHIPS in the release binary -- so it is covered
+	# by lint-web-assets below, which `dist` depends on, rather than here:
+	# the tag does not compile until `make web-build` has produced the
+	# bundle, and `make lint` must keep working in a checkout with no node.
 
 test:
 	go test -race ./...
@@ -319,5 +327,23 @@ web-check: web-typecheck web-lint web-check-dto-types web-test web-build
 # internal/sandboxagent/boot/config.go's own defaultAgentVersion comment),
 # so inventing one only for this target would be its own, un-asked-for
 # scope rather than something §12.4 requires.
-dist: web-build
+# lint-web-assets runs the arch-test over the code the DEFAULT build
+# context cannot see. `make lint`'s own narvichecks pass reads only
+# untagged files, so a client-side net/http symbol or an os/exec import
+# behind //go:build web_assets would ship in the release binary having
+# been analyzed by nothing at all -- an arch-test blind to shipped code is
+# not an arch-test.
+#
+# The tag is passed via GOFLAGS, deliberately: `narvichecks -tags X` is
+# accepted and SILENTLY IGNORED (the analysis framework's own flag set
+# does not define -tags), so that spelling exits 0 having checked
+# nothing. A check that cannot fail is worse than no check, because it
+# reads as coverage.
+#
+# Depends on web-build for the same reason `dist` does: the tagged file
+# embeds `all:dist` and does not compile until that bundle exists.
+lint-web-assets: web-build
+	GOFLAGS=-tags=web_assets go run ./tools/lint/narvichecks ./...
+
+dist: web-build lint-web-assets
 	go build -tags web_assets -o narvi ./cmd/control-plane

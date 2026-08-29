@@ -110,6 +110,7 @@ var bannedSymbols = map[string]bool{
 	"NewRequestWithContext": true,
 	"Get":                   true,
 	"Post":                  true,
+	"PostForm":              true,
 	"Head":                  true,
 	"Transport":             true,
 }
@@ -193,20 +194,35 @@ func run(pass *analysis.Pass) (any, error) {
 
 // httpImportName reports the local identifier file uses for "net/http",
 // and whether it imports it at all. A dot-import or blank import cannot
-// be reliably matched by name and is treated as "not imported" -- no file
-// in this codebase does either for net/http, and a future one that did
-// would be its own, separate review problem.
+// be reliably matched by name, so it is SKIPPED and the search continues
+// through the file's remaining import specs. Skipping the spec, never the
+// file: a file may import one path several times, and abandoning it on
+// the first unusable spec is how an ordinary blank import came to switch
+// the whole check off.
 func httpImportName(file *ast.File) (name string, ok bool) {
 	for _, imp := range file.Imports {
 		path, err := strconv.Unquote(imp.Path.Value)
 		if err != nil || path != "net/http" {
 			continue
 		}
+		// CONTINUE, never return, on a blank or dot import. Go allows one
+		// path to be imported more than once, and returning here turned
+		// the whole check off for the file: a blank import seen first
+		// yielded "not imported", run() skipped every remaining spec and
+		// every symbol, and a usable named alias sitting on the next line
+		// was never looked at.
+		//
+		// That was not a theoretical evasion. gofmt SORTS a blank import
+		// ahead of a named one for the same path ("_" < any letter), so
+		// the bypassing order is the formatter-stable state -- a
+		// contributor could reach it by accident and CI would agree with
+		// them. Reinstating ack.go's own retired client-in-ingress shape
+		// took two extra characters.
 		if imp.Name == nil {
 			return "http", true
 		}
 		if imp.Name.Name == "_" || imp.Name.Name == "." {
-			return "", false
+			continue
 		}
 		return imp.Name.Name, true
 	}

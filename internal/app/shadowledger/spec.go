@@ -49,6 +49,7 @@ func (Transport) isShadowSpec()                {}
 func (ScmCredentialMintRefused) isShadowSpec() {}
 func (ScmCredentialSubstituted) isShadowSpec() {}
 func (SlackAck) isShadowSpec()                 {}
+func (SlackIdentityLinkNotice) isShadowSpec()  {}
 func (SlackEphemeral) isShadowSpec()           {}
 func (SlackMessageUpdate) isShadowSpec()       {}
 func (SlackViewOpen) isShadowSpec()            {}
@@ -253,6 +254,34 @@ type LinearResponseActivity struct {
 	Body           string `json:"body"`
 }
 
+// SlackIdentityLinkNotice records that an identity-link prompt would have
+// been shown, and DELIBERATELY CARRIES NO TEXT.
+//
+// The notice's body contains a live magic-link URL whose nonce is
+// credential-equivalent: whoever holds it can bind a Slack identity to a
+// Narvi account. §30.6 requires the ledger's record types to exclude
+// credentials "a compile error, not a redaction pass" -- and the sealed
+// marker alone does not deliver that here, because this secret does not
+// arrive in a field named Token. It arrives inside human-readable text.
+//
+// So the exclusion is the type's SHAPE. There is no field to put the
+// notice in, which is why the caller has a distinct method rather than
+// passing this text to the general ephemeral recorder. Redacting the URL
+// out of a text field would be exactly the redaction pass §30.6 rejects:
+// it works until someone changes the notice's wording.
+//
+// An evaluator loses nothing that matters. "An unlinked user was prompted
+// to link their account, in this channel" is the whole fact; the URL is a
+// per-user secret, not evidence about the workspace.
+type SlackIdentityLinkNotice struct {
+	// Channel is where the ephemeral would have appeared.
+	Channel string `json:"channel"`
+	// UserID is the only person who would have seen it.
+	UserID string `json:"userId"`
+	// ThreadTS is the thread it would have been scoped to, if any.
+	ThreadTS string `json:"threadTs"`
+}
+
 // These assertions pin the sealed set. Removing isShadowSpec from any of
 // them, or forgetting it on a type added later, is a build failure at the
 // point where someone would otherwise have widened the ledger's input
@@ -269,6 +298,7 @@ var (
 	_ Spec = ScmCredentialSubstituted{}
 	_ Spec = SlackAck{}
 	_ Spec = SlackEphemeral{}
+	_ Spec = SlackIdentityLinkNotice{}
 	_ Spec = SlackMessageUpdate{}
 	_ Spec = SlackViewOpen{}
 	_ Spec = LinearThoughtActivity{}

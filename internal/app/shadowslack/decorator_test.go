@@ -45,6 +45,13 @@ func (l *liveSpy) PostAck(context.Context, string, string, string) error {
 	}
 	return nil
 }
+func (l *liveSpy) PostIdentityLinkNotice(context.Context, string, string, string, string) error {
+	l.writeCalls++
+	if l.t != nil {
+		l.t.Error("PostIdentityLinkNotice reached the live client in shadow")
+	}
+	return nil
+}
 func (l *liveSpy) PostEphemeral(context.Context, string, string, string, string) error {
 	l.writeCalls++
 	if l.failOnWrite {
@@ -204,5 +211,43 @@ func TestNew_RefusesAnIncompleteConstruction(t *testing.T) {
 	}
 	if _, err := New(live, store, "acme/widgets", nil); err == nil {
 		t.Error("New accepted a nil resolver -- which would make live/shadow undefined")
+	}
+}
+
+// TestDecorator_IdentityLinkNotice_NeverRecordsItsText is the reason this
+// method exists apart from PostEphemeral.
+//
+// The notice's body carries a live magic-link URL whose nonce is
+// credential-equivalent: whoever holds it can bind a Slack identity to a
+// Narvi account. PostEphemeral records its text verbatim into a
+// permanent, append-only ledger, so routing the notice through there
+// stores a secret forever.
+//
+// The assertion is on the SERIALISED row, not on the struct's fields. A
+// field list can be read and believed; only the bytes prove nothing
+// leaked, and a future field added to the spec would be caught here
+// rather than in a customer's ledger.
+func TestDecorator_IdentityLinkNotice_NeverRecordsItsText(t *testing.T) {
+	store := &fakeStore{}
+	d, _ := shadowDecorator(t, store)
+
+	const nonce = "nonce-b8f2c1d4e7a9"
+	notice := "Connect your account here: https://narvi.example/auth/identity-link/" + nonce
+
+	if err := d.PostIdentityLinkNotice(context.Background(), "C1", "U1", "1.1", notice); err != nil {
+		t.Fatalf("PostIdentityLinkNotice: %v", err)
+	}
+	if len(store.rows) != 1 {
+		t.Fatalf("ledger rows = %d, want 1: the notice must be recorded, just never with its text", len(store.rows))
+	}
+	spec := string(store.rows[0].SpecJson)
+	if strings.Contains(spec, nonce) {
+		t.Errorf("the magic-link nonce reached spec_json: %s", spec)
+	}
+	if strings.Contains(spec, "identity-link") || strings.Contains(spec, "Connect your account") {
+		t.Errorf("the notice text reached spec_json: %s", spec)
+	}
+	if !strings.Contains(spec, "C1") || !strings.Contains(spec, "U1") {
+		t.Errorf("spec_json = %s, want it to still name the channel and user -- the fact is what the evaluator needs", spec)
 	}
 }
