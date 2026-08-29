@@ -68,6 +68,7 @@ import (
 	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/khazaddev/narvi/internal/app/shadowledger"
 	"github.com/khazaddev/narvi/internal/app/workflowengine"
 	"github.com/khazaddev/narvi/internal/domain/provenance"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
@@ -148,6 +149,17 @@ var errNoStampedSuppressor = errors.New("sessionactor: push cycle stamped shadow
 type pushSignal struct {
 	gen   int
 	repos []sessionconfig.SessionConfigReposElem
+	// suppressedInShadow is the SAME §30.8 push/PR egress decision
+	// completeProcessingTurn resolves and persists onto the sandbox row
+	// (below) -- carried on the signal too, since sendPushBestEffort
+	// consumes it in the SAME handleSandboxEvent invocation that produced
+	// it, before any wire redelivery gap the persisted column exists to
+	// survive (createPRBestEffort, a genuinely separate later invocation,
+	// still reads the persisted column, never this field). §30.9
+	// (resolved: no git mirror; short-circuit the push, done properly):
+	// true means sendPushBestEffort must never send the sandbox a push
+	// command at all for this cycle.
+	suppressedInShadow bool
 }
 
 // completeProcessingTurn implements this file's own first half: given a
@@ -359,7 +371,7 @@ func (a *Actor) completeProcessingTurn(ctx context.Context, tx pgx.Tx, sandboxRo
 		return nil, fmt.Errorf("sessionactor: persist push/PR egress-mode decision: %w", err)
 	}
 
-	return &pushSignal{gen: int(sandboxRow.Gen), repos: repos}, nil
+	return &pushSignal{gen: int(sandboxRow.Gen), repos: repos, suppressedInShadow: suppressedInShadow}, nil
 }
 
 // recordFalseFailureIfApplicable implements the "false failures"
@@ -456,22 +468,46 @@ func (a *Actor) recordFalseFailureIfApplicable(ctx context.Context, tx pgx.Tx) e
 // wire contract has no command for -- an honest, documented gap, not a
 // silent shortcut.
 //
-// sig.suppressedInShadow is resolved and persisted by completeProcessingTurn
-// (pushSignal's own doc comment) but deliberately NOT consulted here to
-// decide whether to send the WS push command at all -- §30.8's own fix is
-// the push/PR pair's CONSISTENCY (one resolved decision, honored without
-// a re-read at PR-creation time, below), not a brand-new suppression
-// point at the WS layer: the sandbox-side credential the push actually
-// uses is already governed by §30.4's read-only substitution regardless
-// of what this function does, and every consumer of ports.SourceControl.
-// CreatePR (createPRBestEffort included) already goes through the §30.2
-// port decorator in production, which independently suppresses a shadow
-// repo's CreatePR call. sig.suppressedInShadow's OWN read happens in
-// createPRBestEffort, below.
-func (a *Actor) sendPushBestEffort(sessionID string, sig *pushSignal) {
+// # §30.9 (resolved): the push itself is gated, not merely accepted as a failure
+//
+// sig.suppressedInShadow is the SAME §30.8 push/PR egress decision
+// completeProcessingTurn resolves and persists onto the sandbox row. An
+// earlier version of this function deliberately did NOT consult it here,
+// reasoning that the sandbox-side read-only credential (§30.4) already
+// makes a shadow repo's push harmless and that §30.8's fix was the push/PR
+// pair's CONSISTENCY alone. That reasoning was correct about SECURITY --
+// §30.4 remains explicit that the read-only token and the UID boundary
+// are the whole security boundary here, this gate is not a second one --
+// but wrong about the CONSEQUENCE of leaving the send ungated: a real push
+// attempt against a read-only credential does not silently no-op, it
+// fails, producing a push_error on every single shadow turn that pushes.
+// A failed push never yields a push_complete, so createPRBestEffort (the
+// gated PR path §30.2's decorator already covers) never even runs -- the
+// ledger's single most important entry, "would have opened PR ...", was
+// never recorded at all, and every shadow turn looked broken to whoever
+// was evaluating it.
+//
+// §30.9 resolves this: gate the send itself. When sig.suppressedInShadow
+// is true, the push command is never sent -- recordSuppressedPushBestEffort
+// (below) records the branch that would have been pushed AND that
+// createPRBestEffort would have opened a pull request against it next
+// (combined into ONE ledger row, since no push_complete will ever arrive
+// to let createPRBestEffort record the second half itself). This is
+// consistency, still never security: a shadow repo's push would already
+// fail against the read-only credential exactly as before, this gate only
+// changes whether that failure is attempted, surfaced as an error, and
+// left unrecorded, or skipped, recorded, and read by the evaluator as the
+// product working as designed.
+func (a *Actor) sendPushBestEffort(ctx context.Context, sessionID string, sig *pushSignal) {
 	if sig == nil {
 		return
 	}
+
+	if sig.suppressedInShadow {
+		a.recordSuppressedPushBestEffort(ctx, sig)
+		return
+	}
+
 	if a.commander == nil {
 		a.logger.Warn("sessionactor: turn completed but no SandboxCommander is configured; skipping push")
 		return
@@ -503,6 +539,65 @@ func (a *Actor) sendPushBestEffort(sessionID string, sig *pushSignal) {
 	}
 	if err := a.commander.SendCommand(sessionID, payload); err != nil {
 		a.logger.Warn("sessionactor: send push command failed", "error", err)
+	}
+}
+
+// recordSuppressedPushBestEffort is sendPushBestEffort's own shadow path
+// (§30.7/§30.9, resolved: no git mirror -- short-circuit the push, done
+// properly): one shadowledger.Push row per repo this turn would have
+// pushed, naming the branch and recording that createPRBestEffort would
+// have opened a pull request against it next -- see that type's own doc
+// comment (shadowledger/spec.go) for why this is ONE combined row rather
+// than two. Mirrors sendPushBestEffort's own loop exactly (a repo with no
+// explicit branch is skipped the same way, for the same reason), and is
+// equally best-effort: this runs after handleSandboxEvent's own transact
+// already committed the turn's completion, with no retry machinery of its
+// own, matching every other side effect in this file.
+//
+// A ledger write failure is logged loudly (Error, not Warn) rather than
+// silently dropped: §30.6's own record-or-fail rule says a suppression
+// that cannot be evidenced is a contract violation, and unlike a decorated
+// port write this function has no caller to return that failure to and no
+// retry to hand it off to -- logging loudly is the only recourse left, and
+// the push itself is NEVER sent regardless of whether the record
+// succeeds, since sending it would still fail against the read-only
+// credential (§30.4) and would still be the wrong direction to fail
+// toward.
+func (a *Actor) recordSuppressedPushBestEffort(ctx context.Context, sig *pushSignal) {
+	if a.shadowLedger == nil {
+		a.logger.Error("sessionactor: turn's own push/PR decision is shadow but no shadow ledger is configured; suppressing the push with NO ledger record (§30.6 contract violation)")
+		return
+	}
+
+	for _, r := range sig.repos {
+		if r.Branch == nil || *r.Branch == "" {
+			a.logger.Warn("sessionactor: session repo has no explicit branch; nothing to record for it", "repo", r.Name)
+			continue
+		}
+		branch := *r.Branch
+
+		if err := reposource.CheckRepoHost(r.Url, ports.SupportedSourceControlHosts()...); err != nil {
+			a.logger.Warn("sessionactor: suppressed push: repo url does not name a supported source-control host; skipping ledger record for it", "repo", r.Name, "url", r.Url, "error", err)
+			continue
+		}
+		owner, repoName, err := reposource.ParseOwnerRepo(r.Url)
+		if err != nil {
+			a.logger.Warn("sessionactor: suppressed push: parse owner/repo from clone url failed; skipping ledger record for it", "repo", r.Name, "error", err)
+			continue
+		}
+
+		if err := shadowledger.Record(ctx, a.shadowLedger, shadowledger.Entry{
+			Operation:    "push",
+			RepoFullName: owner + "/" + repoName,
+			Target:       branch,
+			Spec:         shadowledger.Push{Owner: owner, Repo: repoName, Branch: branch, WouldOpenPR: true},
+			SessionID:    a.sessionID,
+		}); err != nil {
+			a.logger.Error("sessionactor: record suppressed push failed", "error", err, "repo", r.Name, "branch", branch)
+			continue
+		}
+		a.logger.Info("sessionactor: turn completed but this repo's egress is suppressed; recording would-have-pushed and would-have-opened-PR, sending no push command (§30.7/§30.9)",
+			"repo", r.Name, "branch", branch)
 	}
 }
 

@@ -4,6 +4,7 @@ package sessionactor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/khazaddev/narvi/internal/app/shadowledger"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -307,5 +309,102 @@ func TestHandleSandboxEvent_PushComplete_CancelledPersistedPush_SuppressesAndRec
 	}
 	if got := sourceControl.suppressCallCount(); got != 1 {
 		t.Errorf("SuppressCreatePR called %d times, want 1: a demotion-cancelled cycle is a suppressed effect and must leave a ledger row, not vanish", got)
+	}
+}
+
+// TestSendPushBestEffort_ShadowStamp_NeverSendsPush_RecordsLedger is the
+// §30.7/§30.9 (resolved: no git mirror -- short-circuit the push, done
+// properly) MUTATION-TESTABLE guard: a turn completes for a session naming
+// a repo with no repo_settings row (egressmode's own fail-closed shadow
+// default, exactly like TestCompleteProcessingTurn_PersistsPushEgressModeDecision
+// above), and sendPushBestEffort must (1) NEVER call SandboxCommander.
+// SendCommand at all -- never merely accept a push_error a real send would
+// produce against the read-only credential -- and (2) record exactly one
+// shadowledger.Push row naming the branch and WouldOpenPR=true, since no
+// push_complete will ever arrive to let createPRBestEffort record that
+// half itself.
+func TestSendPushBestEffort_ShadowStamp_NeverSendsPush_RecordsLedger(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	const repoFullName = "acme/shadow-push-shortcircuit"
+	sessionID := createTestSessionWithRepos(ctx, t, pool, pgtype.UUID{}, "repo", "https://github.com/"+repoFullName+".git", "feature-shadow-push")
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	turnStore := narvipg.NewTurnStore(pool)
+	processing := createProcessingTurn(ctx, t, turnStore, sessionID)
+
+	commander := &fakeSendCommander{}
+	shadowLedgerStore := narvipg.NewShadowSCMWriteStore(pool)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "", nil, nil, "", nil, false,
+		RegistryOptions{ShadowLedger: shadowLedgerStore})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	sendSandboxEventForTest(ctx, t, a, SandboxEvent{
+		Type: "execution_complete", Gen: 1,
+		Raw: executionCompleteRaw(t, sessionID.String(), 1, sandboxws.ExecutionCompleteOutcomeCompleted),
+	})
+
+	waitUntil(t, 5*time.Second, func() bool {
+		row, err := turnStore.Get(ctx, processing.ID)
+		return err == nil && row.Status == sqlcgen.TurnStatusCompleted
+	})
+
+	// sendPushBestEffort runs AFTER the reply above already returned
+	// (handleSandboxEvent's own doc comment: the reply is sent BEFORE any
+	// best-effort post-commit side effect runs) -- poll the ledger row
+	// this call is expected to produce, rather than assume it has already
+	// landed by the time the turn's own status flips.
+	waitUntil(t, 5*time.Second, func() bool {
+		rows, err := shadowLedgerStore.ListForRepo(ctx, repoFullName, 10)
+		return err == nil && len(rows) == 1
+	})
+
+	if got := commander.callCount(); got != 0 {
+		t.Errorf("SandboxCommander.SendCommand called %d times, want 0 -- a shadow-stamped turn must never even attempt the push, not merely accept its failure", got)
+	}
+
+	rows, err := shadowLedgerStore.ListForRepo(ctx, repoFullName, 10)
+	if err != nil {
+		t.Fatalf("ListForRepo: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("ledger rows for %s = %d, want 1", repoFullName, len(rows))
+	}
+	row := rows[0]
+	if row.Operation != "push" {
+		t.Errorf("Operation = %q, want %q", row.Operation, "push")
+	}
+	if row.Target == nil || *row.Target != "feature-shadow-push" {
+		t.Errorf("Target = %v, want %q", row.Target, "feature-shadow-push")
+	}
+	if row.ResultJson != nil {
+		t.Errorf("ResultJson = %s, want nil -- a suppressed push invents no push result", row.ResultJson)
+	}
+	if row.SessionID != sessionID {
+		t.Errorf("SessionID = %v, want %v", row.SessionID, sessionID)
+	}
+	var spec shadowledger.Push
+	if err := json.Unmarshal(row.SpecJson, &spec); err != nil {
+		t.Fatalf("unmarshal spec_json: %v", err)
+	}
+	if spec.Owner != "acme" || spec.Repo != "shadow-push-shortcircuit" {
+		t.Errorf("spec Owner/Repo = %q/%q, want acme/shadow-push-shortcircuit", spec.Owner, spec.Repo)
+	}
+	if spec.Branch != "feature-shadow-push" {
+		t.Errorf("spec Branch = %q, want %q", spec.Branch, "feature-shadow-push")
+	}
+	if !spec.WouldOpenPR {
+		t.Error("spec WouldOpenPR = false, want true -- no push_complete will ever arrive to record that half separately")
 	}
 }

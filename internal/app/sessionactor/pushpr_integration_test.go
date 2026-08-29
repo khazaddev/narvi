@@ -473,6 +473,16 @@ func TestHandleSandboxEvent_ExecutionCompleteCompleted_CompletesTurnAndSendsPush
 
 	sessionID := createTestSessionWithRepos(ctx, t, pool, pgtype.UUID{},
 		"repo1", "https://github.com/acme/repo1.git", "feature-x")
+	// §30.7/§30.9: sendPushBestEffort now honors this turn's own frozen
+	// push/PR egress decision (completeProcessingTurn resolves it against
+	// repo_settings.live_egress_enabled) -- without this, the repo's
+	// fail-closed default is shadow (egressmode's own doc comment), and
+	// this test's own push-sending assertion below would never fire. This
+	// test proves the general push-sending mechanism, unrelated to §30's
+	// own shadow/live distinction, so it explicitly arms this repo live.
+	if _, err := narvipg.NewRepoSettingsStore(pool).UpsertLiveEgressEnabled(ctx, "acme/repo1", true); err != nil {
+		t.Fatalf("arm live egress: %v", err)
+	}
 
 	sandboxStore := narvipg.NewSandboxStore(pool)
 	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {

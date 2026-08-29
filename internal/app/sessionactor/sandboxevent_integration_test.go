@@ -1434,6 +1434,15 @@ func TestHandleSandboxEvent_AckReplySentBeforeSlowPostCommitSideEffects(t *testi
 
 	sessionID := createTestSessionWithRepos(ctx, t, pool, pgtype.UUID{},
 		"repo1", "https://github.com/acme/repo1.git", "feature-x")
+	// §30.7/§30.9: sendPushBestEffort now honors this turn's own frozen
+	// push/PR egress decision -- without arming this repo live, its
+	// fail-closed default is shadow (egressmode's own doc comment) and
+	// SendCommand (the exact side effect this test blocks on) would never
+	// be invoked at all. This test proves the ack-before-side-effect
+	// ORDERING, unrelated to §30's own shadow/live distinction.
+	if _, err := narvipg.NewRepoSettingsStore(pool).UpsertLiveEgressEnabled(ctx, "acme/repo1", true); err != nil {
+		t.Fatalf("arm live egress: %v", err)
+	}
 
 	sandboxStore := narvipg.NewSandboxStore(pool)
 	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {

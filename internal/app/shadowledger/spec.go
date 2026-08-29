@@ -55,6 +55,7 @@ func (SlackMessageUpdate) isShadowSpec()       {}
 func (SlackViewOpen) isShadowSpec()            {}
 func (LinearThoughtActivity) isShadowSpec()    {}
 func (LinearResponseActivity) isShadowSpec()   {}
+func (Push) isShadowSpec()                     {}
 
 // CreatePR mirrors ports.CreatePRSpec without its Token.
 type CreatePR struct {
@@ -282,6 +283,32 @@ type SlackIdentityLinkNotice struct {
 	ThreadTS string `json:"threadTs"`
 }
 
+// Push is what sendPushBestEffort (internal/app/sessionactor/pushpr.go)
+// records when a turn's own frozen push/PR decision (§30.8) says shadow --
+// §30.9's resolved mirror decision (no git mirror; short-circuit the push
+// itself, done properly) means the sandbox WS push command is never sent
+// at all, for a repository whose credential could not have pushed it
+// anyway (§30.4: the read-only token and the UID boundary are the
+// security here, never this gate).
+//
+// With the push command never sent, no push_complete (or push_error)
+// ever arrives on the wire, so createPRBestEffort's own "would have
+// opened PR ..." row (§30.7) never gets a turn to run either -- a turn
+// that reaches this point always completed successfully and always names
+// at least one repo (pushpr.go's own completeProcessingTurn only ever
+// produces a pushSignal for that case), so a real push would always have
+// been followed by a real CreatePR attempt next. This ONE row records
+// both facts together, since nothing downstream ever will.
+type Push struct {
+	Owner  string `json:"owner"`
+	Repo   string `json:"repo"`
+	Branch string `json:"branch"`
+	// WouldOpenPR is always true -- see this type's own doc comment for
+	// why. Recorded explicitly, not left implied, so a reader of this row
+	// alone sees the whole suppressed sequence, not just its first half.
+	WouldOpenPR bool `json:"wouldOpenPr"`
+}
+
 // These assertions pin the sealed set. Removing isShadowSpec from any of
 // them, or forgetting it on a type added later, is a build failure at the
 // point where someone would otherwise have widened the ledger's input
@@ -303,4 +330,5 @@ var (
 	_ Spec = SlackViewOpen{}
 	_ Spec = LinearThoughtActivity{}
 	_ Spec = LinearResponseActivity{}
+	_ Spec = Push{}
 )

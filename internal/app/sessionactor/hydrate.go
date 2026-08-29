@@ -106,6 +106,7 @@ func (r *Registry) hydrateAndAcquire(ctx context.Context, sessionID pgtype.UUID)
 		provider:               r.provider,
 		publicBaseURL:          r.publicBaseURL,
 		sourceControl:          r.sourceControl,
+		shadowLedger:           r.shadowLedger,
 		tokenEncryptionKey:     r.tokenEncryptionKey,
 		openCodeRuntimeVersion: r.openCodeRuntimeVersion,
 		diffFetcher:            r.diffFetcher,
