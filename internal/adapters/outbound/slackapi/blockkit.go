@@ -8,8 +8,7 @@
 // (docs.slack.dev/reference/methods/{chat.update,views.open},
 // docs.slack.dev/reference/interaction-payloads/block_actions-payload) --
 // not invented from a summary, matching this codebase's own established
-// "verify against the real API" discipline (see client.go's own doc.go,
-// §8.10's ack.go).
+// "verify against the real API" discipline (see client.go's own doc.go).
 //
 // # Button value encoding
 //
@@ -359,6 +358,40 @@ func (c *Client) PostMessage(ctx context.Context, channel, text string) (channel
 		return "", "", &DeliveryError{SlackError: parsed.Error}
 	}
 	return parsed.Channel, parsed.Ts, nil
+}
+
+// postThreadMessageRequest is chat.postMessage's own real request body
+// shape for a plain-text, non-Block-Kit reply threaded under an existing
+// message -- mirrors postMessageWithBlocksRequest's own Channel/ThreadTS/
+// Text fields with Blocks always omitted (this call never sends any).
+type postThreadMessageRequest struct {
+	Channel  string `json:"channel"`
+	ThreadTS string `json:"thread_ts,omitempty"`
+	Text     string `json:"text"`
+}
+
+// PostAck posts a single plain-text chat.postMessage reply into channel,
+// threaded under threadTS -- this package's own former sibling, internal/
+// adapters/inbound/slack/ack.go's own private ackClient.postAck, folded in
+// here as part of retiring that second, independently-constructed client
+// (§30.3's "one client per provider"). Unlike PostPlanApprovalMessage/
+// PostMessage above, this caller never needs the posted message's own
+// channel/ts back (there is nothing later that would chat.update THIS
+// message), so it returns only an error.
+func (c *Client) PostAck(ctx context.Context, channel, threadTS, text string) error {
+	reqBody, err := json.Marshal(postThreadMessageRequest{Channel: channel, ThreadTS: threadTS, Text: text})
+	if err != nil {
+		return fmt.Errorf("slackapi: encode chat.postMessage request: %w", err)
+	}
+
+	var parsed postMessageResponse
+	if err := c.doPost(ctx, "/chat.postMessage", reqBody, &parsed); err != nil {
+		return err
+	}
+	if !parsed.Ok {
+		return &DeliveryError{SlackError: parsed.Error}
+	}
+	return nil
 }
 
 // chatUpdateRequest is chat.update's own real request body shape.

@@ -79,7 +79,7 @@ func countRequestsByPath(requests []recordedSlackRequestBody, path string) int {
 // countPostMessageForThread counts how many captured chat.postMessage
 // (never chat.postEphemeral) calls carried the given thread_ts -- this
 // file's own proxy for "how many in-thread acks were posted for this
-// thread", since ack.go's postAck always threads its reply via
+// thread", since slackapi.Client.PostAck always threads its reply via
 // thread_ts.
 func countPostMessageForThread(requests []recordedSlackRequestBody, threadTS string) int {
 	n := 0
@@ -377,11 +377,9 @@ func TestHandler_DualDelivery_FailedFirstAttemptReleasesBothClaimsForRedelivery(
 		AuditLog:        auditLog,
 		Participants:    narvipg.NewParticipantStore(pool),
 		SigningSecret:   testSigningSecret,
-		BotToken:        "test-bot-token",
 		DefaultRepoName: "narvi",
 		DefaultRepoURL:  "https://github.com/khazaddev/narvi",
 		TimestampWindow: 5 * time.Minute,
-		SlackAPIBaseURL: fakeSlack.URL,
 		AckTimeout:      platform.DefaultTimeouts().SlackAckTimeout,
 		SlackClient:     slackapi.New(fakeSlack.Client(), fakeSlack.URL, "test-bot-token"),
 		Timeouts:        platform.DefaultTimeouts(),
@@ -447,11 +445,9 @@ func TestHandler_DualDelivery_FailedFirstAttemptReleasesBothClaimsForRedelivery(
 		AuditLog:        auditLog,
 		Participants:    narvipg.NewParticipantStore(pool),
 		SigningSecret:   testSigningSecret,
-		BotToken:        "test-bot-token",
 		DefaultRepoName: "narvi",
 		DefaultRepoURL:  "https://github.com/khazaddev/narvi",
 		TimestampWindow: 5 * time.Minute,
-		SlackAPIBaseURL: fakeSlack.URL,
 		AckTimeout:      platform.DefaultTimeouts().SlackAckTimeout,
 		SlackClient:     slackapi.New(fakeSlack.Client(), fakeSlack.URL, "test-bot-token"),
 		Timeouts:        platform.DefaultTimeouts(),
@@ -662,11 +658,9 @@ func newSlackAckTestRigWithRepo(t *testing.T, pool *pgxpool.Pool, defaultRepoNam
 		AuditLog:        auditLog,
 		Participants:    narvipg.NewParticipantStore(pool),
 		SigningSecret:   testSigningSecret,
-		BotToken:        "test-bot-token",
 		DefaultRepoName: defaultRepoName,
 		DefaultRepoURL:  defaultRepoURL,
 		TimestampWindow: 5 * time.Minute,
-		SlackAPIBaseURL: ackServer.URL,
 		AckTimeout:      platform.DefaultTimeouts().SlackAckTimeout,
 		SlackClient:     slackapi.New(ackServer.Client(), ackServer.URL, "test-bot-token"),
 		Timeouts:        platform.DefaultTimeouts(),

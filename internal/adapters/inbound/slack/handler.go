@@ -20,12 +20,12 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
 	"github.com/khazaddev/narvi/internal/app/actorauthz"
 	"github.com/khazaddev/narvi/internal/app/identitylink"
 	"github.com/khazaddev/narvi/internal/app/intentclassifier"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/app/shadowslack"
 	"github.com/khazaddev/narvi/internal/domain/authz"
 	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
 	plandomain "github.com/khazaddev/narvi/internal/domain/plan"
@@ -245,14 +245,22 @@ type Deps struct {
 	// Timeouts.IdentityEmailFetch*), then IdentityLink.Resolve to
 	// auto-link or create a magic-link prompt the first time this package
 	// sees a given Slack user id it doesn't already know about.
-	// SlackClient is a SEPARATE client instance from this file's own
-	// internal ackClient (newAckClient below) -- mirrors interactive.go's
-	// own identical InteractiveDeps.SlackClient precedent; production
-	// wiring (cmd/control-plane/main.go) passes the SAME *slackapi.Client
-	// instance already constructed for the outbox delivery worker, rather
-	// than building a third one.
+	//
+	// SlackClient is ALSO this file's own in-thread-ack/identity-notice
+	// client now (§30.3's "one client per provider" -- this package used
+	// to construct a SEPARATE, private ackClient of its own, ack.go, and
+	// this struct used to carry a SlackHTTPClient/BotToken/SlackAPIBaseURL
+	// trio just to build it; all four are retired). Typed as the
+	// shadowslack.Client interface, never the
+	// concrete *slackapi.Client, so this package can no longer construct
+	// one itself: production wiring (cmd/control-plane/main.go) hands over
+	// a shadowslack.Decorator wrapping the SAME *slackapi.Client instance
+	// already constructed for the outbox delivery worker and the
+	// interactivity route (interactive.go's own identical
+	// InteractiveDeps.SlackClient), never a second, independently-
+	// constructed, gate-free client.
 	IdentityLink identitylink.Deps
-	SlackClient  *slackapi.Client
+	SlackClient  shadowslack.Client
 	// Timeouts is §13.2's own addition, read for its
 	// IdentityEmailFetch* fields only (identity.go) -- every OTHER
 	// timeout this package needs is still an existing discrete field
@@ -285,27 +293,58 @@ type Deps struct {
 	RepoSettings *postgres.RepoSettingsStore
 
 	SigningSecret   string
-	BotToken        string
 	DefaultRepoName string
 	DefaultRepoURL  string
 	TimestampWindow time.Duration
-	SlackAPIBaseURL string       // optional; defaults to defaultSlackAPIBaseURL (production wiring should still pass it explicitly)
-	SlackHTTPClient *http.Client // optional; defaults to http.DefaultClient
-	// AckTimeout bounds each ackClient.postAck call (platform.Timeouts.
-	// SlackAckTimeout in production wiring) -- postAck is a genuine
-	// outbound network call made synchronously in this handler's own
-	// request path, so it must never run against the bare, deadline-free
-	// r.Context() unbounded (mirrors sessionactor's own PRCreateTimeout
-	// precedent). A zero value here means no deadline is applied at all,
-	// so production wiring should always pass it explicitly.
+	// AckTimeout bounds each in-thread ack/ephemeral-notice call
+	// (platform.Timeouts.SlackAckTimeout in production wiring) -- these
+	// are genuine outbound network calls made synchronously in this
+	// handler's own request path, so they must never run against the
+	// bare, deadline-free r.Context() unbounded (mirrors sessionactor's
+	// own PRCreateTimeout precedent). A zero value here means no deadline
+	// is applied at all, so production wiring should always pass it
+	// explicitly.
 	AckTimeout time.Duration
+}
+
+// postAckBounded posts text into channel via deps.SlackClient.PostAck,
+// threaded under threadTS, bounded by timeout -- every caller in this
+// package uses this rather than deps.SlackClient.PostAck directly: it is
+// a genuine outbound network call made synchronously in this handler's
+// own request path, which otherwise carries no deadline of its own (a
+// bare r.Context()). Mirrors internal/app/sessionactor/pushpr.go's own
+// PRCreateTimeout-bounded CreatePR call precedent exactly. A zero or
+// negative timeout would make context.WithTimeout expire the call
+// immediately, so callers must always pass a real, positive value
+// (production wiring passes platform.Timeouts.SlackAckTimeout).
+func postAckBounded(ctx context.Context, client shadowslack.Client, timeout time.Duration, channel, threadTS, text string) error {
+	ackCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return client.PostAck(ackCtx, channel, threadTS, text)
+}
+
+// postIdentityLinkNoticeBounded is postAckBounded's own sibling for the
+// identity-link prompt -- see that function's own doc comment for the
+// identical "why bounded" reasoning.
+//
+// It calls PostIdentityLinkNotice, never PostEphemeral, and the
+// difference is not cosmetic: this text carries a live magic-link nonce,
+// and PostEphemeral's shadow record stores its text verbatim in a
+// permanent, append-only ledger. The method used here records the fact
+// with no text field at all. Do not "simplify" the two back together.
+//
+// (This replaced a general postEphemeralBounded, which had exactly one
+// caller -- this one. The remaining PostEphemeral call site posts a fixed
+// constant and needs no helper.)
+func postIdentityLinkNoticeBounded(ctx context.Context, client shadowslack.Client, timeout time.Duration, channel, userID, threadTS, text string) error {
+	noticeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return client.PostIdentityLinkNotice(noticeCtx, channel, userID, threadTS, text)
 }
 
 // NewHandler builds the POST /webhooks/slack handler (§8.10 --
 // see doc.go's own full request-handling writeup).
 func NewHandler(deps Deps) http.HandlerFunc {
-	ack := newAckClient(deps.SlackHTTPClient, deps.SlackAPIBaseURL, deps.BotToken)
-
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		logger := platform.Logger(ctx)
@@ -427,7 +466,7 @@ func NewHandler(deps Deps) http.HandlerFunc {
 			return
 		}
 
-		result := handleEvent(ctx, deps, ack, logger, ev)
+		result := handleEvent(ctx, deps, logger, ev)
 		if !result.OK {
 			// H2 audit fix: handleEvent hit a genuine post-claim processing
 			// failure (a DB error resolving/creating the session or adding
@@ -577,7 +616,7 @@ type handleEventResult struct {
 // underlying session/turn work is already durably committed by the time
 // either runs). See handleEventResult's own doc comment for the SECOND,
 // orthogonal thing this now reports: ReleaseMessageClaim.
-func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Logger, ev slackEvent) handleEventResult {
+func handleEvent(ctx context.Context, deps Deps, logger *slog.Logger, ev slackEvent) handleEventResult {
 	channel := ev.Channel
 	key := ev.threadKey()
 	prompt := normalizeMrkdwn(ev.Text)
@@ -604,22 +643,22 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	// resolution/notification still needs to run for it regardless.
 	actorUserID, notice := resolveSlackActor(ctx, logger, deps.SlackClient, deps.IdentityLink, deps.Timeouts, ev.User)
 
-	res, ok := resolveOrClaimSession(ctx, deps, ack, logger, ev, channel, key, actorUserID, prompt)
+	res, ok := resolveOrClaimSession(ctx, deps, logger, ev, channel, key, actorUserID, prompt)
 
 	// Security-remediation addition ("identities + full RBAC",
 	// §13.2): notice (the "connected your account" confirmation, or --
 	// far more sensitive -- the magic-link URL itself) is posted via
 	// chat.postEphemeral, visible ONLY to ev.User, NEVER appended to the
 	// ordinary, whole-channel-visible ack below anymore -- see
-	// ack.go's own postEphemeral doc comment for the confirmed hijack
-	// this closes. Posted regardless of ok/res.Skip (a denied/skip
+	// slackapi.Client.PostEphemeral's own doc comment for the confirmed
+	// hijack this closes. Posted regardless of ok/res.Skip (a denied/skip
 	// outcome already gets its own ack elsewhere above; the identity
 	// notice, when there is one, is still this user's own business to
 	// see either way) except when ev.User is empty (postEphemeral would
 	// have nothing to scope to -- never expected in practice, see
 	// resolveSlackActor's own identical defensive short-circuit).
 	if notice != "" && ev.User != "" {
-		if err := ack.postEphemeralBounded(ctx, deps.AckTimeout, channel, ev.User, key, notice); err != nil {
+		if err := postIdentityLinkNoticeBounded(ctx, deps.SlackClient, deps.AckTimeout, channel, ev.User, key, notice); err != nil {
 			logger.Warn("slack: post identity-link ephemeral notice failed", "error", err)
 		}
 	}
@@ -695,7 +734,7 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	if deps.Plans != nil {
 		if planID, hasAwaiting := findAwaitingApprovalPlanID(ctx, logger, deps.Plans, res.SessionID); hasAwaiting {
 			if verdict, verdictOK := plandomain.MatchVerdict(prompt); verdictOK {
-				return deps.handlePlanVerdict(ctx, ack, logger, channel, key, res.SessionID, planID, verdict, actorUserID)
+				return deps.handlePlanVerdict(ctx, logger, channel, key, res.SessionID, planID, verdict, actorUserID)
 			}
 			if feedback, reviseOK := plandomain.MatchRevise(prompt); reviseOK {
 				// plandomain.IsBlankFeedback (LOW audit fix, confirmed finding
@@ -831,7 +870,7 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	// notice is no longer appended here -- see this function's own top
 	// doc comment for why it is now posted separately, ephemerally,
 	// scoped to ev.User (§13.2's own security-remediation addition).
-	if err := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, ackText); err != nil {
+	if err := postAckBounded(ctx, deps.SlackClient, deps.AckTimeout, channel, key, ackText); err != nil {
 		logger.Warn("slack: post in-thread ack failed", "error", err)
 	}
 	return handleEventResult{OK: true}
@@ -882,11 +921,11 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 // never a hard failure) or DecidePlan's own outcome (won or lost the
 // decision elsewhere, or a revision already in flight) -- all deliberate
 // business decisions a retry could not usefully change.
-func (deps Deps) handlePlanVerdict(ctx context.Context, ack *ackClient, logger *slog.Logger, channel, key string, sessionID, planID pgtype.UUID, verdict string, actorUserID pgtype.UUID) handleEventResult {
+func (deps Deps) handlePlanVerdict(ctx context.Context, logger *slog.Logger, channel, key string, sessionID, planID pgtype.UUID, verdict string, actorUserID pgtype.UUID) handleEventResult {
 	if err := deps.authorizeSessionAction(ctx, logger, sessionID, actorUserID, authz.ActionApprovePlan); err != nil {
 		if errors.Is(err, ErrActorNotAuthorized) {
 			logger.Warn("slack: text plan verdict denied by authz", "session_id", sessionID.String(), "plan_id", planID.String(), "user_id", actorUserID.String())
-			if ackErr := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, slackPlanForbiddenText); ackErr != nil {
+			if ackErr := postAckBounded(ctx, deps.SlackClient, deps.AckTimeout, channel, key, slackPlanForbiddenText); ackErr != nil {
 				logger.Warn("slack: post not-authorized text-verdict ack failed", "error", ackErr)
 			}
 			return handleEventResult{OK: true}
@@ -919,7 +958,7 @@ func (deps Deps) handlePlanVerdict(ctx context.Context, ack *ackClient, logger *
 	}
 
 	logger.Info("slack: text plan verdict decided", "session_id", sessionID.String(), "plan_id", planID.String(), "verdict", verdict)
-	if ackErr := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, text); ackErr != nil {
+	if ackErr := postAckBounded(ctx, deps.SlackClient, deps.AckTimeout, channel, key, text); ackErr != nil {
 		logger.Warn("slack: post plan-verdict outcome ack failed", "error", ackErr)
 	}
 	return handleEventResult{OK: true}
@@ -957,10 +996,10 @@ func (deps Deps) handlePlanVerdict(ctx context.Context, ack *ackClient, logger *
 // the denial text/log line don't match the button/Linear equivalents for
 // the identical underlying decision"): authorizeExistingSessionReply needs
 // it to recognize that shape of reply and choose the matching denial text.
-func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Logger, ev slackEvent, channel, key string, creator pgtype.UUID, prompt string) (sessionResolution, bool) {
+func resolveOrClaimSession(ctx context.Context, deps Deps, logger *slog.Logger, ev slackEvent, channel, key string, creator pgtype.UUID, prompt string) (sessionResolution, bool) {
 	existing, err := deps.Threads.Get(ctx, channel, key)
 	if err == nil {
-		return deps.authorizeExistingSessionReply(ctx, ack, logger, channel, key, existing.SessionID, creator, prompt)
+		return deps.authorizeExistingSessionReply(ctx, logger, channel, key, existing.SessionID, creator, prompt)
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		logger.Error("slack: lookup thread mapping failed", "error", err)
@@ -985,7 +1024,7 @@ func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logge
 	}
 
 	if deps.DefaultRepoName == "" || deps.DefaultRepoURL == "" {
-		if ackErr := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, ackNotConfiguredText); ackErr != nil {
+		if ackErr := postAckBounded(ctx, deps.SlackClient, deps.AckTimeout, channel, key, ackNotConfiguredText); ackErr != nil {
 			logger.Warn("slack: post not-configured ack failed", "error", ackErr)
 		}
 		return sessionResolution{Skip: true}, true
@@ -1009,7 +1048,7 @@ func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logge
 	// (Slack has a pending-link mechanism GitHub does not).
 	if !actorauthz.AuthorizeLinkedActor(ctx, logger, authzSurface, deps.IdentityLink.Users, creator, authz.ActionCreateSession, authz.Resource{}) {
 		logger.Warn("slack: create-session denied by authz", "channel", channel, "thread_key", key, "user_id", creator.String())
-		if ackErr := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, ackNotAuthorizedText); ackErr != nil {
+		if ackErr := postAckBounded(ctx, deps.SlackClient, deps.AckTimeout, channel, key, ackNotAuthorizedText); ackErr != nil {
 			logger.Warn("slack: post not-authorized ack failed", "error", ackErr)
 		}
 		return sessionResolution{Skip: true}, true
@@ -1038,7 +1077,7 @@ func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logge
 		// exactly like an authz denial.
 		if cerr.RolloutRefusal {
 			logger.Warn("slack: create bare session refused: repo not enrolled in cohort rollout", "channel", channel, "thread_key", key)
-			if ackErr := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, ackNotEnrolledText); ackErr != nil {
+			if ackErr := postAckBounded(ctx, deps.SlackClient, deps.AckTimeout, channel, key, ackNotEnrolledText); ackErr != nil {
 				logger.Warn("slack: post not-enrolled ack failed", "error", ackErr)
 			}
 			return sessionResolution{Skip: true}, true
@@ -1069,7 +1108,7 @@ func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logge
 		logger.Error("slack: lookup winning thread mapping after lost claim failed", "error", err)
 		return sessionResolution{}, false
 	}
-	return deps.authorizeExistingSessionReply(ctx, ack, logger, channel, key, winner.SessionID, creator, prompt)
+	return deps.authorizeExistingSessionReply(ctx, logger, channel, key, winner.SessionID, creator, prompt)
 }
 
 // authorizeExistingSessionReply gates a session id that this event's own
@@ -1116,7 +1155,7 @@ func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logge
 // there) denial branch would give were it ever reached directly. deps.
 // Plans == nil (never true in production wiring) skips this recognition
 // entirely, falling back to the pre-existing generic wording.
-func (deps Deps) authorizeExistingSessionReply(ctx context.Context, ack *ackClient, logger *slog.Logger, channel, key string, sessionID, creator pgtype.UUID, prompt string) (sessionResolution, bool) {
+func (deps Deps) authorizeExistingSessionReply(ctx context.Context, logger *slog.Logger, channel, key string, sessionID, creator pgtype.UUID, prompt string) (sessionResolution, bool) {
 	err := deps.authorizeSessionAction(ctx, logger, sessionID, creator, authz.ActionPromptSession)
 	if err == nil {
 		return sessionResolution{SessionID: sessionID}, true
@@ -1136,7 +1175,7 @@ func (deps Deps) authorizeExistingSessionReply(ctx context.Context, ack *ackClie
 		if !isPlanVerdictReply {
 			logger.Warn("slack: reply denied by authz", "channel", channel, "thread_key", key, "user_id", creator.String())
 		}
-		if ackErr := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, ackText); ackErr != nil {
+		if ackErr := postAckBounded(ctx, deps.SlackClient, deps.AckTimeout, channel, key, ackText); ackErr != nil {
 			logger.Warn("slack: post not-authorized-reply ack failed", "error", ackErr)
 		}
 		return sessionResolution{Skip: true}, true

@@ -9,10 +9,18 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 )
 
-// ShadowSCMWriteStore is the append-only ledger of suppressed SCM writes
-// (§30.6). It has a Create and a List and deliberately no update or delete:
-// a suppressed effect is a historical fact, and there is nothing to correct
-// about the record of something that never happened.
+// ShadowSCMWriteStore is the append-only ledger of every suppressed
+// customer-visible write this platform's shadow mode records (§30.6) --
+// named for its first and largest source (the GitHub port decorator and
+// transport gate's own SCM writes, internal/app/shadowscm) but shared, by
+// design, with every other suppressed effect that has nowhere more
+// specific to go: the Slack/Linear synchronous ingress writes (§30.3,
+// internal/app/shadowslack/shadowlinear) and the shadow credential mint's
+// own substitution/refusal records (§30.4) all write into this same
+// table, through this same store. It has a Create and a List and
+// deliberately no update or delete: a suppressed effect is a historical
+// fact, and there is nothing to correct about the record of something
+// that never happened.
 type ShadowSCMWriteStore struct {
 	q *sqlcgen.Queries
 }

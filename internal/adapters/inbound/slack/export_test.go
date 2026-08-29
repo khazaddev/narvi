@@ -20,9 +20,8 @@
 // ever get past that outer gate with would ALSO pass handlePlanVerdict's
 // own inner one, making the inner denial branch unreachable (and its own
 // removal undetectable) from black-box tests alone. This bridges JUST
-// enough (an ackClient constructor, and handlePlanVerdict itself) to call
-// it directly, bypassing the outer gate entirely -- never a general-
-// purpose test-only API surface.
+// enough (handlePlanVerdict itself) to call it directly, bypassing the
+// outer gate entirely -- never a general-purpose test-only API surface.
 package slack
 
 import (
@@ -33,20 +32,15 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// NewAckClientForTest bridges newAckClient (ack.go) -- see this file's own
-// top doc comment. httpClient is always nil (http.DefaultClient) here:
-// every real caller of this bridge posts to a local httptest.Server over
-// plain localhost HTTP, which needs no special client configuration.
-func NewAckClientForTest(apiBaseURL, botToken string) *ackClient {
-	return newAckClient(nil, apiBaseURL, botToken)
-}
-
 // HandlePlanVerdictForTest bridges Deps.handlePlanVerdict (handler.go) --
 // see this file's own top doc comment. A pure pass-through (never a
 // second, drifted implementation of its own), returning handleEventResult's
 // two EXPORTED fields as plain bools rather than naming that unexported
-// type in this bridge's own exported signature.
-func (deps Deps) HandlePlanVerdictForTest(ctx context.Context, ack *ackClient, channel, key string, sessionID, planID pgtype.UUID, verdict string, actorUserID pgtype.UUID) (ok, releaseMessageClaim bool) {
-	result := deps.handlePlanVerdict(ctx, ack, platform.Logger(ctx), channel, key, sessionID, planID, verdict, actorUserID)
+// type in this bridge's own exported signature. deps.SlackClient carries
+// whatever shadowslack.Client the caller wired -- this package no longer
+// constructs one of its own (§30.3), so there is no separate ack argument
+// to bridge any more.
+func (deps Deps) HandlePlanVerdictForTest(ctx context.Context, channel, key string, sessionID, planID pgtype.UUID, verdict string, actorUserID pgtype.UUID) (ok, releaseMessageClaim bool) {
+	result := deps.handlePlanVerdict(ctx, platform.Logger(ctx), channel, key, sessionID, planID, verdict, actorUserID)
 	return result.OK, result.ReleaseMessageClaim
 }

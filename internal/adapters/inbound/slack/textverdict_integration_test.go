@@ -32,6 +32,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/inbound/slack"
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/platform"
 )
@@ -400,7 +401,6 @@ func TestHandlePlanVerdict_UnauthorizedActor_DeniedByOwnAuthorizationCheck(t *te
 	}
 
 	recordingServer, recordedBodies := newFakeSlackRecordingWithUsersInfo(t, "unused", "unused@example.com")
-	ack := slack.NewAckClientForTest(recordingServer.URL, "test-bot-token")
 
 	deps := slack.Deps{
 		Pool:                pool,
@@ -413,10 +413,11 @@ func TestHandlePlanVerdict_UnauthorizedActor_DeniedByOwnAuthorizationCheck(t *te
 		Registry:            registry,
 		Participants:        participants,
 		IdentityLink:        newIdentityLinkDepsForTest(pool, auditLog),
+		SlackClient:         slackapi.New(recordingServer.Client(), recordingServer.URL, "test-bot-token"),
 		AckTimeout:          platform.DefaultTimeouts().SlackAckTimeout,
 	}
 
-	ok, _ := deps.HandlePlanVerdictForTest(ctx, ack, "C0DIRECTVERDICT", "1700000073.000100", session.ID, plan.ID, "approve", viewer.ID)
+	ok, _ := deps.HandlePlanVerdictForTest(ctx, "C0DIRECTVERDICT", "1700000073.000100", session.ID, plan.ID, "approve", viewer.ID)
 	if !ok {
 		t.Fatal("HandlePlanVerdictForTest ok = false, want true (a real authz denial must never be reported as a backend failure)")
 	}

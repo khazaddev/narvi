@@ -81,9 +81,9 @@ func New(httpClient *http.Client, apiBaseURL, botToken string) *Client {
 }
 
 // postMessageRequest is the subset of Slack's real chat.postMessage
-// request body this client needs -- mirrors internal/adapters/inbound/
-// slack/ack.go's own postMessageRequest shape exactly (a deliberate, small
-// duplication -- see this package's own doc.go).
+// request body this client needs for a plain, unthreaded post (the
+// outbox's own Deliver, below) -- see postThreadMessageRequest
+// (blockkit.go) for PostAck's own threaded sibling shape.
 type postMessageRequest struct {
 	Channel  string `json:"channel"`
 	ThreadTS string `json:"thread_ts"`
@@ -168,4 +168,12 @@ type refusingTransport struct{}
 
 func (refusingTransport) RoundTrip(*http.Request) (*http.Response, error) {
 	return nil, errors.New("slackapi: this client was built with no HTTP client, so it can make no requests")
+}
+
+// PostIdentityLinkNotice is PostEphemeral. The two differ only in what the
+// SHADOW decorator records for them (internal/app/shadowslack) -- a live
+// send is a live send, and duplicating the transport here would be a
+// second copy of it to keep in step.
+func (c *Client) PostIdentityLinkNotice(ctx context.Context, channel, userID, threadTS, text string) error {
+	return c.PostEphemeral(ctx, channel, userID, threadTS, text)
 }

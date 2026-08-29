@@ -87,7 +87,7 @@ type recordedIdentityRequest struct {
 // proving the magic-link identity notice is delivered via
 // chat.postEphemeral (scoped to one user), never chat.postMessage (the
 // whole channel/thread), per this Step's own security-remediation fix
-// (ack.go's own postEphemeral doc comment).
+// (slackapi.Client.PostEphemeral's own doc comment).
 func newFakeSlackRecordingWithUsersInfo(t *testing.T, userID, email string) (*httptest.Server, <-chan recordedIdentityRequest) {
 	t.Helper()
 	requests := make(chan recordedIdentityRequest, 16)
@@ -587,11 +587,9 @@ func newSlackHandlerRigForIdentityTests(t *testing.T, pool *pgxpool.Pool, record
 		// already wires.
 		Participants:    narvipg.NewParticipantStore(pool),
 		SigningSecret:   testSigningSecret,
-		BotToken:        "test-bot-token",
 		DefaultRepoName: "narvi",
 		DefaultRepoURL:  "https://github.com/khazaddev/narvi",
 		TimestampWindow: 5 * time.Minute,
-		SlackAPIBaseURL: recordingSlackServer.URL,
 		AckTimeout:      platform.DefaultTimeouts().SlackAckTimeout,
 		SlackClient:     slackapi.New(recordingSlackServer.Client(), recordingSlackServer.URL, "test-bot-token"),
 		Timeouts:        platform.DefaultTimeouts(),

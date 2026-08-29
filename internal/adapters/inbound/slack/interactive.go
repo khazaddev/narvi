@@ -90,6 +90,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/actorauthz"
 	"github.com/khazaddev/narvi/internal/app/identitylink"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/app/shadowslack"
 	"github.com/khazaddev/narvi/internal/domain/authz"
 	plandomain "github.com/khazaddev/narvi/internal/domain/plan"
 	"github.com/khazaddev/narvi/internal/platform"
@@ -110,7 +111,14 @@ type InteractiveDeps struct {
 	Outbox              *postgres.OutboxStore
 	LinearAgentSessions *postgres.LinearAgentSessionStore
 	Registry            *sessionactor.Registry
-	SlackClient         *slackapi.Client
+	// SlackClient is typed as the shadowslack.Client interface, never the
+	// concrete *slackapi.Client -- this package no longer constructs a
+	// client of its own (§30.3's "one client per provider, ingress
+	// packages lose the right to construct clients"). Production wiring
+	// (cmd/control-plane/main.go) hands over a shadowslack.Decorator
+	// wrapping the SAME *slackapi.Client instance handler.go's own
+	// identical Deps.SlackClient field uses, never a second one.
+	SlackClient shadowslack.Client
 
 	// Participants is §13.2's own addition ("identities + full RBAC",
 	// §13.2/§13.3) -- authorizeSessionAction below (identity.go's own
@@ -544,7 +552,7 @@ func (deps InteractiveDeps) decideAndUpdateMessage(ctx context.Context, logger *
 	// PostEphemeral's own doc comment describes. Best-effort: a failure
 	// here never blocks the actual plan decision below.
 	if notice != "" {
-		if err := deps.SlackClient.PostEphemeral(decideCtx, channel, slackUserID, messageTS, notice); err != nil {
+		if err := deps.SlackClient.PostIdentityLinkNotice(decideCtx, channel, slackUserID, messageTS, notice); err != nil {
 			logger.Warn("slack: interactivity: post identity-link ephemeral notice failed", "error", err)
 		}
 	}
@@ -650,8 +658,8 @@ func renderPlanOutcomeText(outcome httpapi.DecidePlanOutcome) string {
 }
 
 // updateMessage calls slackapi.Client.UpdateMessage using ctx AS GIVEN, with
-// no additional wrapping -- unlike this package's ack.go (postAckBounded),
-// which owns the ONLY bounded context for its own single call, this
+// no additional wrapping -- unlike handler.go's own postAckBounded, which
+// owns the ONLY bounded context for its own single call, this
 // function's caller (decideAndUpdateMessage above) already derived ctx from
 // a SINGLE context.WithTimeout(deps.Timeouts.SlackInteractivityAckTimeout)
 // shared across both the preceding httpapi.DecidePlan call and this
@@ -810,7 +818,8 @@ func (deps InteractiveDeps) handleViewSubmission(ctx context.Context, w http.Res
 	// now captured and, specifically for that denial case (below,
 	// ErrActorNotLinked), delivered via postViewSubmissionLinkNotice --
 	// this modal-submission payload STILL has no channel/message field of
-	// its own the way an ordinary event does (unlike handler.go's ack.go),
+	// its own the way an ordinary event does (unlike handler.go's own
+	// handleEvent, which always has channel/key from the inbound event),
 	// so that helper looks the plan's own already-stored Slack channel/
 	// message-ts back up instead of relying on one being handed in here.
 	actorUserID, notice := resolveSlackActorSingleAttempt(ctx, logger, deps.SlackClient, deps.IdentityLink, deps.Timeouts.SlackInteractivityIdentityFetchTimeout, payload.User.ID)
@@ -935,7 +944,7 @@ func (deps InteractiveDeps) postViewSubmissionLinkNotice(ctx context.Context, lo
 		return
 	}
 
-	if err := deps.SlackClient.PostEphemeral(ctx, *plan.SlackChannelID, slackUserID, *plan.SlackMessageTs, notice); err != nil {
+	if err := deps.SlackClient.PostIdentityLinkNotice(ctx, *plan.SlackChannelID, slackUserID, *plan.SlackMessageTs, notice); err != nil {
 		logger.Warn("slack: interactivity: post identity-link ephemeral notice failed", "error", err)
 	}
 }

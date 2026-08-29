@@ -145,19 +145,23 @@
 // # In-thread acks -- scoping decision (§8.10's own row, "in-thread
 // acks")
 //
-// internal/app/ports has no Notifier port yet, and the outbox table
-// (migrations/000010_outbox.up.sql) has no delivery-worker consumer --
-// both are explicitly §5.1's ("outbox delivery") own job, confirmed
-// against the plan before this work started. Building either here
-// would be scope creep into that territory. An
-// in-thread ack is also a latency-sensitive UX signal ("a mention was
+// An in-thread ack is a latency-sensitive UX signal ("a mention was
 // received") that Slack's own redelivery behavior means must happen
-// synchronously, inside THIS request, well before a general outbox/
-// notifier abstraction could plausibly exist. This package therefore
-// makes the smallest possible direct call instead: ackClient (ack.go) is
-// a tiny, unexported chat.postMessage client, used for exactly one
-// message per processed event -- never a queued, retried, or
-// dead-lettered delivery the way §5.1's real Notifier will be. A
-// failure here is logged and swallowed (see step 8 above), never
-// escalated into a redelivery.
+// synchronously, inside THIS request -- never a queued, retried, or
+// dead-lettered delivery the way §5.1's real Notifier (internal/app/
+// outboxworker, since built) is for turn-completion notifications. This
+// package therefore makes the smallest possible direct call instead:
+// deps.SlackClient.PostAck, used for exactly one message per processed
+// event. A failure here is logged and swallowed (see step 8 above),
+// never escalated into a redelivery.
+//
+// This package used to construct its own small, private chat.postMessage
+// client for exactly this call (ack.go's own ackClient, since retired).
+// §30.3 ("synchronous ingress writes") requires one client per provider
+// instead: deps.SlackClient is now the SAME shadowslack-decorated
+// *slackapi.Client instance the interactivity route (interactive.go) and
+// the outbox delivery worker all share, and this package can no longer
+// construct a client of its own at all -- see internal/app/shadowslack's
+// own doc comment for why suppression lives at the client-method level
+// here rather than at the transport.
 package slack

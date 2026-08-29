@@ -1,21 +1,22 @@
-// Package slackapi holds the Slack Notifier adapter ("outbox
-// delivery", §5.1/§8.10) -- a real chat.postMessage client implementing
-// ports.Notifier, consumed EXCLUSIVELY via the outbox (internal/app/
-// outboxworker), never called directly by any inbound handler.
+// Package slackapi holds the single production Slack Web API client
+// (§30.3's own "one client per provider" compensating control) -- a real
+// HTTP client against chat.postMessage/chat.postEphemeral/chat.update/
+// views.open/users.info, implementing ports.Notifier (called by the
+// outbox delivery worker, internal/app/outboxworker) AND providing the
+// narrow surface internal/app/shadowslack's Decorator wraps for
+// internal/adapters/inbound/slack's own synchronous ack/interactivity
+// writes.
 //
-// This is a DELIBERATE, small duplication of internal/adapters/inbound/
-// slack/ack.go's own tiny chat.postMessage HTTP shape (request/response
-// envelope, bounded-read, Authorization: Bearer botToken auth), not an
-// oversight to "fix" by sharing one client across both packages: that
-// file's own doc comment already says so explicitly ("NOT the general
-// Notifier/outbox abstraction §5.1 builds"), and ack.go's own call is a
-// synchronous, in-request-path, best-effort in-thread ack (§8.10's own
-// scope, called directly from the inbound webhook handler, no retry, no
-// outbox row) -- a fundamentally different caller shape from THIS
-// package's Client, which is called ONLY by the outbox delivery worker,
-// asynchronously, with its own retry/backoff/dead-letter policy layered on
-// top by that caller, never by any inbound handler directly. Two small,
-// independent clients, each scoped to its own caller, is simpler and
-// safer than one shared client serving two structurally different
-// call sites with different lifecycle/retry expectations.
+// This USED TO be two small, independently-constructed clients: this
+// package's own Client (outbox-only) and internal/adapters/inbound/
+// slack/ack.go's own private ackClient (in-thread acks, constructed
+// straight from the ingress package via newAckClient). §30.3 is explicit
+// that the single-instance property GitHub's transport gate gets for
+// free does NOT hold for Slack unless something enforces it: two
+// independently-constructed clients meant two independently-gate-able (or
+// gate-FREE) egress paths. ack.go's own client is retired; every Slack
+// write in this codebase, synchronous or outboxed, now goes through THIS
+// package's Client, and internal/adapters/inbound/slack no longer
+// constructs a client of its own at all -- it is handed the shadowslack-
+// decorated seam by production wiring instead (cmd/control-plane/main.go).
 package slackapi

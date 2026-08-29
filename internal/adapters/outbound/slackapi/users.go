@@ -10,11 +10,13 @@
 // from "this user genuinely has no email set" and does not try to; both
 // surface as ok=false, "" to GetUserEmail's own caller).
 //
-// Called from internal/app/identitylink.Resolve, NEVER from the outbox
-// delivery worker's own Notifier.Deliver path -- a distinct call site from
-// this package's own chat.postMessage Client.Deliver (see this package's
-// own doc.go for why this Client is already, deliberately, a SEPARATE
-// small client from internal/adapters/inbound/slack's own ack.go).
+// Called from internal/adapters/inbound/slack's own identity auto-linking
+// (resolveSlackActor/resolveSlackActorSingleAttempt, identity.go), NEVER
+// from the outbox delivery worker's own Notifier.Deliver path -- a
+// distinct call site from this package's own chat.postMessage
+// Client.Deliver, reached through the SAME single Client instance either
+// way (§30.3's "one client per provider" -- see this package's own
+// doc.go).
 
 package slackapi
 
