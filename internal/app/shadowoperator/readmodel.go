@@ -70,7 +70,7 @@ func BuildSummary(ctx context.Context, ledger *postgres.ShadowSCMWriteStore, rea
 
 	pending := 0
 	for _, row := range outboxRows {
-		if !isLedgerTerminal(row) {
+		if !isSettled(row) {
 			pending++
 			continue
 		}
@@ -84,6 +84,14 @@ func BuildSummary(ctx context.Context, ledger *postgres.ShadowSCMWriteStore, rea
 	}
 
 	sortEntriesNewestFirst(entries)
+	// Counted BEFORE truncation. The contract says totalCount may exceed
+	// entries.length, and computing it afterwards made that impossible:
+	// the two were always equal, the field carried no information, and the
+	// card rendered a capped number as the repository's exact total with
+	// nothing to say it had been cut. An operator reading "500 suppressed
+	// effects" on a repository with 900 is being told a wrong number by a
+	// surface whose entire job is telling them what was suppressed.
+	totalCount := len(entries)
 	if int32(len(entries)) > entryLimit {
 		entries = entries[:entryLimit]
 	}
@@ -105,22 +113,44 @@ func BuildSummary(ctx context.Context, ledger *postgres.ShadowSCMWriteStore, rea
 		LiveEgressPromotedAt:  promotedAt,
 		PendingShadowEraCount: pending,
 		Categories:            summarizeCategories(entries),
-		TotalCount:            len(entries),
+		TotalCount:            totalCount,
 		LLMSpendComputed:      computed,
 		LLMSpendUsd:           usd,
 		Entries:               entries,
 	}, nil
 }
 
-// isLedgerTerminal reports whether row is a genuine ledger entry (the
-// outbox worker delivered it into shadow_scm_writes' own sibling terminal
-// mark, migrations/000103's own delivered_to_ledger column) rather than
-// still in flight or dead-lettered without ever having been recorded.
-// See queries/outbox.sql's own ListShadowSuppressedOutboxWithSessionRepos
-// doc comment for why both states are returned undifferentiated and
-// bucketed here instead.
-func isLedgerTerminal(row postgres.ShadowOperatorOutboxRow) bool {
-	return row.Status == sqlcgen.OutboxStatusDelivered && row.DeliveredToLedger
+// isSettled reports whether a shadow-stamped outbox row has reached a
+// state nothing will move it out of.
+//
+// This replaced a predicate requiring delivered AND delivered_to_ledger,
+// which quietly made Activate impossible for whole classes of repository.
+// Two states it excluded are terminal:
+//
+//  1. A genuinely-delivered PASS-THROUGH row. blob_delete,
+//     sentinel_auto_fix and linear_digest are classified pass-through, so
+//     the outbox worker never diverts them to the ledger and never sets
+//     delivered_to_ledger -- yet every row is stamped suppressed_in_shadow
+//     regardless of kind. One swept upload or one sentinel verdict during
+//     an evaluation therefore left a row that was finished, would never
+//     change again, and was counted as in flight forever. Activate
+//     returned 409 permanently, under a message telling the operator to
+//     wait for it to settle.
+//
+//  2. A dead-lettered row. It will never be retried. Blocking on it
+//     forever is not a guarantee, it is a dead end.
+//
+// So: delivered is settled, whatever it was delivered TO, and
+// dead-lettered is settled-though-failed. Only pending still blocks,
+// because only pending can still act.
+//
+// Treating delivered as settled does not weaken §30.8. A SUPPRESS-
+// classified row that was suppressed is diverted to the ledger BEFORE
+// delivery, so a suppressed row reaching delivered-without-a-ledger-mark
+// would mean the stamp check itself failed -- a different bug, in a
+// different place, that this gate was never the control for.
+func isSettled(row postgres.ShadowOperatorOutboxRow) bool {
+	return row.Status != sqlcgen.OutboxStatusPending
 }
 
 // sumSessionCostForRepo sums every matching session's own running cost

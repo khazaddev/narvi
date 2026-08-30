@@ -293,3 +293,36 @@ JOIN sessions s ON s.id = o.session_id
 WHERE o.suppressed_in_shadow = true
 ORDER BY o.created_at DESC
 LIMIT $1;
+
+-- name: ListShadowSuppressedOutboxUnsettled :many
+-- Every shadow-stamped outbox row that has NOT settled -- the set §30.8's
+-- promotion quarantine actually asks about, and deliberately WITHOUT a
+-- limit.
+--
+-- Its sibling above carries one for display, and that limit is applied
+-- across the whole deployment BEFORE the caller filters to a repository
+-- in Go (repo matching needs each session's repos JSONB parsed into
+-- owner/repo, which SQL here cannot do). For a display list that only
+-- truncates what is shown. For the Activate gate it would fail OPEN: a
+-- repository's own unsettled row, older than the newest N rows anywhere
+-- in the deployment, becomes invisible and promotion proceeds as if
+-- nothing were outstanding.
+--
+-- Unbounded is safe here precisely because of what this selects. A
+-- settled row -- delivered, whatever it was delivered to, or dead-lettered
+-- -- is excluded, so this returns only work still genuinely in flight
+-- plus anything that failed permanently. On a healthy deployment that is
+-- a handful of rows; on an unhealthy one, the count is the thing the
+-- operator needs to see in full.
+SELECT o.id AS id,
+       o.session_id AS session_id,
+       o.kind AS kind,
+       o.status AS status,
+       o.delivered_to_ledger AS delivered_to_ledger,
+       o.created_at AS created_at,
+       s.repos AS repos
+FROM outbox o
+JOIN sessions s ON s.id = o.session_id
+WHERE o.suppressed_in_shadow = true
+  AND o.status <> 'delivered'
+ORDER BY o.created_at DESC;

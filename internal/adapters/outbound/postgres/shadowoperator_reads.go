@@ -68,14 +68,17 @@ func NewShadowOperatorReadStore(pool *pgxpool.Pool) *ShadowOperatorReadStore {
 	return &ShadowOperatorReadStore{q: sqlcgen.New(pool)}
 }
 
-// ListSuppressedOutboxForRepo returns every outbox row this deployment
-// has ever stamped suppressed_in_shadow=true for repoFullName -- both a
-// still-pending (in-flight) row and a ledger-terminal one
-// (delivered_to_ledger=true), undifferentiated; the caller buckets by
-// (Status, DeliveredToLedger). limit bounds the underlying scan --
-// ListShadowSuppressedOutboxWithSessionRepos' own doc comment (queries/
-// outbox.sql) explains why this is a floor, not a guarantee, for a
-// deployment large enough to ever reach it.
+// ListSuppressedOutboxForRepo returns shadow-stamped outbox rows for
+// repoFullName, for DISPLAY only.
+//
+// limit is applied by the underlying query across the WHOLE deployment,
+// before this function filters to one repository in Go -- repo matching
+// needs each session's repos JSONB parsed into owner/repo, which the
+// query cannot do. So this returns "the newest rows anywhere, that happen
+// to belong to this repo", never "every row for this repo". That is
+// acceptable for a list an operator scrolls; it is NOT acceptable for a
+// decision, which is why the Activate gate uses
+// ListUnsettledSuppressedOutboxForRepo below instead.
 //
 // A row whose own session names repositories this cannot read (malformed
 // JSON, an unsupported host) is skipped -- it cannot be attributed to
@@ -93,6 +96,47 @@ func (s *ShadowOperatorReadStore) ListSuppressedOutboxForRepo(ctx context.Contex
 		if !ok || !containsRepoFullName(names, repoFullName) {
 			continue
 		}
+		out = append(out, ShadowOperatorOutboxRow{
+			ID:                row.ID,
+			SessionID:         row.SessionID,
+			Kind:              row.Kind,
+			Status:            row.Status,
+			DeliveredToLedger: row.DeliveredToLedger,
+			CreatedAt:         row.CreatedAt,
+		})
+	}
+	return out, nil
+}
+
+// ListUnsettledSuppressedOutboxForRepo returns every shadow-stamped
+// outbox row for repoFullName that has NOT settled -- the set §30.8's
+// promotion quarantine asks about.
+//
+// Deliberately unbounded, unlike its display sibling above. A limit here
+// would fail OPEN: the underlying query orders newest-first across the
+// whole deployment, so this repository's own oldest unsettled row -- the
+// one most likely to be genuinely stuck, and exactly what a promotion
+// gate exists to notice -- is the first to fall off the end. Promotion
+// would then proceed as if nothing were outstanding. The set is small by
+// construction, because everything delivered is excluded.
+func (s *ShadowOperatorReadStore) ListUnsettledSuppressedOutboxForRepo(ctx context.Context, repoFullName string) ([]ShadowOperatorOutboxRow, error) {
+	rows, err := s.q.ListShadowSuppressedOutboxUnsettled(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ShadowOperatorOutboxRow, 0, len(rows))
+	for _, row := range rows {
+		names, ok := sessionRepoFullNames(row.Repos)
+		if ok && !containsRepoFullName(names, repoFullName) {
+			continue
+		}
+		// !ok -- the session's repos could not be parsed, so this row
+		// cannot be attributed to ANY repository on the evidence
+		// available. It is counted rather than skipped: this is a
+		// promotion gate, and the safe direction for "I cannot tell
+		// whether this belongs to the repo you are about to arm" is to
+		// refuse. The display sibling above skips such a row, because a
+		// list that cannot attribute it has nothing useful to show.
 		out = append(out, ShadowOperatorOutboxRow{
 			ID:                row.ID,
 			SessionID:         row.SessionID,

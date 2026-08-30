@@ -102,19 +102,23 @@ func Activate(ctx context.Context, reads *postgres.ShadowOperatorReadStore, repo
 	return updated, nil
 }
 
-// countUnhandledShadowEraRows mirrors readmodel.go's own isLedgerTerminal
-// bucketing -- duplicated rather than shared with BuildSummary because
-// this function needs only the count, not the constructed Entry/Category
-// values, and Activate must remain callable (and testable) without
-// building a whole Summary first.
+// countUnhandledShadowEraRows counts this repository's shadow-stamped
+// outbox rows that have not settled.
+//
+// It reads the UNBOUNDED, unsettled-only query rather than the display
+// list. The display list's limit is applied across the whole deployment
+// before the repo filter runs in Go, so this repository's own OLDEST
+// unsettled row -- the one most likely to be genuinely stuck, and exactly
+// what a promotion gate exists to notice -- is the first to fall off the
+// end. Counting from that list would fail OPEN.
 func countUnhandledShadowEraRows(ctx context.Context, reads *postgres.ShadowOperatorReadStore, repoFullName string) (int, error) {
-	rows, err := reads.ListSuppressedOutboxForRepo(ctx, repoFullName, DefaultEntryLimit)
+	rows, err := reads.ListUnsettledSuppressedOutboxForRepo(ctx, repoFullName)
 	if err != nil {
 		return 0, err
 	}
 	count := 0
 	for _, row := range rows {
-		if !isLedgerTerminal(row) {
+		if !isSettled(row) {
 			count++
 		}
 	}

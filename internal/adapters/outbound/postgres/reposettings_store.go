@@ -214,7 +214,10 @@ func (s *RepoSettingsStore) UpsertSessionsEnabled(ctx context.Context, repoFullN
 // UpsertSessionsEnabled's own identical shape): touches ONLY
 // live_egress_enabled, leaving every other repo_settings column
 // completely untouched. Called by the seed tool only in v1 (internal/
-// app/seed/reposettings.go) -- no REST route calls this yet; see that
+// app/seed/reposettings.go) for a DEMOTION, and by internal/app/
+// shadowoperator.Activate (an admin-only REST route) for a PROMOTION --
+// the split the demotionsweep analyzer enforces, because only a demotion
+// owes a sandbox-termination sweep. See that
 // file's own doc comment for the full "why" and for how this write is
 // journaled to audit_log.
 func (s *RepoSettingsStore) UpsertLiveEgressEnabled(ctx context.Context, repoFullName string, liveEgressEnabled bool) (sqlcgen.RepoSetting, error) {

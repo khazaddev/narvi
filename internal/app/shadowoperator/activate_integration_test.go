@@ -154,3 +154,111 @@ func TestActivate_ReactivatingAnAlreadyLiveRepoIsIdempotent(t *testing.T) {
 		t.Errorf("promotion fence moved on re-activation: first=%v second=%v, want unchanged", first.LiveEgressPromotedAt.Time, second.LiveEgressPromotedAt.Time)
 	}
 }
+
+// TestActivate_DeliveredPassThroughRowDoesNotBlockForever is the case
+// that made Activate impossible for whole classes of repository.
+//
+// Every outbox row is stamped suppressed_in_shadow regardless of kind,
+// but a PASS-THROUGH kind (blob_delete, sentinel_auto_fix, linear_digest)
+// is never diverted to the ledger, so it reaches "delivered" with
+// delivered_to_ledger still false. The gate required BOTH, so one swept
+// upload or one sentinel verdict during an evaluation left a row that was
+// finished, would never change again, and counted as in flight forever.
+// Activate returned 409 permanently — under a message telling the
+// operator to wait for it to settle.
+//
+// A repository that ran the sentinel lane in shadow could never graduate.
+func TestActivate_DeliveredPassThroughRowDoesNotBlockForever(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	const repoFullName = "acme/passthrough-repo"
+
+	sessionID := createTestSessionWithRepo(ctx, t, pool, repoFullName)
+	outbox := narvipg.NewOutboxStore(pool, false)
+	row, err := outbox.Create(ctx, sqlcgen.CreateOutboxEntryParams{
+		SessionID: sessionID,
+		Kind:      "blob_delete",
+		Payload:   []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create outbox row: %v", err)
+	}
+	if !row.SuppressedInShadow {
+		t.Fatalf("the row was not stamped suppressed_in_shadow; this test's premise is that EVERY kind is stamped")
+	}
+	// Delivered the way a pass-through kind really is: the outbox worker
+	// never touches delivered_to_ledger for it.
+	if _, err := pool.Exec(ctx, `UPDATE outbox SET status = 'delivered', delivered_at = now() WHERE id = $1`, row.ID); err != nil {
+		t.Fatalf("mark delivered: %v", err)
+	}
+
+	reads := narvipg.NewShadowOperatorReadStore(pool)
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
+	auditLog := narvipg.NewAuditLogStore(pool)
+
+	updated, err := shadowoperator.Activate(ctx, reads, repoSettings, auditLog, repoFullName, testActor(ctx, t, pool))
+	if err != nil {
+		t.Fatalf("Activate() error = %v, want nil: a delivered pass-through row is finished and will never change again, so blocking on it blocks forever", err)
+	}
+	if !updated.LiveEgressEnabled {
+		t.Error("LiveEgressEnabled = false after a successful Activate")
+	}
+}
+
+// TestActivate_SeesAnUnsettledRowOlderThanTheDisplayLimit closes a
+// fail-OPEN in the gate.
+//
+// The display query orders newest-first across the WHOLE deployment and
+// only then filters to one repository in Go. Counting from it meant this
+// repository's own OLDEST unsettled row — the one most likely to be
+// genuinely stuck, and exactly what a promotion gate exists to notice —
+// was the first to fall off the end, and Activate proceeded as if nothing
+// were outstanding.
+//
+// Here the repo's pending row is buried under more recent suppressed rows
+// belonging to a different repository. The gate must still see it.
+func TestActivate_SeesAnUnsettledRowOlderThanTheDisplayLimit(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	const repoFullName = "acme/buried-repo"
+	const noisyRepo = "acme/noisy-repo"
+
+	buriedSession := createTestSessionWithRepo(ctx, t, pool, repoFullName)
+	outbox := narvipg.NewOutboxStore(pool, false)
+	buried, err := outbox.Create(ctx, sqlcgen.CreateOutboxEntryParams{
+		SessionID: buriedSession, Kind: "github_verdict", Payload: []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create buried outbox row: %v", err)
+	}
+	// Age it so every later row sorts ahead of it.
+	if _, err := pool.Exec(ctx, `UPDATE outbox SET created_at = now() - interval '30 days' WHERE id = $1`, buried.ID); err != nil {
+		t.Fatalf("age the buried row: %v", err)
+	}
+
+	// Bury it under more suppressed rows than the gate would ever have
+	// read, all belonging to a DIFFERENT repository.
+	noisySession := createTestSessionWithRepo(ctx, t, pool, noisyRepo)
+	for i := 0; i < int(shadowoperator.DefaultEntryLimit)+10; i++ {
+		if _, err := outbox.Create(ctx, sqlcgen.CreateOutboxEntryParams{
+			SessionID: noisySession, Kind: "github_verdict", Payload: []byte(`{}`),
+		}); err != nil {
+			t.Fatalf("create noise row %d: %v", i, err)
+		}
+	}
+
+	reads := narvipg.NewShadowOperatorReadStore(pool)
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
+	auditLog := narvipg.NewAuditLogStore(pool)
+
+	_, err = shadowoperator.Activate(ctx, reads, repoSettings, auditLog, repoFullName, testActor(ctx, t, pool))
+	var unhandled *shadowoperator.ErrUnhandledShadowEraRows
+	if !errors.As(err, &unhandled) {
+		t.Fatalf("Activate() error = %v (%T), want *ErrUnhandledShadowEraRows: this repo's own pending row must be visible to the gate however many newer rows other repositories have produced", err, err)
+	}
+
+	settings, getErr := repoSettings.Get(ctx, repoFullName)
+	if getErr == nil && settings.LiveEgressEnabled {
+		t.Error("repo_settings.LiveEgressEnabled = true: a repository was armed for live egress while one of its own shadow-era rows was still in flight")
+	}
+}
