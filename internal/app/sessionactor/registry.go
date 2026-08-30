@@ -14,7 +14,6 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/reviewcontext"
-	"github.com/khazaddev/narvi/internal/app/shadowledger"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -85,7 +84,13 @@ type storeBundle struct {
 	// origin-channel-address) lookups that write needs to know WHERE to
 	// route that notification -- each mirrors imageBuild/environment's own
 	// identical "added by the Step that first needs it" precedent.
-	outbox             *postgres.OutboxStore
+	outbox *postgres.OutboxStore
+	// shadowLedgerStore is the CONCRETE store, held alongside the Actor's
+	// shadowledger.Store handle, because the suppressed-push record must
+	// join completeProcessingTurn's own transaction (§30.6 record-or-fail)
+	// and only the concrete store exposes WithTx -- the same reason
+	// outbox above is concrete rather than a port.
+	shadowLedgerStore  *postgres.ShadowSCMWriteStore
 	slackThreadSession *postgres.SlackThreadSessionStore
 	githubPRSession    *postgres.GitHubPRSessionStore
 	linearAgentSession *postgres.LinearAgentSessionStore
@@ -191,6 +196,7 @@ func newStoreBundle(pool *pgxpool.Pool, platformShadow bool) storeBundle {
 		environment:          postgres.NewEnvironmentStore(pool),
 		contractDrift:        postgres.NewContractDriftStore(pool),
 		outbox:               postgres.NewOutboxStore(pool, platformShadow),
+		shadowLedgerStore:    postgres.NewShadowSCMWriteStore(pool),
 		slackThreadSession:   postgres.NewSlackThreadSessionStore(pool),
 		githubPRSession:      postgres.NewGitHubPRSessionStore(pool),
 		linearAgentSession:   postgres.NewLinearAgentSessionStore(pool),
@@ -252,13 +258,6 @@ type Registry struct {
 	// never exercise the push/PR path).
 	sourceControl      ports.SourceControl
 	tokenEncryptionKey []byte
-
-	// shadowLedger is §30.9's own resolved mirror decision's remaining
-	// wiring (RegistryOptions.ShadowLedger's own doc comment) -- threaded
-	// through to every Actor this Registry hydrates exactly like
-	// sourceControl above. May be nil (tests that never exercise the
-	// push path).
-	shadowLedger shadowledger.Store
 
 	// openCodeRuntimeVersion is §8.5's ("image builds") own remaining
 	// addition, threaded through to every Actor this Registry hydrates
@@ -516,7 +515,6 @@ func NewRegistry(
 		publicBaseURL:          publicBaseURL,
 		sourceControl:          sourceControl,
 		tokenEncryptionKey:     tokenEncryptionKey,
-		shadowLedger:           opt.ShadowLedger,
 		openCodeRuntimeVersion: openCodeRuntimeVersion,
 		diffFetcher:            diffFetcher,
 		reviewDiffFetcher:      opt.ReviewDiffFetcher,
@@ -547,19 +545,6 @@ type RegistryOptions struct {
 	// GitHubBotHandle is §24's own addition -- see Registry.
 	// githubBotHandle's own doc comment.
 	GitHubBotHandle string
-	// ShadowLedger is §30.9's own resolved mirror decision (no git mirror;
-	// short-circuit the push, done properly): sendPushBestEffort
-	// (pushpr.go) records directly here when a turn's own frozen push/PR
-	// decision (§30.8) says shadow, since the sandbox WS push command is
-	// never sent at all on that path -- no push_complete/push_error wire
-	// event ever arrives to drive a recording through the decorated
-	// ports.SourceControl the way CreatePR/CreateBranch already do. The
-	// SAME shadowledger.Store instance production wiring already
-	// constructs for shadowscm.Decorator (cmd/control-plane/main.go's own
-	// shadowLedger) -- one ledger, every suppressed write. May be nil
-	// (tests that never exercise the push path) -- sendPushBestEffort
-	// logs loudly, and still never sends the push, rather than panicking.
-	ShadowLedger shadowledger.Store
 	// ReviewDiffFetcher is §24's own addition -- see Registry.
 	// reviewDiffFetcher's own doc comment.
 	ReviewDiffFetcher reviewcontext.Fetcher

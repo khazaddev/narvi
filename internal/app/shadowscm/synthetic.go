@@ -60,3 +60,23 @@ func syntheticPRRef(owner, repo string) ports.PRRef {
 func IsSyntheticCommitSHA(sha string) bool {
 	return sha == syntheticCommitSHA
 }
+
+// IsSyntheticPRRef reports whether ref is the placeholder a suppressed
+// CreatePR returns rather than a real pull request.
+//
+// Callers use it to stop at the single hop. §30.9's resolved decision is
+// that shadow validates single hops only, and a suppressed CreatePR
+// returns a nil error with a usable-looking ref -- so a caller that
+// simply carries on runs its downstream lanes against a pull request that
+// does not exist: preview enqueues, handoff-readiness reads, and any
+// state they write, all about a PR nobody can open. That is the
+// second-order exercise the decision rules out, and it does not announce
+// itself, because nothing failed.
+//
+// Matching is on the number alone. syntheticPRNumber is negative and real
+// GitHub PR numbers are positive and monotonic, so the test cannot
+// collide -- and it stays true for a ref that has been round-tripped
+// through a store that kept only the number.
+func IsSyntheticPRRef(ref ports.PRRef) bool {
+	return ref.Number == syntheticPRNumber
+}

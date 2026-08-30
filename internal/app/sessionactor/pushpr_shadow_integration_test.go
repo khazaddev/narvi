@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -338,8 +339,7 @@ func TestSendPushBestEffort_ShadowStamp_NeverSendsPush_RecordsLedger(t *testing.
 
 	commander := &fakeSendCommander{}
 	shadowLedgerStore := narvipg.NewShadowSCMWriteStore(pool)
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "", nil, nil, "", nil, false,
-		RegistryOptions{ShadowLedger: shadowLedgerStore})
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -406,5 +406,77 @@ func TestSendPushBestEffort_ShadowStamp_NeverSendsPush_RecordsLedger(t *testing.
 	}
 	if !spec.WouldOpenPR {
 		t.Error("spec WouldOpenPR = false, want true -- no push_complete will ever arrive to record that half separately")
+	}
+}
+
+// TestCompleteProcessingTurn_SuppressedPush_NonGitHubRepoIsStillRecorded
+// closes an asymmetry between the two loops.
+//
+// The LIVE push loop has no host check: it builds a push for every repo
+// with an explicit branch, so the sandbox really does push a repo on any
+// host. The suppression record used to skip anything that was not
+// owner/repo on a supported host — so the one case where suppression left
+// no evidence was also a case where the live path acts. Session creation
+// validates a clone URL's scheme and host only, so such a URL is
+// perfectly reachable.
+//
+// The URL deliberately carries userinfo, because a clone URL may, and
+// this string is about to reach a permanent, append-only table.
+func TestCompleteProcessingTurn_SuppressedPush_NonGitHubRepoIsStillRecorded(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	const identity = "git.example.com/team/group/app"
+	sessionID := createTestSessionWithRepos(ctx, t, pool, pgtype.UUID{}, "repo",
+		"https://alice:s3cr3t-token@git.example.com/team/group/app.git", "feature-x")
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	turnStore := narvipg.NewTurnStore(pool)
+	processing := createProcessingTurn(ctx, t, turnStore, sessionID)
+
+	commander := &fakeSendCommander{}
+	shadowLedgerStore := narvipg.NewShadowSCMWriteStore(pool)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "", nil, nil, "", nil, false)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	sendSandboxEventForTest(ctx, t, a, SandboxEvent{
+		Type: "execution_complete", Gen: 1,
+		Raw: executionCompleteRaw(t, sessionID.String(), 1, sandboxws.ExecutionCompleteOutcomeCompleted),
+	})
+	waitUntil(t, 5*time.Second, func() bool {
+		row, err := turnStore.Get(ctx, processing.ID)
+		return err == nil && row.Status == sqlcgen.TurnStatusCompleted
+	})
+
+	rows, err := shadowLedgerStore.ListForRepo(ctx, identity, 10)
+	if err != nil {
+		t.Fatalf("ListForRepo: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("ledger rows for %q = %d, want 1: a suppressed push on an unsupported host must still leave evidence, because the live loop would really have pushed it", identity, len(rows))
+	}
+	if rows[0].Operation != "push" {
+		t.Errorf("Operation = %q, want %q", rows[0].Operation, "push")
+	}
+	if got := commander.callCount(); got != 0 {
+		t.Errorf("a push command was sent %d times, want 0", got)
+	}
+	spec := string(rows[0].SpecJson)
+	if strings.Contains(spec, "s3cr3t-token") || strings.Contains(spec, "alice") {
+		t.Errorf("the clone URL's userinfo reached spec_json: %s", spec)
+	}
+	if strings.Contains(rows[0].RepoFullName, "s3cr3t-token") || strings.Contains(rows[0].RepoFullName, "alice") {
+		t.Errorf("the clone URL's userinfo reached repo_full_name: %s", rows[0].RepoFullName)
 	}
 }

@@ -16,7 +16,6 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/reviewcontext"
-	"github.com/khazaddev/narvi/internal/app/shadowledger"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -88,18 +87,6 @@ type Actor struct {
 	// request. May be nil (tests that never exercise the push/PR path,
 	// e.g. the resilience test).
 	sourceControl ports.SourceControl
-
-	// shadowLedger is this Actor's own shadowledger.Store (§30.7/§30.9,
-	// resolved: no git mirror -- short-circuit the push, done properly):
-	// sendPushBestEffort (pushpr.go) writes here directly when a turn's
-	// own frozen push/PR decision says shadow, since there is no
-	// push_complete/push_error wire event to drive that recording through
-	// the decorated ports.SourceControl the way CreatePR/CreateBranch
-	// already do. May be nil (tests that never exercise the push path,
-	// and every pre-§30 caller) -- sendPushBestEffort logs loudly rather
-	// than panicking if a shadow-stamped turn ever reaches it with no
-	// ledger configured.
-	shadowLedger shadowledger.Store
 
 	// githubBotToken is §8.2's ("sentinels + suggestions", §17.2) own
 	// addition -- see Registry's own identical field doc comment

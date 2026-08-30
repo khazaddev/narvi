@@ -450,7 +450,6 @@ func serve() error {
 			// arrives on that path to drive a recording through the
 			// decorated sourceControl the way CreatePR/CreateBranch
 			// already do.
-			ShadowLedger: shadowLedger,
 		})
 	if err != nil {
 		return fmt.Errorf("construct session actor registry: %w", err)

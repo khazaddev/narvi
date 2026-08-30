@@ -99,6 +99,39 @@ const (
 	FindingStatusFixRecorded FindingStatus = "fix_recorded"
 )
 
+// BlocksMerge reports whether a finding in this status still represents an
+// UNRESOLVED defect on the real head, and must therefore keep counting
+// against the merge gate and against every other "is anything still
+// open" question.
+//
+// It exists because that question was being asked as `status == Open` at
+// each call site, and adding a status is exactly when per-call-site
+// equality goes wrong. FindingStatusFixRecorded is the case that proved
+// it: its own documentation says it "is NOT a claim of resolution", and
+// yet an equality check against Open silently classed it as resolved --
+// so recording a fix that never reached the customer's repository made an
+// unresolved finding stop blocking merge, permanently, and across a later
+// promotion to live.
+//
+// Add a status, and this function is where you must decide what it means.
+// That is the point of it being here rather than at the call sites.
+func (s FindingStatus) BlocksMerge() bool {
+	switch s {
+	case FindingStatusOpen, FindingStatusFixRecorded:
+		// Open: nobody has answered it. FixRecorded: the fix was
+		// recorded and never committed, so the defect is untouched on
+		// the real head -- the honest reading is "still open, with a
+		// prepared remedy", never "resolved".
+		return true
+	default:
+		// Rebutted (a maintainer answered it), fix_pending/fix_open/
+		// fix_merged/fix_applied (remediation is owned by another path,
+		// and really did reach the head). Each has an explicit
+		// resolution.
+		return false
+	}
+}
+
 // FindingInput is a review-verdict-posting-tool call's own typed
 // per-finding fields (§8.2's VerdictInput, extended -- restdtos.
 // PostReviewVerdictRequest.findings, additive and optional, so an old

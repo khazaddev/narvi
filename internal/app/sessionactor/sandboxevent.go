@@ -619,7 +619,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 		// committed successfully regardless of what either side effect
 		// does next.
 		if pushAfterCommit != nil {
-			a.sendPushBestEffort(ctx, a.sessionID.String(), pushAfterCommit)
+			a.sendPushBestEffort(a.sessionID.String(), pushAfterCommit)
 		}
 		// Audit fix (correctness): push_complete is an at-least-once wire
 		// event (internal/sandboxagent/wsbridge's own doc.go/buffer.go --

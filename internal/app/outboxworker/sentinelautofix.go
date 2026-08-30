@@ -375,7 +375,21 @@ func (n *sentinelAutoFixNotifier) Deliver(ctx context.Context, notification port
 			// error; nothing user-visible has happened yet.
 			return errors.New("outboxworker: sentinelAutoFixNotifier: no egress-mode resolver configured")
 		}
-		if !n.isLive(ctx, payload.RepoFullName) {
+		// §30.8's rule, both halves: suppress if the ENQUEUE STAMP or the
+		// CURRENT flag says shadow, monotone toward suppression either
+		// way.
+		//
+		// The stamp half is not optional here and is easy to miss,
+		// because this kind is classified PASS-THROUGH: the outbox
+		// builder applies its own stamp check only to SUPPRESS kinds, so
+		// this notifier is reached unconditionally and would otherwise
+		// see nothing but the current flag. A row enqueued while the repo
+		// was shadow, and delivered after it was promoted -- outbox
+		// backlogs reach tens of minutes -- would then create a real
+		// branch and a real pull request in a customer repository, which
+		// §30.8 rules out in as many words: a born-shadow row "can only
+		// end in the ledger".
+		if notification.SuppressedInShadow || !n.isLive(ctx, payload.RepoFullName) {
 			return n.recordShortCircuit(ctx, payload)
 		}
 

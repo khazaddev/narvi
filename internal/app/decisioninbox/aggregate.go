@@ -764,10 +764,12 @@ func (b *codeOwnersBudget) take(ctx context.Context) bool {
 	return true
 }
 
-// countOpenFindings counts repoFullName/prNumber's own STILL-OPEN
-// (reviewpost.FindingStatusOpen) review_findings rows -- a rebutted or
-// fix-pending/open/merged/applied finding does not count (each already
-// has an explicit resolution).
+// countOpenFindings counts repoFullName/prNumber's own review_findings
+// rows that still represent an unresolved defect on the real head --
+// reviewpost.FindingStatus.BlocksMerge decides, never an equality check
+// here. A rebutted or fix-pending/open/merged/applied finding does not
+// count (each has an explicit resolution); a fix_recorded one DOES,
+// because recording a fix in shadow changed nothing on the head.
 //
 // A fetch failure is propagated to the caller --
 // it must NEVER degrade to zero. This function's own doc comment used to
@@ -794,7 +796,7 @@ func countOpenFindings(ctx context.Context, deps Deps, repoFullName string, prNu
 	}
 	count := 0
 	for _, f := range findings {
-		if f.Status == string(reviewpost.FindingStatusOpen) {
+		if reviewpost.FindingStatus(f.Status).BlocksMerge() {
 			count++
 		}
 	}
