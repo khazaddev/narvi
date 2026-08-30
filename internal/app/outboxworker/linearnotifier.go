@@ -125,7 +125,7 @@ func (n *linearNotifier) deliverOutcome(ctx context.Context, raw json.RawMessage
 	}
 
 	if payload.Success {
-		return n.client.CreateResponseActivity(ctx, accessToken, payload.AgentSessionID, payload.Text)
+		return n.client.CreateResponseActivity(ctx, accessToken, payload.AgentSessionID, payload.Text, "")
 	}
 	return n.client.CreateErrorActivity(ctx, accessToken, payload.AgentSessionID, payload.Text)
 }
@@ -148,5 +148,5 @@ func (n *linearNotifier) deliverProgress(ctx context.Context, raw json.RawMessag
 		return err
 	}
 
-	return n.client.CreateThoughtActivity(ctx, accessToken, payload.AgentSessionID, payload.Text)
+	return n.client.CreateThoughtActivity(ctx, accessToken, payload.AgentSessionID, payload.Text, "")
 }

@@ -1608,12 +1608,13 @@ type AuditLog struct {
 }
 
 type AutoApprovalOutcome struct {
-	ID           pgtype.UUID        `json:"id"`
-	RepoFullName string             `json:"repo_full_name"`
-	PrNumber     int32              `json:"pr_number"`
-	HeadSha      string             `json:"head_sha"`
-	Outcome      string             `json:"outcome"`
-	DecidedAt    pgtype.Timestamptz `json:"decided_at"`
+	ID                 pgtype.UUID        `json:"id"`
+	RepoFullName       string             `json:"repo_full_name"`
+	PrNumber           int32              `json:"pr_number"`
+	HeadSha            string             `json:"head_sha"`
+	Outcome            string             `json:"outcome"`
+	DecidedAt          pgtype.Timestamptz `json:"decided_at"`
+	SuppressedInShadow bool               `json:"suppressed_in_shadow"`
 }
 
 type Automation struct {

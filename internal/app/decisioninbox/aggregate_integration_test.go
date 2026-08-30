@@ -1445,6 +1445,11 @@ func TestBuild_ReviewDecisionDegraded_DemotesFromReadyToMerge(t *testing.T) {
 // countAutoApprovalOutcomes returns (total, contested) for repoFullName
 // within the last hour -- the shared assertion helper every T1 test below
 // uses to confirm whether RecordOverridden actually fired.
+// countAutoApprovalOutcomes reads through the CALIBRATION query, which
+// §30.7 requires to exclude shadow-era outcomes -- so a repo with no
+// repo_settings row (shadow by default) counts zero however many outcomes
+// were recorded. The tests below are about whether an outcome is recorded
+// at all, not about shadow semantics, so they arm the repo live first.
 func countAutoApprovalOutcomes(ctx context.Context, t *testing.T, pool *pgxpool.Pool, repoFullName string) (total, contested int64) {
 	t.Helper()
 	total, contested, err := narvipg.NewAutoApprovalOutcomeStore(pool).CountInWindow(ctx, repoFullName, pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true})
@@ -1477,6 +1482,15 @@ func TestBuild_Contested_HasChangesRequestedHalf_RecordsOverridden(t *testing.T)
 	const repoFullName = "acme/t1-contested-changes-requested"
 
 	actor, fakeSCM := buildEligibleReadyToMergeFixture(ctx, t, pool, tokenKey, "t1-changes-requested@example.com", actorGitHubExternalID, repoFullName, 70)
+	// §30.7 stamps each recorded outcome with the egress mode that held
+	// when it was OBSERVED, and the calibration query excludes shadow ones.
+	// A repo with no repo_settings row resolves shadow, so this must be
+	// armed BEFORE the outcome is recorded -- arming afterwards cannot
+	// change a stamp already written. These tests are about whether an
+	// outcome is recorded at all, not about egress mode.
+	if _, err := narvipg.NewRepoSettingsStore(pool).UpsertLiveEgressEnabled(ctx, repoFullName, true); err != nil {
+		t.Fatalf("arm live egress: %v", err)
+	}
 	// The ONE fact under test: HasChangesRequested true, hasNeedsHuman
 	// (no review:needs-human label) stays false -- isolates this half
 	// from the OTHER half TestBuild_Contested_NeedsHumanLabelHalf_
@@ -1536,6 +1550,15 @@ func TestBuild_Contested_NeedsHumanLabelHalf_RecordsOverridden(t *testing.T) {
 	const repoFullName = "acme/t1-contested-needs-human"
 
 	actor, fakeSCM := buildEligibleReadyToMergeFixture(ctx, t, pool, tokenKey, "t1-needs-human@example.com", actorGitHubExternalID, repoFullName, 71)
+	// §30.7 stamps each recorded outcome with the egress mode that held
+	// when it was OBSERVED, and the calibration query excludes shadow ones.
+	// A repo with no repo_settings row resolves shadow, so this must be
+	// armed BEFORE the outcome is recorded -- arming afterwards cannot
+	// change a stamp already written. These tests are about whether an
+	// outcome is recorded at all, not about egress mode.
+	if _, err := narvipg.NewRepoSettingsStore(pool).UpsertLiveEgressEnabled(ctx, repoFullName, true); err != nil {
+		t.Fatalf("arm live egress: %v", err)
+	}
 	prs := fakeSCM.openPRsByExternalID[actorGitHubExternalID]
 	prs[0].Labels = append(prs[0].Labels, "review:needs-human")
 	fakeSCM.openPRsByExternalID[actorGitHubExternalID] = prs
@@ -1589,6 +1612,15 @@ func TestBuild_NotContested_WhenEngineWouldNotHaveApprovedAnyway(t *testing.T) {
 	const repoFullName = "acme/t1-not-contested-stale"
 
 	actor, fakeSCM := buildEligibleReadyToMergeFixture(ctx, t, pool, tokenKey, "t1-not-contested@example.com", actorGitHubExternalID, repoFullName, 72)
+	// §30.7 stamps each recorded outcome with the egress mode that held
+	// when it was OBSERVED, and the calibration query excludes shadow ones.
+	// A repo with no repo_settings row resolves shadow, so this must be
+	// armed BEFORE the outcome is recorded -- arming afterwards cannot
+	// change a stamp already written. These tests are about whether an
+	// outcome is recorded at all, not about egress mode.
+	if _, err := narvipg.NewRepoSettingsStore(pool).UpsertLiveEgressEnabled(ctx, repoFullName, true); err != nil {
+		t.Fatalf("arm live egress: %v", err)
+	}
 	prs := fakeSCM.openPRsByExternalID[actorGitHubExternalID]
 	prs[0].HasChangesRequested = true
 	// Stale verdict: the live head sha no longer matches what

@@ -37,14 +37,14 @@ func (l *liveSpy) GetUserEmail(context.Context, string, string) (string, error) 
 	l.readCalls++
 	return "actor@example.com", nil
 }
-func (l *liveSpy) CreateThoughtActivity(context.Context, string, string, string) error {
+func (l *liveSpy) CreateThoughtActivity(context.Context, string, string, string, string) error {
 	l.writeCalls++
 	if l.failOnWrite {
 		l.t.Error("CreateThoughtActivity reached the live client in shadow")
 	}
 	return nil
 }
-func (l *liveSpy) CreateResponseActivity(context.Context, string, string, string) error {
+func (l *liveSpy) CreateResponseActivity(context.Context, string, string, string, string) error {
 	l.writeCalls++
 	if l.failOnWrite {
 		l.t.Error("CreateResponseActivity reached the live client in shadow")
@@ -71,10 +71,10 @@ func TestDecorator_WritesAreSuppressedAndRecorded(t *testing.T) {
 	d, spy := shadowDecorator(t, store)
 	ctx := context.Background()
 
-	if err := d.CreateThoughtActivity(ctx, "linear-installation-token", "agent-session-1", "Narvi has started working on this."); err != nil {
+	if err := d.CreateThoughtActivity(ctx, "linear-installation-token", "agent-session-1", "Narvi has started working on this.", ""); err != nil {
 		t.Fatalf("CreateThoughtActivity: %v", err)
 	}
-	if err := d.CreateResponseActivity(ctx, "linear-installation-token", "agent-session-1", "Approved."); err != nil {
+	if err := d.CreateResponseActivity(ctx, "linear-installation-token", "agent-session-1", "Approved.", ""); err != nil {
 		t.Fatalf("CreateResponseActivity: %v", err)
 	}
 
@@ -108,7 +108,7 @@ func TestDecorator_LiveRepoPassesThrough(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	if err := d.CreateThoughtActivity(context.Background(), "token", "agent-session-1", "hi"); err != nil {
+	if err := d.CreateThoughtActivity(context.Background(), "token", "agent-session-1", "hi", ""); err != nil {
 		t.Fatalf("CreateThoughtActivity: %v", err)
 	}
 	if spy.writeCalls != 1 {
@@ -141,7 +141,7 @@ func TestDecorator_ReadsAreForwarded(t *testing.T) {
 func TestDecorator_LedgerFailureFailsTheWrite(t *testing.T) {
 	d, _ := shadowDecorator(t, &fakeStore{err: errors.New("ledger down")})
 
-	if err := d.CreateThoughtActivity(context.Background(), "token", "agent-session-1", "hi"); err == nil {
+	if err := d.CreateThoughtActivity(context.Background(), "token", "agent-session-1", "hi", ""); err == nil {
 		t.Fatal("CreateThoughtActivity reported success when its ledger insert failed")
 	}
 }
@@ -165,5 +165,46 @@ func TestNew_RefusesAnIncompleteConstruction(t *testing.T) {
 	}
 	if _, err := New(live, store, "acme/widgets", nil); err == nil {
 		t.Error("New accepted a nil resolver -- which would make live/shadow undefined")
+	}
+}
+
+// TestDecorator_IdentityNotice_NeverRecordsItsText mirrors the guarantee
+// the Slack seam already had, on the half that was missed.
+//
+// The identity-link prompt carries a live magic-link URL whose nonce is
+// credential-equivalent: whoever holds it can bind a Linear identity to a
+// Narvi account. It used to be concatenated into the activity body by the
+// caller, and the shadow decorator records bodies verbatim into a
+// permanent, append-only table — so a shadow deployment stored a working
+// nonce for every unlinked Linear actor, for the full prompt TTL.
+//
+// The prompt now travels as its own parameter. The assertion is on the
+// SERIALISED row, not the struct's fields: a field list can be read and
+// believed, only the bytes prove nothing leaked.
+func TestDecorator_IdentityNotice_NeverRecordsItsText(t *testing.T) {
+	store := &fakeStore{}
+	d, _ := shadowDecorator(t, store)
+
+	const nonce = "nonce-7f31ac0e59"
+	notice := "I couldn't automatically match this to a Narvi account. Connect it here: https://narvi.example/auth/identity-link/" + nonce
+
+	if err := d.CreateThoughtActivity(context.Background(), "tok", "agent-session-1", "Narvi has started working on this.", notice); err != nil {
+		t.Fatalf("CreateThoughtActivity: %v", err)
+	}
+	if len(store.rows) != 1 {
+		t.Fatalf("ledger rows = %d, want 1", len(store.rows))
+	}
+	spec := string(store.rows[0].SpecJson)
+	if strings.Contains(spec, nonce) {
+		t.Errorf("the magic-link nonce reached spec_json: %s", spec)
+	}
+	if strings.Contains(spec, "identity-link") || strings.Contains(spec, "Connect it here") {
+		t.Errorf("the identity-link prompt's text reached spec_json: %s", spec)
+	}
+	if !strings.Contains(spec, "identityNoticeAppended\":true") {
+		t.Errorf("spec_json = %s, want it to record THAT a prompt was appended -- the fact is what the evaluator needs", spec)
+	}
+	if !strings.Contains(spec, "Narvi has started working on this.") {
+		t.Errorf("spec_json = %s, want the activity's own body still recorded", spec)
 	}
 }

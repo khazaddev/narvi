@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
@@ -52,4 +53,24 @@ func (s *ShadowSCMWriteStore) ListForRepo(ctx context.Context, repoFullName stri
 		RepoFullName: repoFullName,
 		Limit:        limit,
 	})
+}
+
+// AppendSuppressionEvent writes §30.6's own third recording write: an
+// `events` row so a suppression appears inline in the session workspace
+// the operator is already watching.
+//
+// It runs on the SAME *sqlcgen.Queries as the ledger insert, so under
+// WithTx the two commit together. That is deliberate but not
+// load-bearing: §30.6 is explicit that `events` is surface, never durable
+// truth -- it cascades with the session, and the ledger row is the
+// record. The caller therefore treats a failure here as loggable, not
+// fatal.
+func (s *ShadowSCMWriteStore) AppendSuppressionEvent(ctx context.Context, sessionID pgtype.UUID, messageID string, payload []byte) error {
+	_, err := s.q.CreateEvent(ctx, sqlcgen.CreateEventParams{
+		SessionID: sessionID,
+		Type:      "shadow_egress_suppressed",
+		MessageID: messageID,
+		Payload:   payload,
+	})
+	return err
 }

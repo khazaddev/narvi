@@ -826,8 +826,19 @@ func TestCleanForImageBuild_PurgesCredentialCache(t *testing.T) {
 		t.Fatalf("CleanForImageBuild() error = %v, want nil", err)
 	}
 
-	if _, statErr := os.Stat(credentialCacheDir); statErr == nil {
-		t.Errorf("credential cache dir %s still exists after CleanForImageBuild, want it purged entirely", credentialCacheDir)
+	// The guarantee is that no credential survives into the baked image,
+	// not that the directory is gone. PurgeAll deliberately empties the
+	// directory and leaves it in place: removing it would unclaim its
+	// name under a world-writable parent, letting another uid create it
+	// and redirect a later root write with a symlink. An empty,
+	// root-owned 0700 directory in the image is harmless, and carries
+	// that protection forward into it.
+	entries, readErr := os.ReadDir(credentialCacheDir)
+	if readErr != nil {
+		t.Fatalf("credential cache dir %s does not survive CleanForImageBuild: %v", credentialCacheDir, readErr)
+	}
+	if len(entries) != 0 {
+		t.Errorf("credential cache dir holds %d entries after CleanForImageBuild, want 0 -- nothing may be baked into the image", len(entries))
 	}
 	if _, found, err := cache.Load("github.com"); err != nil || found {
 		t.Errorf("cache.Load(\"github.com\") after CleanForImageBuild = (found=%v, err=%v), want (false, nil)", found, err)

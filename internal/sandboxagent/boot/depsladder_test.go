@@ -94,7 +94,7 @@ func TestSetupRerunLadder_DigestMatch_SkipsSetupEntirely(t *testing.T) {
 	repos := []boot.RepoInfo{{Name: "repo1", Primary: true}}
 
 	err = boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved, ladder, nil,
-		noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil)
+		noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil, nil)
 	if err != nil {
 		t.Fatalf("RunBoot(, nil) error = %v, want nil", err)
 	}
@@ -144,7 +144,7 @@ func TestSetupRerunLadder_DeltaEligible_RunsSyncInsteadOfSetup(t *testing.T) {
 	repos := []boot.RepoInfo{{Name: "repo1", Primary: true}}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved, ladder, nil,
-		noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil)
+		noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil, nil)
 	if err != nil {
 		t.Fatalf("RunBoot(, nil) error = %v, want nil", err)
 	}
@@ -185,7 +185,7 @@ func TestSetupRerunLadder_DeltaFails_FallsBackToFullSetup(t *testing.T) {
 	repos := []boot.RepoInfo{{Name: "repo1", Primary: true}}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved, ladder, nil,
-		noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil)
+		noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil, nil)
 	if err != nil {
 		t.Fatalf("RunBoot(, nil) error = %v, want nil (a delta-script failure must be non-fatal and fall back to full setup.sh)", err)
 	}
@@ -226,7 +226,7 @@ func TestSetupRerunLadder_DeltaIneligible_SetupChanged_RunsFullSetup(t *testing.
 	repos := []boot.RepoInfo{{Name: "repo1", Primary: true}}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved, ladder, nil,
-		noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil)
+		noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil, nil)
 	if err != nil {
 		t.Fatalf("RunBoot(, nil) error = %v, want nil", err)
 	}
@@ -281,7 +281,7 @@ func TestSetupRerunLadder_DigestMismatch_FallsThroughToFullSetup(t *testing.T) {
 	repos := []boot.RepoInfo{{Name: "repo1", Primary: true}}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved, ladder, nil,
-		noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil)
+		noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil, nil)
 	if err != nil {
 		t.Fatalf("RunBoot(, nil) error = %v, want nil (a proven digest mismatch must still be non-fatal)", err)
 	}
@@ -356,7 +356,7 @@ func TestSetupRerunLadder_DigestMatchButSetupChanged_RunsFullSetup(t *testing.T)
 	repos := []boot.RepoInfo{{Name: "repo1", Primary: true}}
 
 	err = boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved, ladder, nil,
-		noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil)
+		noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil, nil)
 	if err != nil {
 		t.Fatalf("RunBoot(, nil) error = %v, want nil", err)
 	}
@@ -443,7 +443,7 @@ func TestSetupRerunLadder_ScopedSession_DigestTierAlwaysIneligible(t *testing.T)
 	repos := []boot.RepoInfo{{Name: "repo1", Primary: true}}
 
 	err = boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved, ladder, nil,
-		noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil)
+		noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil, nil)
 	if err != nil {
 		t.Fatalf("RunBoot(, nil) error = %v, want nil", err)
 	}
@@ -519,7 +519,7 @@ func TestSetupRerunLadder_LogsStructuredDecisionsForEachTier(t *testing.T) {
 	repos := []boot.RepoInfo{{Name: "repo1", Primary: true}}
 
 	if err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved, ladder, nil,
-		noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil); err != nil {
+		noopReporter, noopHookRerunTiming, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil, nil); err != nil {
 		t.Fatalf("RunBoot(, nil) error = %v, want nil", err)
 	}
 

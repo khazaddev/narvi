@@ -6,6 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/khazaddev/narvi/internal/app/egressmode"
 	"github.com/khazaddev/narvi/internal/domain/reviewverdict"
 	"github.com/khazaddev/narvi/internal/platform"
 )
@@ -53,7 +54,23 @@ func recordOutcome(ctx context.Context, deps Deps, repoFullName string, prNumber
 	if headSHA == "" {
 		return
 	}
-	if err := deps.AutoApprovalOutcomes.Record(ctx, repoFullName, prNumber, headSHA, string(outcome)); err != nil {
+	// §30.7's calibration-read exclusion, stamped at write time for the
+	// same reason §30.8 stamps everything else at write time: the mode
+	// that held when the observation was MADE is the one that decides
+	// whether it may calibrate, and re-reading later would let a
+	// promotion retroactively admit verdicts nobody ever saw.
+	//
+	// The outcome is still recorded. The contradiction rate is the
+	// instrument that justifies arming auto-merge for real, and moving it
+	// with shadow-era observations is the falsification §30.7 rules out --
+	// but an operator's ledger still needs to see that the observation
+	// happened.
+	suppressedInShadow := egressmode.Resolve(ctx, egressmode.Deps{
+		RepoSettings:   deps.RepoSettings,
+		PlatformShadow: deps.PlatformShadow,
+	}, repoFullName).Suppressed()
+
+	if err := deps.AutoApprovalOutcomes.Record(ctx, repoFullName, prNumber, headSHA, string(outcome), suppressedInShadow); err != nil {
 		platform.Logger(ctx).Warn("reviewverdict: record auto-approval outcome failed", "error", err, "repo_full_name", repoFullName, "pr_number", prNumber, "outcome", string(outcome))
 	}
 }

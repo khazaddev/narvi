@@ -81,11 +81,27 @@ func RunBoot(
 	reporter services.ProgressReporter,
 	onHookRerunTiming OnHookRerunTiming,
 	hookTimeout, stopGrace, readinessTimeout, readinessPollInterval, setupRetryDelay time.Duration,
-	// runtimeCredential is the identity customer-authored processes run
-	// under -- services.yml commands, and the setup hooks below. See
-	// services.Run's own parameter doc for why they share the agent
-	// runtime's identity rather than sandbox-agent's.
+	// runtimeCredential is the identity services.yml commands run under.
+	//
+	// NOT the setup hooks. They still run as sandbox-agent, and this
+	// parameter's doc used to claim otherwise -- runRepoHooks does not
+	// take a credential at all. Written down as the gap it is: a
+	// repository-authored setup.sh executes with this process's own
+	// identity, and the control for that is the credential's own read-only
+	// scope (§30.4), not this parameter.
 	runtimeCredential *syscall.Credential,
+	// chownWorkspace re-owns repoDir to the runtime before any
+	// services.yml command starts.
+	//
+	// Required, and the ordering is the point. services.Run drops those
+	// commands to runtimeCredential, but every writer before it --
+	// gitclone, the setup hooks -- ran as sandbox-agent, so the tree is
+	// root-owned 0755. A dropped process could read it and not write it,
+	// so an ordinary services.yml command that writes inside its own
+	// checkout (a dev server's build cache, a watcher, a code generator)
+	// failed with EACCES. Nil in tests that never reach the services
+	// branch.
+	chownWorkspace func(repoDir string) error,
 ) error {
 	for _, repo := range repos {
 		repoDir := filepath.Join(workspaceDir, repo.Name)
@@ -117,6 +133,15 @@ func RunBoot(
 		// package already imports services). secretEnv is appended on top
 		// of that filtered base -- §27.1's own explicit "services.yml
 		// services" spawn target.
+		// Before the drop, not after boot: see chownWorkspace's own
+		// parameter doc. Idempotent, and the post-boot chown still runs
+		// for everything written after this point.
+		if chownWorkspace != nil {
+			if err := chownWorkspace(repoDir); err != nil {
+				return fmt.Errorf("boot: re-own %s for the runtime before starting its services: %w", repo.Name, err)
+			}
+		}
+
 		if err := services.Run(ctx, sup, repoDir, manifest, append(supervisor.EnvWithout(SessionConfigEnvVar), secretEnv...), reporter, readinessTimeout, readinessPollInterval, runtimeCredential); err != nil {
 			return fmt.Errorf("boot: services.yml supervision for %s failed: %w", repo.Name, err)
 		}

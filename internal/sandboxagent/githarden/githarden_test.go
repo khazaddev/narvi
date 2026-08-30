@@ -73,3 +73,93 @@ func assertFlag(t *testing.T, args []string, want, why string) {
 	}
 	t.Errorf("missing -c %s\n    %s\n    got: %v", want, why, args)
 }
+
+// TestHardeningFlags_NeutralisesEveryRepoSettableCommandKey asserts the
+// SET, not a sample.
+//
+// The phase audit found credential.helper missing while hooksPath and
+// fsmonitor were present — a check that names some of the dangerous keys
+// reads like a perimeter and is not one. credential.helper is the worst
+// of them: git runs the named command AND hands it the credential over
+// its own protocol, so one planted value is both execution as this
+// process and theft of the SCM token.
+//
+// Both entry points are asserted, because they were two separate lists
+// until this audit and a key added to one is exactly what gets missed.
+func TestHardeningFlags_NeutralisesEveryRepoSettableCommandKey(t *testing.T) {
+	// Every key here makes git RUN something and is settable from the
+	// repository's own .git/config, which the agent runtime owns.
+	want := map[string]string{
+		"credential.helper": "",
+		"core.hooksPath":    "/dev/null",
+		"core.sshCommand":   "",
+		"diff.external":     "",
+		"core.pager":        "cat",
+		"core.fsmonitor":    "",
+	}
+
+	for _, tc := range []struct {
+		name string
+		got  []string
+	}{
+		{"Args", Args("/workspace/repo", "status")},
+		{"Harden", Harden([]string{"-C", "/workspace/repo", "status"})},
+	} {
+		set := map[string]string{}
+		for i := 0; i+1 < len(tc.got); i++ {
+			if tc.got[i] != "-c" {
+				continue
+			}
+			k, v, found := strings.Cut(tc.got[i+1], "=")
+			if !found {
+				t.Errorf("%s: -c %q has no '='", tc.name, tc.got[i+1])
+				continue
+			}
+			set[k] = v
+		}
+		for key, wantValue := range want {
+			gotValue, ok := set[key]
+			if !ok {
+				t.Errorf("%s: %s is NOT neutralised; a repository-authored value for it runs a command as this process", tc.name, key)
+				continue
+			}
+			if gotValue != wantValue {
+				t.Errorf("%s: %s = %q, want %q", tc.name, key, gotValue, wantValue)
+			}
+		}
+	}
+}
+
+// TestArgs_CredentialHelperResetPrecedesTheCallersOwn pins the ORDER,
+// which is the whole reason the empty value works.
+//
+// credential.helper is multi-valued: git accumulates helpers rather than
+// replacing them. An empty value discards every helper configured so far
+// — including one planted in the repository's config — and the caller's
+// own helper, added after, is then the only survivor. Reversed, the
+// reset would wipe Narvi's own helper and leave the repository's.
+func TestArgs_CredentialHelperResetPrecedesTheCallersOwn(t *testing.T) {
+	args := Args("/workspace/repo", "-c", "credential.helper=!narvi credential-helper", "fetch")
+
+	resetAt, oursAt := -1, -1
+	for i, a := range args {
+		if a != "-c" || i+1 >= len(args) {
+			continue
+		}
+		switch args[i+1] {
+		case "credential.helper=":
+			resetAt = i
+		case "credential.helper=!narvi credential-helper":
+			oursAt = i
+		}
+	}
+	if resetAt == -1 {
+		t.Fatal("no credential.helper reset in the hardening flags")
+	}
+	if oursAt == -1 {
+		t.Fatal("the caller's own credential.helper did not survive")
+	}
+	if resetAt > oursAt {
+		t.Errorf("the reset is at %d and the caller's helper at %d: the reset must come FIRST, or it discards Narvi's own helper and leaves the repository's", resetAt, oursAt)
+	}
+}

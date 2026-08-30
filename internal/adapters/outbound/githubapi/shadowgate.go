@@ -34,6 +34,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/khazaddev/narvi/internal/app/shadowledger"
+	"github.com/khazaddev/narvi/internal/domain/shadowsentinel"
 )
 
 // shadowRoundTripper intercepts mutating requests and records them.
@@ -144,9 +145,29 @@ func drainBody(req *http.Request) (string, error) {
 // anything that logs or stores it shows what it is rather than looking
 // like a GitHub response that happened to have odd ids.
 func synthesizedResponse(req *http.Request) *http.Response {
+	// The body carries the SAME sentinels the typed decorator returns, and
+	// that is the point of this function rather than a stylistic detail.
+	//
+	// Two layers can suppress independently: the decorator resolves the
+	// flag, and so does this gate underneath it. When they disagree --
+	// which one transient repo_settings read failure is enough to cause,
+	// since that read fails closed -- the decorator calls the live client
+	// and gets THIS response back. A body with no fields parsed into
+	// PRRef{Number: 0, URL: ""} and an empty commit SHA: zero values that
+	// no synthetic-value check recognises, because those checks look for
+	// the sentinels. Downstream lanes then ran against a pull request
+	// that does not exist, and nothing failed to say so.
+	//
+	// Filling the fields a real response would carry makes a suppressed
+	// result look the same whichever layer decided it, which is what lets
+	// a caller check once.
 	payload, _ := json.Marshal(map[string]any{
 		"shadowSuppressed": true,
 		"note":             "This platform is in shadow mode for this repository. Nothing was sent.",
+		"number":           shadowsentinel.PRNumber,
+		"html_url":         shadowsentinel.URLScheme + repoFromPath(req.URL.Path) + "/not-created",
+		"sha":              shadowsentinel.CommitSHA,
+		"commit":           map[string]any{"sha": shadowsentinel.CommitSHA},
 	})
 	h := make(http.Header)
 	h.Set("Content-Type", "application/json")

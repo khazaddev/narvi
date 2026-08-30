@@ -99,6 +99,30 @@ const (
 	FindingStatusFixRecorded FindingStatus = "fix_recorded"
 )
 
+// EligibleForManualApply reports whether a finding's suggested fix can
+// still be applied by hand.
+//
+// Open is the obvious case. FixRecorded is the one that was missing, and
+// missing it left a finding permanently unfixable: applying a suggestion
+// while the repository's egress was suppressed marks it fix_recorded --
+// correctly, since nothing reached the real head -- and the eligibility
+// check was `status == Open`, so after the repository was promoted the
+// maintainer clicking Apply to make the fix real got a 409 forever. The
+// defect was still there, still blocking merge, and the one action that
+// would have fixed it was refused because it had been attempted once in
+// shadow.
+//
+// Every other status names remediation that really did reach the head,
+// or is owned by another path.
+func (s FindingStatus) EligibleForManualApply() bool {
+	switch s {
+	case FindingStatusOpen, FindingStatusFixRecorded:
+		return true
+	default:
+		return false
+	}
+}
+
 // BlocksMerge reports whether a finding in this status still represents an
 // UNRESOLVED defect on the real head, and must therefore keep counting
 // against the merge gate and against every other "is anything still

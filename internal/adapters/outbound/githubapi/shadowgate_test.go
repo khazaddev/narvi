@@ -2,13 +2,17 @@ package githubapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+
+	"github.com/khazaddev/narvi/internal/domain/shadowsentinel"
 )
 
 // recordingStore captures what the gate wrote, and can be made to fail.
@@ -218,5 +222,48 @@ func TestNew_WithoutATransportCannotReachAnything(t *testing.T) {
 	}
 	if reached != 0 {
 		t.Fatalf("the server was contacted %d times by a gate-less adapter", reached)
+	}
+}
+
+// TestSynthesizedResponse_CarriesTheSameSentinelsTheDecoratorReturns
+// closes the gap between the two layers that can each suppress.
+//
+// §30.2 puts this transport gate underneath the typed port decorator as a
+// fallback net, and each resolves the egress flag for itself. When they
+// disagree — one transient repo_settings read failure is enough, since
+// that read fails closed — the decorator calls the live client and gets
+// this response. A body with no fields parsed into PRRef{Number: 0,
+// URL: ""} and an empty commit SHA: zero values no synthetic-value check
+// recognises, so downstream lanes ran against a pull request that does
+// not exist and nothing failed to say so.
+func TestSynthesizedResponse_CarriesTheSameSentinelsTheDecoratorReturns(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://api.github.com/repos/acme/widgets/pulls", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+
+	resp := synthesizedResponse(req)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	var parsed struct {
+		Number  int    `json:"number"`
+		HTMLURL string `json:"html_url"`
+		SHA     string `json:"sha"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("unmarshal synthesized body: %v", err)
+	}
+
+	if parsed.Number != shadowsentinel.PRNumber {
+		t.Errorf("number = %d, want the synthetic sentinel %d: a caller parsing this must be able to tell it from a real PR", parsed.Number, shadowsentinel.PRNumber)
+	}
+	if !strings.HasPrefix(parsed.HTMLURL, shadowsentinel.URLScheme) {
+		t.Errorf("html_url = %q, want the %q scheme so it cannot be followed or matched as a real GitHub URL", parsed.HTMLURL, shadowsentinel.URLScheme)
+	}
+	if parsed.SHA != shadowsentinel.CommitSHA {
+		t.Errorf("sha = %q, want the synthetic sentinel %q", parsed.SHA, shadowsentinel.CommitSHA)
 	}
 }

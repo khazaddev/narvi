@@ -344,6 +344,16 @@ func TestMergePullRequest_HappyPath(t *testing.T) {
 	rig.markPlatformAuthored(ctx, t, user.ID, htmlURL)
 	rig.seedAutoApprovedVerdict(ctx, t, "acme/widgets", 1204, "headsha1204")
 
+	// §30.7 stamps each recorded auto-approval outcome with the egress
+	// mode that held when it was observed, and the calibration query
+	// excludes shadow ones. A repo with no repo_settings row resolves
+	// shadow, so arm it BEFORE the merge -- a stamp already written
+	// cannot be changed afterwards. This test is about whether a
+	// 'confirmed' outcome is recorded, not about egress mode.
+	if _, err := narvipg.NewRepoSettingsStore(rig.pool).UpsertLiveEgressEnabled(ctx, "acme/widgets", true); err != nil {
+		t.Fatalf("arm live egress: %v", err)
+	}
+
 	body, err := json.Marshal(restdtos.MergePullRequestRequest{RepoFullName: "acme/widgets", PrNumber: 1204})
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 )
 
@@ -161,5 +163,83 @@ func TestRecord_FailsLoudlyWhenTheStoreCannotWrite(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("Record() error = nil, want an error when the store itself fails to write")
+	}
+}
+
+// eventAppenderStore is fakeStore plus §30.6's optional timeline half.
+type eventAppenderStore struct {
+	fakeStore
+	events   []sqlcgen.CreateEventParams
+	eventErr error
+}
+
+func (s *eventAppenderStore) AppendSuppressionEvent(_ context.Context, sessionID pgtype.UUID, messageID string, payload []byte) error {
+	if s.eventErr != nil {
+		return s.eventErr
+	}
+	s.events = append(s.events, sqlcgen.CreateEventParams{
+		SessionID: sessionID, Type: "shadow_egress_suppressed", MessageID: messageID, Payload: payload,
+	})
+	return nil
+}
+
+// TestRecord_AppendsTheSuppressionTimelineEvent covers §30.6's third
+// recording write, which both the section and the plan row said had
+// shipped and which existed nowhere in the code for the whole phase.
+//
+// Without it an operator watching a session's workspace — the surface
+// §30.6 names, and the one they are already looking at — sees a turn
+// where nothing happened.
+func TestRecord_AppendsTheSuppressionTimelineEvent(t *testing.T) {
+	store := &eventAppenderStore{}
+	sessionID := pgtype.UUID{Bytes: [16]byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x47, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x01}, Valid: true}
+
+	if err := Record(context.Background(), store, Entry{
+		Operation:    "create_pr",
+		RepoFullName: "acme/widgets",
+		Target:       "feature-x",
+		SessionID:    sessionID,
+		Spec:         CreatePR{Owner: "acme", Repo: "widgets", Head: "feature-x", Base: "main"},
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	if len(store.events) != 1 {
+		t.Fatalf("timeline events = %d, want 1: a suppression must appear inline in the session workspace (§30.6)", len(store.events))
+	}
+	ev := store.events[0]
+	if ev.Type != "shadow_egress_suppressed" {
+		t.Errorf("event type = %q, want %q", ev.Type, "shadow_egress_suppressed")
+	}
+	if ev.SessionID != sessionID {
+		t.Errorf("event session = %v, want the suppression's own session %v", ev.SessionID, sessionID)
+	}
+	payload := string(ev.Payload)
+	if !strings.Contains(payload, "create_pr") || !strings.Contains(payload, "acme/widgets") {
+		t.Errorf("payload = %s, want the operation and repo", payload)
+	}
+	if !strings.Contains(payload, "ledgerId") {
+		t.Errorf("payload = %s, want the ledger id §30.6 names", payload)
+	}
+}
+
+// TestRecord_TimelineFailureDoesNotFailTheSuppression pins the line §30.6
+// itself draws: the ledger row is the record and is record-or-fail; the
+// events row is surface that cascades with the session. Failing the whole
+// suppression because a timeline entry did not land would trade the
+// durable half for the disposable one.
+func TestRecord_TimelineFailureDoesNotFailTheSuppression(t *testing.T) {
+	store := &eventAppenderStore{eventErr: errors.New("simulated events failure")}
+
+	if err := Record(context.Background(), store, Entry{
+		Operation:    "create_pr",
+		RepoFullName: "acme/widgets",
+		SessionID:    pgtype.UUID{Bytes: [16]byte{0x01}, Valid: true},
+		Spec:         CreatePR{Owner: "acme", Repo: "widgets"},
+	}); err != nil {
+		t.Fatalf("Record() error = %v, want nil: the ledger row committed, and the timeline is surface", err)
+	}
+	if len(store.rows) != 1 {
+		t.Errorf("ledger rows = %d, want 1", len(store.rows))
 	}
 }

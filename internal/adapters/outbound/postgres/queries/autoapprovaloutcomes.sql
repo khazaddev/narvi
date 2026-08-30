@@ -15,8 +15,15 @@
 -- "first_seen_at is set once, never overwritten" precedent
 -- (migrations/000046) for the analogous "durable first observation"
 -- shape.
-INSERT INTO auto_approval_outcomes (repo_full_name, pr_number, head_sha, outcome)
-VALUES ($1, $2, $3, $4)
+--
+-- suppressed_in_shadow (migrations/000111) is §30.7's own calibration-read
+-- exclusion: an outcome observed while the repository's egress was
+-- suppressed is recorded, so the operator ledger can show it, and
+-- EXCLUDED from the contradiction rate below -- that number is the
+-- instrument justifying auto-merge, and moving it with verdicts nobody
+-- ever saw is the falsification §30.7 rules out.
+INSERT INTO auto_approval_outcomes (repo_full_name, pr_number, head_sha, outcome, suppressed_in_shadow)
+VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (repo_full_name, pr_number, head_sha) DO NOTHING;
 
 -- name: CountAutoApprovalOutcomesInWindow :one
@@ -31,4 +38,7 @@ SELECT
     count(*) AS total,
     count(*) FILTER (WHERE outcome = 'overridden') AS contested
 FROM auto_approval_outcomes
-WHERE repo_full_name = $1 AND decided_at > $2;
+WHERE repo_full_name = $1 AND decided_at > $2
+  -- §30.7: a shadow-era outcome is recorded but never calibrates. See
+  -- RecordAutoApprovalOutcome above.
+  AND NOT suppressed_in_shadow;

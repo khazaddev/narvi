@@ -510,7 +510,7 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 		// actor whose auto-link attempt hasn't resolved at all). Reads
 		// correctly either way; the appended notice (when non-empty) is what
 		// tells an unlinked actor specifically how to fix it.
-		deps.postAcknowledgment(ctx, payload.OrganizationID, payload.AgentSession.ID, appendNotice("This actor is not authorized to start new sessions from Linear.", notice))
+		deps.postAcknowledgment(ctx, payload.OrganizationID, payload.AgentSession.ID, "This actor is not authorized to start new sessions from Linear.", notice)
 		return true
 	}
 
@@ -536,7 +536,7 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 			if releaseErr := deps.AgentSessions.Release(ctx, payload.AgentSession.ID); releaseErr != nil {
 				logger.Error("linear: release agent session claim failed", "error", releaseErr, "agent_session_id", payload.AgentSession.ID)
 			}
-			deps.postAcknowledgment(ctx, payload.OrganizationID, payload.AgentSession.ID, appendNotice("This repository is not yet enrolled in Narvi's session rollout.", notice))
+			deps.postAcknowledgment(ctx, payload.OrganizationID, payload.AgentSession.ID, "This repository is not yet enrolled in Narvi's session rollout.", notice)
 			return true
 		}
 
@@ -604,7 +604,7 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 
 	logger.Info("linear: created session from agent session", "agent_session_id", payload.AgentSession.ID, "session_id", created.ID.String())
 
-	deps.postAcknowledgment(ctx, payload.OrganizationID, payload.AgentSession.ID, appendNotice(acknowledgmentBody, notice))
+	deps.postAcknowledgment(ctx, payload.OrganizationID, payload.AgentSession.ID, acknowledgmentBody, notice)
 	return true
 }
 
@@ -671,7 +671,7 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 		// isn't supported at all. L7 audit fix: post a minimal, honest
 		// reply instead of silently discarding the signal.
 		logger.Info("linear: received stop signal, replying that cancellation isn't supported yet", "agent_session_id", payload.AgentSession.ID)
-		deps.postThoughtNotice(ctx, payload.OrganizationID, payload.AgentSession.ID, stopNotSupportedText)
+		deps.postThoughtNotice(ctx, payload.OrganizationID, payload.AgentSession.ID, stopNotSupportedText, "")
 		return true
 	}
 
@@ -802,7 +802,7 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 			// resolved at all). Reads correctly either way; the appended
 			// notice (when non-empty) is what tells an unlinked actor
 			// specifically how to fix it.
-			deps.postIdentityNotice(ctx, payload.OrganizationID, payload.AgentSession.ID, appendNotice("This actor is not authorized to prompt this session.", notice))
+			deps.postIdentityNotice(ctx, payload.OrganizationID, payload.AgentSession.ID, "This actor is not authorized to prompt this session.", notice)
 			return true
 		}
 		// MEDIUM audit fix ("authorizeSessionAction conflates a genuine
@@ -842,7 +842,7 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 		// other. Previously Warn, which would flag this routine case above
 		// the identical one below on any Warn-level alert.
 		logger.Info("linear: revise reply had empty feedback, blocked by awaiting-approval plan guard", "session_id", sessionID.String())
-		deps.postThoughtNotice(ctx, payload.OrganizationID, payload.AgentSession.ID, appendNotice(emptyReviseFeedbackReplyText, notice))
+		deps.postThoughtNotice(ctx, payload.OrganizationID, payload.AgentSession.ID, emptyReviseFeedbackReplyText, notice)
 		return true
 	}
 
@@ -870,7 +870,7 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 			// failure -- mirrors the !wasCreated busy-reply branch just
 			// below for the analogous open-turn case (M6 audit fix).
 			logger.Info("linear: ordinary reply blocked by awaiting-approval plan", "session_id", sessionID.String())
-			deps.postThoughtNotice(ctx, payload.OrganizationID, payload.AgentSession.ID, appendNotice(planAwaitingApprovalReplyText, notice))
+			deps.postThoughtNotice(ctx, payload.OrganizationID, payload.AgentSession.ID, planAwaitingApprovalReplyText, notice)
 			return true
 		}
 		logger.Error("linear: create turn failed", "status", cerr.Status, "message", cerr.Message, "session_id", sessionID.String())
@@ -882,7 +882,7 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 		// false "I'll pick this up next" promise (which at least said
 		// something, even if untrue). Post an honest reply instead.
 		logger.Warn("linear: session already has an open turn, dropping prompted message", "session_id", sessionID.String())
-		deps.postThoughtNotice(ctx, payload.OrganizationID, payload.AgentSession.ID, appendNotice(busyReplyText, notice))
+		deps.postThoughtNotice(ctx, payload.OrganizationID, payload.AgentSession.ID, busyReplyText, notice)
 		return true
 	}
 
@@ -923,7 +923,7 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 	// httpapi.CreateTurnCore itself already fired the SAME
 	// GetOrSpawn+EnsureDispatched post-commit dispatch sequencing this
 	// function used to do here directly (turn.go's own createTurnLocked).
-	deps.postIdentityNotice(ctx, payload.OrganizationID, payload.AgentSession.ID, notice)
+	deps.postIdentityNotice(ctx, payload.OrganizationID, payload.AgentSession.ID, "", notice)
 	return true
 }
 
@@ -1003,7 +1003,7 @@ func (deps Deps) handlePlanVerdict(ctx context.Context, logger *slog.Logger, ses
 	if err := deps.authorizeSessionAction(ctx, logger, sessionID, decidedBy, authz.ActionApprovePlan); err != nil {
 		if errors.Is(err, ErrActorNotAuthorized) {
 			logger.Warn("linear: plan decision denied by authz", "plan_id", planID.String(), "session_id", sessionID.String(), "user_id", decidedBy.String())
-			deps.postPlanOutcomeActivity(ctx, logger, organizationID, agentSessionID, appendNotice("You don't have permission to approve or reject this plan.", identityNotice))
+			deps.postPlanOutcomeActivity(ctx, logger, organizationID, agentSessionID, "You don't have permission to approve or reject this plan.", identityNotice)
 			return true
 		}
 		return false
@@ -1012,14 +1012,14 @@ func (deps Deps) handlePlanVerdict(ctx context.Context, logger *slog.Logger, ses
 	outcome, err := httpapi.DecidePlan(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.Outbox, deps.AgentSessions, deps.AuditLog, deps.Registry, sessionID, planID, httpapi.PlanVerdict(verdict), decidedBy, deps.EpistemicCheckDefault)
 	if err != nil {
 		if errors.Is(err, httpapi.ErrPlanOpenTurnInFlight) {
-			deps.postPlanOutcomeActivity(ctx, logger, organizationID, agentSessionID, appendNotice("A revision is already in progress for this plan -- try again once it completes.", identityNotice))
+			deps.postPlanOutcomeActivity(ctx, logger, organizationID, agentSessionID, "A revision is already in progress for this plan -- try again once it completes.", identityNotice)
 			return true
 		}
 		logger.Error("linear: decide plan failed", "error", err, "plan_id", planID.String(), "session_id", sessionID.String())
 		return true
 	}
 
-	deps.postPlanOutcomeActivity(ctx, logger, organizationID, agentSessionID, appendNotice(renderLinearPlanOutcomeText(outcome), identityNotice))
+	deps.postPlanOutcomeActivity(ctx, logger, organizationID, agentSessionID, renderLinearPlanOutcomeText(outcome), identityNotice)
 	return true
 }
 
@@ -1056,7 +1056,7 @@ func renderLinearPlanOutcomeText(outcome httpapi.DecidePlanOutcome) string {
 // identical Success:true convention for the cross-channel notify path).
 // Best-effort only: any failure is logged and swallowed, mirroring
 // postAcknowledgment's own identical tolerance.
-func (deps Deps) postPlanOutcomeActivity(ctx context.Context, logger *slog.Logger, organizationID, agentSessionID, text string) {
+func (deps Deps) postPlanOutcomeActivity(ctx context.Context, logger *slog.Logger, organizationID, agentSessionID, text, identityNotice string) {
 	install, err := deps.Installations.GetByOrganizationID(ctx, organizationID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1076,7 +1076,7 @@ func (deps Deps) postPlanOutcomeActivity(ctx context.Context, logger *slog.Logge
 	activityCtx, cancel := context.WithTimeout(ctx, deps.Timeouts.LinearOutboundActivityTimeout)
 	defer cancel()
 
-	if err := deps.LinearClient.CreateResponseActivity(activityCtx, string(accessToken), agentSessionID, text); err != nil {
+	if err := deps.LinearClient.CreateResponseActivity(activityCtx, string(accessToken), agentSessionID, text, identityNotice); err != nil {
 		logger.Error("linear: post plan-outcome activity failed", "error", err, "agent_session_id", agentSessionID)
 	}
 }
@@ -1091,7 +1091,7 @@ func (deps Deps) postPlanOutcomeActivity(ctx context.Context, logger *slog.Logge
 // own established "small, documented duplication over a forced shared
 // abstraction" precedent -- see identity.go's own decryptLinearAccessToken
 // doc comment).
-func (deps Deps) postThoughtNotice(ctx context.Context, organizationID, agentSessionID, body string) {
+func (deps Deps) postThoughtNotice(ctx context.Context, organizationID, agentSessionID, body, identityNotice string) {
 	logger := platform.Logger(ctx)
 
 	accessToken, ok := deps.decryptLinearAccessToken(ctx, logger, organizationID)
@@ -1102,7 +1102,7 @@ func (deps Deps) postThoughtNotice(ctx context.Context, organizationID, agentSes
 	activityCtx, cancel := context.WithTimeout(ctx, deps.Timeouts.LinearOutboundActivityTimeout)
 	defer cancel()
 
-	if err := deps.LinearClient.CreateThoughtActivity(activityCtx, accessToken, agentSessionID, body); err != nil {
+	if err := deps.LinearClient.CreateThoughtActivity(activityCtx, accessToken, agentSessionID, body, identityNotice); err != nil {
 		logger.Warn("linear: post thought notice activity failed", "error", err, "agent_session_id", agentSessionID)
 	}
 }
@@ -1130,7 +1130,7 @@ func (deps Deps) postThoughtNotice(ctx context.Context, organizationID, agentSes
 // handleCreated's own caller passes acknowledgmentBody with an identity-
 // link notice appended (appendNotice), when there is one; every other
 // property of this function is unchanged.
-func (deps Deps) postAcknowledgment(ctx context.Context, organizationID, agentSessionID, body string) {
+func (deps Deps) postAcknowledgment(ctx context.Context, organizationID, agentSessionID, body, identityNotice string) {
 	logger := platform.Logger(ctx)
 
 	install, err := deps.Installations.GetByOrganizationID(ctx, organizationID)
@@ -1152,7 +1152,7 @@ func (deps Deps) postAcknowledgment(ctx context.Context, organizationID, agentSe
 	activityCtx, cancel := context.WithTimeout(ctx, deps.Timeouts.LinearOutboundActivityTimeout)
 	defer cancel()
 
-	if err := deps.LinearClient.CreateThoughtActivity(activityCtx, string(accessToken), agentSessionID, body); err != nil {
+	if err := deps.LinearClient.CreateThoughtActivity(activityCtx, string(accessToken), agentSessionID, body, identityNotice); err != nil {
 		logger.Error("linear: post acknowledgment activity failed", "error", err, "agent_session_id", agentSessionID)
 	}
 }

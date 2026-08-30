@@ -11,6 +11,7 @@ package shadowoperator_test
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -222,3 +223,70 @@ func TestBuildSummary_LLMSpendSumsAcrossSessionsForTheRepo(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+// TestBuildSummary_ShowsADemotionSuppressedRowAndHidesAnExecutedPassThrough
+// covers the two ways the operator's ledger told them the wrong thing.
+//
+//  1. A row born LIVE and suppressed at delivery — the demotion half of
+//     §30.8's suppress-wins rule — kept a false suppressed_in_shadow
+//     stamp, while this read is keyed on exactly that column. A
+//     suppression that genuinely happened was invisible on the one
+//     surface built to show it.
+//
+//  2. A PASS-THROUGH row that really executed carries the shadow stamp
+//     anyway, because every row is stamped regardless of kind, and was
+//     displayed as a suppressed effect. That is the opposite of what
+//     happened.
+func TestBuildSummary_ShowsADemotionSuppressedRowAndHidesAnExecutedPassThrough(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	const repoFullName = "acme/ledger-truth"
+
+	sessionID := createTestSessionWithRepo(ctx, t, pool, repoFullName)
+	outbox := narvipg.NewOutboxStore(pool, false)
+
+	// (1) Born LIVE, then suppressed at delivery.
+	if _, err := narvipg.NewRepoSettingsStore(pool).UpsertLiveEgressEnabled(ctx, repoFullName, true); err != nil {
+		t.Fatalf("arm live egress: %v", err)
+	}
+	demoted, err := outbox.Create(ctx, sqlcgen.CreateOutboxEntryParams{
+		SessionID: sessionID, Kind: "github_verdict", Payload: []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create born-live row: %v", err)
+	}
+	if demoted.SuppressedInShadow {
+		t.Fatalf("premise broken: the row was stamped shadow at enqueue, so this test cannot exercise the demotion half")
+	}
+	if _, err := outbox.MarkDeliveredToLedger(ctx, demoted.ID); err != nil {
+		t.Fatalf("mark delivered to ledger: %v", err)
+	}
+
+	// (2) A pass-through row that really executed.
+	executed, err := outbox.Create(ctx, sqlcgen.CreateOutboxEntryParams{
+		SessionID: sessionID, Kind: "blob_delete", Payload: []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create pass-through row: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE outbox SET status = 'delivered', delivered_at = now(), suppressed_in_shadow = true WHERE id = $1`, executed.ID); err != nil {
+		t.Fatalf("mark the pass-through row genuinely delivered: %v", err)
+	}
+
+	reads := narvipg.NewShadowOperatorReadStore(pool)
+	rows, err := reads.ListSuppressedOutboxForRepo(ctx, repoFullName, 100)
+	if err != nil {
+		t.Fatalf("ListSuppressedOutboxForRepo: %v", err)
+	}
+
+	var kinds []string
+	for _, r := range rows {
+		kinds = append(kinds, r.Kind)
+	}
+	if !slices.Contains(kinds, "github_verdict") {
+		t.Errorf("kinds = %v, want the demotion-suppressed github_verdict row: it was suppressed for real and the ledger is the only place that shows it", kinds)
+	}
+	if slices.Contains(kinds, "blob_delete") {
+		t.Errorf("kinds = %v, want NO blob_delete: that pass-through row really executed, and showing it as a suppressed effect tells the operator the opposite of what happened", kinds)
+	}
+}

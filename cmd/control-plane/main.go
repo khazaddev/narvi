@@ -717,7 +717,11 @@ func serve() error {
 		// DigestContestationRate -- the SAME reviewDigestSectionFeedbackStore
 		// instance the GitHub capture command above already uses.
 		DigestSectionFeedback: reviewDigestSectionFeedbackStore,
-		Timeouts:              cfg.Timeouts,
+		// §30.7: stamps each recorded auto-approval outcome with the
+		// epoch it was observed in, so a shadow-era contradiction never
+		// moves the rate that justifies arming auto-merge.
+		PlatformShadow: cfg.ShadowMode,
+		Timeouts:       cfg.Timeouts,
 	}
 	// digestChannelStore (§21.3) backs internal/app/digest's own
 	// channel-discovery step -- constructed here, alongside its own

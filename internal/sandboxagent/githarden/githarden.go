@@ -42,10 +42,22 @@ const noHooksPath = "/dev/null"
 //
 // Callers pass what they would have passed anyway; the flags this adds
 // come first because git requires its -c options before the subcommand.
-func Args(repoDir string, rest ...string) []string {
-	args := []string{
-		"-C", repoDir,
-
+// hardeningFlags is the ONE list, used by both entry points below.
+//
+// It was two lists, and that is a defect waiting to happen: a key added
+// to one and forgotten in the other leaves a live hole reachable through
+// whichever call site was missed. The phase audit found credential.helper
+// missing from both, which is the cheaper version of the same mistake.
+//
+// Every entry names a git config key that (a) makes git RUN a command and
+// (b) is settable from the repository's own .git/config -- which the
+// agent runtime owns after the workspace chown, and which a
+// prompt-injected agent can therefore write.
+//
+// This list is the guarantee. It is NOT complete for all time: git adds
+// config keys, and one class is deliberately not covered below.
+func hardeningFlags(repoDir string) []string {
+	return []string{
 		// The repository is owned by the runtime, not by this process.
 		// Scoped to this exact path rather than the wildcard: a wildcard
 		// would also cover any other foreign-owned repository this
@@ -55,11 +67,54 @@ func Args(repoDir string, rest ...string) []string {
 		// A repository-authored hook must never execute as this process.
 		"-c", "core.hooksPath=" + noHooksPath,
 
-		// core.fsmonitor names a command git runs on ordinary operations,
-		// and it is settable from the repository's own config -- which the
-		// runtime owns. Emptied here so a value planted there is inert.
+		// credential.helper is the most dangerous of these, and it was
+		// missed until the phase audit. It names a command git runs, AND
+		// git hands that command the credential over its own protocol --
+		// so a value planted in the runtime-owned config both executes as
+		// this process and exfiltrates the SCM token in one step.
+		//
+		// The empty value is load-bearing and is not a stylistic reset:
+		// credential.helper is MULTI-VALUED, so adding Narvi's own helper
+		// without this would APPEND it to whatever the repository already
+		// configured rather than replacing it. An empty value discards
+		// every earlier helper, which is git's own documented behaviour.
+		// The caller's own -c credential.helper=... then lands after this
+		// one and is the only survivor.
+		"-c", "credential.helper=",
+
+		// core.sshCommand names the program git runs for every ssh
+		// transport operation.
+		"-c", "core.sshCommand=",
+
+		// diff.external replaces git's own diff with a named command.
+		"-c", "diff.external=",
+
+		// core.pager runs a command over git's output. cat, not empty: an
+		// empty pager makes git fall back to its built-in default rather
+		// than disabling paging.
+		"-c", "core.pager=cat",
+
+		// core.fsmonitor names a command git runs on ordinary operations.
 		"-c", "core.fsmonitor=",
 	}
+}
+
+// NOT covered, stated rather than left for the next audit to rediscover:
+// content filters (filter.<name>.clean / .smudge). They are named by the
+// repository's own .gitattributes, so there is no fixed key to neutralise
+// and git offers no flag that disables filters wholesale. A repository
+// that authors both .gitattributes and .git/config can still run a
+// command on checkout. The control for that is the UID boundary (§30.5)
+// and, for the credential specifically, the read-only token (§30.4) --
+// not this file. Do not read the list above as a complete perimeter.
+
+// Args returns git's own arguments for a command operating on repoDir,
+// with the hardening ahead of whatever the caller wants to run.
+//
+// Callers pass what they would have passed anyway; the flags this adds
+// come first because git requires its -c options before the subcommand.
+func Args(repoDir string, rest ...string) []string {
+	args := append([]string{"-C", repoDir}, hardeningFlags(repoDir)...)
 	return append(args, rest...)
 }
 
@@ -85,13 +140,10 @@ func Harden(args []string) []string {
 	for i := 0; i+1 < len(args); i++ {
 		if args[i] == "-C" {
 			repoDir := args[i+1]
-			out := make([]string, 0, len(args)+6)
+			flags := hardeningFlags(repoDir)
+			out := make([]string, 0, len(args)+len(flags))
 			out = append(out, args[:i+2]...)
-			out = append(out,
-				"-c", "safe.directory="+repoDir,
-				"-c", "core.hooksPath="+noHooksPath,
-				"-c", "core.fsmonitor=",
-			)
+			out = append(out, flags...)
 			return append(out, args[i+2:]...)
 		}
 	}

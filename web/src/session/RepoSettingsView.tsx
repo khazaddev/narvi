@@ -82,6 +82,7 @@
 // as markup either way; T is reserved for the READ-ONLY summary this file
 // renders alongside them, exported as RepoSettingsSummary for direct
 // render-safety testing (see __tests__/repoSettingsRendering.test.tsx).
+import { formatUsd } from './money'
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
@@ -379,8 +380,16 @@ function ShadowLedgerCard({ owner, repo, role }: { owner: string; repo: string; 
             </span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '4px 0', fontSize: 'var(--text-sm)', borderBottom: '1px solid var(--line)' }}>
-            <span style={{ color: 'var(--faint)' }}>LLM spend (this repository)</span>
-            <span>{query.data.llmSpendComputed && query.data.llmSpendUsd !== null ? `$${query.data.llmSpendUsd.toFixed(2)}` : 'no figure available yet'}</span>
+            {/*
+              formatUsd, not toFixed(2). A per-turn agent cost is routinely
+              a fraction of a cent, and two decimals render a real charge as
+              "$0.00" -- indistinguishable from free, on the one screen whose
+              job is telling an evaluator what their evaluation cost. That is
+              the exact drift money.ts exists to prevent, and this card had
+              quietly reintroduced a fifth local formatter.
+            */}
+            <span style={{ color: 'var(--faint)' }}>LLM spend (turns that reported a cost)</span>
+            <span>{query.data.llmSpendComputed && query.data.llmSpendUsd !== null ? formatUsd(query.data.llmSpendUsd) : 'no figure available yet'}</span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '4px 0', fontSize: 'var(--text-sm)', borderBottom: '1px solid var(--line)' }}>
             <span style={{ color: 'var(--faint)' }}>Suppressed effects on record</span>

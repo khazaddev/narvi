@@ -31,5 +31,10 @@ type Deps struct {
 	// by Timeseries/TopRiskDrivers/FindingOutcomes above).
 	DigestSectionFeedback *postgres.ReviewDigestSectionFeedbackStore
 
+	// PlatformShadow is the deployment-wide egress switch (§30.8), needed
+	// alongside RepoSettings to stamp an outcome's own epoch -- see
+	// recordOutcome. False on a wiring that never records outcomes.
+	PlatformShadow bool
+
 	Timeouts platform.Timeouts
 }

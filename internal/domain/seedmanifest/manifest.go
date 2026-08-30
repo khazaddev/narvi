@@ -188,13 +188,18 @@ type RepoSetting struct {
 	// sibling field on this struct. Unlike SessionsEnabled immediately
 	// above, this is not seed-manifest-only because REST enrollment is
 	// structurally impossible -- it is seed-manifest-only because no
-	// admin-facing surface for it exists YET: §30.6's own "Activate"
-	// graduation gesture is the eventual REST path, and it does
-	// substantially more than a bare column write (§30.8's promotion
-	// fence, shadow-era-artifact quarantine) before it may flip this bit
-	// for real. Until that surface ships, this is the one way to move a
-	// repo out of shadow at all -- e.g. for an evaluation deployment's own
-	// pre-seeded fixture repos -- and every write here already goes
+	// admin-facing surface for it existed when this was written. One does
+	// now: §30.6's "Activate" graduation gesture ships as an admin-only
+	// REST path (internal/app/shadowoperator), and it does substantially
+	// more than a bare column write -- §30.8's promotion fence, and a
+	// refusal while shadow-era rows are still unhandled.
+	//
+	// Which makes this field the LOWER-ceremony path, not the only one,
+	// and that distinction matters: promoting by manifest skips the
+	// quarantine Activate enforces. Use it for an evaluation deployment's
+	// own pre-seeded fixture repos, where there is no shadow-era history
+	// to quarantine; use Activate to graduate a repo that was actually
+	// evaluated. Every write here already goes
 	// through this tool's own "seed.repo_setting_upserted" audit_log
 	// entry (internal/app/seed/reposettings.go), satisfying §30.8's
 	// "flag flips journaled to audit_log" requirement without a bespoke
