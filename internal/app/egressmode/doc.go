@@ -5,10 +5,19 @@
 // §30.6) for one call, and the sole source of the Capability token that
 // decision takes the shape of.
 //
-// # This Step is dark
+// # Callers
 //
-// Nothing in this codebase calls Resolve yet. This package exists so
-// later Steps' egress seams -- the §30.2 transport gate and port
+// Resolve is load-bearing on several production paths now -- the §30.2
+// transport gate and port decorator, the §30.3 Slack and Linear seams,
+// the outbox's enqueue-time stamp (§30.6), the SCM-credential
+// substitution (§30.4) and the calibration-read exclusion (§30.7). This
+// doc used to say "nothing in this codebase calls Resolve yet", which
+// was true when the package shipped dark and stopped being true one Step
+// later; it is recorded here because someone changing Resolve's
+// fail-closed posture or its signature would have read that sentence and
+// treated the package as unconstrained.
+//
+// It exists so those seams -- the §30.2 transport gate and port
 // decorator, the §30.3 single-instance Slack/Linear clients, the outbox's
 // own enqueue-time stamp (§30.6) -- have exactly one, already-correct
 // place to ask the question, rather than each growing its own copy of

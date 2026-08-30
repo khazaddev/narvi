@@ -7,6 +7,7 @@ import (
 	"go/printer"
 	"go/token"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -31,6 +32,15 @@ func TestActivate_IsTheOnlyCallerOfUpsertLiveEgressEnabledInThisPackage(t *testi
 	var callSites []string
 	for _, path := range files {
 		if filepath.Ext(path) != ".go" {
+			continue
+		}
+		// Test files are exempt, exactly as the demotionsweep analyzer
+		// exempts them: a test arming a repository is not a production
+		// path to the flag, and this test is about production call sites.
+		// Without this, adding any test that needs a live repo makes the
+		// guarantee look violated, which teaches the next reader to
+		// weaken the test rather than the code.
+		if strings.HasSuffix(path, "_test.go") {
 			continue
 		}
 		file, err := parser.ParseFile(fset, path, nil, 0)

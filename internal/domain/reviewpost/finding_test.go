@@ -379,3 +379,33 @@ func TestFindingStatus_BlocksMerge_FixRecordedStillBlocks(t *testing.T) {
 		}
 	}
 }
+
+// TestFindingStatus_EligibleForManualApply_FixRecordedStaysApplicable
+// pins the case that left a finding permanently unfixable.
+//
+// Applying a suggestion while the repository's egress was suppressed
+// marks it fix_recorded — correctly, since nothing reached the real head.
+// The eligibility check was `status == Open`, so after the repository was
+// promoted the maintainer clicking Apply to make the fix real got a 409
+// forever: the defect still there, still blocking merge, and the one
+// action that would have fixed it refused because it had been attempted
+// once in shadow.
+func TestFindingStatus_EligibleForManualApply_FixRecordedStaysApplicable(t *testing.T) {
+	for _, tc := range []struct {
+		status reviewpost.FindingStatus
+		want   bool
+		why    string
+	}{
+		{reviewpost.FindingStatusOpen, true, "nothing has been attempted"},
+		{reviewpost.FindingStatusFixRecorded, true, "recorded in shadow, never committed -- after promotion this is exactly the action to take"},
+		{reviewpost.FindingStatusRebutted, false, "a maintainer answered it"},
+		{reviewpost.FindingStatusFixPending, false, "the sentinel lane owns the remediation"},
+		{reviewpost.FindingStatusFixOpen, false, "an open fix PR owns it"},
+		{reviewpost.FindingStatusFixMerged, false, "the fix reached the head"},
+		{reviewpost.FindingStatusFixApplied, false, "the commit reached the head"},
+	} {
+		if got := tc.status.EligibleForManualApply(); got != tc.want {
+			t.Errorf("FindingStatus(%q).EligibleForManualApply() = %v, want %v: %s", tc.status, got, tc.want, tc.why)
+		}
+	}
+}

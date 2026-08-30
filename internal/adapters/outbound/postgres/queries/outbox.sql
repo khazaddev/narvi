@@ -98,8 +98,17 @@ RETURNING *;
 -- pgx.ErrNoRows-means-superseded handling: a caller must not proceed to
 -- treat this row as terminal if some other builder already raced ahead
 -- of it.
+--
+-- suppressed_in_shadow is set here TOO, and that is not redundant with
+-- the enqueue stamp. A row born LIVE and suppressed at delivery -- the
+-- demotion half of §30.8's suppress-wins rule -- kept a false stamp,
+-- while the operator ledger's own read is keyed on exactly that column.
+-- So a suppression that genuinely happened was invisible on the one
+-- surface built to show it. The column records the row's EFFECTIVE mode,
+-- and by the time this statement runs that mode is shadow whichever half
+-- of the rule decided it.
 UPDATE outbox
-SET status = 'delivered', delivered_at = now(), delivered_to_ledger = true
+SET status = 'delivered', delivered_at = now(), delivered_to_ledger = true, suppressed_in_shadow = true
 WHERE id = $1 AND status = 'pending'
 RETURNING *;
 
@@ -291,6 +300,14 @@ SELECT o.id AS id,
 FROM outbox o
 JOIN sessions s ON s.id = o.session_id
 WHERE o.suppressed_in_shadow = true
+  -- A row that is DELIVERED but was never diverted to the ledger is a
+  -- PASS-THROUGH kind that really executed. It carries the shadow stamp
+  -- because every row does, regardless of kind -- but showing it as a
+  -- suppressed effect tells the operator the opposite of what happened,
+  -- and for sentinel_auto_fix it also double-counts, since the suppressed
+  -- lane writes its own shadow_scm_writes row that this read already
+  -- unions in.
+  AND NOT (o.status = 'delivered' AND NOT o.delivered_to_ledger)
 ORDER BY o.created_at DESC
 LIMIT $1;
 

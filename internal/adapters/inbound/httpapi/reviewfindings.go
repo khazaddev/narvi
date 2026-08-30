@@ -253,7 +253,7 @@ func ApplySuggestion(sessions *postgres.SessionStore, prSessions *postgres.GitHu
 			writeError(w, http.StatusBadRequest, "this finding has no suggested fix to apply")
 			return
 		}
-		if finding.Status != string(reviewpost.FindingStatusOpen) {
+		if !reviewpost.FindingStatus(finding.Status).EligibleForManualApply() {
 			writeError(w, http.StatusConflict, fmt.Sprintf("this finding's own status (%s) is not eligible for manual apply-suggestion -- its remediation is already owned by another path", finding.Status))
 			return
 		}

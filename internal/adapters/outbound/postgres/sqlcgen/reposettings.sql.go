@@ -449,10 +449,18 @@ type UpsertLiveEgressEnabledParams struct {
 // repo_settings column is left COMPLETELY untouched, so a concurrent
 // write to any of them can never race with this one at the database
 // level. Written ONLY by the seed tool in v1 (internal/app/seed/
-// reposettings.go) for a DEMOTION, and by internal/app/shadowoperator.
-// Activate (a REST route, admin-only) for a PROMOTION -- the split the
-// demotionsweep analyzer enforces, because only a demotion owes a
-// sandbox-termination sweep. See that file's own
+// reposettings.go), which can flip it either way, and by internal/app/
+// shadowoperator.Activate (an admin-only REST route), which only ever
+// promotes.
+//
+// The demotionsweep analyzer constrains WHICH PACKAGES may call this, not
+// which direction they call it in -- it bans the name. What keeps
+// shadowoperator to promotion is that package's own meta-test, asserting
+// the literal true at its single call site; and what makes seed safe in
+// the other direction is that it pairs a demotion with repodemotion.Sweep
+// itself. Stated precisely because an earlier version of this comment
+// claimed the analyzer enforced the direction, which would leave a reader
+// trusting a guarantee nothing provides. See that file's own
 // doc comment for why, and for how this write is journaled to audit_log.
 //
 // live_egress_promoted_at (migrations/
