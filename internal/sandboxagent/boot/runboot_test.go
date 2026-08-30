@@ -146,7 +146,7 @@ func TestRunBoot_MixedManifestAndHookFallback(t *testing.T) {
 	}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
-		nil, nil, reporter.report, noopHookRerunTiming, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil)
+		nil, nil, reporter.report, noopHookRerunTiming, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil, nil)
 	if err != nil {
 		t.Fatalf("RunBoot(, nil) error = %v, want nil", err)
 	}
@@ -172,7 +172,7 @@ func TestRunBoot_AbsentManifestFallsBackToHooks(t *testing.T) {
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
-		nil, nil, noopReporter, noopHookRerunTiming, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil)
+		nil, nil, noopReporter, noopHookRerunTiming, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil, nil)
 	if err != nil {
 		t.Fatalf("RunBoot(, nil) error = %v, want nil", err)
 	}
@@ -203,7 +203,7 @@ func TestRunBoot_MalformedManifestIsAFatalError(t *testing.T) {
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
-		nil, nil, noopReporter, noopHookRerunTiming, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil)
+		nil, nil, noopReporter, noopHookRerunTiming, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil, nil)
 	if err == nil {
 		t.Fatal("RunBoot(, nil) error = nil, want an error for a malformed services.yml")
 	}
@@ -243,10 +243,59 @@ func TestRunBoot_FatalFailureInRepoAStopsBeforeRepoB(t *testing.T) {
 	}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
-		nil, nil, noopReporter, noopHookRerunTiming, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil)
+		nil, nil, noopReporter, noopHookRerunTiming, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond, nil, nil)
 	if err == nil {
 		t.Fatal("RunBoot(, nil) error = nil, want a fatal error (repo-a's primary service crashed)")
 	}
 
 	assertFileAbsent(t, laterMarker)
+}
+
+// TestRunBoot_ChownsBeforeStartingServices pins an ordering that is not
+// cosmetic.
+//
+// services.Run drops each services.yml command to the runtime uid, but
+// every writer before it — gitclone, the setup hooks — runs as
+// sandbox-agent. Without a chown in between, those commands land in a
+// root-owned tree they can read and not write, so an ordinary services.yml
+// entry that writes inside its own checkout (a dev server's build cache,
+// a watcher, a code generator) fails with EACCES. The chown used to run
+// only after the whole boot.
+func TestRunBoot_ChownsBeforeStartingServices(t *testing.T) {
+	dir := t.TempDir()
+	repoDir := filepath.Join(dir, "repo1")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// A .narvi/services.yml makes RunBoot take the services branch. The
+	// service itself exits immediately; this test observes ORDERING, not
+	// readiness.
+	writeServicesManifest(t, repoDir, crashingManifestYAML("web", 1, "secondary"))
+
+	var order []string
+	chown := func(got string) error {
+		if got != repoDir {
+			t.Errorf("chownWorkspace got %q, want the repo dir %q", got, repoDir)
+		}
+		order = append(order, "chown")
+		return nil
+	}
+
+	sup := supervisor.New()
+	t.Cleanup(func() { _ = sup.StopAll(context.Background(), time.Second) })
+
+	_ = boot.RunBoot(context.Background(), sup, dir,
+		[]boot.RepoInfo{{Name: "repo1"}}, sandboxboot.BootModeFresh,
+		map[string]bool{}, map[string]boot.SetupRerunLadder{}, nil,
+		func(e services.BootProgressEvent) { order = append(order, "service:"+string(e.Phase)) },
+		func(_, _, _ string, _, _ bool, _ float64) {},
+		time.Second, time.Second, 2*time.Second, 20*time.Millisecond, time.Millisecond,
+		nil, chown)
+
+	if len(order) == 0 {
+		t.Fatal("neither the chown nor any service phase ran; this test cannot observe the ordering it exists to pin")
+	}
+	if order[0] != "chown" {
+		t.Errorf("first event = %q, want \"chown\": the workspace must be re-owned BEFORE any dropped services.yml command starts, or it cannot write to its own checkout (order = %v)", order[0], order)
+	}
 }

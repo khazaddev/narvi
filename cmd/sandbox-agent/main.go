@@ -1812,10 +1812,16 @@ func run() error {
 	// (TECHNICAL_PLAN.md §30.5): once boot itself succeeded, re-own
 	// cfg.WorkspaceDir to the isolated agent runtime's own uid/gid --
 	// BEFORE anything below marks the sandbox ready to receive a
-	// "prompt" command. Every writer above (gitclone.CloneAll, repo
-	// setup hooks, services.yml, the AGENTS.md/opencode.json writers
-	// folded into runBootSequence) ran as sandbox-agent's own identity,
-	// never the runtime's -- see boot.ChownWorkspaceForRuntime's own doc
+	// "prompt" command. gitclone.CloneAll, the repo setup hooks and the
+	// AGENTS.md/opencode.json writers folded into runBootSequence all ran
+	// as sandbox-agent's own identity, never the runtime's.
+	//
+	// services.yml is the exception, and this comment used to include it
+	// in that list wrongly: those commands ARE dropped to the runtime,
+	// which is why RunBoot re-owns each repo before starting them. This
+	// pass is still needed for everything written after that point, and
+	// is idempotent over what RunBoot already did -- see
+	// boot.ChownWorkspaceForRuntime's own doc
 	// comment for why leaving that unfixed would leave the runtime
 	// locked out of the one surface §30.5 requires stay usable. Guarded
 	// on cfg.SessionConfig != nil: that is exactly the condition under
@@ -2293,7 +2299,18 @@ func runBootSequence(
 	if err := boot.RunBoot(ctx, sup, cfg.WorkspaceDir, repos, cfg.BootMode, workspaceMoved, setupRerunLadder, secretEnv, reportBootProgress, onHookRerunTiming,
 		timeouts.HookTimeout, timeouts.ProcessStopGracePeriod,
 		timeouts.ServiceReadinessTimeout, timeouts.ServiceReadinessPollInterval,
-		timeouts.SetupRerunRetryBackoff, runtimeCredentialFor(cfg)); err != nil {
+		timeouts.SetupRerunRetryBackoff, runtimeCredentialFor(cfg),
+		// Re-own each repo before its own services.yml commands start,
+		// because those are dropped to the runtime uid and every writer
+		// before them ran as this process. Guarded exactly like the
+		// post-boot chown below: with no live session there is no runtime
+		// to re-own anything for.
+		func(repoDir string) error {
+			if cfg.SessionConfig == nil {
+				return nil
+			}
+			return boot.ChownWorkspaceForRuntime(repoDir, cfg.RuntimeUID, cfg.RuntimeGID)
+		}); err != nil {
 		return fmt.Errorf("boot: %w", err)
 	}
 
