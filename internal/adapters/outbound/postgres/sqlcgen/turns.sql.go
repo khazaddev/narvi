@@ -188,6 +188,66 @@ func (q *Queries) GetTurn(ctx context.Context, id pgtype.UUID) (Turn, error) {
 	return i, err
 }
 
+const listSessionCostTotalsWithRepos = `-- name: ListSessionCostTotalsWithRepos :many
+SELECT s.id AS session_id,
+       s.repos AS repos,
+       SUM(t.cost_usd)::numeric(14, 6) AS total_cost_usd
+FROM sessions s
+JOIN turns t ON t.session_id = s.id
+WHERE s.repos != '[]'::jsonb
+GROUP BY s.id
+`
+
+type ListSessionCostTotalsWithReposRow struct {
+	SessionID    pgtype.UUID    `json:"session_id"`
+	Repos        []byte         `json:"repos"`
+	TotalCostUsd pgtype.Numeric `json:"total_cost_usd"`
+}
+
+// The shadow-operator surface's own LLM-spend line (§30.1: "surfaced, not suppressed" --
+// shadow burns real customer provider credit, and the evaluator must see
+// it). Reuses turns.cost_usd (migration 000098), the SAME running total
+// internal/app/sessionactor's own recordStepFinishCost (stepcost.go)
+// already maintains from step_finish.cost.usd -- this is a READ over
+// that existing figure, never a second cost-computation path.
+//
+// SUM ignores a NULL per-turn total, so a session's own total_cost_usd
+// here is NULL only when EVERY one of its turns still has none -- never
+// a fabricated $0 for a session that simply has not reported a figure
+// yet (turns.cost_usd's own migration comment: "NULL, never 0, stays the
+// ONLY representation of 'no cost has arrived yet'" -- this query
+// preserves that discipline rather than collapsing it at the aggregate
+// boundary). The caller (internal/app/shadowoperator) sums these
+// per-session totals with reviewtriage.NumericToFloat64, the SAME
+// pgtype.Numeric-to-float64 conversion httpapi/workflowruns.go's own
+// per-step cost display already uses.
+//
+// Joined with sessions.repos for the SAME Go-side repo resolution
+// ListShadowSuppressedOutboxWithSessionRepos uses (outbox.sql's own doc
+// comment) -- every session with at least one turn and at least one
+// named repository, LIVE or shadow alike: LLM spend is surfaced
+// regardless of egress mode (§30.1), so this performs no
+// suppressed_in_shadow filtering at all, unlike the outbox query above.
+func (q *Queries) ListSessionCostTotalsWithRepos(ctx context.Context) ([]ListSessionCostTotalsWithReposRow, error) {
+	rows, err := q.db.Query(ctx, listSessionCostTotalsWithRepos)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSessionCostTotalsWithReposRow
+	for rows.Next() {
+		var i ListSessionCostTotalsWithReposRow
+		if err := rows.Scan(&i.SessionID, &i.Repos, &i.TotalCostUsd); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTurnsForSession = `-- name: ListTurnsForSession :many
 SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision, dispatched_event_id, cost_usd FROM turns
 WHERE session_id = $1
