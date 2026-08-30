@@ -1,8 +1,10 @@
 package shadowoperator
 
 import (
+	"bytes"
 	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"path/filepath"
 	"testing"
@@ -45,6 +47,23 @@ func TestActivate_IsTheOnlyCallerOfUpsertLiveEgressEnabledInThisPackage(t *testi
 				return true
 			}
 			callSites = append(callSites, path)
+
+			// The DIRECTION, not only the call site. Pinning "one caller,
+			// in activate.go" is not the guarantee this package needs:
+			// what earns its place on demotionsweep's allow-list is that
+			// it only ever PROMOTES. A false here would be a demotion
+			// with no sweep -- the repo's sandboxes keeping write
+			// credentials for the ScmCredentialTTL window -- and it would
+			// pass both the analyzer (the package is allowed) and the
+			// call-site count (still one, still activate.go).
+			if len(call.Args) != 3 {
+				t.Errorf("%s: UpsertLiveEgressEnabled called with %d args, want 3 -- this test reads the third to check the direction, and cannot if the signature moved", path, len(call.Args))
+				return true
+			}
+			lit, ok := call.Args[2].(*ast.Ident)
+			if !ok || lit.Name != "true" {
+				t.Errorf("%s: UpsertLiveEgressEnabled's enabled argument is %s, want the literal true -- this package is on demotionsweep's allow-list ONLY because it promotes and therefore owes no sweep; anything else must pair with repodemotion.Sweep first", path, exprText(fset, call.Args[2]))
+			}
 			return true
 		})
 	}
@@ -52,4 +71,14 @@ func TestActivate_IsTheOnlyCallerOfUpsertLiveEgressEnabledInThisPackage(t *testi
 	if len(callSites) != 1 || callSites[0] != "activate.go" {
 		t.Fatalf("UpsertLiveEgressEnabled called from %v, want exactly one call site: [activate.go]", callSites)
 	}
+}
+
+// exprText renders an expression back to source, so a failure names what
+// was actually written rather than an AST node address.
+func exprText(fset *token.FileSet, e ast.Expr) string {
+	var buf bytes.Buffer
+	if err := printer.Fprint(&buf, fset, e); err != nil {
+		return "<unprintable>"
+	}
+	return buf.String()
 }
