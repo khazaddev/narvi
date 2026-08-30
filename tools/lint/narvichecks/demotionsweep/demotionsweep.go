@@ -34,14 +34,25 @@ import (
 	"golang.org/x/tools/go/analysis"
 )
 
-const doc = `report calls to UpsertLiveEgressEnabled outside the demotion-aware package
+const doc = `report calls to UpsertLiveEgressEnabled outside the demotion-aware packages
 
 Flipping live_egress_enabled true->false must also run the demotion sweep
 (technical plan §30.4): terminate every sandbox of the repo and cancel
 in-flight push signals, because a write credential minted just before the
-flip outlives it by the ScmCredentialTTL window. Only internal/app/seed
-performs that pairing today. A new caller must go through it, or run the
-sweep itself and be added here deliberately.`
+flip outlives it by the ScmCredentialTTL window. internal/app/seed
+performs that pairing for a general upsert that can move in either
+direction. internal/app/shadowoperator is also allowed: it backs Step
+104's own "Activate" graduation gesture, which is a PROMOTION only
+(false->true) -- its own doc comment states plainly that promotion "is
+the safe direction on the sandbox side," since a shadow repo's sandboxes
+have never held more than read-only, so it owes no sweep. That package's
+own Activate function carries no boolean argument at all, so nothing in
+it can call this method with false -- the promotion-only property is a
+fact about its type, not a convention this analyzer merely trusts. A
+THIRD new caller must go through one of these two, or run the sweep
+itself and be added here deliberately -- this analyzer bans the call by
+NAME, not by which direction a given caller happens to use it in, so
+widening this list is exactly the deliberate act it exists to force.`
 
 // Analyzer reports any call selecting UpsertLiveEgressEnabled from a file
 // outside the packages allowed to make it.
@@ -55,12 +66,19 @@ var Analyzer = &analysis.Analyzer{
 const flipMethod = "UpsertLiveEgressEnabled"
 
 // allowedDirs are the packages permitted to call flipMethod: the postgres
-// store that DEFINES it, and internal/app/seed, the one caller that pairs
-// it with repodemotion.Sweep. Extending this list is the deliberate act
-// this analyzer exists to force -- pair the call with a sweep first.
+// store that DEFINES it; internal/app/seed, which pairs a true->false
+// transition with repodemotion.Sweep; and internal/app/shadowoperator,
+// whose own Activate is a promotion-only (false->true) caller that owes
+// no sweep at all (§30.4: promotion "is the safe direction on the
+// sandbox side") -- see this file's own doc comment for the full
+// reasoning on why that third entry is safe to add. Extending this list
+// further is the deliberate act this analyzer exists to force -- pair a
+// new caller with a sweep first, or prove (and say, right here) why it
+// does not need one.
 var allowedDirs = []string{
 	"/internal/adapters/outbound/postgres/",
 	"/internal/app/seed/",
+	"/internal/app/shadowoperator/",
 }
 
 func run(pass *analysis.Pass) (any, error) {
