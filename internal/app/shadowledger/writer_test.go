@@ -76,6 +76,78 @@ func TestRecord_ScmCredentialMintRefused(t *testing.T) {
 	}
 }
 
+// TestRecord_UpdateFileContentSplitsHeavyContent pins migrations/
+// 000110_shadow_scm_writes_heavy_content.up.sql's own contract: a
+// customer file's own content reaches heavy_content, and ONLY there --
+// spec_json must carry every other UpdateFileContent field but never the
+// content itself, so a future retention null-out of that one column
+// removes the content and nothing else.
+func TestRecord_UpdateFileContentSplitsHeavyContent(t *testing.T) {
+	const content = "package main\n\nfunc secretSauce() {}\n"
+	store := &fakeStore{}
+	err := Record(context.Background(), store, Entry{
+		Operation:    "update_file_content",
+		RepoFullName: "acme/widgets",
+		Target:       "main.go",
+		Spec: UpdateFileContent{
+			Owner:   "acme",
+			Repo:    "widgets",
+			Path:    "main.go",
+			Content: content,
+			SHA:     "deadbeef",
+			Branch:  "feature/x",
+			Message: "update main.go",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Record() error = %v, want nil", err)
+	}
+	if len(store.rows) != 1 {
+		t.Fatalf("store recorded %d rows, want 1", len(store.rows))
+	}
+	row := store.rows[0]
+
+	if row.HeavyContent == nil || *row.HeavyContent != content {
+		t.Fatalf("row.HeavyContent = %v, want %q", row.HeavyContent, content)
+	}
+	if strings.Contains(string(row.SpecJson), "secretSauce") {
+		t.Errorf("row.SpecJson = %s, must never carry the file content -- it belongs in heavy_content alone", row.SpecJson)
+	}
+
+	var decoded UpdateFileContent
+	if err := json.Unmarshal(row.SpecJson, &decoded); err != nil {
+		t.Fatalf("unmarshal row.SpecJson: %v", err)
+	}
+	if decoded.Content != "" {
+		t.Errorf("decoded.Content = %q, want empty -- the spec_json copy must be blanked", decoded.Content)
+	}
+	if decoded.Path != "main.go" || decoded.SHA != "deadbeef" || decoded.Branch != "feature/x" {
+		t.Errorf("decoded spec = %+v, every non-content field must still round-trip through spec_json", decoded)
+	}
+}
+
+// TestRecord_NonFileContentSpecsCarryNoHeavyContent proves the split is
+// scoped to UpdateFileContent alone: every other spec type's row leaves
+// heavy_content NULL, never an empty string standing in for "no content".
+func TestRecord_NonFileContentSpecsCarryNoHeavyContent(t *testing.T) {
+	store := &fakeStore{}
+	err := Record(context.Background(), store, Entry{
+		Operation:    "create_branch",
+		RepoFullName: "acme/widgets",
+		Target:       "feature/x",
+		Spec:         CreateBranch{Owner: "acme", Repo: "widgets", Branch: "feature/x", SHA: "deadbeef"},
+	})
+	if err != nil {
+		t.Fatalf("Record() error = %v, want nil", err)
+	}
+	if len(store.rows) != 1 {
+		t.Fatalf("store recorded %d rows, want 1", len(store.rows))
+	}
+	if got := store.rows[0].HeavyContent; got != nil {
+		t.Errorf("row.HeavyContent = %v, want nil for a non-UpdateFileContent spec", *got)
+	}
+}
+
 // TestRecord_FailsLoudlyWhenTheStoreCannotWrite is the record-or-fail
 // property itself (this package's own top doc comment): a suppression
 // (or, here, a refusal) that cannot be recorded must surface as an error,

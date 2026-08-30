@@ -84,7 +84,9 @@ func Record(ctx context.Context, store Store, e Entry) error {
 		return fmt.Errorf("shadowledger: refusing to record a suppressed %s with no repository", e.Operation)
 	}
 
-	specJSON, err := json.Marshal(e.Spec)
+	specForJSON, heavyContent := splitHeavyContent(e.Spec)
+
+	specJSON, err := json.Marshal(specForJSON)
 	if err != nil {
 		return fmt.Errorf("shadowledger: marshal %s spec: %w", e.Operation, err)
 	}
@@ -105,10 +107,42 @@ func Record(ctx context.Context, store Store, e Entry) error {
 		ResultJson:    resultJSON,
 		SessionID:     e.SessionID,
 		CorrelationID: optionalText(e.CorrelationID),
+		HeavyContent:  heavyContent,
 	}); err != nil {
 		return fmt.Errorf("shadowledger: record suppressed %s: %w", e.Operation, err)
 	}
 	return nil
+}
+
+// splitHeavyContent implements the schema-time move migrations/
+// 000110_shadow_scm_writes_heavy_content.up.sql exists for: a customer
+// repository's own file content -- carried whole on UpdateFileContent,
+// per that type's own doc comment -- lives in its OWN column, never
+// duplicated into spec_json, so a later retention null-out (§30.9, still
+// open) touches exactly one column and leaves every other fact an
+// operator's ledger summary reads (operation, repo, target, timestamps)
+// completely alone.
+//
+// This is the ONE place that performs the split -- Record's own single
+// choke point, mirroring OutboxStore.Create's own "one column, one
+// choke point" precedent (§30.6) -- so every caller of Record still
+// constructs an ordinary, complete UpdateFileContent{Content: "..."} the
+// same way ports.UpdateFileContentSpec's own real write does; nothing
+// upstream of this function needs to know the column split exists.
+//
+// Returns the spec to marshal into spec_json (an UpdateFileContent has
+// its own Content field zeroed, so the two never carry the same bytes
+// twice) and the heavy_content column value -- nil for every operation
+// that isn't UpdateFileContent, which is the correct "not applicable"
+// value, not an empty string standing in for "no content".
+func splitHeavyContent(spec Spec) (forJSON Spec, heavyContent *string) {
+	ufc, ok := spec.(UpdateFileContent)
+	if !ok {
+		return spec, nil
+	}
+	content := ufc.Content
+	ufc.Content = ""
+	return ufc, &content
 }
 
 // optionalText maps an empty string to a genuine SQL NULL rather than to
