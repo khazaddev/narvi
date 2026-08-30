@@ -283,6 +283,13 @@ func TestHandleSnapshot_PurgesCredentialCacheBeforeMint(t *testing.T) {
 	fcp.mintSnapshotID = "snap-purge-abc"
 
 	cacheDir := t.TempDir()
+	// 0700, matching what MkdirAll gives the real cache dir: Cache
+	// refuses to write into a directory group or others can enter, since
+	// under a world-writable parent another uid owning that directory can
+	// redirect this process's own O_CREATE with a symlink.
+	if err := os.Chmod(cacheDir, 0o700); err != nil {
+		t.Fatalf("chmod cache dir: %v", err)
+	}
 	cache := &credentials.Cache{Dir: cacheDir}
 	if err := cache.Store("github.com", credentials.Credential{Username: "x-access-token", Password: "leftover-write-token"}); err != nil {
 		t.Fatalf("seed credential cache: %v", err)
@@ -304,8 +311,17 @@ func TestHandleSnapshot_PurgesCredentialCacheBeforeMint(t *testing.T) {
 	// real mint from proceeding.
 	waitForFrameType(t, fcp, "snapshot_ready", snapshotTestWait)
 
-	if _, err := os.Stat(cacheDir); !os.IsNotExist(err) {
-		t.Fatalf("credential cache dir %s still exists after HandleSnapshot (stat err=%v), want it purged (PurgeAll removes the whole dir)", cacheDir, err)
+	// The guarantee is that no credential survives into the snapshot, not
+	// that the directory is gone. PurgeAll empties it and leaves it in
+	// place on purpose: removing it would unclaim its name under a
+	// world-writable parent, letting another uid create it and redirect a
+	// later root write with a symlink.
+	entries, readErr := os.ReadDir(cacheDir)
+	if readErr != nil {
+		t.Fatalf("credential cache dir %s does not survive HandleSnapshot: %v", cacheDir, readErr)
+	}
+	if len(entries) != 0 {
+		t.Errorf("credential cache dir holds %d entries after HandleSnapshot, want 0 -- nothing may be captured in the snapshot", len(entries))
 	}
 }
 
@@ -327,13 +343,25 @@ func TestHandleSnapshot_PurgeFailure_AbortsWithoutMinting(t *testing.T) {
 	if err := os.Mkdir(cacheDir, 0o700); err != nil {
 		t.Fatalf("Mkdir(cacheDir): %v", err)
 	}
-	if err := os.Chmod(parentDir, 0o500); err != nil {
-		t.Fatalf("Chmod(parentDir, 0o500): %v", err)
+	// Seed an entry and make the cache dir itself unwritable, so removing
+	// that entry fails.
+	//
+	// The injection used to be a read-only PARENT, which worked when
+	// PurgeAll removed the directory itself. It no longer does: PurgeAll
+	// now empties the directory and leaves it in place, deliberately, so
+	// its name is never unclaimed under a world-writable /tmp where
+	// another uid could claim it. A read-only parent no longer blocks
+	// anything, so the failure has to be injected where the work now
+	// happens.
+	if err := os.WriteFile(filepath.Join(cacheDir, "leftover.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatalf("seed a cache entry: %v", err)
 	}
-	// Restore write permission before t.TempDir()'s own cleanup tries to
-	// remove parentDir, or that cleanup itself would fail for the exact
-	// same reason this test forces PurgeAll to fail.
-	t.Cleanup(func() { _ = os.Chmod(parentDir, 0o700) })
+	if err := os.Chmod(cacheDir, 0o500); err != nil {
+		t.Fatalf("Chmod(cacheDir, 0o500): %v", err)
+	}
+	// Restore write permission before t.TempDir()'s own cleanup runs, or
+	// that cleanup fails for the same reason this test forces on PurgeAll.
+	t.Cleanup(func() { _ = os.Chmod(cacheDir, 0o700) })
 
 	ctx, cancel := context.WithTimeout(context.Background(), snapshotTestWait)
 	t.Cleanup(cancel)

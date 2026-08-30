@@ -91,8 +91,16 @@ func (c *Cache) assertDirIsOurs() error {
 	if uint64(stat.Uid) != uint64(os.Getuid()) {
 		return fmt.Errorf("credentials: cache dir %s is owned by uid %d, not this process (uid %d); refusing to cache a credential in a directory another user controls", c.Dir, stat.Uid, os.Getuid())
 	}
-	if perm := info.Mode().Perm(); perm&0o077 != 0 {
-		return fmt.Errorf("credentials: cache dir %s has mode %#o; refusing to cache a credential in a directory group or others can enter", c.Dir, perm)
+	// The WRITE bits, not every bit. Group- or other-writable is the hole:
+	// it lets another uid create, replace or symlink an entry, which is
+	// how a 0600 root-owned file still ends up written wherever an
+	// attacker chose. Group- or other-READABLE is not the same problem --
+	// the entries themselves are 0600, and the filenames are a hash of
+	// the host, so a listing reveals nothing. Rejecting readability too
+	// would have cost strictness nowhere and broken every caller whose
+	// directory came from a 0755 parent.
+	if perm := info.Mode().Perm(); perm&0o022 != 0 {
+		return fmt.Errorf("credentials: cache dir %s has mode %#o; refusing to cache a credential in a directory group or others can write to, since another uid can then redirect this write with a symlink", c.Dir, perm)
 	}
 	return nil
 }

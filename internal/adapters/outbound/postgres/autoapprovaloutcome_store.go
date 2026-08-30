@@ -27,12 +27,16 @@ func NewAutoApprovalOutcomeStore(pool *pgxpool.Pool) *AutoApprovalOutcomeStore {
 // Record idempotently records outcome for (repoFullName, prNumber,
 // headSHA) -- see RecordAutoApprovalOutcome's own generated doc comment
 // for the "first recorded outcome wins, never overwritten" precedent.
-func (s *AutoApprovalOutcomeStore) Record(ctx context.Context, repoFullName string, prNumber int32, headSHA, outcome string) error {
+// suppressedInShadow marks an outcome observed while this repository's
+// egress was suppressed. It is still RECORDED -- the operator ledger
+// shows it -- and excluded from the contradiction rate, per §30.7.
+func (s *AutoApprovalOutcomeStore) Record(ctx context.Context, repoFullName string, prNumber int32, headSHA, outcome string, suppressedInShadow bool) error {
 	return s.q.RecordAutoApprovalOutcome(ctx, sqlcgen.RecordAutoApprovalOutcomeParams{
-		RepoFullName: repoFullName,
-		PrNumber:     prNumber,
-		HeadSha:      headSHA,
-		Outcome:      outcome,
+		RepoFullName:       repoFullName,
+		PrNumber:           prNumber,
+		HeadSha:            headSHA,
+		Outcome:            outcome,
+		SuppressedInShadow: suppressedInShadow,
 	})
 }
 
