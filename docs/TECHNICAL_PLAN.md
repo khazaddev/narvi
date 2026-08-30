@@ -3792,12 +3792,27 @@ rather than being silently defaulted; none is resolved by this section:
 - **RWX preview in shadow**: the public dispatch is suppressed either way (§30.1 — a public
   preview URL is a trace); the open choice is whether an internal, non-public rendering ships as
   an evaluator feature (a new product surface) or previews are simply absent in shadow.
-- **Ledger retention/PII** (customer code at rest): retention window and null-out policy — the
-  schema-time enabling move is taken (§30.6), the policy is not, and nothing gates Step 104's ship
-  on it. The **visibility threshold** (admin-only vs maintainer+) is the one part of this bullet
-  that does gate a Step: it must be chosen before Step 104 ships its role-gated ledger view (same
-  pattern as the chat-trigger and mirror decisions above); admin-only is the default absent that
-  choice (§30.6, §16.1's dead-lettered-outbox-deliveries precedent).
+- **Ledger retention/PII** (customer code at rest): retention window and null-out policy remain
+  OPEN — the schema-time enabling move is taken (§30.6), the policy is not, and nothing gates
+  Step 104's ship on it.
+
+  The **visibility threshold** was the part that did gate a Step, and it is **RESOLVED:
+  admin-only** — not by falling back to the default, but for a reason worth stating, because it
+  also constrains when the threshold may later be widened.
+
+  This ledger is the only surface in the product that holds **customer source code at rest, in
+  full**. That is deliberate: `shadowledger.UpdateFileContent` carries `Content` whole rather
+  than a length or a hash, because "what would this have written into my repository" is the
+  evaluator's entire question and a digest does not answer it. The consequence is that a
+  `shadow_scm_writes` row can contain more of a customer's private source than any other screen
+  Narvi exposes — beyond even the Settings → Members audit-log row, which is already admin-only
+  (§16.1's dead-lettered-outbox-deliveries precedent).
+
+  And by the bullet immediately above, that corpus has **no retention window and no null-out
+  policy yet**. Widening read access to a body of customer code whose lifetime nobody has
+  decided is the wrong order of operations: decide how long it lives before deciding who may
+  read it. So admin-only is the answer now, and **the retention decision is the gate on
+  revisiting it** — maintainer+ becomes arguable once retention exists, and not before.
 - **Downstream-chain synthesis vs single-hop validation — RESOLVED: single-hop, documented.**
 
   Synthesizing a `github_pr_session` from the suppressed `CreatePR` record would exercise
