@@ -147,6 +147,17 @@ export const repoSettingsQueryKeys = {
   detail: (repoFullName: string) => ['repo-settings', repoFullName] as const,
 }
 
+// shadowLedgerQueryKeys -- the shadow-operator surface's own read model
+// (§30.6), a SEPARATE admin-only endpoint from repoSettingsQueryKeys
+// above (GET .../shadow-ledger, not GET .../settings) -- kept as its own
+// cache entry rather than folded into repoSettingsQueryKeys' single key,
+// since activating (POST .../shadow-ledger/activate) changes
+// repo_settings.live_egress_enabled too and both views need to
+// invalidate independently of each other's own unrelated fields.
+export const shadowLedgerQueryKeys = {
+  detail: (repoFullName: string) => ['shadow-ledger', repoFullName] as const,
+}
+
 export const sandboxSecretQueryKeys = {
   list: (scope: Parameters<typeof scopeKeyParts>[0]) => ['sandbox-secrets', ...scopeKeyParts(scope)] as const,
 }

@@ -689,6 +689,27 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Get("/", httpapi.GetPreviewConfig(rig.repoSettings, rig.prSessions))
 		r.Put("/", httpapi.PutPreviewConfig(rig.repoSettings, rig.prSessions))
 	})
+	// /api/repos/{owner}/{repo}/shadow-ledger[/activate] (§30.6/§30.8/
+	// §30.9) -- mounted behind auth.Middleware, exactly like cmd/
+	// control-plane/main.go's own wiring (see shadowledger.go's own doc
+	// comment). A FRESH *narvipg.ShadowSCMWriteStore over rig.pool, not a
+	// type assertion on rig.shadowLedger -- that field is typed as the
+	// narrow shadowledger.Store interface elsewhere in this rig
+	// specifically so scmcredentials_integration_test.go's own shadow-mint
+	// failure tests can swap in a fake that always errors; asserting it
+	// back to the concrete type here would panic the moment ANY test in
+	// this package builds a rig with that fake installed, whether or not
+	// that test ever touches these routes. Mirrors reviewfindings_
+	// integration_test.go/scmcredentials_integration_test.go's own
+	// identical "construct a fresh reader over rig.pool" precedent for
+	// reaching ListForRepo, which the interface does not expose.
+	router.Route("/api/repos/{owner}/{repo}/shadow-ledger", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		shadowLedgerStore := narvipg.NewShadowSCMWriteStore(rig.pool)
+		shadowOperatorReads := narvipg.NewShadowOperatorReadStore(rig.pool)
+		r.Get("/", httpapi.GetShadowLedger(shadowLedgerStore, shadowOperatorReads, rig.repoSettings, rig.prSessions))
+		r.Post("/activate", httpapi.PostActivateShadowLedger(shadowLedgerStore, shadowOperatorReads, rig.repoSettings, rig.auditLog, rig.prSessions))
+	})
 	// /api/integrations (§12.5 amendment) -- mounted behind
 	// auth.Middleware, exactly like cmd/control-plane/main.go's own
 	// wiring (see integrations.go's own doc comment).

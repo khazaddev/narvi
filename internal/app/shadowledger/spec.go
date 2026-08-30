@@ -72,7 +72,15 @@ type CreatePR struct {
 //
 // Content is carried in full rather than summarised: the operator's whole
 // question in shadow is "what would this have written into my repository",
-// and a length or a hash does not answer it.
+// and a length or a hash does not answer it. writer.go's own Record is
+// the ONLY place that ever reads this field directly -- it moves the
+// value into shadow_scm_writes.heavy_content (migrations/
+// 000110_shadow_scm_writes_heavy_content.up.sql) and zeroes it before
+// this struct is marshalled into spec_json, so the content exists in
+// exactly one column, not two, and a later retention null-out (§30.9,
+// still open) never has to touch this JSON blob at all. Every caller
+// still constructs this field normally (the split is invisible upstream
+// of Record) -- see splitHeavyContent's own doc comment.
 type UpdateFileContent struct {
 	Owner   string `json:"owner"`
 	Repo    string `json:"repo"`

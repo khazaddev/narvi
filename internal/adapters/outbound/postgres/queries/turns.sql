@@ -207,3 +207,36 @@ SET cost_usd = COALESCE(turns.cost_usd, 0) + claimed.cost_usd
 FROM claimed
 WHERE turns.id = claimed.turn_id;
 
+
+-- name: ListSessionCostTotalsWithRepos :many
+-- The shadow-operator surface's own LLM-spend line (§30.1: "surfaced, not suppressed" --
+-- shadow burns real customer provider credit, and the evaluator must see
+-- it). Reuses turns.cost_usd (migration 000098), the SAME running total
+-- internal/app/sessionactor's own recordStepFinishCost (stepcost.go)
+-- already maintains from step_finish.cost.usd -- this is a READ over
+-- that existing figure, never a second cost-computation path.
+--
+-- SUM ignores a NULL per-turn total, so a session's own total_cost_usd
+-- here is NULL only when EVERY one of its turns still has none -- never
+-- a fabricated $0 for a session that simply has not reported a figure
+-- yet (turns.cost_usd's own migration comment: "NULL, never 0, stays the
+-- ONLY representation of 'no cost has arrived yet'" -- this query
+-- preserves that discipline rather than collapsing it at the aggregate
+-- boundary). The caller (internal/app/shadowoperator) sums these
+-- per-session totals with reviewtriage.NumericToFloat64, the SAME
+-- pgtype.Numeric-to-float64 conversion httpapi/workflowruns.go's own
+-- per-step cost display already uses.
+--
+-- Joined with sessions.repos for the SAME Go-side repo resolution
+-- ListShadowSuppressedOutboxWithSessionRepos uses (outbox.sql's own doc
+-- comment) -- every session with at least one turn and at least one
+-- named repository, LIVE or shadow alike: LLM spend is surfaced
+-- regardless of egress mode (§30.1), so this performs no
+-- suppressed_in_shadow filtering at all, unlike the outbox query above.
+SELECT s.id AS session_id,
+       s.repos AS repos,
+       SUM(t.cost_usd)::numeric(14, 6) AS total_cost_usd
+FROM sessions s
+JOIN turns t ON t.session_id = s.id
+WHERE s.repos != '[]'::jsonb
+GROUP BY s.id;

@@ -1,0 +1,35 @@
+-- §30.6/§30.9's own "the cheap enabling move ... is taken at schema
+-- time": shadow_scm_writes.spec_json (migrations/000102) carries every
+-- suppressed write's full intention, and for exactly one operation --
+-- UpdateFileContent -- that intention includes a customer repository's
+-- own file content, carried WHOLE rather than a length or a hash
+-- (spec.go's own doc comment: "a digest does not answer [the
+-- evaluator's] question"). Retention/PII policy for that corpus is a
+-- DEFERRED decision (§30.9, still open) -- but whatever that policy
+-- turns out to be, it will need to null out file content independently
+-- of the row's own metadata (operation, repo_full_name, target,
+-- timestamps: the facts an operator's ledger summary reads even after
+-- the content itself is gone). A row whose only home for that content is
+-- a field buried inside spec_json's own JSONB blob cannot support that
+-- without rewriting the row -- and jsonb_set-ing one key out of an
+-- unknown-shape blob, per retention sweep, per row, is exactly the kind
+-- of per-call-site discipline this plan's own §30 bar rejects (doc.go:
+-- "a guarantee must be structural").
+--
+-- So: a SEPARATE column, written and read only by the one operation that
+-- ever carries this kind of payload. NULL for every other operation
+-- (create_pr, create_branch, merge_pr, the Slack/Linear specs, the
+-- transport gate's own Body, ...) -- none of them are a repository's own
+-- file content, and none of them move here now or later; widening this
+-- column's scope to a second operation is a separate decision this
+-- migration does not make. A future null-out, whenever §30.9 resolves
+-- retention, is then a single-column UPDATE ... SET heavy_content = NULL
+-- WHERE ..., leaving spec_json (and every other column an operator's
+-- ledger summary reads) completely untouched.
+--
+-- internal/app/shadowledger's own Record (writer.go) is the single
+-- choke point that performs the split: an UpdateFileContent spec's own
+-- Content field is extracted into this column and blanked out of the
+-- JSON that reaches spec_json, so the content is never duplicated in two
+-- places -- one column to null out, not two to keep in sync.
+ALTER TABLE shadow_scm_writes ADD COLUMN heavy_content TEXT;

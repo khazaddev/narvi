@@ -81,6 +81,7 @@ import type {
   RotateCloudIdentitySigningKeyResponse,
   SandboxSecret,
   Session,
+  ShadowLedgerSummary,
   UpdateAutoApprovalSettingsRequest,
   UpdateAutoMergeToggleRequest,
   UpdateAutoRetriggerReviewToggleRequest,
@@ -465,6 +466,16 @@ export function putReviewDepthConfig(owner: string, repo: string, body: UpdateRe
 /** putReviewCostBudget calls PUT /api/repos/:owner/:repo/review-cost-budget -- reviewCostBudgetLightUsd + reviewCostBudgetDeepUsd (§26.7). Admin-only server-side (authz.ActionConfigureReviewCostBudget). Zero/negative values are rejected 400 server-side (they would collide with the "unconfigured" sentinel and silently mean unlimited spend) -- callers validate this client-side too (repoSettingsFormat.ts's own parseOptionalPositiveUsd) so the refusal is never the caller's first hint. */
 export function putReviewCostBudget(owner: string, repo: string, body: UpdateReviewCostBudgetRequest, signal?: AbortSignal): Promise<RepoSettings> {
   return request<RepoSettings>(repoSettingsPath(owner, repo, 'review-cost-budget'), { method: 'PUT', body, signal })
+}
+
+/** getShadowLedger calls GET /api/repos/:owner/:repo/shadow-ledger -- the shadow-operator surface's own read model (§30.6): suppressed writes grouped by category, the §30.1 LLM-spend line, and this repository's own current egress-mode state. ADMIN-ONLY server-side (authz.ActionViewShadowLedger) -- a non-admin gets 403, never a filtered/redacted body, since this ledger can hold a customer repository's own file content at rest. */
+export function getShadowLedger(owner: string, repo: string, signal?: AbortSignal): Promise<ShadowLedgerSummary> {
+  return request<ShadowLedgerSummary>(repoSettingsPath(owner, repo, 'shadow-ledger'), { signal })
+}
+
+/** postActivateShadowLedger calls POST /api/repos/:owner/:repo/shadow-ledger/activate -- the graduation gesture that flips this repository's own live_egress_enabled from shadow to live (§30.8). Admin-only server-side (authz.ActionActivateShadowLedger); a 409 ApiError means unhandled shadow-era rows still remain for this repository (§30.8's own quarantine) -- the caller's own message names the count. Returns the freshly-rebuilt ShadowLedgerSummary on success, so the caller never needs a follow-up GET. */
+export function postActivateShadowLedger(owner: string, repo: string, signal?: AbortSignal): Promise<ShadowLedgerSummary> {
+  return request<ShadowLedgerSummary>(repoSettingsPath(owner, repo, 'shadow-ledger/activate'), { method: 'POST', signal })
 }
 
 // -- secrets scope resolution (§27.1/§25.1, §12.2 item 5). --

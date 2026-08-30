@@ -49,10 +49,11 @@ import (
 //
 // # LiveEgressEnabled (§30.4/§30.8) demotion also runs from here
 //
-// This is, today, the ONLY writer of repo_settings.live_egress_enabled
-// (migrations/000101_repo_settings_live_egress_enabled.up.sql's own doc
-// comment: "no REST route calls this yet"), so it is also the one place
-// a genuine live->shadow TRANSITION can be detected and acted on: a
+// This is the only writer that can DEMOTE repo_settings.live_egress_enabled
+// (a REST route now promotes -- internal/app/shadowoperator.Activate, on
+// the operator surface -- but promotion only, and the demotionsweep
+// analyzer enforces that split). It is therefore still the one place a
+// genuine live->shadow TRANSITION can be detected and acted on: a
 // write credential minted just before such a flip stays served for up to
 // ScmCredentialTTL (§30.4), so demotion must terminate every live
 // sandbox of the repo and cancel any in-flight push signal

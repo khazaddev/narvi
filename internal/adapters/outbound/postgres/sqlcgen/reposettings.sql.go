@@ -449,7 +449,10 @@ type UpsertLiveEgressEnabledParams struct {
 // repo_settings column is left COMPLETELY untouched, so a concurrent
 // write to any of them can never race with this one at the database
 // level. Written ONLY by the seed tool in v1 (internal/app/seed/
-// reposettings.go) -- no REST route calls this yet; see that file's own
+// reposettings.go) for a DEMOTION, and by internal/app/shadowoperator.
+// Activate (a REST route, admin-only) for a PROMOTION -- the split the
+// demotionsweep analyzer enforces, because only a demotion owes a
+// sandbox-termination sweep. See that file's own
 // doc comment for why, and for how this write is journaled to audit_log.
 //
 // live_egress_promoted_at (migrations/
@@ -821,7 +824,7 @@ type UpsertSessionsEnabledParams struct {
 // independently-gated-toggle pattern): every other repo_settings column is left
 // COMPLETELY untouched, so a concurrent write to any of them can never
 // race with this one at the database level. Written ONLY by the seed
-// tool in v1 (§32: "seed-manifest-only") -- no REST route calls this yet.
+// tool in v1 (§32: "seed-manifest-only").
 func (q *Queries) UpsertSessionsEnabled(ctx context.Context, arg UpsertSessionsEnabledParams) (RepoSetting, error) {
 	row := q.db.QueryRow(ctx, upsertSessionsEnabled, arg.RepoFullName, arg.SessionsEnabled)
 	var i RepoSetting

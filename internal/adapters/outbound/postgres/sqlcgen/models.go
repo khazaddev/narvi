@@ -2133,6 +2133,7 @@ type ShadowScmWrite struct {
 	SessionID     pgtype.UUID        `json:"session_id"`
 	CorrelationID *string            `json:"correlation_id"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	HeavyContent  *string            `json:"heavy_content"`
 }
 
 type SlackThreadSession struct {

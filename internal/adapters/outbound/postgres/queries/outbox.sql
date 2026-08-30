@@ -253,3 +253,76 @@ SELECT * FROM outbox
 WHERE kind LIKE sqlc.arg('kind_prefix')::text || '%'
 ORDER BY created_at DESC
 LIMIT 1;
+
+-- name: ListShadowSuppressedOutboxWithSessionRepos :many
+-- The shadow-operator surface's own UNION read model (§30.6: "the read is a UNION over
+-- marked outbox rows + shadow_scm_writes"). Every row this deployment
+-- ever stamped suppressed_in_shadow=true at enqueue (migrations/
+-- 000103_outbox_shadow_epoch.up.sql), joined with its owning session's
+-- own raw repos JSONB column -- mirrors ListLiveSandboxesWithSessionRepos'
+-- own identical "join sessions for the JSONB, resolve owner/repo in Go"
+-- shape (sandboxes.sql), the repo-demotion sweep's established
+-- convention for this exact problem: there is no reliable SQL-side way
+-- to compare a session's own repo clone URL against a bare "owner/repo"
+-- string (reposource.ParseOwnerRepo's own host-agnostic path parsing has
+-- no SQL equivalent here).
+--
+-- Both an in-flight row (status='pending' -- §30.8's own "unhandled
+-- shadow-era row" internal/app/shadowoperator's own Activate refuses
+-- promotion on) and a ledger-terminal one (status='delivered',
+-- delivered_to_ledger=true -- the actual ledger entry) are returned
+-- undifferentiated; the caller buckets by (status, delivered_to_ledger)
+-- rather than this query encoding two separate reads over what is, at
+-- the row level, one repo-scoped concern. A repo-less row (session_id
+-- NULL -- a digest, a release manifest) is excluded by the INNER JOIN
+-- itself: a suppressed effect with no identifiable repo cannot be shown
+-- on, or gate, a repo-scoped surface.
+--
+-- Newest first, LIMIT $1 -- like CountSuppressedRepos' own doc comment
+-- above, a floor for a deployment large enough to ever reach it, which a
+-- dedicated shadow-evaluation deployment (§30.8) is not expected to be.
+SELECT o.id AS id,
+       o.session_id AS session_id,
+       o.kind AS kind,
+       o.status AS status,
+       o.delivered_to_ledger AS delivered_to_ledger,
+       o.created_at AS created_at,
+       s.repos AS repos
+FROM outbox o
+JOIN sessions s ON s.id = o.session_id
+WHERE o.suppressed_in_shadow = true
+ORDER BY o.created_at DESC
+LIMIT $1;
+
+-- name: ListShadowSuppressedOutboxUnsettled :many
+-- Every shadow-stamped outbox row that has NOT settled -- the set §30.8's
+-- promotion quarantine actually asks about, and deliberately WITHOUT a
+-- limit.
+--
+-- Its sibling above carries one for display, and that limit is applied
+-- across the whole deployment BEFORE the caller filters to a repository
+-- in Go (repo matching needs each session's repos JSONB parsed into
+-- owner/repo, which SQL here cannot do). For a display list that only
+-- truncates what is shown. For the Activate gate it would fail OPEN: a
+-- repository's own unsettled row, older than the newest N rows anywhere
+-- in the deployment, becomes invisible and promotion proceeds as if
+-- nothing were outstanding.
+--
+-- Unbounded is safe here precisely because of what this selects. A
+-- settled row -- delivered, whatever it was delivered to, or dead-lettered
+-- -- is excluded, so this returns only work still genuinely in flight
+-- plus anything that failed permanently. On a healthy deployment that is
+-- a handful of rows; on an unhealthy one, the count is the thing the
+-- operator needs to see in full.
+SELECT o.id AS id,
+       o.session_id AS session_id,
+       o.kind AS kind,
+       o.status AS status,
+       o.delivered_to_ledger AS delivered_to_ledger,
+       o.created_at AS created_at,
+       s.repos AS repos
+FROM outbox o
+JOIN sessions s ON s.id = o.session_id
+WHERE o.suppressed_in_shadow = true
+  AND o.status <> 'delivered'
+ORDER BY o.created_at DESC;
