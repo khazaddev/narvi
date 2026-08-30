@@ -286,6 +286,13 @@ func serve() error {
 	// Individual call deadlines still come from each caller's own context
 	// (platform.Timeouts.PRCreateTimeout), not a package-level Timeout.
 	shadowLedger := postgres.NewShadowSCMWriteStore(pool)
+	// shadowOperatorReads backs the shadow-operator surface's own read model
+	// (§30.6's own "UNION over marked outbox rows + shadow_scm_writes") --
+	// a pure reader, never a writer: outboxworker's own Builder keeps
+	// writing suppressed_in_shadow/delivered_to_ledger through OutboxStore
+	// exactly as before, this store only ever reads what that already
+	// wrote.
+	shadowOperatorReads := postgres.NewShadowOperatorReadStore(pool)
 	repoSettingsForEgress := postgres.NewRepoSettingsStore(pool)
 	isLiveEgress := func(ctx context.Context, repoFullName string) bool {
 		return egressmode.Resolve(ctx, egressmode.Deps{
@@ -1659,6 +1666,22 @@ func serve() error {
 		r.Use(auth.Middleware(userSessionStore, userStore))
 		r.Get("/", httpapi.GetPreviewConfig(repoSettingsStore, githubPRSessionStore))
 		r.Put("/", httpapi.PutPreviewConfig(repoSettingsStore, githubPRSessionStore))
+	})
+
+	// /api/repos/{owner}/{repo}/shadow-ledger[/activate] (§30.6/§30.8/§30.9):
+	// the shadow-operator surface's own read model
+	// (GET) and graduation gesture (POST .../activate) -- see
+	// httpapi/shadowledger.go's own doc comment. Gated by the NEW
+	// admin-only authz.ActionViewShadowLedger/ActionActivateShadowLedger,
+	// deliberately carrying no §13.3 table row (that action's own doc
+	// comment explains why). shadowOperatorReads/shadowLedger are the SAME
+	// stores githubapi's own shadow transport gate and port decorator are
+	// already wired with above -- this surface only ever READS what they
+	// already write, never a second writer.
+	router.Route("/api/repos/{owner}/{repo}/shadow-ledger", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Get("/", httpapi.GetShadowLedger(shadowLedger, shadowOperatorReads, repoSettingsStore, githubPRSessionStore))
+		r.Post("/activate", httpapi.PostActivateShadowLedger(shadowLedger, shadowOperatorReads, repoSettingsStore, auditLogStore, githubPRSessionStore))
 	})
 
 	// /api/repos/{owner}/{repo}/false-positive-patterns ("review:

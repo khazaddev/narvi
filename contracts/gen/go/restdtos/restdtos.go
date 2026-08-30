@@ -9003,6 +9003,268 @@ func (j *ShadowComparisonTurn) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// One grouped bucket in ShadowLedgerSummary.categories (§30.6: "summarise what was
+// suppressed ... grouped so an operator can see the shape at a glance") -- e.g.
+// {label: "Pull requests", count: 3}. label is prose an operator reads, never a
+// closed enum a client branches on (internal/app/shadowoperator's own
+// categoryForSCMOperation/categoryForOutboxKind, which this mirrors, can add a new
+// label without a contract change).
+type ShadowLedgerCategory struct {
+	// Count corresponds to the JSON schema field "count".
+	Count int `json:"count" yaml:"count" mapstructure:"count"`
+
+	// Label corresponds to the JSON schema field "label".
+	Label string `json:"label" yaml:"label" mapstructure:"label"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ShadowLedgerCategory) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["count"]; raw != nil && !ok {
+		return fmt.Errorf("field count in ShadowLedgerCategory: required")
+	}
+	if _, ok := raw["label"]; raw != nil && !ok {
+		return fmt.Errorf("field label in ShadowLedgerCategory: required")
+	}
+	type Plain ShadowLedgerCategory
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ShadowLedgerCategory(plain)
+	return nil
+}
+
+// One suppressed effect from either half of the shadow-operator surface's own
+// §30.6 UNION read model -- a shadow_scm_writes row (source "scm_write") or a
+// ledger-terminal outbox row (source "outbox"). Deliberately narrow: this NEVER
+// carries a row's own spec_json/result_json/heavy_content (shadow_scm_writes can
+// hold a customer repository's own file content in full,
+// migrations/000110_shadow_scm_writes_heavy_content.up.sql) -- an operator sees
+// the shape (operation, category, target, which session) and follows sessionId
+// into the session's own existing, already-render-safe view to look further, never
+// a raw payload rendered on this surface. target/operation are
+// attacker/customer-influenceable text (a branch name, a file path, an HTTP path)
+// and must be rendered exactly like any other repo-derived string, never as
+// trusted markup.
+type ShadowLedgerEntry struct {
+	// The display bucket this entry counts toward -- matches one of the
+	// ShadowLedgerCategory.label values in the SAME response's own categories array.
+	Category string `json:"category" yaml:"category" mapstructure:"category"`
+
+	// CreatedAt corresponds to the JSON schema field "createdAt".
+	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
+
+	// shadow_scm_writes.operation ("create_pr", "http_post", ...) for a scm_write
+	// entry, or outbox.kind ("github_verdict", ...) for an outbox entry.
+	Operation string `json:"operation" yaml:"operation" mapstructure:"operation"`
+
+	// The session that would have produced this effect -- §30.6's own "links into the
+	// sessions that produced them". Null when none is recorded (a shadow_scm_writes
+	// row's own session_id is ON DELETE SET NULL, migrations/000102's own doc
+	// comment: history outlives the session).
+	SessionId ShadowLedgerEntrySessionId `json:"sessionId" yaml:"sessionId" mapstructure:"sessionId"`
+
+	// Which half of the UNION this entry came from --
+	// internal/app/shadowoperator.Entry.Source, verbatim.
+	Source ShadowLedgerEntrySource `json:"source" yaml:"source" mapstructure:"source"`
+
+	// The specific thing acted on (a branch, a PR number as text, a path) where the
+	// operation has one. Null for an outbox entry, which carries no single target in
+	// this read model, and for any scm_write entry whose own shadow_scm_writes.target
+	// column is itself null.
+	Target ShadowLedgerEntryTarget `json:"target" yaml:"target" mapstructure:"target"`
+}
+
+// The session that would have produced this effect -- §30.6's own "links into the
+// sessions that produced them". Null when none is recorded (a shadow_scm_writes
+// row's own session_id is ON DELETE SET NULL, migrations/000102's own doc comment:
+// history outlives the session).
+type ShadowLedgerEntrySessionId *string
+
+type ShadowLedgerEntrySource string
+
+const ShadowLedgerEntrySourceOutbox ShadowLedgerEntrySource = "outbox"
+const ShadowLedgerEntrySourceScmWrite ShadowLedgerEntrySource = "scm_write"
+
+var enumValues_ShadowLedgerEntrySource = []interface{}{
+	"scm_write",
+	"outbox",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ShadowLedgerEntrySource) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ShadowLedgerEntrySource {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ShadowLedgerEntrySource, v)
+	}
+	*j = ShadowLedgerEntrySource(v)
+	return nil
+}
+
+// The specific thing acted on (a branch, a PR number as text, a path) where the
+// operation has one. Null for an outbox entry, which carries no single target in
+// this read model, and for any scm_write entry whose own shadow_scm_writes.target
+// column is itself null.
+type ShadowLedgerEntryTarget *string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ShadowLedgerEntry) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["category"]; raw != nil && !ok {
+		return fmt.Errorf("field category in ShadowLedgerEntry: required")
+	}
+	if _, ok := raw["createdAt"]; raw != nil && !ok {
+		return fmt.Errorf("field createdAt in ShadowLedgerEntry: required")
+	}
+	if _, ok := raw["operation"]; raw != nil && !ok {
+		return fmt.Errorf("field operation in ShadowLedgerEntry: required")
+	}
+	if _, ok := raw["sessionId"]; raw != nil && !ok {
+		return fmt.Errorf("field sessionId in ShadowLedgerEntry: required")
+	}
+	if _, ok := raw["source"]; raw != nil && !ok {
+		return fmt.Errorf("field source in ShadowLedgerEntry: required")
+	}
+	if _, ok := raw["target"]; raw != nil && !ok {
+		return fmt.Errorf("field target in ShadowLedgerEntry: required")
+	}
+	type Plain ShadowLedgerEntry
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ShadowLedgerEntry(plain)
+	return nil
+}
+
+// GET /api/repos/{owner}/{repo}/shadow-ledger response body, and the body POST
+// .../shadow-ledger/activate also returns on success (§30.6/§30.8/§30.9) -- the
+// shadow-operator surface's own read model over shadow_scm_writes + marked outbox
+// rows (internal/app/shadowoperator.BuildSummary), plus the §30.1 LLM-spend line
+// and the repository's own current egress-mode state. ADMIN-ONLY
+// (authz.ActionViewShadowLedger) -- deliberately no §13.3 table row names this
+// action; see that action's own doc comment (internal/domain/authz/action.go) for
+// why: this is the one surface in the product holding customer source code at rest
+// IN FULL, beyond even the admin-only Settings -> Members audit-log row, and its
+// own retention/PII policy (§30.9) is still an open, deferred decision.
+type ShadowLedgerSummary struct {
+	// Ordered by descending count then label -- internal/app/shadowoperator's own
+	// summarizeCategories.
+	Categories []ShadowLedgerCategory `json:"categories" yaml:"categories" mapstructure:"categories"`
+
+	// Newest first, capped at internal/app/shadowoperator.DefaultEntryLimit -- a
+	// floor for a deployment large enough to reach it (§30.8's own
+	// dedicated-evaluation-deployment framing), not a promise every suppressed effect
+	// this repository ever produced is listed.
+	Entries []ShadowLedgerEntry `json:"entries" yaml:"entries" mapstructure:"entries"`
+
+	// repo_settings.live_egress_enabled's own current value (§30.8) -- mirrors
+	// RepoSettings' own field of the same name; carried here too so this surface
+	// renders standalone without a second fetch.
+	LiveEgressEnabled bool `json:"liveEgressEnabled" yaml:"liveEgressEnabled" mapstructure:"liveEgressEnabled"`
+
+	// repo_settings.live_egress_promoted_at (§30.8's own promotion fence,
+	// migrations/000104). Null means never promoted, or demoted since the last
+	// promotion.
+	LiveEgressPromotedAt ShadowLedgerSummaryLiveEgressPromotedAt `json:"liveEgressPromotedAt" yaml:"liveEgressPromotedAt" mapstructure:"liveEgressPromotedAt"`
+
+	// §30.1's own 'surfaced, not suppressed' LLM-spend line. False means no session
+	// naming this repository has recorded a priced turn yet -- distinct from a real
+	// $0.00, mirroring RepoSettings.contradictionRateComputed's own identical 'not
+	// yet computed' sentinel discipline.
+	LlmSpendComputed bool `json:"llmSpendComputed" yaml:"llmSpendComputed" mapstructure:"llmSpendComputed"`
+
+	// Null iff llmSpendComputed is false. The running total of every session naming
+	// this repository's own turns.cost_usd, summed -- reuses the SAME figure
+	// internal/app/sessionactor's own recordStepFinishCost maintains, never a second
+	// cost computation.
+	LlmSpendUsd ShadowLedgerSummaryLlmSpendUsd `json:"llmSpendUsd" yaml:"llmSpendUsd" mapstructure:"llmSpendUsd"`
+
+	// How many outbox rows this deployment stamped suppressed_in_shadow at enqueue
+	// have not yet reached a ledger-terminal state (§30.8's own 'unhandled shadow-era
+	// row' -- internal/app/shadowoperator.ErrUnhandledShadowEraRows). Nonzero here is
+	// exactly why POST .../activate would currently refuse.
+	PendingShadowEraCount int `json:"pendingShadowEraCount" yaml:"pendingShadowEraCount" mapstructure:"pendingShadowEraCount"`
+
+	// The natural 'owner/repo' key, matching RepoSettings.repoFullName's own shape.
+	RepoFullName string `json:"repoFullName" yaml:"repoFullName" mapstructure:"repoFullName"`
+
+	// How many entries this summary counts in total -- may exceed entries.length when
+	// the underlying read hit its own floor
+	// (internal/app/shadowoperator.DefaultEntryLimit); see entries' own doc comment.
+	TotalCount int `json:"totalCount" yaml:"totalCount" mapstructure:"totalCount"`
+}
+
+// repo_settings.live_egress_promoted_at (§30.8's own promotion fence,
+// migrations/000104). Null means never promoted, or demoted since the last
+// promotion.
+type ShadowLedgerSummaryLiveEgressPromotedAt *time.Time
+
+// Null iff llmSpendComputed is false. The running total of every session naming
+// this repository's own turns.cost_usd, summed -- reuses the SAME figure
+// internal/app/sessionactor's own recordStepFinishCost maintains, never a second
+// cost computation.
+type ShadowLedgerSummaryLlmSpendUsd *float64
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ShadowLedgerSummary) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["categories"]; raw != nil && !ok {
+		return fmt.Errorf("field categories in ShadowLedgerSummary: required")
+	}
+	if _, ok := raw["entries"]; raw != nil && !ok {
+		return fmt.Errorf("field entries in ShadowLedgerSummary: required")
+	}
+	if _, ok := raw["liveEgressEnabled"]; raw != nil && !ok {
+		return fmt.Errorf("field liveEgressEnabled in ShadowLedgerSummary: required")
+	}
+	if _, ok := raw["liveEgressPromotedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field liveEgressPromotedAt in ShadowLedgerSummary: required")
+	}
+	if _, ok := raw["llmSpendComputed"]; raw != nil && !ok {
+		return fmt.Errorf("field llmSpendComputed in ShadowLedgerSummary: required")
+	}
+	if _, ok := raw["llmSpendUsd"]; raw != nil && !ok {
+		return fmt.Errorf("field llmSpendUsd in ShadowLedgerSummary: required")
+	}
+	if _, ok := raw["pendingShadowEraCount"]; raw != nil && !ok {
+		return fmt.Errorf("field pendingShadowEraCount in ShadowLedgerSummary: required")
+	}
+	if _, ok := raw["repoFullName"]; raw != nil && !ok {
+		return fmt.Errorf("field repoFullName in ShadowLedgerSummary: required")
+	}
+	if _, ok := raw["totalCount"]; raw != nil && !ok {
+		return fmt.Errorf("field totalCount in ShadowLedgerSummary: required")
+	}
+	type Plain ShadowLedgerSummary
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ShadowLedgerSummary(plain)
+	return nil
+}
+
 // Request body for PUT /api/repos/{owner}/{repo}/auto-approval-settings (§21.2
 // stage 1) -- the auto-approval eligibility engine's own two per-repo-tunable
 // criteria. A SEPARATE endpoint from UpdateRepoSettingsRequest's own PUT
