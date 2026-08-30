@@ -624,7 +624,7 @@ export interface ReviewFinding {
   /**
    * Matches internal/domain/reviewpost.FindingStatus exactly.
    */
-  status: 'open' | 'rebutted' | 'fix_pending' | 'fix_open' | 'fix_merged' | 'fix_applied';
+  status: 'open' | 'rebutted' | 'fix_pending' | 'fix_open' | 'fix_merged' | 'fix_applied' | 'fix_recorded';
   rebuttalText: string | null;
 }
 /**
@@ -640,7 +640,7 @@ export interface RebutFindingRequest {
   rebuttalText: string;
 }
 /**
- * 200 response body for POST /api/sessions/:id/review/findings/:identityHash/apply-suggestion (§12.2 item 2).
+ * 200 response body for POST /api/sessions/:id/review/findings/:identityHash/apply-suggestion (§12.2 item 2). On a repository whose outgoing changes are currently suppressed (platform shadow mode, §30.7/§30.9), applied is false and commitSha carries the shadow-suppressed synthetic value -- never a real commit -- and the finding is marked fix_recorded rather than fix_applied.
  *
  * This interface was referenced by `RestDtos`'s JSON-Schema
  * via the `definition` "ApplySuggestionResponse".
@@ -648,9 +648,17 @@ export interface RebutFindingRequest {
 export interface ApplySuggestionResponse {
   identityHash: string;
   /**
-   * The new commit this call created on the PR's own head branch, applying the finding's suggestedFix.
+   * The new commit this call created on the PR's own head branch, applying the finding's suggestedFix -- or, when applied is false, the shadow-suppressed synthetic value this call recorded instead of committing anything real.
    */
   commitSha: string;
+  /**
+   * True only when this call genuinely committed the suggested fix to the real repository. False means the commit was recorded, not committed (platform shadow mode) -- the finding is marked fix_recorded, not fix_applied.
+   */
+  applied: boolean;
+  /**
+   * A human-readable summary of what happened -- "Suggested fix applied" or an honest "Recorded, not committed: ..." explanation.
+   */
+  message: string;
 }
 /**
  * 201 response body for POST /sessions/:id/review/verdict -- the server-computed authoritative results the caller cannot itself derive, so a review agent can log/confirm what actually happened.
@@ -830,7 +838,7 @@ export interface ReviewReadoutFinding {
   line: number | null;
   description: string;
   suggestedFix: string | null;
-  status: 'open' | 'rebutted' | 'fix_pending' | 'fix_open' | 'fix_merged' | 'fix_applied';
+  status: 'open' | 'rebutted' | 'fix_pending' | 'fix_open' | 'fix_merged' | 'fix_applied' | 'fix_recorded';
   rebuttalText: string | null;
   /**
    * §22.1.1's own content-anchored position, re-resolved at read time against the diff at the latest verdict's own headSha. 0 means explicitly unanchored -- never a guessed line number; a client must render this distinctly from a real match, never silently as line 0.
@@ -1179,7 +1187,7 @@ export interface ReviewAnalyticsTagCount {
  * via the `definition` "ReviewAnalyticsFindingStatusCount".
  */
 export interface ReviewAnalyticsFindingStatusCount {
-  status: 'open' | 'rebutted' | 'fix_pending' | 'fix_open' | 'fix_merged' | 'fix_applied';
+  status: 'open' | 'rebutted' | 'fix_pending' | 'fix_open' | 'fix_merged' | 'fix_applied' | 'fix_recorded';
   count: number;
 }
 /**

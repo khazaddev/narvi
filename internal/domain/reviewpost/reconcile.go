@@ -26,15 +26,20 @@ type ReconciledFinding struct {
 	SentinelKind *SentinelKind
 	FilePath     string
 	Description  string
-	// Status is FindingStatusOpen, FindingStatusRebutted,
-	// FindingStatusFixPending, FindingStatusFixOpen, FindingStatusFixMerged,
-	// or FindingStatusFixApplied -- every status this Step's own
-	// reconciliation query surfaces (see reviewcontext's own doc comment
-	// for which statuses that query actually selects: "open" is included
-	// too, deliberately, so a NOT-yet-rebutted finding still reads as
-	// "already reported, no need to raise it again as if it were brand
-	// new" -- distinct from "already RESOLVED", which only the
-	// rebutted/fix_* statuses claim).
+	// Status is FindingStatusOpen, FindingStatusRebutted, or
+	// FindingStatusFixRecorded -- the three statuses reviewcontext's own
+	// ListOpenAndRebuttedReviewFindings query actually selects (its own
+	// doc comment). "open" is included deliberately, so a NOT-yet-rebutted
+	// finding still reads as "already reported, no need to raise it again
+	// as if it were brand new" -- distinct from "already RESOLVED", which
+	// only FindingStatusRebutted claims. FindingStatusFixRecorded is
+	// included for the OPPOSITE reason a real fix status (FixPending/
+	// FixOpen/FixMerged/FixApplied) is excluded: those claim a real fix is
+	// (or will be) underway, with their own separate, stronger signal
+	// posted directly onto the PR (§17.3) -- FixRecorded claims no such
+	// thing (§30.7: nothing reached the real repository), so a
+	// re-reviewing agent must keep seeing it as live, exactly like an
+	// ordinary open finding.
 	Status FindingStatus
 	// RebuttalText is non-nil only when Status is FindingStatusRebutted --
 	// the maintainer's own dismissal reason, surfaced so a re-reviewing

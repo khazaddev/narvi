@@ -19,8 +19,10 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
+	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/khazaddev/narvi/internal/app/shadowscm"
 	"github.com/khazaddev/narvi/internal/domain/reviewpost"
 	"github.com/khazaddev/narvi/internal/platform"
 )
@@ -476,6 +478,80 @@ func TestApplySuggestion_Success_CommitsUsingActingMaintainerToken(t *testing.T)
 	}
 	if row.Status != "fix_applied" {
 		t.Errorf("Status = %q, want %q", row.Status, "fix_applied")
+	}
+}
+
+// TestApplySuggestion_ShadowSuppressed_RecordedNotCommitted proves §30.7/
+// §30.9's own resolved apply-suggestion behavior: on a repository whose
+// outgoing changes are suppressed, UpdateFileContent returns a nil error
+// and a self-evidently synthetic commit SHA (never a sentinel error) --
+// the handler must recognize that result and respond honestly rather than
+// naively marking the finding fix_applied with a SHA that exists nowhere.
+// Proves: (1) response.applied is false and response.message says
+// "recorded, not committed"; (2) response.commitSha is the shadow-scheme
+// value the decorator produced, never a real commit; (3) the finding's
+// own status is fix_recorded, never fix_applied; (4) the ledger recorded
+// exactly one suppressed update_file_content write.
+func TestApplySuggestion_ShadowSuppressed_RecordedNotCommitted(t *testing.T) {
+	fake := &applySuggestionFakeSourceControl{
+		content: "package foo\n// old comment\n",
+		sha:     "blob-sha-shadow",
+		exists:  true,
+	}
+	rig := newTestRig(t, func(r *testRig) {
+		ledger := narvipg.NewShadowSCMWriteStore(r.pool)
+		decorated, err := shadowscm.New(fake, ledger, func(context.Context, string) bool { return false })
+		if err != nil {
+			t.Fatalf("shadowscm.New: %v", err)
+		}
+		r.sourceControl = decorated
+		r.shadowLedger = ledger
+	})
+	ctx := context.Background()
+	repoFullName := "acme/apply-suggestion-shadow-repo"
+	session, hash := setupFindingWithSuggestedFix(ctx, t, rig, repoFullName, 63)
+
+	const actingToken = "acting-maintainer-token"
+	_, maintainerToken := createMaintainerWithGitHubToken(ctx, t, rig, actingToken)
+
+	var resp restdtos.ApplySuggestionResponse
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/review/findings/"+hash+"/apply-suggestion", nil, &resp, maintainerToken)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+	if resp.Applied {
+		t.Error("Applied = true, want false -- nothing was really committed")
+	}
+	if !shadowscm.IsSyntheticCommitSHA(resp.CommitSha) {
+		t.Errorf("CommitSha = %q, want the shadow-suppressed synthetic value", resp.CommitSha)
+	}
+	if !strings.Contains(resp.Message, "Recorded, not committed") {
+		t.Errorf("Message = %q, want it to say recorded, not committed", resp.Message)
+	}
+	// The fake's own live UpdateFileContent must never have been reached --
+	// the decorator intercepts it before the wrapped adapter ever sees the
+	// call.
+	if fake.updateCalls != 0 {
+		t.Errorf("live UpdateFileContent called %d times, want 0 -- a shadow-suppressed write must never reach the wrapped adapter", fake.updateCalls)
+	}
+
+	row, err := rig.reviewFindings.Get(ctx, repoFullName, 63, hash)
+	if err != nil {
+		t.Fatalf("get review finding: %v", err)
+	}
+	if row.Status != "fix_recorded" {
+		t.Errorf("Status = %q, want %q -- naive suppression would mark this fix_applied with a SHA that exists nowhere", row.Status, "fix_recorded")
+	}
+
+	rows, err := rig.shadowLedger.(*narvipg.ShadowSCMWriteStore).ListForRepo(ctx, repoFullName, 10)
+	if err != nil {
+		t.Fatalf("ListForRepo: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("ledger rows for %s = %d, want 1", repoFullName, len(rows))
+	}
+	if rows[0].Operation != "update_file_content" {
+		t.Errorf("Operation = %q, want %q", rows[0].Operation, "update_file_content")
 	}
 }
 

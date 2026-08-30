@@ -294,6 +294,24 @@ const (
 type Notification struct {
 	Kind    NotificationKind
 	Payload json.RawMessage
+
+	// SuppressedInShadow is the row's ENQUEUE-TIME egress stamp
+	// (TECHNICAL_PLAN.md §30.8's epoch discipline: "suppress if the stamp
+	// OR the current flag says shadow -- monotone toward suppression, in
+	// both directions").
+	//
+	// It is carried here because the delivery-time half of that rule is
+	// applied by the outbox builder for SUPPRESS-classified kinds only. A
+	// PASS-THROUGH kind reaches Deliver unconditionally, so a notifier
+	// that must honour the stamp could otherwise read nothing but the
+	// CURRENT flag -- and a row born shadow, delivered after the repo was
+	// promoted, would then take the live path. §30.8 is explicit that a
+	// born-shadow row "can only end in the ledger", whatever
+	// repo_settings says by the time it is delivered.
+	//
+	// A notifier that ignores this field is not thereby safe; it is
+	// simply one whose kind has no shadow-suppressible effect.
+	SuppressedInShadow bool
 }
 
 // Notifier is the port that delivers ONE outbound notification to an

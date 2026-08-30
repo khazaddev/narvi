@@ -55,6 +55,8 @@ func (SlackMessageUpdate) isShadowSpec()       {}
 func (SlackViewOpen) isShadowSpec()            {}
 func (LinearThoughtActivity) isShadowSpec()    {}
 func (LinearResponseActivity) isShadowSpec()   {}
+func (Push) isShadowSpec()                     {}
+func (SentinelAutoFix) isShadowSpec()          {}
 
 // CreatePR mirrors ports.CreatePRSpec without its Token.
 type CreatePR struct {
@@ -282,6 +284,63 @@ type SlackIdentityLinkNotice struct {
 	ThreadTS string `json:"threadTs"`
 }
 
+// Push is what sendPushBestEffort (internal/app/sessionactor/pushpr.go)
+// records when a turn's own frozen push/PR decision (§30.8) says shadow --
+// §30.9's resolved mirror decision (no git mirror; short-circuit the push
+// itself, done properly) means the sandbox WS push command is never sent
+// at all, for a repository whose credential could not have pushed it
+// anyway (§30.4: the read-only token and the UID boundary are the
+// security here, never this gate).
+//
+// With the push command never sent, no push_complete (or push_error)
+// ever arrives on the wire, so createPRBestEffort's own "would have
+// opened PR ..." row (§30.7) never gets a turn to run either -- a turn
+// that reaches this point always completed successfully and always names
+// at least one repo (pushpr.go's own completeProcessingTurn only ever
+// produces a pushSignal for that case), so a real push would always have
+// been followed by a real CreatePR attempt next. This ONE row records
+// both facts together, since nothing downstream ever will.
+type Push struct {
+	Owner  string `json:"owner"`
+	Repo   string `json:"repo"`
+	Branch string `json:"branch"`
+	// WouldOpenPR is always true -- see this type's own doc comment for
+	// why. Recorded explicitly, not left implied, so a reader of this row
+	// alone sees the whole suppressed sequence, not just its first half.
+	WouldOpenPR bool `json:"wouldOpenPr"`
+}
+
+// SentinelAutoFix is what the sentinel-auto-fix outbox notifier
+// (internal/app/outboxworker/sentinelautofix.go) records when its own
+// origin repository is shadow and no fix child session has been claimed
+// yet -- §30.7's own state-coherence resolution for this lane, per §30.9
+// (resolved: no git mirror; short-circuit before the claim). A suppressed
+// CreateBranch would leave the fix branch created nowhere real; a child
+// session pinned to check it out would fail its own `git clone --branch`
+// and, by the time that failure surfaced, the one-shot claim
+// (sentinel_fixes.fix_child_session_id) would already be committed and
+// every addressed finding already flipped to fix_pending -- wedging the
+// lane permanently and disabling the manual apply-suggestion action
+// (§17.3) for a fix nothing is actually working on. So the whole lane
+// stops here instead: no branch is created, no child session is spawned,
+// and the caller never calls markFindingsFixPending -- every addressed
+// finding stays exactly 'open'.
+//
+// This ONE row records what the lane would have done, combining what
+// would otherwise have been a separate create_branch ledger row and a
+// separate session-spawn fact: WouldCreateBranch is never actually
+// created (createFixBranch is never called on this path), and
+// FindingIdentityHashes names every finding this delivery's own payload
+// addresses, exactly as markFindingsFixPending would have.
+type SentinelAutoFix struct {
+	Owner                 string   `json:"owner"`
+	Repo                  string   `json:"repo"`
+	OriginPRNumber        int      `json:"originPrNumber"`
+	OriginHeadBranch      string   `json:"originHeadBranch"`
+	WouldCreateBranch     string   `json:"wouldCreateBranch"`
+	FindingIdentityHashes []string `json:"findingIdentityHashes"`
+}
+
 // These assertions pin the sealed set. Removing isShadowSpec from any of
 // them, or forgetting it on a type added later, is a build failure at the
 // point where someone would otherwise have widened the ledger's input
@@ -303,4 +362,6 @@ var (
 	_ Spec = SlackViewOpen{}
 	_ Spec = LinearThoughtActivity{}
 	_ Spec = LinearResponseActivity{}
+	_ Spec = Push{}
+	_ Spec = SentinelAutoFix{}
 )

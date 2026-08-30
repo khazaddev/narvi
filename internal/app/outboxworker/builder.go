@@ -338,7 +338,12 @@ func (b *Builder) attempt(ctx context.Context, row sqlcgen.Outbox) {
 	// demoted since it was enqueued? That is the delivery-time half
 	// suppress-wins needs, and it applies ONLY to §30.2's classified
 	// SUPPRESS kinds -- a PASS-THROUGH kind (blob_delete, sentinel_auto_fix,
-	// linear_digest) always reaches notifier.Deliver unconditionally.
+	// linear_digest) always reaches notifier.Deliver unconditionally, and
+	// therefore carries its own enqueue stamp on the Notification
+	// (ports.Notification.SuppressedInShadow): a pass-through notifier
+	// with a shadow-suppressible effect must still honour the
+	// born-shadow half of this rule, which this block never applies for
+	// it.
 	// classifyNotifiers (NewBuilder) already guarantees row.Kind, having
 	// resolved a real notifier above, also has an entry here.
 	if notificationKindClassification[ports.NotificationKind(row.Kind)] == ClassSuppress {
@@ -355,7 +360,13 @@ func (b *Builder) attempt(ctx context.Context, row sqlcgen.Outbox) {
 	deliverCtx, cancel := context.WithTimeout(ctx, b.timeouts.OutboxDeliveryTimeout)
 	defer cancel()
 
-	if err := notifier.Deliver(deliverCtx, ports.Notification{Kind: ports.NotificationKind(row.Kind), Payload: row.Payload}); err != nil {
+	if err := notifier.Deliver(deliverCtx, ports.Notification{
+		Kind:    ports.NotificationKind(row.Kind),
+		Payload: row.Payload,
+		// Carried for the PASS-THROUGH kinds, which reach here without
+		// the stamp check above ever having run for them.
+		SuppressedInShadow: row.SuppressedInShadow,
+	}); err != nil {
 		logger.Warn("outboxworker: Deliver failed", "error", err)
 		b.recordFailure(ctx, logger, row, err.Error())
 		return

@@ -125,6 +125,20 @@ func (s *ReviewFindingStore) MarkFixApplied(ctx context.Context, repoFullName st
 	})
 }
 
+// MarkFixRecorded records that the manual apply-suggestion endpoint
+// (§12.2 item 2) attempted to commit this finding's own SuggestedFix but
+// the repository's outgoing changes are currently suppressed (platform
+// shadow mode, §30.7/§30.9): nothing reached the real repository, so this
+// is deliberately NOT MarkFixApplied -- see FindingStatusFixRecorded's own
+// doc comment for why the distinction matters to re-review reconciliation.
+func (s *ReviewFindingStore) MarkFixRecorded(ctx context.Context, repoFullName string, prNumber int32, identityHash string) (sqlcgen.ReviewFinding, error) {
+	return s.q.MarkReviewFindingFixRecorded(ctx, sqlcgen.MarkReviewFindingFixRecordedParams{
+		RepoFullName: repoFullName,
+		PrNumber:     prNumber,
+		IdentityHash: identityHash,
+	})
+}
+
 // ListStatusesInWindow returns the status column of every finding first
 // seen for repoFullName after sinceTime, oldest-first, bounded by limit
 // -- §21's own "Review finding outcomes" analytics KPI (§21.1).

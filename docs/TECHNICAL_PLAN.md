@@ -3738,13 +3738,31 @@ is declared complete):
 **Decisions deliberately left open** — each is represented here so it surfaces at its Step
 rather than being silently defaulted; none is resolved by this section:
 
-- **Git mirror in v1** (gates Step 103's shape). For: without it the ledger loses its most
-  important entry — a suppressed push means no `push_complete`, so `createPRBestEffort` never
-  runs and no "would have opened PR …" is ever recorded; every turn surfaces a `push_error` that
-  makes Narvi look broken to the very evaluator shadow exists to convince; and the sentinel-fix
-  lane only runs coherently against a mirror (§30.7). Against: a real piece of per-session git
-  infrastructure. The fallback (short-circuit before the claim + documented single-hop
-  validation) is viable and smaller.
+- **Git mirror in v1 — RESOLVED: NO. Short-circuit, done properly.**
+
+  The "Against" above was one sentence, and it understated the cost in the one way that matters
+  for this section. A per-session bare mirror puts **complete customer repositories at rest on
+  Narvi's own storage** — and the ledger-retention bullet below already records that customer
+  code at rest has no retention or null-out policy. Shadow's promise is "we touch nothing";
+  answering it by copying the whole repository onto our disks is the wrong direction, before
+  counting the git service (receive-pack, auth, lifecycle, GC) that two different sandboxes must
+  both reach.
+
+  The "For" list is real, but most of it is a consequence of letting the push FAIL, not of
+  lacking a mirror:
+    - *"no `push_complete`, so no 'would have opened PR …' is ever recorded"* — the push signal
+      already carries the session and the branch. Short-circuit the push **before** it fails and
+      record the intent from what is already in hand.
+    - *"every turn surfaces a `push_error` that makes Narvi look broken"* — same fix. An
+      intentional, recorded suppression is not an error, and the evaluator reads it as the
+      product working.
+    - *"the sentinel-fix lane only runs coherently against a mirror"* — accepted. That lane
+      short-circuits before the one-shot claim (§30.7), findings staying `open`.
+
+  §30.4 endorses gating the push for exactly this: "the turn's push/PR/preview trio resolves one
+  mode atomically **and the ledger gets its entry** — UX and state coherence". It denies only
+  that the gate is *security*. Step 101 left `sendPushBestEffort` ungated and said so; this is
+  the Step that takes it, for the stated reason.
 - **Chat-originated triggers in shadow — RESOLVED: the trigger runs, and every outward effect
   it produces is suppressed and recorded.** Narvi does not refuse Slack- or Linear-originated
   work in shadow.
@@ -3780,8 +3798,20 @@ rather than being silently defaulted; none is resolved by this section:
   that does gate a Step: it must be chosen before Step 104 ships its role-gated ledger view (same
   pattern as the chat-trigger and mirror decisions above); admin-only is the default absent that
   choice (§30.6, §16.1's dead-lettered-outbox-deliveries precedent).
-- **Downstream-chain synthesis vs single-hop validation** (§30.7's echo problem — Step 103's
-  second half).
+- **Downstream-chain synthesis vs single-hop validation — RESOLVED: single-hop, documented.**
+
+  Synthesizing a `github_pr_session` from the suppressed `CreatePR` record would exercise
+  review-of-own-work, auto-approval, description-autofix and handoff internally. Every one of
+  those lanes wants to WRITE. Synthesis therefore buys internal-only observability by
+  multiplying the number of write paths running inside a capability whose bar is that **one**
+  leaked PR is total failure — the wrong trade at any exchange rate.
+
+  It is also incoherent without a mirror, which the decision above settles: there is no real ref
+  for those lanes to act on, so they would be reasoning about a head that exists only in a
+  transient sandbox workspace.
+
+  §30.7 already names the honest posture while this was open — "no downstream-lane claims in the
+  operator view beyond what actually ran". It is now the decision, not the default.
 - **Mid-session flip semantics**: next-turn-boundary (the design as written, §30.8) vs
   applies-only-to-new-sessions.
 

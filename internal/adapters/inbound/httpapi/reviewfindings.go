@@ -10,7 +10,12 @@
 //     the PR's CURRENT head before committing it, via the ACTING
 //     maintainer's own OAuth token (never the original session creator's)
 //     -- hard-stops on a stale/conflicting suggestion, exactly like
-//     §17.4's own cherry-pick discipline, never auto-resolves.
+//     §17.4's own cherry-pick discipline, never auto-resolves. On a
+//     repository whose outgoing changes are currently suppressed
+//     (platform shadow mode, §30.7/§30.9), the commit is recorded rather
+//     than made real -- an honest "recorded, not committed" response and
+//     a dedicated fix_recorded finding status, never a false claim of
+//     resolution (see ApplySuggestion's own doc comment below).
 //
 // Both routes are gated by authz.ActionEditReviewVerdict (§13.3 row 5,
 // the SAME action reviewretrigger.go's own re-trigger button and any
@@ -36,6 +41,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/khazaddev/narvi/internal/app/shadowscm"
 	"github.com/khazaddev/narvi/internal/domain/authz"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/domain/reviewpost"
@@ -184,10 +190,27 @@ func RebutReviewFinding(sessions *postgres.SessionStore, prSessions *postgres.Gi
 // (reviewpost.ValidateSuggestionApplies); 404 if no such finding exists;
 // 409 if this finding's own remediation is already owned by the OTHER,
 // mutually-exclusive path (a sentinel-auto-fix child session already
-// fix_pending/fix_open/fix_merged, or a prior fix_applied) -- §17.3: "the
-// two remediation paths are mutually exclusive per finding"; 403 if the
-// acting maintainer has no usable GitHub credential; 200 with the
-// resulting restdtos.ApplySuggestionResponse otherwise.
+// fix_pending/fix_open/fix_merged, or a prior fix_applied/fix_recorded) --
+// §17.3: "the two remediation paths are mutually exclusive per finding";
+// 403 if the acting maintainer has no usable GitHub credential; 200 with
+// the resulting restdtos.ApplySuggestionResponse otherwise.
+//
+// # §30.7/§30.9 (resolved): a shadow-suppressed commit is recorded, not applied
+//
+// sourceControl.UpdateFileContent already goes through the §30.2 port
+// decorator in production; on a repository whose outgoing changes are
+// currently suppressed, that call returns a nil error and a self-evidently
+// synthetic commit SHA (shadowscm.IsSyntheticCommitSHA), never a sentinel
+// error the way a suppressed MergePR does. Marking the finding
+// fix_applied on that result would be exactly the naive-suppression bug
+// §30.7 names by name: the SHA exists nowhere, and §24's automatic
+// re-review would re-detect the SAME defect on the unchanged real head --
+// the system contradicting its own record. So this handler checks the
+// result instead: response.applied is false, response.message says
+// "recorded, not committed", and the finding is marked fix_recorded, a
+// status re-review reconciliation (ListOpenAndRebuttedReviewFindings)
+// treats as still-open -- an honest update on re-detection, never a
+// contradiction.
 //
 // The commit this creates is attributed to the ACTING maintainer's own
 // decrypted GitHub OAuth token (identities.GetByUserAndProvider on
@@ -331,6 +354,40 @@ func ApplySuggestion(sessions *postgres.SessionStore, prSessions *postgres.GitHu
 			return
 		}
 
+		// §30.7/§30.9 (resolved): a shadow-suppressed UpdateFileContent
+		// returns a nil error and a self-evidently synthetic commit SHA
+		// (shadowscm.Decorator's own doc comment), never a sentinel error
+		// the way MergePR's own suppression does -- so this is the one
+		// place that call's own result decides what happened, rather than
+		// an errors.Is check. Naive suppression would mark this finding
+		// fix_applied with a SHA that exists nowhere, and §24's automatic
+		// re-review would then re-detect the SAME defect on the unchanged
+		// real head -- the system contradicting itself and, worse, a
+		// re-reviewing agent never even being told about it
+		// (ListOpenAndRebuttedReviewFindings excludes fix_applied).
+		// Instead: an honest "recorded, not committed" response, and the
+		// dedicated fix_recorded status re-review reconciliation treats as
+		// still-open -- see FindingStatusFixRecorded's own doc comment.
+		// This is this codebase's established shape for exactly this kind
+		// of honesty (mirrors ports.ErrShadowSuppressed's own "recorded,
+		// not merged" -- decisioninbox.go/automerge/worker.go), applied
+		// here to a write whose OWN suppressed branch never needed a
+		// sentinel error in the first place.
+		if shadowscm.IsSyntheticCommitSHA(commitSHA) {
+			if _, err := reviewFindings.MarkFixRecorded(ctx, prSession.RepoFullName, prSession.PrNumber, identityHash); err != nil {
+				logger.Error("httpapi: mark review finding fix recorded failed", "error", err)
+				writeError(w, http.StatusInternalServerError, "internal error")
+				return
+			}
+			writeJSON(w, http.StatusOK, restdtos.ApplySuggestionResponse{
+				IdentityHash: identityHash,
+				CommitSha:    commitSHA,
+				Applied:      false,
+				Message:      "Recorded, not committed: this repository's outgoing changes are suppressed on this deployment.",
+			})
+			return
+		}
+
 		if _, err := reviewFindings.MarkFixApplied(ctx, prSession.RepoFullName, prSession.PrNumber, identityHash); err != nil {
 			logger.Error("httpapi: mark review finding fix applied failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal error")
@@ -340,6 +397,8 @@ func ApplySuggestion(sessions *postgres.SessionStore, prSessions *postgres.GitHu
 		writeJSON(w, http.StatusOK, restdtos.ApplySuggestionResponse{
 			IdentityHash: identityHash,
 			CommitSha:    commitSHA,
+			Applied:      true,
+			Message:      "Suggested fix applied",
 		})
 	}
 }

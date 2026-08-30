@@ -84,7 +84,13 @@ type storeBundle struct {
 	// origin-channel-address) lookups that write needs to know WHERE to
 	// route that notification -- each mirrors imageBuild/environment's own
 	// identical "added by the Step that first needs it" precedent.
-	outbox             *postgres.OutboxStore
+	outbox *postgres.OutboxStore
+	// shadowLedgerStore is the CONCRETE store, held alongside the Actor's
+	// shadowledger.Store handle, because the suppressed-push record must
+	// join completeProcessingTurn's own transaction (§30.6 record-or-fail)
+	// and only the concrete store exposes WithTx -- the same reason
+	// outbox above is concrete rather than a port.
+	shadowLedgerStore  *postgres.ShadowSCMWriteStore
 	slackThreadSession *postgres.SlackThreadSessionStore
 	githubPRSession    *postgres.GitHubPRSessionStore
 	linearAgentSession *postgres.LinearAgentSessionStore
@@ -190,6 +196,7 @@ func newStoreBundle(pool *pgxpool.Pool, platformShadow bool) storeBundle {
 		environment:          postgres.NewEnvironmentStore(pool),
 		contractDrift:        postgres.NewContractDriftStore(pool),
 		outbox:               postgres.NewOutboxStore(pool, platformShadow),
+		shadowLedgerStore:    postgres.NewShadowSCMWriteStore(pool),
 		slackThreadSession:   postgres.NewSlackThreadSessionStore(pool),
 		githubPRSession:      postgres.NewGitHubPRSessionStore(pool),
 		linearAgentSession:   postgres.NewLinearAgentSessionStore(pool),

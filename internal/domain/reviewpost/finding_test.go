@@ -347,3 +347,35 @@ func TestBuildFindings_RepeatedBatchIsDeterministic(t *testing.T) {
 		t.Errorf("BuildFindings() not deterministic across repeated calls with the same input: first=%v, second=%v", first, second)
 	}
 }
+
+// TestFindingStatus_BlocksMerge_FixRecordedStillBlocks pins the case that
+// made this a function rather than an equality check at each call site.
+//
+// fix_recorded means a suggested fix was recorded and NEVER committed --
+// the defect is untouched on the real head. Its own doc says it "is NOT a
+// claim of resolution". An `== FindingStatusOpen` check at the merge gate
+// nonetheless classed it as resolved, so recording a fix in shadow made
+// an unresolved finding stop blocking merge, permanently, and across a
+// later promotion to live.
+//
+// The table asserts the WHOLE set, not a sample: adding a status without
+// deciding what it means here is what this test exists to catch.
+func TestFindingStatus_BlocksMerge_FixRecordedStillBlocks(t *testing.T) {
+	for _, tc := range []struct {
+		status reviewpost.FindingStatus
+		want   bool
+		why    string
+	}{
+		{reviewpost.FindingStatusOpen, true, "nobody has answered it"},
+		{reviewpost.FindingStatusFixRecorded, true, "recorded, never committed -- the defect is untouched on the real head"},
+		{reviewpost.FindingStatusRebutted, false, "a maintainer answered it"},
+		{reviewpost.FindingStatusFixPending, false, "remediation is owned by the sentinel lane"},
+		{reviewpost.FindingStatusFixOpen, false, "remediation is owned by an open fix PR"},
+		{reviewpost.FindingStatusFixMerged, false, "the fix really reached the head"},
+		{reviewpost.FindingStatusFixApplied, false, "the commit really reached the head"},
+	} {
+		if got := tc.status.BlocksMerge(); got != tc.want {
+			t.Errorf("FindingStatus(%q).BlocksMerge() = %v, want %v: %s", tc.status, got, tc.want, tc.why)
+		}
+	}
+}

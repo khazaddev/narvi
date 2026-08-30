@@ -441,6 +441,15 @@ func serve() error {
 			// previewpr.go, progressnotify.go) writes through THIS one, so it
 			// needs the SAME cfg.ShadowMode outboxStore itself receives below.
 			PlatformShadow: cfg.ShadowMode,
+			// ShadowLedger (§30.7/§30.9, resolved: no git mirror --
+			// short-circuit the push, done properly): the SAME
+			// shadowLedger instance shadowscm.Decorator already writes
+			// to, below -- sendPushBestEffort (pushpr.go) records here
+			// directly when a turn's own frozen push/PR decision is
+			// shadow, since no push_complete/push_error wire event ever
+			// arrives on that path to drive a recording through the
+			// decorated sourceControl the way CreatePR/CreateBranch
+			// already do.
 		})
 	if err != nil {
 		return fmt.Errorf("construct session actor registry: %w", err)
@@ -2074,7 +2083,7 @@ func serve() error {
 	// sentinelAutoFixNotifier ("sentinels + suggestions", §17.2)
 	// spawns the child session -- reviewFindingStore/sentinelFixStore are
 	// the SAME instances every other caller above already uses.
-	sentinelAutoFixNotifier := outboxworker.NewSentinelAutoFixNotifier(pool, sessionStore, turnStore, environmentStore, auditLogStore, registry, sentinelFixStore, reviewFindingStore, sourceControl, cfg.GitHubBotToken, cfg.Timeouts, cfg.EpistemicCheckDefault, cfg.RolloutMode, repoSettingsStore)
+	sentinelAutoFixNotifier := outboxworker.NewSentinelAutoFixNotifier(pool, sessionStore, turnStore, environmentStore, auditLogStore, registry, sentinelFixStore, reviewFindingStore, sourceControl, cfg.GitHubBotToken, cfg.Timeouts, cfg.EpistemicCheckDefault, cfg.RolloutMode, repoSettingsStore, isLiveEgress, shadowLedger)
 	// handoffNotifier ("handoff-readiness sentinel", §14.4) posts
 	// the handoff-readiness comment and applies the "handoff" label on a
 	// scoped session's PR -- the SAME sourceControl/cfg.GitHubBotToken
