@@ -84,11 +84,14 @@
 // render-safety testing (see __tests__/repoSettingsRendering.test.tsx).
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
 
-import type { RepoSettings } from '@narvi/contracts/rest-dtos'
+import type { RepoSettings, ShadowLedgerEntry } from '@narvi/contracts/rest-dtos'
 
 import {
   getRepoSettings,
+  getShadowLedger,
+  postActivateShadowLedger,
   putAutoApprovalSettings,
   putAutoMergeToggle,
   putAutoRetriggerReviewToggle,
@@ -98,7 +101,7 @@ import {
   putReviewDepthConfig,
 } from '../api/endpoints'
 import { ApiError } from '../api/http'
-import { repoSettingsQueryKeys } from '../api/queryKeys'
+import { repoSettingsQueryKeys, shadowLedgerQueryKeys } from '../api/queryKeys'
 import { meQueryOptions } from '../auth/session'
 import {
   BLAST_RADIUS_TAGS,
@@ -292,6 +295,156 @@ function AutoMergeCard({ owner, repo, settings, canEdit }: { owner: string; repo
         </div>
       )}
       {mutation.isError && <MutationError error={mutation.error} />}
+    </div>
+  )
+}
+
+/** ShadowLedgerEntryRow renders one ShadowLedgerEntry as a table row -- operation/category/target are all attacker/customer-influenceable (a branch name, a file path, an HTTP path) so every one of them renders through T, never interpolated as markup. Exported for direct render-safety testing (see __tests__/shadowLedgerRendering.test.tsx) -- an entry with no sessionId renders no <Link> at all, the shape that test exercises (this codebase's own established "no precedent for unit-rendering a <Link>-bearing component outside the real app" convention, mirrored from decisionInboxRendering.test.tsx). */
+export function ShadowLedgerEntryRow({ entry }: { entry: ShadowLedgerEntry }) {
+  return (
+    <tr>
+      <td>
+        <T text={entry.category} />
+      </td>
+      <td>
+        <T text={entry.operation} />
+      </td>
+      <td>{entry.target ? <T text={entry.target} /> : <span style={{ color: 'var(--faint)' }}>—</span>}</td>
+      <td>
+        {entry.sessionId ? (
+          <Link to="/session/$sessionId" params={{ sessionId: entry.sessionId }} style={{ textDecoration: 'none' }}>
+            open session
+          </Link>
+        ) : (
+          <span style={{ color: 'var(--faint)' }}>—</span>
+        )}
+      </td>
+      <td style={{ color: 'var(--faint)', fontSize: 'var(--text-sm)' }}>{new Date(entry.createdAt).toLocaleString()}</td>
+    </tr>
+  )
+}
+
+/**
+ * ShadowLedgerCard renders §30.6's own shadow-operator surface: the
+ * per-repo ledger of suppressed platform-shadow effects, the §30.1
+ * LLM-spend line, and the "Activate" graduation gesture (§30.8). The
+ * WHOLE card -- not just Activate -- is admin-only: unlike every other
+ * card on this screen, this one's own GET is itself gated
+ * (authz.ActionViewShadowLedger), because this ledger can hold a
+ * customer repository's own file content at rest, beyond what any other
+ * card here exposes. This mirrors MembersPanel.tsx's own "query anyway,
+ * render a forbidden note on a real 403" pattern -- the server is the
+ * authority, this screen only explains the verdict -- rather than
+ * RiskPolicyCard/AutoMergeCard's own "always readable, only editing is
+ * gated" shape immediately above, which does not apply here since even
+ * READING this card is restricted.
+ */
+function ShadowLedgerCard({ owner, repo, role }: { owner: string; repo: string; role: string | undefined }) {
+  const queryClient = useQueryClient()
+  const repoFullName = `${owner}/${repo}`
+
+  const query = useQuery({
+    queryKey: shadowLedgerQueryKeys.detail(repoFullName),
+    queryFn: ({ signal }) => getShadowLedger(owner, repo, signal),
+    retry: false,
+  })
+
+  const mutation = useMutation({
+    mutationFn: () => postActivateShadowLedger(owner, repo),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(shadowLedgerQueryKeys.detail(repoFullName), updated)
+      void queryClient.invalidateQueries({ queryKey: repoSettingsQueryKeys.detail(repoFullName) })
+    },
+  })
+
+  const forbidden = query.isError && query.error instanceof ApiError && query.error.status === 403
+
+  return (
+    <div className="panel">
+      <h4>Shadow ledger</h4>
+      <p className="ph">
+        What platform shadow mode suppressed on this repository&rsquo;s behalf -- every customer-visible write it would have made, and what running the agent actually cost. Admin-only: this is the one surface in the product that can
+        hold a customer repository&rsquo;s own file content at rest, in full.
+      </p>
+      {forbidden && <p className="notavailable">Shadow ledger is admin-only. Your role cannot view this card -- enforced server-side (authz.ActionViewShadowLedger), not merely hidden here.</p>}
+      {!forbidden && query.isPending && <p className="rail-empty">Loading…</p>}
+      {!forbidden && query.isError && <p className="rail-empty">Couldn&rsquo;t load the shadow ledger.</p>}
+      {!forbidden && query.isSuccess && (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '4px 0', fontSize: 'var(--text-sm)', borderBottom: '1px solid var(--line)' }}>
+            <span style={{ color: 'var(--faint)' }}>Egress mode</span>
+            <span>
+              {query.data.liveEgressEnabled ? 'Live' : 'Shadow'}
+              {query.data.liveEgressPromotedAt ? ` · promoted ${new Date(query.data.liveEgressPromotedAt).toLocaleString()}` : ''}
+            </span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '4px 0', fontSize: 'var(--text-sm)', borderBottom: '1px solid var(--line)' }}>
+            <span style={{ color: 'var(--faint)' }}>LLM spend (this repository)</span>
+            <span>{query.data.llmSpendComputed && query.data.llmSpendUsd !== null ? `$${query.data.llmSpendUsd.toFixed(2)}` : 'no figure available yet'}</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '4px 0', fontSize: 'var(--text-sm)', borderBottom: '1px solid var(--line)' }}>
+            <span style={{ color: 'var(--faint)' }}>Suppressed effects on record</span>
+            <span>{query.data.totalCount}</span>
+          </div>
+
+          {query.data.categories.length > 0 && (
+            <div style={{ padding: '8px 0' }}>
+              {query.data.categories.map((c) => (
+                <div key={c.label} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 'var(--text-sm)', padding: '2px 0' }}>
+                  <span>
+                    <T text={c.label} />
+                  </span>
+                  <span>{c.count}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {query.data.entries.length > 0 && (
+            <div style={{ overflowX: 'auto' }}>
+              <table className="sectable">
+                <thead>
+                  <tr>
+                    <th>Category</th>
+                    <th>Operation</th>
+                    <th>Target</th>
+                    <th>Session</th>
+                    <th>When</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {query.data.entries.map((e, i) => (
+                    <ShadowLedgerEntryRow key={`${e.source}-${e.sessionId ?? 'none'}-${i}`} entry={e} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {query.data.pendingShadowEraCount > 0 && (
+            <p className="sidebar-notice">
+              {query.data.pendingShadowEraCount} suppressed effect{query.data.pendingShadowEraCount === 1 ? '' : 's'} still resolving into this ledger -- Activate is blocked until they settle.
+            </p>
+          )}
+          {query.data.liveEgressEnabled ? (
+            <p className="ph" style={{ marginTop: 8 }}>
+              This repository is already live.
+            </p>
+          ) : (
+            <>
+              {!isAdmin(role) && <RoleGateNote requiredRole="admin" />}
+              {isAdmin(role) && (
+                <div className="formrow" style={{ marginTop: 8 }}>
+                  <button type="button" className="btn primary" disabled={mutation.isPending || query.data.pendingShadowEraCount > 0} onClick={() => mutation.mutate()}>
+                    {mutation.isPending ? 'Activating…' : 'Activate'}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+          {mutation.isError && <MutationError error={mutation.error} />}
+        </>
+      )}
     </div>
   )
 }
@@ -664,6 +817,7 @@ export function RepoSettingsView() {
               <RepoSettingsSummary settings={query.data} />
               <RiskPolicyCard owner={owner} repo={repo} settings={query.data} canEdit={isAdmin(role)} />
               <AutoMergeCard owner={owner} repo={repo} settings={query.data} canEdit={isAdmin(role)} />
+              <ShadowLedgerCard owner={owner} repo={repo} role={role} />
               <AutoRetriggerReviewCard owner={owner} repo={repo} settings={query.data} canEdit={isAdmin(role)} />
               <DescriptionAutofixCard owner={owner} repo={repo} settings={query.data} canEdit={isAdmin(role)} />
               <AutoApprovalCard owner={owner} repo={repo} settings={query.data} canEdit={isMaintainerPlus(role)} />
