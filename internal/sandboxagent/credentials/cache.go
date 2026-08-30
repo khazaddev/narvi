@@ -47,13 +47,54 @@ func cacheFileName(host string) string {
 	return hex.EncodeToString(sum[:]) + ".json"
 }
 
-// path ensures Dir exists (0700) and returns the full path to host's cache
-// file inside it.
+// path ensures Dir exists, is OURS, and is 0700, then returns the full
+// path to host's cache file inside it.
+//
+// The ownership and mode check is the point, and MkdirAll cannot make it:
+// MkdirAll is a no-op when the directory already exists, whatever its
+// owner or mode. Dir's default lives under /tmp, which is world-writable,
+// and the agent runtime -- prompt-injectable, and running as a different
+// uid precisely because it is not trusted (§30.5) -- can create a
+// directory there. If it wins that race, root then opens credential files
+// INSIDE a runtime-owned directory: the runtime cannot read a 0600 root
+// file, but it owns the directory entry, so it can plant a symlink at the
+// exact name and have root's own O_CREATE write the SCM token wherever it
+// points.
+//
+// So a directory that is not ours, or not 0700, is a hard failure rather
+// than something to repair: repairing it would race the same attacker,
+// and a credential that cannot be cached safely must not be cached.
 func (c *Cache) path(host string) (string, error) {
 	if err := os.MkdirAll(c.Dir, 0o700); err != nil {
 		return "", fmt.Errorf("credentials: create cache dir %s: %w", c.Dir, err)
 	}
+	if err := c.assertDirIsOurs(); err != nil {
+		return "", err
+	}
 	return filepath.Join(c.Dir, cacheFileName(host)), nil
+}
+
+// assertDirIsOurs fails unless Dir is a real directory, owned by this
+// process's uid, with no group or other permission bits.
+func (c *Cache) assertDirIsOurs() error {
+	info, err := os.Lstat(c.Dir)
+	if err != nil {
+		return fmt.Errorf("credentials: stat cache dir %s: %w", c.Dir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("credentials: cache dir %s is not a directory", c.Dir)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("credentials: cannot read ownership of cache dir %s", c.Dir)
+	}
+	if uint64(stat.Uid) != uint64(os.Getuid()) {
+		return fmt.Errorf("credentials: cache dir %s is owned by uid %d, not this process (uid %d); refusing to cache a credential in a directory another user controls", c.Dir, stat.Uid, os.Getuid())
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		return fmt.Errorf("credentials: cache dir %s has mode %#o; refusing to cache a credential in a directory group or others can enter", c.Dir, perm)
+	}
+	return nil
 }
 
 // withFileLock opens (creating if absent, 0600) path, takes an exclusive
@@ -178,8 +219,32 @@ func (c *Cache) Erase(host string) error {
 // purge, which is the common case for a fresh BootModeFresh/BootModeBuild
 // boot's very first credential-helper invocation.
 func (c *Cache) PurgeAll() error {
-	if err := os.RemoveAll(c.Dir); err != nil {
-		return fmt.Errorf("credentials: purge cache dir %s: %w", c.Dir, err)
+	// The CONTENTS, never the directory itself.
+	//
+	// Removing the directory looks equivalent and opens a real window:
+	// the default Dir is under /tmp, which is world-writable, and the
+	// agent runtime runs as a different uid on purpose. Between this
+	// delete and the next Store's MkdirAll, the runtime can create
+	// /tmp/narvi-credentials as its own -- and MkdirAll on an existing
+	// directory is a no-op, whatever its owner. Root then writes
+	// credential files into a directory the runtime controls, where a
+	// planted symlink redirects the token somewhere the runtime can read.
+	//
+	// Leaving the root-owned 0700 directory in place means there is no
+	// moment at which that name is unclaimed. A missing directory is
+	// still not an error: a sandbox that never minted anything has
+	// nothing to purge, which is the common fresh-boot case.
+	entries, err := os.ReadDir(c.Dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("credentials: read cache dir %s: %w", c.Dir, err)
+	}
+	for _, entry := range entries {
+		if rmErr := os.RemoveAll(filepath.Join(c.Dir, entry.Name())); rmErr != nil {
+			return fmt.Errorf("credentials: purge cache entry %s: %w", entry.Name(), rmErr)
+		}
 	}
 	return nil
 }

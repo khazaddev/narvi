@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -260,7 +261,7 @@ func TestCache_FlockSerializesConcurrentAccess(t *testing.T) {
 // Cache is still usable afterward (a fresh Store/Load round trip
 // succeeds, proving PurgeAll doesn't leave the directory in a state a
 // later credential-helper invocation couldn't recover from).
-func TestCache_PurgeAllRemovesEverything(t *testing.T) {
+func TestCache_PurgeAllEmptiesTheDirectoryWithoutUnclaimingIt(t *testing.T) {
 	t.Parallel()
 
 	dir := filepath.Join(t.TempDir(), "cache")
@@ -278,12 +279,32 @@ func TestCache_PurgeAllRemovesEverything(t *testing.T) {
 		t.Fatalf("PurgeAll() error = %v, want nil", err)
 	}
 
-	// Checked BEFORE any Load call below: Cache.path() (Load/Store/Erase's
-	// own shared helper) calls os.MkdirAll as a side effect of merely
-	// LOOKING for a cache file, which would recreate (empty) the very
-	// directory this assertion means to prove is gone.
-	if _, err := os.Stat(dir); err == nil {
-		t.Errorf("cache dir %s still exists after PurgeAll, want it removed entirely", dir)
+	// The guarantee is "no credential remains", NOT "the directory is
+	// gone" -- and this assertion used to pin the second, which is the
+	// behaviour that opened a real hole. The default Dir lives under
+	// /tmp, which is world-writable, and the agent runtime runs as a
+	// different uid on purpose. A purge that removed the directory left
+	// its NAME unclaimed, so the runtime could recreate it as its own
+	// before the next Store; MkdirAll on an existing directory is a
+	// no-op whatever its owner, so root then wrote credential files into
+	// a directory the runtime controlled, where a planted symlink
+	// redirects the token somewhere readable.
+	//
+	// So: the directory must SURVIVE, still ours and still 0700, and be
+	// empty.
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("cache dir %s does not survive PurgeAll: %v -- leaving its name unclaimed under a world-writable parent lets another uid claim it", dir, err)
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		t.Errorf("cache dir mode = %#o after PurgeAll, want no group/other bits", perm)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read cache dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("cache dir holds %d entries after PurgeAll, want 0", len(entries))
 	}
 
 	for _, host := range []string{"github.com", "gitlab.com"} {
@@ -312,5 +333,47 @@ func TestCache_PurgeAllOfAbsentDirIsNotAnError(t *testing.T) {
 	cache := &credentials.Cache{Dir: filepath.Join(t.TempDir(), "never-created")}
 	if err := cache.PurgeAll(); err != nil {
 		t.Errorf("PurgeAll() error = %v, want nil for a Dir that was never created", err)
+	}
+}
+
+// TestCache_RefusesADirectoryAnotherUserCouldControl is the second half
+// of closing the /tmp hijack, and it covers the case PurgeAll's own fix
+// does not: the directory never being ours in the first place.
+//
+// MkdirAll is a no-op on an existing directory, whatever its owner or
+// mode, so a cache directory pre-created by someone else is adopted
+// silently. Under a world-writable parent that someone is the agent
+// runtime — a different uid on purpose, and prompt-injectable. It cannot
+// read a 0600 root file, but owning the directory entry is enough: it
+// plants a symlink at the credential's exact name and root's own O_CREATE
+// writes the SCM token wherever it points.
+//
+// A group- or world-accessible directory is therefore a hard failure, not
+// something to repair in place — repairing races the same attacker.
+func TestCache_RefusesADirectoryAnotherUserCouldControl(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "cache")
+	if err := os.MkdirAll(dir, 0o777); err != nil {
+		t.Fatalf("pre-create a permissive cache dir: %v", err)
+	}
+	// os.MkdirAll applies the umask, so set the hostile mode explicitly.
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+
+	cache := &credentials.Cache{Dir: dir}
+	err := cache.Store("github.com", credentials.Credential{Username: "x-access-token", Password: "ghs_must_not_be_written_here"})
+	if err == nil {
+		t.Fatal("Store() error = nil into a world-writable cache dir; another uid owning that directory can redirect root's own write with a symlink")
+	}
+	if !strings.Contains(err.Error(), "mode") {
+		t.Errorf("Store() error = %v, want it to name the directory's mode as the reason", err)
+	}
+
+	entries, readErr := os.ReadDir(dir)
+	if readErr != nil {
+		t.Fatalf("read dir: %v", readErr)
+	}
+	if len(entries) != 0 {
+		t.Errorf("the refused Store still wrote %d entries; nothing may be written before the directory is trusted", len(entries))
 	}
 }
