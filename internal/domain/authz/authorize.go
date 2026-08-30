@@ -229,6 +229,13 @@ var matrix = map[Action]actionRule{
 	// ActionToggleAutoMerge/ActionToggleSentinelAutoFix immediately above
 	// (action.go's own doc comment).
 	ActionConfigurePreviewLinks: {allow: roles(RoleAdmin)},
+	// (§30.6/§30.9): the shadow-operator ledger view and its
+	// Activate promotion -- admin only, this SAME row, though no §13.3
+	// table row names either explicitly (action.go's own doc comment on
+	// ActionViewShadowLedger explains why, mirroring ActionMergePR's own
+	// precedent for an enforced-but-untabled action).
+	ActionViewShadowLedger:     {allow: roles(RoleAdmin)},
+	ActionActivateShadowLedger: {allow: roles(RoleAdmin)},
 }
 
 // Authorize renders the §13.3 verdict for actor attempting action against

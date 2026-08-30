@@ -472,6 +472,44 @@ const (
 	// instruction -- see httpapi/previewconfig.go's own doc comment for
 	// the full "why a separate endpoint" reasoning).
 	ActionConfigurePreviewLinks Action = "configure_preview_links"
+
+	// ActionViewShadowLedger backs, alongside ActionActivateShadowLedger
+	// immediately below, the shadow-operator surface (§30.6/§30.9): the
+	// per-repo ledger of
+	// suppressed platform-shadow effects (shadow_scm_writes + marked
+	// outbox rows) plus the §30.1 LLM-spend line, and the "Activate"
+	// graduation gesture that flips repo_settings.live_egress_enabled
+	// (§30.8's promotion fence + shadow-era artifact quarantine).
+	//
+	// NO §13.3 TABLE ROW NAMES EITHER OF THESE -- deliberately, not by
+	// omission: this ledger is the only surface in the product holding customer
+	// source code at rest, IN FULL (shadowledger.UpdateFileContent.
+	// Content is carried whole, never a hash), which is strictly more
+	// exposure than even ActionManageMembers' own admin-only audit-log
+	// row (§16.1's dead-lettered-outbox-deliveries precedent) already
+	// covers -- and whose own retention/PII policy is still an open,
+	// deferred decision (§30.9). Admin-only is the answer NOW, precisely
+	// because that policy does not exist yet: deciding who may read a
+	// body of customer code before deciding how long it lives is the
+	// wrong order, and widening past admin-only is gated on retention
+	// existing first, not on this matrix growing a row for it. This
+	// mirrors ActionMergePR's own identical "no dedicated §13.3 table row
+	// names this action explicitly" precedent (row 2, above) -- an Action
+	// can be real and enforced without the markdown table ever listing
+	// it by name.
+	//
+	// Two actions, not one, because they are different admin verdicts on
+	// different things: viewing a ledger that already exists is a read;
+	// Activate is the one-way (per repository; re-promoting an
+	// already-live repo is a no-op, §30.8) state change that arms live
+	// egress. Both admin-only, both this SAME row-6 grouping -- a repo's
+	// egress mode is exactly the kind of "what runs unattended" system
+	// posture change this row already gates for every sibling toggle.
+	ActionViewShadowLedger Action = "view_shadow_ledger"
+	// ActionActivateShadowLedger is the Activate endpoint itself -- see
+	// ActionViewShadowLedger's own doc comment immediately above for why
+	// this pair carries no §13.3 table row.
+	ActionActivateShadowLedger Action = "activate_shadow_ledger"
 )
 
 // AllActions is every recognized Action, in this file's own declaration
@@ -518,4 +556,6 @@ var AllActions = []Action{
 	ActionConfigureReviewDepth,
 	ActionConfigureReviewCostBudget,
 	ActionConfigurePreviewLinks,
+	ActionViewShadowLedger,
+	ActionActivateShadowLedger,
 }
