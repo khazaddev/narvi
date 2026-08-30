@@ -26,13 +26,21 @@ type Client interface {
 	// immediate acknowledgment, identity-link notice, and busy/stop
 	// notices internal/adapters/inbound/linear posts synchronously from
 	// its own webhook handler.
-	CreateThoughtActivity(ctx context.Context, accessToken, agentSessionID, body string) error
+	// identityNotice is the identity-link prompt, passed SEPARATELY from
+	// body rather than concatenated into it by the caller. Its text
+	// contains a live magic-link URL whose nonce is credential-equivalent
+	// -- whoever holds it can bind a Linear identity to a Narvi account --
+	// and the shadow decorator records body verbatim into a permanent,
+	// append-only table. Keeping it out of body is what makes the ledger
+	// record structurally unable to carry it: there is no field for it.
+	// Empty when this actor is already linked, which is the common case.
+	CreateThoughtActivity(ctx context.Context, accessToken, agentSessionID, body, identityNotice string) error
 
 	// CreateResponseActivity posts a `response` Agent Activity -- the
 	// SYNCHRONOUS plan-decision-outcome activity (postPlanOutcomeActivity,
 	// webhook.go). See doc.go's own note on this method's separate,
 	// outbox-delivered call site, which this package does not touch.
-	CreateResponseActivity(ctx context.Context, accessToken, agentSessionID, body string) error
+	CreateResponseActivity(ctx context.Context, accessToken, agentSessionID, body, identityNotice string) error
 }
 
 // Decorator wraps a live Client and suppresses its writes when
@@ -86,25 +94,36 @@ func (d *Decorator) GetUserEmail(ctx context.Context, accessToken, userID string
 }
 
 // CreateThoughtActivity posts the activity, or records that it would have.
-func (d *Decorator) CreateThoughtActivity(ctx context.Context, accessToken, agentSessionID, body string) error {
+func (d *Decorator) CreateThoughtActivity(ctx context.Context, accessToken, agentSessionID, body, identityNotice string) error {
 	if d.isLive(ctx, d.repoFullName) {
-		return d.live.CreateThoughtActivity(ctx, accessToken, agentSessionID, body)
+		return d.live.CreateThoughtActivity(ctx, accessToken, agentSessionID, body, identityNotice)
 	}
 	return d.record(ctx, shadowledger.Entry{
 		Operation: "linear_create_thought_activity",
 		Target:    agentSessionID,
-		Spec:      shadowledger.LinearThoughtActivity{AgentSessionID: agentSessionID, Body: body},
+		Spec: shadowledger.LinearThoughtActivity{
+			AgentSessionID: agentSessionID,
+			Body:           body,
+			// The notice's TEXT is never recorded -- only that one was
+			// appended. It carries a live magic-link nonce, and this row
+			// outlives the session in an append-only table.
+			IdentityNoticeAppended: identityNotice != "",
+		},
 	})
 }
 
 // CreateResponseActivity posts the activity, or records that it would have.
-func (d *Decorator) CreateResponseActivity(ctx context.Context, accessToken, agentSessionID, body string) error {
+func (d *Decorator) CreateResponseActivity(ctx context.Context, accessToken, agentSessionID, body, identityNotice string) error {
 	if d.isLive(ctx, d.repoFullName) {
-		return d.live.CreateResponseActivity(ctx, accessToken, agentSessionID, body)
+		return d.live.CreateResponseActivity(ctx, accessToken, agentSessionID, body, identityNotice)
 	}
 	return d.record(ctx, shadowledger.Entry{
 		Operation: "linear_create_response_activity",
 		Target:    agentSessionID,
-		Spec:      shadowledger.LinearResponseActivity{AgentSessionID: agentSessionID, Body: body},
+		Spec: shadowledger.LinearResponseActivity{
+			AgentSessionID:         agentSessionID,
+			Body:                   body,
+			IdentityNoticeAppended: identityNotice != "",
+		},
 	})
 }

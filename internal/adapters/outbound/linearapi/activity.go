@@ -40,7 +40,14 @@ type thoughtContent struct {
 // seconds of a `created` AgentSessionEvent to avoid the session being
 // marked unresponsive -- see this package's own doc.go for why this is a
 // direct, synchronous call rather than routed through an outbox.
-func (c *Client) CreateThoughtActivity(ctx context.Context, accessToken, agentSessionID, body string) error {
+// identityNotice, when non-empty, is joined onto body for the actual
+// post. It travels as its own parameter rather than pre-joined by the
+// caller because it carries a live magic-link nonce, and the shadow
+// decorator between this client and its callers records body verbatim
+// into an append-only table -- see shadowlinear.Client's own doc comment.
+// Here, at the live edge, the join is exactly what it always was.
+func (c *Client) CreateThoughtActivity(ctx context.Context, accessToken, agentSessionID, body, identityNotice string) error {
+	body = joinIdentityNotice(body, identityNotice)
 	variables := map[string]any{
 		"input": map[string]any{
 			"agentSessionId": agentSessionID,
@@ -84,7 +91,14 @@ const (
 // for a turn that completed SUCCESSFULLY (turn.TriggerComplete), delivered
 // via the outbox (internal/app/outboxworker), never synchronously from an
 // inbound webhook handler the way CreateThoughtActivity above is.
-func (c *Client) CreateResponseActivity(ctx context.Context, accessToken, agentSessionID, body string) error {
+// identityNotice, when non-empty, is joined onto body for the actual
+// post. It travels as its own parameter rather than pre-joined by the
+// caller because it carries a live magic-link nonce, and the shadow
+// decorator between this client and its callers records body verbatim
+// into an append-only table -- see shadowlinear.Client's own doc comment.
+// Here, at the live edge, the join is exactly what it always was.
+func (c *Client) CreateResponseActivity(ctx context.Context, accessToken, agentSessionID, body, identityNotice string) error {
+	body = joinIdentityNotice(body, identityNotice)
 	return c.createOutcomeActivity(ctx, accessToken, agentSessionID, outcomeContentTypeResponse, body)
 }
 
@@ -108,4 +122,18 @@ func (c *Client) createOutcomeActivity(ctx context.Context, accessToken, agentSe
 	}
 	var data createAgentActivityData
 	return c.doGraphQL(ctx, accessToken, createAgentActivityMutation, variables, &data)
+}
+
+// joinIdentityNotice puts the identity-link prompt on its own line under
+// body, or returns body unchanged when there is no prompt. This is the
+// former inbound-side appendNotice, moved to the one place that actually
+// sends the text.
+func joinIdentityNotice(body, notice string) string {
+	if notice == "" {
+		return body
+	}
+	if body == "" {
+		return notice
+	}
+	return body + "\n\n" + notice
 }

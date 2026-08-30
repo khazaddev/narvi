@@ -252,6 +252,22 @@ type SlackViewOpen struct {
 type LinearThoughtActivity struct {
 	AgentSessionID string `json:"agentSessionId"`
 	Body           string `json:"body"`
+	// IdentityNoticeAppended records THAT an identity-link prompt was
+	// appended to this activity, never its text.
+	//
+	// The prompt's body contains a live magic-link URL whose nonce is
+	// credential-equivalent: whoever holds it can bind a Linear identity
+	// to a Narvi account. This row is append-only and outlives the
+	// session, so recording the text would store that secret forever.
+	//
+	// The exclusion is the type's SHAPE, not a redaction. §30.6 asks for
+	// a compile error rather than a redaction pass, and the sealed marker
+	// alone cannot deliver it here -- this secret does not arrive in a
+	// field named Token, it arrives inside human-readable text. So the
+	// caller passes the notice separately and there is nowhere to put it.
+	// Stripping a URL out of Body instead would hold only until someone
+	// reworded the prompt.
+	IdentityNoticeAppended bool `json:"identityNoticeAppended"`
 }
 
 // LinearResponseActivity mirrors linearapi.Client.CreateResponseActivity's
@@ -262,6 +278,22 @@ type LinearThoughtActivity struct {
 type LinearResponseActivity struct {
 	AgentSessionID string `json:"agentSessionId"`
 	Body           string `json:"body"`
+	// IdentityNoticeAppended records THAT an identity-link prompt was
+	// appended to this activity, never its text.
+	//
+	// The prompt's body contains a live magic-link URL whose nonce is
+	// credential-equivalent: whoever holds it can bind a Linear identity
+	// to a Narvi account. This row is append-only and outlives the
+	// session, so recording the text would store that secret forever.
+	//
+	// The exclusion is the type's SHAPE, not a redaction. §30.6 asks for
+	// a compile error rather than a redaction pass, and the sealed marker
+	// alone cannot deliver it here -- this secret does not arrive in a
+	// field named Token, it arrives inside human-readable text. So the
+	// caller passes the notice separately and there is nowhere to put it.
+	// Stripping a URL out of Body instead would hold only until someone
+	// reworded the prompt.
+	IdentityNoticeAppended bool `json:"identityNoticeAppended"`
 }
 
 // SlackIdentityLinkNotice records that an identity-link prompt would have

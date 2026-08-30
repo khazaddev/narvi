@@ -143,7 +143,7 @@ func (deps Deps) decryptLinearAccessToken(ctx context.Context, logger *slog.Logg
 // their own existing text instead of sending a second call). A no-op when
 // notice is empty -- never an extra API call, an extra log line, or an
 // extra activity when there's nothing to say.
-func (deps Deps) postIdentityNotice(ctx context.Context, organizationID, agentSessionID, notice string) {
+func (deps Deps) postIdentityNotice(ctx context.Context, organizationID, agentSessionID, body, notice string) {
 	if notice == "" {
 		return
 	}
@@ -157,56 +157,21 @@ func (deps Deps) postIdentityNotice(ctx context.Context, organizationID, agentSe
 	activityCtx, cancel := context.WithTimeout(ctx, deps.Timeouts.LinearOutboundActivityTimeout)
 	defer cancel()
 
-	if err := deps.LinearClient.CreateThoughtActivity(activityCtx, accessToken, agentSessionID, notice); err != nil {
+	if err := // body carries whatever context the caller had; notice goes
+		// separately so the shadow ledger records THAT a prompt was shown
+		// without recording the live magic-link nonce inside it.
+		deps.LinearClient.CreateThoughtActivity(activityCtx, accessToken, agentSessionID, body, notice); err != nil {
 		logger.Warn("linear: post identity-link notice activity failed", "error", err, "agent_session_id", agentSessionID)
 	}
 }
 
-// appendNotice appends notice to base on its own line, or returns base
-// unchanged when notice is empty -- shared wording glue between
-// handleCreated's acknowledgment and handlePlanVerdict's outcome text,
-// both of which append the SAME §13.2 "notify in-channel" text
-// (identitylink.Resolution.NotificationText) rather than sending a
-// second, separate activity.
-//
-// Residual risk ("identities + full RBAC", §13.2 -- documented,
-// deliberate, Linear-specific): unlike Slack (ack.go's own postEphemeral),
-// this text -- including a still-sensitive magic-link URL -- is posted as
-// an ordinary Agent Activity, visible to whoever can see this Linear
-// AgentSession/issue, not scoped to ONE named recipient the way Slack's
-// chat.postEphemeral is. This codebase's own linearapi client (internal/
-// adapters/outbound/linearapi) implements only AgentActivity creation
-// (thought/response/error) -- no private/personal notification mutation
-// exists in it today, and this Step's own investigation found no
-// confirmed equivalent to add without a new, unverified Linear API scope.
-// The concretely DEMONSTRATED hijack path this Step's own security review
-// found (service_integration_test.go's own TestConsume_
-// LinksIdentityAndDeletesPrompt shape) is Slack's shared-channel
-// chat.postMessage -- fixed above. Linear's own AgentSession/AgentActivity
-// model is already scoped tighter than an arbitrary shared Slack channel
-// (an agent session is tied to a specific issue/delegation, not "every
-// member of a channel"), and the spec's own magic-link mechanism does not
-// mandate delivery-scoping parity across every channel -- so this is
-// accepted as a documented residual gap for Linear specifically, per this
-// Step's own explicit brief, rather than guessed at with an unverified
-// API call.
-//
-// Re-reviewed in this Step's own SECOND fix pass: also checked whether
-// Consume (internal/app/identitylink.Consume) could at least be narrowed
-// to the small, known candidate-user-id set for the "multiple matches"
-// (ambiguous) sub-case specifically, shrinking -- not closing -- this
-// same hijack window without needing any new Linear API capability.
-// Investigated and NOT done: see identitylink/service.go's own Consume
-// doc comment for the full reasoning (it would need a new migration/
-// column, a Consume signature change, and a new outcome case in the
-// magic-link consume handler -- a small redesign, but still a redesign,
-// not a targeted fix). This gap remains exactly as documented above.
-func appendNotice(base, notice string) string {
-	if notice == "" {
-		return base
-	}
-	return base + "\n\n" + notice
-}
+// appendNotice was removed. It concatenated the identity-link prompt --
+// which carries a live magic-link nonce -- into arbitrary activity
+// bodies, and the shadow decorator records those bodies verbatim into an
+// append-only table. The prompt now travels as its own parameter all the
+// way to the client, so the ledger record has nowhere to put it (see
+// shadowledger.LinearThoughtActivity.IdentityNoticeAppended). The live
+// client still joins the two for the actual post.
 
 // authorizeResolvedActor/ownedOrJoined used to live here (
 // "identities + full RBAC", §13.2/§13.3) but moved verbatim into

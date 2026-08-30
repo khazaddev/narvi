@@ -35,7 +35,7 @@ func TestCreateResponseActivity_Success(t *testing.T) {
 
 	client := linearapi.New(server.Client(), server.URL)
 
-	err := client.CreateResponseActivity(context.Background(), "test-access-token", "agent-session-1", "Turn completed successfully.")
+	err := client.CreateResponseActivity(context.Background(), "test-access-token", "agent-session-1", "Turn completed successfully.", "")
 	if err != nil {
 		t.Fatalf("CreateResponseActivity() error = %v, want nil", err)
 	}
@@ -122,7 +122,7 @@ func TestCreateResponseActivity_GraphQLError(t *testing.T) {
 
 	client := linearapi.New(server.Client(), server.URL)
 
-	err := client.CreateResponseActivity(context.Background(), "bad-token", "agent-session-1", "hi")
+	err := client.CreateResponseActivity(context.Background(), "bad-token", "agent-session-1", "hi", "")
 	if err == nil {
 		t.Fatal("CreateResponseActivity() error = nil, want non-nil")
 	}
@@ -156,7 +156,7 @@ func TestCreateThoughtActivity_Success(t *testing.T) {
 
 	client := linearapi.New(server.Client(), server.URL)
 
-	err := client.CreateThoughtActivity(context.Background(), "test-access-token", "agent-session-1", "Looking into this now.")
+	err := client.CreateThoughtActivity(context.Background(), "test-access-token", "agent-session-1", "Looking into this now.", "")
 	if err != nil {
 		t.Fatalf("CreateThoughtActivity() error = %v, want nil", err)
 	}
@@ -205,7 +205,7 @@ func TestCreateThoughtActivity_GraphQLError(t *testing.T) {
 
 	client := linearapi.New(server.Client(), server.URL)
 
-	err := client.CreateThoughtActivity(context.Background(), "bad-token", "agent-session-1", "hi")
+	err := client.CreateThoughtActivity(context.Background(), "bad-token", "agent-session-1", "hi", "")
 	if err == nil {
 		t.Fatal("CreateThoughtActivity() error = nil, want non-nil")
 	}
