@@ -15,21 +15,24 @@
 
 package shadowscm
 
-import "github.com/khazaddev/narvi/internal/app/ports"
+import (
+	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/khazaddev/narvi/internal/domain/shadowsentinel"
+)
 
 // syntheticPRNumber is deliberately negative. Real GitHub pull request
 // numbers are positive and monotonic, so a negative one cannot collide
 // with a real PR and cannot be mistaken for one anywhere it is printed,
 // compared, or stored -- while still being an int, so nothing downstream
 // has to special-case the type.
-const syntheticPRNumber = -1
+const syntheticPRNumber = shadowsentinel.PRNumber
 
 // syntheticCommitSHA is the right length and alphabet for a git object id,
 // so anything that validates the shape still works, and spells what it is
 // so nobody reads it as a real commit. It is not a valid hex SHA: the
 // letters past 'f' make it impossible for it to name an object that could
 // ever exist.
-const syntheticCommitSHA = "shadowsuppressednotarealcommitsha0000000"
+const syntheticCommitSHA = shadowsentinel.CommitSHA
 
 // syntheticPRRef builds the PRRef a suppressed CreatePR returns. The URL
 // points nowhere on the real host on purpose -- a link that resolves to a
@@ -38,7 +41,7 @@ const syntheticCommitSHA = "shadowsuppressednotarealcommitsha0000000"
 func syntheticPRRef(owner, repo string) ports.PRRef {
 	return ports.PRRef{
 		Number: syntheticPRNumber,
-		URL:    "shadow-suppressed://" + owner + "/" + repo + "/pull/not-created",
+		URL:    shadowsentinel.URLScheme + owner + "/" + repo + "/pull/not-created",
 	}
 }
 
