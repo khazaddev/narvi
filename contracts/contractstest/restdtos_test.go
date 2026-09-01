@@ -1160,3 +1160,138 @@ func TestReviewAnalyticsRoundTrip(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+// TestAutomationRoundTrip covers the DTO that carries the schema's only
+// nullable, non-enum date-time property today (`lastRunAt`).
+//
+// The PopulatedLastRunAt subtest is the regression test for the codegen
+// defect ./tools/contractspatch exists to fix: go-jsonschema emits a DEFINED
+// pointer type for such a property (`type AutomationLastRunAt *time.Time`),
+// whose method set is empty and cannot be extended (Go rejects a pointer
+// receiver base type outright), so encoding/json never dispatched to
+// time.Time.UnmarshalJSON and decoding any non-null timestamp failed with
+// "cannot unmarshal string into Go struct field Plain.lastRunAt of type
+// time.Time". contractspatch rewrites the declaration to an ALIAS
+// (`type AutomationLastRunAt = *time.Time`), which restores that dispatch.
+//
+// The two subtests are deliberately paired: a JSON null needs no method
+// dispatch to leave a pointer nil, so NullLastRunAt passed throughout the
+// defect's whole lifetime. Only a REAL populated value exercises the broken
+// path -- which is exactly why nothing caught this before.
+func TestAutomationRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/Automation")
+
+	createdAt := time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC)
+	updatedAt := time.Date(2026, 7, 27, 11, 15, 0, 0, time.UTC)
+	prompt := "Triage the overnight CI failures."
+	createdBy := testSessionID
+	branch := "main"
+	// repos has minItems: 1 -- an automation always fans out over at least
+	// one repo, so every fixture here carries a real entry.
+	repos := []restdtos.AutomationReposElem{{
+		Name:   "narvi",
+		Url:    "https://github.com/khazaddev/narvi.git",
+		Branch: restdtos.AutomationReposElemBranch(&branch),
+	}}
+
+	t.Run("PopulatedLastRunAt", func(t *testing.T) {
+		lastRunAt := time.Date(2026, 7, 27, 11, 14, 30, 0, time.UTC)
+		artifactSummary := "Closed 2 flaky-test findings."
+		roundTrip(t, sch, restdtos.Automation{
+			Id:                    testSessionID,
+			Name:                  "overnight-ci-triage",
+			Prompt:                restdtos.AutomationPrompt(&prompt),
+			Repos:                 repos,
+			Status:                restdtos.AutomationStatusActive,
+			ConsecutiveFailures:   0,
+			CreatedBy:             restdtos.AutomationCreatedBy(&createdBy),
+			CreatedAt:             createdAt,
+			UpdatedAt:             updatedAt,
+			TriggerType:           restdtos.AutomationTriggerTypeCron,
+			TriggerConfig:         json.RawMessage(`{"schedule":"0 3 * * *"}`),
+			SandboxPathScope:      nil,
+			SandboxMockConfigured: false,
+			SandboxContractsPath:  nil,
+			EnvVars:               []restdtos.AutomationEnvVarElem{},
+			LastRunAt:             restdtos.AutomationLastRunAt(&lastRunAt),
+			LastRunStatus:         &restdtos.AutomationLastRunStatus{Value: "succeeded"},
+			ArtifactSummary:       restdtos.AutomationArtifactSummary(&artifactSummary),
+		})
+	})
+
+	t.Run("NullLastRunAt", func(t *testing.T) {
+		// Never run yet: lastRunAt/lastRunStatus/artifactSummary are all
+		// null together (the schema's own "Null until lastRunAt is first
+		// set"). This shape decoded correctly even before the fix.
+		roundTrip(t, sch, restdtos.Automation{
+			Id:                    testSandboxID,
+			Name:                  "never-run-yet",
+			Prompt:                restdtos.AutomationPrompt(&prompt),
+			Repos:                 repos,
+			Status:                restdtos.AutomationStatusActive,
+			ConsecutiveFailures:   0,
+			CreatedBy:             nil,
+			CreatedAt:             createdAt,
+			UpdatedAt:             createdAt,
+			TriggerType:           restdtos.AutomationTriggerTypeManual,
+			TriggerConfig:         json.RawMessage(`{}`),
+			SandboxPathScope:      nil,
+			SandboxMockConfigured: false,
+			SandboxContractsPath:  nil,
+			EnvVars:               []restdtos.AutomationEnvVarElem{},
+			LastRunAt:             nil,
+			// A nil *AutomationLastRunStatus and a wrapper holding a nil
+			// Value both marshal to JSON null, but only nil survives the
+			// round trip unchanged: encoding/json nils the pointer for a
+			// null rather than dispatching to the wrapper's UnmarshalJSON.
+			LastRunStatus:   nil,
+			ArtifactSummary: nil,
+		})
+	})
+}
+
+// TestShadowLedgerSummaryRoundTrip covers the second of the two DTOs whose
+// populated nullable date-time is decoded on the Go side today
+// (`liveEgressPromotedAt`, §30.8's own promotion fence). Same defect class
+// as TestAutomationRoundTrip above -- see that test's own comment.
+//
+// PopulatedPromotedAt deliberately pairs the promotion timestamp with a
+// real llmSpendUsd: both are nullable, both distinguish "not known" from a
+// legitimate zero-or-absent value, and a decode that silently dropped
+// either would misreport this surface rather than fail loudly.
+func TestShadowLedgerSummaryRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/ShadowLedgerSummary")
+
+	t.Run("PopulatedPromotedAt", func(t *testing.T) {
+		promotedAt := time.Date(2026, 8, 12, 14, 3, 0, 0, time.UTC)
+		spend := 12.34
+		roundTrip(t, sch, restdtos.ShadowLedgerSummary{
+			RepoFullName:          "khazaddev/narvi",
+			LiveEgressEnabled:     true,
+			LiveEgressPromotedAt:  restdtos.ShadowLedgerSummaryLiveEgressPromotedAt(&promotedAt),
+			PendingShadowEraCount: 0,
+			Categories:            []restdtos.ShadowLedgerCategory{},
+			TotalCount:            0,
+			LlmSpendComputed:      true,
+			LlmSpendUsd:           restdtos.ShadowLedgerSummaryLlmSpendUsd(&spend),
+			Entries:               []restdtos.ShadowLedgerEntry{},
+		})
+	})
+
+	t.Run("NullPromotedAt", func(t *testing.T) {
+		// Never promoted, and no priced turn recorded yet: llmSpendComputed
+		// false with a null llmSpendUsd is the "not computed" sentinel, not
+		// a real $0.00.
+		roundTrip(t, sch, restdtos.ShadowLedgerSummary{
+			RepoFullName:          "khazaddev/narvi",
+			LiveEgressEnabled:     false,
+			LiveEgressPromotedAt:  nil,
+			PendingShadowEraCount: 3,
+			Categories:            []restdtos.ShadowLedgerCategory{},
+			TotalCount:            0,
+			LlmSpendComputed:      false,
+			LlmSpendUsd:           nil,
+			Entries:               []restdtos.ShadowLedgerEntry{},
+		})
+	})
+}

@@ -224,11 +224,25 @@ dev:
 # tool pinned by go.mod's `tool` directive (no separately-installed binary
 # required); TS output uses contracts/scripts/generate-ts.mjs, which requires
 # contracts/node_modules to already be installed (`cd contracts && npm ci`).
+#
+# The go-jsonschema runs are followed by ./tools/contractspatch, which turns
+# the DEFINED pointer types go-jsonschema emits for nullable properties
+# (`type AutomationLastRunAt *time.Time`) into type ALIASES. A defined type
+# whose underlying type is a pointer has an empty method set and cannot be
+# given one (Go forbids a pointer receiver base type), so such a field never
+# reaches time.Time's own UnmarshalJSON and fails to decode any non-null
+# value. See that command's package comment for the full writeup;
+# contracts/contractstest/restdtos_test.go's TestAutomationRoundTrip and
+# TestShadowLedgerSummaryRoundTrip for the behavioral regression tests; and
+# contracts/contractstest/genshape_test.go for the structural guard that
+# fails if this step is ever skipped. The patch is idempotent, so
+# contracts-check's regenerate-and-diff stays clean.
 contracts-generate:
 	go tool go-jsonschema contracts/sandbox-ws/v1/commands.schema.json contracts/sandbox-ws/v1/events.schema.json -p sandboxws -o contracts/gen/go/sandboxws/sandboxws.go
 	go tool go-jsonschema contracts/client-ws/v1/protocol.schema.json -p clientws -o contracts/gen/go/clientws/clientws.go
 	go tool go-jsonschema contracts/session-config/v1/session-config.schema.json -p sessionconfig -o contracts/gen/go/sessionconfig/sessionconfig.go
 	go tool go-jsonschema contracts/rest/v1/dtos.schema.json -p restdtos -o contracts/gen/go/restdtos/restdtos.go
+	go run ./tools/contractspatch contracts/gen/go/sandboxws/sandboxws.go contracts/gen/go/clientws/clientws.go contracts/gen/go/sessionconfig/sessionconfig.go contracts/gen/go/restdtos/restdtos.go
 	cd contracts && npm run generate
 
 # contracts-check (§9.2/§10 exit criterion "contracts round-trip green") is
