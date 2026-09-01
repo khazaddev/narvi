@@ -40,10 +40,19 @@ type Client struct {
 }
 
 // New builds a Client. httpClient is accepted (rather than constructed
-// internally) so a caller controls its own timeout/transport -- a nil
-// httpClient defaults to http.DefaultClient. apiBaseURL defaults to
-// defaultAPIBaseURL when empty; production wiring should still pass it
-// explicitly (matches githubapi.New's own precedent).
+// internally) so a caller controls its own timeout/transport, and must
+// be a real client.
+//
+// A nil httpClient used to default to http.DefaultClient, and §30.2
+// names why that default had to go: New(nil, ...) in a new package got a
+// working client that no egress layer above it could see. It now yields
+// one whose transport refuses every request -- the omission is useless
+// rather than dangerous, and the zero value fails closed, matching
+// githubapi.New's own updated convention.
+//
+// apiBaseURL still defaults to defaultAPIBaseURL when empty; production
+// wiring should still pass it explicitly (matches githubapi.New's own
+// precedent).
 func New(httpClient *http.Client, apiBaseURL string) *Client {
 	if httpClient == nil {
 		// Not http.DefaultClient. §30.2 calls that default an attractive

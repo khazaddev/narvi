@@ -40,14 +40,21 @@ type DispatchClient struct {
 	accessToken string
 }
 
-// NewDispatchClient builds a DispatchClient. httpClient defaults to
-// http.DefaultClient when nil (mirroring githubapi.New's own identical
-// convention: each call is bounded by its own caller-supplied context
+// NewDispatchClient builds a DispatchClient. httpClient must be a real
+// client: each call is bounded by its own caller-supplied context
 // deadline, never a package-level http.Client.Timeout — here, the caller
 // is always outboxworker.Builder.attempt, whose own platform.Timeouts.
 // OutboxDeliveryTimeout already wraps every ports.Notifier.Deliver call,
-// see notifier.go's own doc comment). baseURL defaults to RWX's real
-// Dispatches API host when empty.
+// see notifier.go's own doc comment.
+//
+// It used to default to http.DefaultClient when nil, and §30.2 names why
+// that default had to go: NewDispatchClient(nil, ...) in a new package
+// got a working client that no egress layer above it could see. A nil
+// httpClient now yields one whose transport refuses every request — the
+// omission is useless rather than dangerous, and the zero value fails
+// closed, mirroring githubapi.New's own identical convention.
+//
+// baseURL still defaults to RWX's real Dispatches API host when empty.
 func NewDispatchClient(httpClient *http.Client, baseURL, accessToken string) *DispatchClient {
 	if httpClient == nil {
 		// Not http.DefaultClient. §30.2 calls that default an attractive

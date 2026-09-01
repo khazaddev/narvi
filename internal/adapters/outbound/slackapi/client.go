@@ -50,12 +50,21 @@ type Client struct {
 // build error, not a runtime surprise.
 var _ ports.Notifier = (*Client)(nil)
 
-// New builds a Client. httpClient defaults to http.DefaultClient when nil
-// (each Deliver call is bounded by its own caller-supplied context
-// deadline, platform.Timeouts.OutboxDeliveryTimeout, not a package-level
-// http.Client.Timeout); apiBaseURL defaults to defaultAPIBaseURL when
-// empty -- production wiring should still pass it explicitly, mirroring
-// githubapi.New/linearapi.New's own identical precedent.
+// New builds a Client. httpClient must be a real client: each Deliver
+// call is bounded by its own caller-supplied context deadline,
+// platform.Timeouts.OutboxDeliveryTimeout, not a package-level
+// http.Client.Timeout.
+//
+// It used to default to http.DefaultClient when nil, and §30.2 names why
+// that default had to go: New(nil, ...) in a new package got a working
+// client that no egress layer above it could see. A nil httpClient now
+// yields one whose transport refuses every request -- the omission is
+// useless rather than dangerous, and the zero value fails closed,
+// mirroring githubapi.New's own identical convention.
+//
+// apiBaseURL still defaults to defaultAPIBaseURL when empty; production
+// wiring should still pass it explicitly, the same precedent
+// githubapi.New and linearapi.New set for theirs.
 func New(httpClient *http.Client, apiBaseURL, botToken string) *Client {
 	if httpClient == nil {
 		// Not http.DefaultClient. §30.2 calls that default an attractive
