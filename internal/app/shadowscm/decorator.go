@@ -25,9 +25,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/app/shadowledger"
+	"github.com/narvidev/narvi/internal/adapters/outbound/githubapi"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/shadowledger"
 )
 
 // Decorator wraps a live ports.SourceControl and suppresses its writes for

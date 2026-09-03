@@ -1,6 +1,6 @@
 package modal
 
-import "github.com/khazaddev/narvi/internal/platform"
+import "github.com/narvidev/narvi/internal/platform"
 
 // Config configures a Modal Provider (New). Every field is sourced from
 // the caller's own configuration/params — New never hardcodes an API

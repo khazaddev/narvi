@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/app/reviewtriage"
+	"github.com/narvidev/narvi/internal/app/reviewtriage"
 )
 
 // allProvidersCredentialed is every test in this file's own default input

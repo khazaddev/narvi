@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
-	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/app/ports"
+	intentdomain "github.com/narvidev/narvi/internal/domain/intent"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // ClassifyPlanFollowup implements §23.1's plan_followup classification

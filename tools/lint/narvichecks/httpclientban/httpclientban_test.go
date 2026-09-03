@@ -5,7 +5,7 @@ import (
 
 	"golang.org/x/tools/go/analysis/analysistest"
 
-	"github.com/khazaddev/narvi/tools/lint/narvichecks/httpclientban"
+	"github.com/narvidev/narvi/tools/lint/narvichecks/httpclientban"
 )
 
 // TestAnalyzer proves: a plain package outside every allowed tree is

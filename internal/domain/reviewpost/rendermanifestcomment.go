@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/review"
 )
 
 // RenderManifestComment renders the release manifest check's own typed

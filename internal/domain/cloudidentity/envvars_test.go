@@ -3,7 +3,7 @@ package cloudidentity_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/cloudidentity"
+	"github.com/narvidev/narvi/internal/domain/cloudidentity"
 )
 
 // TestReservedEnvVarNames_ContainsEveryDocumentedName pins the exact 7

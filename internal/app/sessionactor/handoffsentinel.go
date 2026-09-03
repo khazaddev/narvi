@@ -65,14 +65,14 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/domain/contractdrift"
-	"github.com/khazaddev/narvi/internal/domain/handoff"
-	"github.com/khazaddev/narvi/internal/domain/provenance"
-	"github.com/khazaddev/narvi/internal/domain/reviewpost"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/outbound/githubapi"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/domain/contractdrift"
+	"github.com/narvidev/narvi/internal/domain/handoff"
+	"github.com/narvidev/narvi/internal/domain/provenance"
+	"github.com/narvidev/narvi/internal/domain/reviewpost"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // PRDiffFetcher is the narrow slice of *githubapi.Adapter's own real,

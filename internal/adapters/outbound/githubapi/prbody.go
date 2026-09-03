@@ -18,7 +18,7 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 // getPRBodyResponse is the subset of GitHub's real GET

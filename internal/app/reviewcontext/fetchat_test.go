@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
-	"github.com/khazaddev/narvi/internal/app/reviewcontext"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/outbound/githubapi"
+	"github.com/narvidev/narvi/internal/app/reviewcontext"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // TestFetchDiffAt_PinnedToGivenHeadSHA_NotPRCurrentHead is this file's own

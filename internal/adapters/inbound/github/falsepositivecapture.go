@@ -24,12 +24,12 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/actorauthz"
-	"github.com/khazaddev/narvi/internal/app/auditlog"
-	"github.com/khazaddev/narvi/internal/domain/authz"
-	"github.com/khazaddev/narvi/internal/domain/falsepositive"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/actorauthz"
+	"github.com/narvidev/narvi/internal/app/auditlog"
+	"github.com/narvidev/narvi/internal/domain/authz"
+	"github.com/narvidev/narvi/internal/domain/falsepositive"
 )
 
 // FalsePositivePatternCapturer is the narrow slice of

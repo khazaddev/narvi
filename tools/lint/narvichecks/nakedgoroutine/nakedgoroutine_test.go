@@ -5,7 +5,7 @@ import (
 
 	"golang.org/x/tools/go/analysis/analysistest"
 
-	"github.com/khazaddev/narvi/tools/lint/narvichecks/nakedgoroutine"
+	"github.com/narvidev/narvi/tools/lint/narvichecks/nakedgoroutine"
 )
 
 // TestAnalyzer proves the analyzer fires on a naked `go` statement (package

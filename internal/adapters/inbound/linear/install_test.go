@@ -6,8 +6,8 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/inbound/linear"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/inbound/linear"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // TestNewInstallHandler_RedirectsWithActorAppAndSetsStateCookie proves

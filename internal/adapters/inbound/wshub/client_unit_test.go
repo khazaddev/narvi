@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/clientws"
+	"github.com/narvidev/narvi/contracts/gen/go/clientws"
 )
 
 // TestTruncateEventsToByteBudget proves the fix for a real, live-reproduced

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/app/seed"
+	"github.com/narvidev/narvi/internal/app/seed"
 )
 
 func TestLoadManifest_Valid(t *testing.T) {

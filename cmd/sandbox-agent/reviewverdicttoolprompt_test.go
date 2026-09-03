@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
-	"github.com/khazaddev/narvi/internal/domain/review"
-	domainupload "github.com/khazaddev/narvi/internal/domain/upload"
+	"github.com/narvidev/narvi/contracts/gen/go/sessionconfig"
+	"github.com/narvidev/narvi/internal/domain/review"
+	domainupload "github.com/narvidev/narvi/internal/domain/upload"
 )
 
 // TestRenderVerdictToolPromptText is table-driven over every branch

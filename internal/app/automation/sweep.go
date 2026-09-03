@@ -7,8 +7,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	domainautomation "github.com/khazaddev/narvi/internal/domain/automation"
-	"github.com/khazaddev/narvi/internal/platform"
+	domainautomation "github.com/narvidev/narvi/internal/domain/automation"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // SweepOnce runs exactly one recovery-sweep tick: §3.5's own two

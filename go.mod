@@ -1,4 +1,4 @@
-module github.com/khazaddev/narvi
+module github.com/narvidev/narvi
 
 go 1.26
 

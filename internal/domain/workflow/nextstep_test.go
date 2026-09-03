@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/workflow"
+	"github.com/narvidev/narvi/internal/domain/workflow"
 )
 
 // TestNextStep is table-driven over every routing shape §25.4/§25.9

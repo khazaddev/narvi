@@ -16,8 +16,8 @@
 package shadowscm
 
 import (
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/domain/shadowsentinel"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/domain/shadowsentinel"
 )
 
 // syntheticPRNumber is deliberately negative. Real GitHub pull request

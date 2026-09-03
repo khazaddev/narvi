@@ -8,17 +8,17 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
-	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/app/releasereview"
-	"github.com/khazaddev/narvi/internal/app/reviewcontext"
-	appreviewtriage "github.com/khazaddev/narvi/internal/app/reviewtriage"
-	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
-	"github.com/khazaddev/narvi/internal/domain/reposource"
-	"github.com/khazaddev/narvi/internal/domain/review"
-	domainreviewtriage "github.com/khazaddev/narvi/internal/domain/reviewtriage"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/contracts/gen/go/restdtos"
+	"github.com/narvidev/narvi/internal/adapters/inbound/httpapi"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/app/releasereview"
+	"github.com/narvidev/narvi/internal/app/reviewcontext"
+	appreviewtriage "github.com/narvidev/narvi/internal/app/reviewtriage"
+	appreviewverdict "github.com/narvidev/narvi/internal/app/reviewverdict"
+	"github.com/narvidev/narvi/internal/domain/reposource"
+	"github.com/narvidev/narvi/internal/domain/review"
+	domainreviewtriage "github.com/narvidev/narvi/internal/domain/reviewtriage"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // maxWebhookBodyBytes bounds every GitHub webhook body this handler reads

@@ -3,7 +3,7 @@ package contractstest
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
+	"github.com/narvidev/narvi/contracts/gen/go/sessionconfig"
 )
 
 func TestSessionConfigRoundTrip(t *testing.T) {
@@ -24,7 +24,7 @@ func TestSessionConfigRoundTrip(t *testing.T) {
 			BootMode:          sessionconfig.SessionConfigBootModeFresh,
 			ControlPlaneWsUrl: "wss://cp.narvi.dev/sessions/" + testSessionID + "/ws?type=sandbox",
 			Repos: []sessionconfig.SessionConfigReposElem{
-				{Name: "narvi", Url: "https://github.com/khazaddev/narvi.git", Branch: &branch},
+				{Name: "narvi", Url: "https://github.com/narvidev/narvi.git", Branch: &branch},
 			},
 			CorrelationId: &correlationID,
 		})
@@ -42,7 +42,7 @@ func TestSessionConfigRoundTrip(t *testing.T) {
 			BootMode:          sessionconfig.SessionConfigBootModeSnapshotRestore,
 			ControlPlaneWsUrl: "wss://cp.narvi.dev/sessions/" + testSessionID + "/ws?type=sandbox",
 			Repos: []sessionconfig.SessionConfigReposElem{
-				{Name: "narvi", Url: "https://github.com/khazaddev/narvi.git", Branch: nil},
+				{Name: "narvi", Url: "https://github.com/narvidev/narvi.git", Branch: nil},
 			},
 			CorrelationId: nil,
 		})

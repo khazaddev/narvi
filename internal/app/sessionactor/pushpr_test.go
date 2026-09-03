@@ -3,8 +3,8 @@ package sessionactor
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
-	"github.com/khazaddev/narvi/internal/domain/turn"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
+	"github.com/narvidev/narvi/internal/domain/turn"
 )
 
 // TestExecutionOutcomeTrigger is table-driven over every

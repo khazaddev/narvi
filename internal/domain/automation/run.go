@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/domain/turn"
+	"github.com/narvidev/narvi/internal/domain/turn"
 )
 
 // RunStatus is one run's own state -- matches the automation_run_status

@@ -3,7 +3,7 @@ package reviewtriage
 import (
 	"strings"
 
-	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/review"
 )
 
 // maxChangedLinesLight and minDistinctRootsForDeep are §26.3's own v1

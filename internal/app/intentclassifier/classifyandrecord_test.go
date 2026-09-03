@@ -8,8 +8,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
-	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
+	"github.com/narvidev/narvi/internal/app/ports"
+	intentdomain "github.com/narvidev/narvi/internal/domain/intent"
 )
 
 // erroringSessionStore is a DecisionStore fake whose

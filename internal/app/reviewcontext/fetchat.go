@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // This file implements §22.1.1's own "the one diff already in hand" at

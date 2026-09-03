@@ -3,8 +3,8 @@ package upload
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/review"
-	"github.com/khazaddev/narvi/internal/domain/turn"
+	"github.com/narvidev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/turn"
 )
 
 // TestPlaceholderTokensMatchReviewPackage is deliberately an INTERNAL test

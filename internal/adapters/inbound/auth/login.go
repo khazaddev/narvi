@@ -6,7 +6,7 @@ import (
 
 	"golang.org/x/oauth2"
 
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // oauthStateCookieName is the SEPARATE, short-lived cookie carrying the

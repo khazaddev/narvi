@@ -6,8 +6,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
-	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
+	"github.com/narvidev/narvi/internal/app/ports"
+	intentdomain "github.com/narvidev/narvi/internal/domain/intent"
 )
 
 // validPlanFollowupTemplates/brokenPlanFollowupTemplates mirror

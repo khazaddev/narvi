@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapp"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/readonlymint"
-	"github.com/khazaddev/narvi/internal/app/shadowledger"
+	"github.com/narvidev/narvi/internal/adapters/outbound/githubapp"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/readonlymint"
+	"github.com/narvidev/narvi/internal/app/shadowledger"
 )
 
 // fakeMinter is a readonlymint.Minter test double -- there is no real

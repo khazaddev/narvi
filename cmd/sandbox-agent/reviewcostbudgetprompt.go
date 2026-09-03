@@ -34,7 +34,7 @@ package main
 import (
 	"strings"
 
-	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/review"
 )
 
 // renderReviewCostBudgetToolPromptText substitutes

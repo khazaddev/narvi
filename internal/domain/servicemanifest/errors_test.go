@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/servicemanifest"
+	"github.com/narvidev/narvi/internal/domain/servicemanifest"
 )
 
 // TestErrorMethods exercises every Error() method this package's own

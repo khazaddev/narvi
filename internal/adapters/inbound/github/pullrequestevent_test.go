@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/outbound/githubapi"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // This file is a WHITE-BOX (package github, not github_test) unit test

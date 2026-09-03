@@ -41,15 +41,15 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
-	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/opencode"
-	"github.com/khazaddev/narvi/internal/domain/review"
-	"github.com/khazaddev/narvi/internal/domain/turn"
-	domainupload "github.com/khazaddev/narvi/internal/domain/upload"
-	"github.com/khazaddev/narvi/internal/platform"
-	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
-	"github.com/khazaddev/narvi/internal/sandboxagent/wsbridge"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
+	"github.com/narvidev/narvi/contracts/gen/go/sessionconfig"
+	"github.com/narvidev/narvi/internal/adapters/outbound/opencode"
+	"github.com/narvidev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/turn"
+	domainupload "github.com/narvidev/narvi/internal/domain/upload"
+	"github.com/narvidev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/sandboxagent/boot"
+	"github.com/narvidev/narvi/internal/sandboxagent/wsbridge"
 )
 
 // capturedPromptAsyncBody is the ONLY part of OpenCode's real

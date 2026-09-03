@@ -3,7 +3,7 @@ package automation_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/automation"
+	"github.com/narvidev/narvi/internal/domain/automation"
 )
 
 func TestBuildArtifactSummary(t *testing.T) {

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
 )
 
 // TestHandleSandboxEvent_GitSync_RepliesWithGitSyncComplete drives

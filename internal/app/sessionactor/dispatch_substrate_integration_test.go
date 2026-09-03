@@ -22,9 +22,9 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/ports"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 // createTestEnvironmentWithDocker inserts an environments row directly
@@ -197,7 +197,7 @@ func TestDispatch_AppendsAllowlistFloorEndToEnd(t *testing.T) {
 	created, err := narvipg.NewSessionStore(pool).Create(ctx, sqlcgen.CreateSessionParams{
 		SpawnSource:   sqlcgen.SessionSpawnSourceWeb,
 		EnvironmentID: environmentID,
-		Repos:         []byte(`[{"name":"narvi","url":"https://github.com/khazaddev/narvi","branch":null}]`),
+		Repos:         []byte(`[{"name":"narvi","url":"https://github.com/narvidev/narvi","branch":null}]`),
 	})
 	if err != nil {
 		t.Fatalf("create test session: %v", err)

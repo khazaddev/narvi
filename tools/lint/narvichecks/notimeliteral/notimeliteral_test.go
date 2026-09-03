@@ -5,7 +5,7 @@ import (
 
 	"golang.org/x/tools/go/analysis/analysistest"
 
-	"github.com/khazaddev/narvi/tools/lint/narvichecks/notimeliteral"
+	"github.com/narvidev/narvi/tools/lint/narvichecks/notimeliteral"
 )
 
 // TestAnalyzer proves the analyzer fires on a time.Duration unit literal

@@ -66,7 +66,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/domain/sandbox"
+	"github.com/narvidev/narvi/internal/domain/sandbox"
 )
 
 // repoAccessCheckBreakerThreshold is the number of consecutive

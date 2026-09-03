@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // DefaultBaseURL is auth.openai.com's real base -- the ONLY place this

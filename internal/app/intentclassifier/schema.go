@@ -3,7 +3,7 @@ package intentclassifier
 import (
 	"encoding/json"
 
-	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
+	intentdomain "github.com/narvidev/narvi/internal/domain/intent"
 )
 
 // templateNameSystem is the prompt_templates.name key this Step's own

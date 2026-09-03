@@ -3,7 +3,7 @@ package review_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/review"
 )
 
 // allTags is this test's own local enumeration of Tag's fixed vocabulary

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/sandbox"
+	"github.com/narvidev/narvi/internal/domain/sandbox"
 )
 
 // TestEvaluateWarmDecision exercises EvaluateWarmDecision's scenarios,

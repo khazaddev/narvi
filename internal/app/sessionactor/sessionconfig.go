@@ -15,13 +15,13 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	appreviewtriage "github.com/khazaddev/narvi/internal/app/reviewtriage"
-	"github.com/khazaddev/narvi/internal/domain/environment"
-	"github.com/khazaddev/narvi/internal/domain/provenance"
-	"github.com/khazaddev/narvi/internal/domain/reposource"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/contracts/gen/go/sessionconfig"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	appreviewtriage "github.com/narvidev/narvi/internal/app/reviewtriage"
+	"github.com/narvidev/narvi/internal/domain/environment"
+	"github.com/narvidev/narvi/internal/domain/provenance"
+	"github.com/narvidev/narvi/internal/domain/reposource"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // publicWsBaseURL derives a ws(s):// base URL from httpBaseURL (platform.

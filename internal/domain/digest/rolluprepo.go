@@ -3,7 +3,7 @@ package digest
 import (
 	"time"
 
-	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/review"
 )
 
 // RepoSection is one repo's own contribution to a single channel's daily

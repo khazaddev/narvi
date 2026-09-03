@@ -1,6 +1,6 @@
 package reviewpost
 
-import "github.com/khazaddev/narvi/internal/domain/review"
+import "github.com/narvidev/narvi/internal/domain/review"
 
 // This file implements §26.1's own restructuring of the rendered verdict
 // into a "merge readout" (§26, §26.1: "when agents author most of the code

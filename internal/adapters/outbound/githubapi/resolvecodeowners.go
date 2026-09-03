@@ -7,9 +7,9 @@ import (
 	"net/url"
 	"strconv"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/domain/codeowners"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/domain/codeowners"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // maxCodeOwnerRefsPerCall bounds how many DISTINCT owner tokens

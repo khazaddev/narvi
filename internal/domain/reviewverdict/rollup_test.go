@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/domain/review"
-	"github.com/khazaddev/narvi/internal/domain/reviewverdict"
+	"github.com/narvidev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/reviewverdict"
 )
 
 func TestTimeseries_EmptyIsNotYetComputed(t *testing.T) {

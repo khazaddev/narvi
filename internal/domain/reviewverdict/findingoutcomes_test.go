@@ -3,8 +3,8 @@ package reviewverdict_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/reviewpost"
-	"github.com/khazaddev/narvi/internal/domain/reviewverdict"
+	"github.com/narvidev/narvi/internal/domain/reviewpost"
+	"github.com/narvidev/narvi/internal/domain/reviewverdict"
 )
 
 func TestFindingOutcomes_EmptyIsNotYetComputed(t *testing.T) {

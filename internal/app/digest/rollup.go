@@ -5,10 +5,10 @@ import (
 	"sort"
 	"time"
 
-	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
-	digestdomain "github.com/khazaddev/narvi/internal/domain/digest"
-	"github.com/khazaddev/narvi/internal/domain/review"
-	"github.com/khazaddev/narvi/internal/platform"
+	appreviewverdict "github.com/narvidev/narvi/internal/app/reviewverdict"
+	digestdomain "github.com/narvidev/narvi/internal/domain/digest"
+	"github.com/narvidev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // buildRollup assembles one channel's own digest.RollupData from

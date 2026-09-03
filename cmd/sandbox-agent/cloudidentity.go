@@ -110,11 +110,11 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/khazaddev/narvi/internal/domain/cloudidentity"
-	"github.com/khazaddev/narvi/internal/domain/sandboxsecret"
-	"github.com/khazaddev/narvi/internal/platform"
-	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
-	"github.com/khazaddev/narvi/internal/sandboxagent/credentials"
+	"github.com/narvidev/narvi/internal/domain/cloudidentity"
+	"github.com/narvidev/narvi/internal/domain/sandboxsecret"
+	"github.com/narvidev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/sandboxagent/boot"
+	"github.com/narvidev/narvi/internal/sandboxagent/credentials"
 )
 
 // cloudIdentityDir is where every token file, the generated GCP

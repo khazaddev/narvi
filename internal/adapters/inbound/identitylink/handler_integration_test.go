@@ -26,12 +26,12 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"golang.org/x/sync/errgroup"
 
-	identitylinkhttp "github.com/khazaddev/narvi/internal/adapters/inbound/identitylink"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	appidentitylink "github.com/khazaddev/narvi/internal/app/identitylink"
-	"github.com/khazaddev/narvi/internal/platform"
-	"github.com/khazaddev/narvi/migrations"
+	identitylinkhttp "github.com/narvidev/narvi/internal/adapters/inbound/identitylink"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	appidentitylink "github.com/narvidev/narvi/internal/app/identitylink"
+	"github.com/narvidev/narvi/internal/platform"
+	"github.com/narvidev/narvi/migrations"
 )
 
 func newTestPool(t *testing.T) *pgxpool.Pool {

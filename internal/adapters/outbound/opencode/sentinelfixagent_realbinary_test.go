@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/sandboxagent/opencodeproc"
-	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
+	"github.com/narvidev/narvi/internal/sandboxagent/opencodeproc"
+	"github.com/narvidev/narvi/internal/sandboxagent/supervisor"
 )
 
 // TestSentinelFixAgent_RegistersAgainstRealPinnedBinary is this Step's own

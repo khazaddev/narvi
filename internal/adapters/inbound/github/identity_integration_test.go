@@ -24,11 +24,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	githubingress "github.com/khazaddev/narvi/internal/adapters/inbound/github"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/sessionactor"
-	"github.com/khazaddev/narvi/internal/platform"
+	githubingress "github.com/narvidev/narvi/internal/adapters/inbound/github"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/sessionactor"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // identityTestRig mirrors testRig (handler_integration_test.go) but also

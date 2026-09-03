@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/oidcsigning"
-	"github.com/khazaddev/narvi/internal/domain/cloudidentity"
+	"github.com/narvidev/narvi/internal/adapters/outbound/oidcsigning"
+	"github.com/narvidev/narvi/internal/domain/cloudidentity"
 )
 
 func TestGenerateKeyPair(t *testing.T) {

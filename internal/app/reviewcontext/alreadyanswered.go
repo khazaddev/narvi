@@ -4,8 +4,8 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/domain/reviewpost"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/domain/reviewpost"
 )
 
 // This file implements §8.2's own ("sentinels + suggestions", §22.1)

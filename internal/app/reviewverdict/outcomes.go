@@ -6,9 +6,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/khazaddev/narvi/internal/app/egressmode"
-	"github.com/khazaddev/narvi/internal/domain/reviewverdict"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/app/egressmode"
+	"github.com/narvidev/narvi/internal/domain/reviewverdict"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // RecordConfirmed idempotently records that (repoFullName, prNumber,

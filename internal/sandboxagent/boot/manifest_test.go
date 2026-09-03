@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
+	"github.com/narvidev/narvi/internal/sandboxagent/boot"
 )
 
 func TestLoadImageManifest_RealFile(t *testing.T) {

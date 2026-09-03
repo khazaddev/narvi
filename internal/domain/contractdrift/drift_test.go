@@ -3,7 +3,7 @@ package contractdrift_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/contractdrift"
+	"github.com/narvidev/narvi/internal/domain/contractdrift"
 )
 
 // TestHasDrifted covers every row of HasDrifted's own doc-comment truth

@@ -118,9 +118,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/khazaddev/narvi/internal/domain/clusterbinding"
-	"github.com/khazaddev/narvi/internal/platform"
-	"github.com/khazaddev/narvi/internal/sandboxagent/credentials"
+	"github.com/narvidev/narvi/internal/domain/clusterbinding"
+	"github.com/narvidev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/sandboxagent/credentials"
 )
 
 // kubeconfigFileName is the fixed file name (never a full path -- dir is

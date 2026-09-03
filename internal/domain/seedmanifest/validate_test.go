@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/sandboxsecret"
-	"github.com/khazaddev/narvi/internal/domain/seedmanifest"
+	"github.com/narvidev/narvi/internal/domain/sandboxsecret"
+	"github.com/narvidev/narvi/internal/domain/seedmanifest"
 )
 
 func validParticipant() seedmanifest.Participant {

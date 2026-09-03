@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/oidcsigning"
+	"github.com/narvidev/narvi/internal/adapters/outbound/oidcsigning"
 )
 
 // appJWTClaims is the exact claim set GitHub's own App-authentication JWT

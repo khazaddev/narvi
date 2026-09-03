@@ -64,10 +64,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/domain/contractdrift"
-	"github.com/khazaddev/narvi/internal/domain/reposource"
+	"github.com/narvidev/narvi/contracts/gen/go/sessionconfig"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/domain/contractdrift"
+	"github.com/narvidev/narvi/internal/domain/reposource"
 )
 
 // checkContractDrift implements this file's own design (see top comment).

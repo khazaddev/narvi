@@ -40,22 +40,22 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
-	"github.com/khazaddev/narvi/internal/adapters/inbound/auth"
-	"github.com/khazaddev/narvi/internal/adapters/inbound/automationwebhook"
-	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/chatgptoauth"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/chatgptlink"
-	"github.com/khazaddev/narvi/internal/app/findingposition"
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/app/reviewcontext"
-	appreviewtriage "github.com/khazaddev/narvi/internal/app/reviewtriage"
-	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
-	"github.com/khazaddev/narvi/internal/app/sessionactor"
-	"github.com/khazaddev/narvi/internal/app/shadowledger"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/contracts/gen/go/restdtos"
+	"github.com/narvidev/narvi/internal/adapters/inbound/auth"
+	"github.com/narvidev/narvi/internal/adapters/inbound/automationwebhook"
+	"github.com/narvidev/narvi/internal/adapters/inbound/httpapi"
+	"github.com/narvidev/narvi/internal/adapters/outbound/chatgptoauth"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/chatgptlink"
+	"github.com/narvidev/narvi/internal/app/findingposition"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/reviewcontext"
+	appreviewtriage "github.com/narvidev/narvi/internal/app/reviewtriage"
+	appreviewverdict "github.com/narvidev/narvi/internal/app/reviewverdict"
+	"github.com/narvidev/narvi/internal/app/sessionactor"
+	"github.com/narvidev/narvi/internal/app/shadowledger"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // newTestPool returns this package's own single, shared Postgres pool --
@@ -1121,7 +1121,7 @@ func TestCreateSession_HappyPath(t *testing.T) {
 		"spawnSource": "web",
 		"title": "my session",
 		"prompt": "do the thing",
-		"repos": [{"name": "narvi", "url": "https://github.com/khazaddev/narvi", "branch": null}],
+		"repos": [{"name": "narvi", "url": "https://github.com/narvidev/narvi", "branch": null}],
 		"modelId": null,"effort":null,
 		"planMode": false
 	}`)

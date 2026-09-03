@@ -3,7 +3,7 @@ package intent_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/intent"
+	"github.com/narvidev/narvi/internal/domain/intent"
 )
 
 func TestMatchesReleaseBranch(t *testing.T) {

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // testConfig builds a valid Config pointed at endpoint, mirroring

@@ -23,11 +23,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	githubingress "github.com/khazaddev/narvi/internal/adapters/inbound/github"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/sessionactor"
-	"github.com/khazaddev/narvi/internal/platform"
+	githubingress "github.com/narvidev/narvi/internal/adapters/inbound/github"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/sessionactor"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // newRolloutTestRig mirrors newTestRig (handler_integration_test.go)

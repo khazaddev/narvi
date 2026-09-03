@@ -3,8 +3,8 @@ package reviewverdict_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/review"
-	"github.com/khazaddev/narvi/internal/domain/reviewverdict"
+	"github.com/narvidev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/reviewverdict"
 )
 
 func TestCounterReviewCorroborated(t *testing.T) {

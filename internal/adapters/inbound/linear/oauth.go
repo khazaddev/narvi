@@ -3,7 +3,7 @@ package linear
 import (
 	"golang.org/x/oauth2"
 
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // authorizeURL and tokenURL are Linear's own real OAuth2 endpoints --

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/sandboxagent/credentials"
+	"github.com/narvidev/narvi/internal/sandboxagent/credentials"
 )
 
 const testFetchTimeout = 5 * time.Second

@@ -21,9 +21,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/automation"
-	domainautomation "github.com/khazaddev/narvi/internal/domain/automation"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/automation"
+	domainautomation "github.com/narvidev/narvi/internal/domain/automation"
 )
 
 // createCronAutomation inserts an automation with TriggerTypeCron and the

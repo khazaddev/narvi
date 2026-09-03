@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
+	"github.com/narvidev/narvi/contracts/gen/go/sessionconfig"
 )
 
 // CreateSpec is what CreateSandbox and RestoreFromSnapshot need to bring

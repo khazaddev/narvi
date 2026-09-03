@@ -31,12 +31,12 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/khazaddev/narvi/internal/adapters/inbound/automationwebhook"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	domainautomation "github.com/khazaddev/narvi/internal/domain/automation"
-	"github.com/khazaddev/narvi/internal/platform"
-	"github.com/khazaddev/narvi/migrations"
+	"github.com/narvidev/narvi/internal/adapters/inbound/automationwebhook"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	domainautomation "github.com/narvidev/narvi/internal/domain/automation"
+	"github.com/narvidev/narvi/internal/platform"
+	"github.com/narvidev/narvi/migrations"
 )
 
 // newTestPool mirrors internal/adapters/inbound/identitylink's own

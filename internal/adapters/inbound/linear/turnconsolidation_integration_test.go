@@ -23,10 +23,10 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/khazaddev/narvi/internal/adapters/inbound/linear"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/linearapi"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/adapters/inbound/linear"
+	"github.com/narvidev/narvi/internal/adapters/outbound/linearapi"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 )
 
 // newGenericLinearGraphQLStub answers EVERY GraphQL request (both the

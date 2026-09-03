@@ -20,11 +20,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/app/sessionactor"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/contracts/gen/go/restdtos"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/sessionactor"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // fakeSubstrateProvider is a minimal, test-only ports.SandboxProvider
@@ -85,7 +85,7 @@ func dockerRequestFixture() restdtos.CreateSessionRequest {
 	return restdtos.CreateSessionRequest{
 		SpawnSource: restdtos.CreateSessionRequestSpawnSourceGithub,
 		Repos: []restdtos.CreateSessionRequestReposElem{
-			{Name: "narvi", Url: "https://github.com/khazaddev/narvi"},
+			{Name: "narvi", Url: "https://github.com/narvidev/narvi"},
 		},
 	}
 }

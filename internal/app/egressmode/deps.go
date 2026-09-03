@@ -5,7 +5,7 @@ package egressmode
 import (
 	"context"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 )
 
 // RepoSettingsReader is the narrow slice of *postgres.RepoSettingsStore

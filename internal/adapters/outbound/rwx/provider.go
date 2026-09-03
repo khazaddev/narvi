@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // rwxAccessTokenEnvVar is the exact environment variable name RWX's own

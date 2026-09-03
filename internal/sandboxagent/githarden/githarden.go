@@ -28,7 +28,7 @@
 // in their own checkouts.
 package githarden
 
-import "github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
+import "github.com/narvidev/narvi/internal/sandboxagent/supervisor"
 
 // noHooksPath points git at a location that holds no hooks and cannot be
 // made to hold any. /dev/null is not a directory, so every hook lookup

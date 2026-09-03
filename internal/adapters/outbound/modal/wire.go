@@ -1,6 +1,6 @@
 package modal
 
-import "github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
+import "github.com/narvidev/narvi/contracts/gen/go/sessionconfig"
 
 // This file holds the request/response JSON shapes this adapter sends to
 // and expects back from Modal's API. As doc.go explains, there is no real

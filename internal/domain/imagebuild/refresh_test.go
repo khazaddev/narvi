@@ -3,7 +3,7 @@ package imagebuild_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/imagebuild"
+	"github.com/narvidev/narvi/internal/domain/imagebuild"
 )
 
 func TestNeedsRefresh(t *testing.T) {

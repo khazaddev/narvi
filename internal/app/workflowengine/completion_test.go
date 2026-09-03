@@ -3,8 +3,8 @@ package workflowengine
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/turn"
-	"github.com/khazaddev/narvi/internal/domain/workflow"
+	"github.com/narvidev/narvi/internal/domain/turn"
+	"github.com/narvidev/narvi/internal/domain/workflow"
 )
 
 // TestImplicitOutcome covers every terminal turn.Trigger OnTurnCompleted

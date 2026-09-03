@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapp"
+	"github.com/narvidev/narvi/internal/adapters/outbound/githubapp"
 )
 
 // testPrivateKey is generated once per test process -- there is no real

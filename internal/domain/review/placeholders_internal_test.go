@@ -3,7 +3,7 @@ package review
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/turn"
+	"github.com/narvidev/narvi/internal/domain/turn"
 )
 
 // TestPlaceholderTokensMatchTurnPackage is deliberately an INTERNAL test

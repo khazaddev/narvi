@@ -7,7 +7,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
+	"github.com/narvidev/narvi/internal/sandboxagent/boot"
 )
 
 // lchownUID reports the on-disk owner of path via os.Lstat's own

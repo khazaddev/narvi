@@ -4,7 +4,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/review"
 )
 
 // This file (blastradius.go) is the path→tag classifier §21.2's own

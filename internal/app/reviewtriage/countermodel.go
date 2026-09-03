@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/khazaddev/narvi/internal/app/modelcatalog"
+	"github.com/narvidev/narvi/internal/app/modelcatalog"
 )
 
 // counterReviewerProviderPreference is the fixed, deterministic order this

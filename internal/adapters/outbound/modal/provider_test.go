@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/contracts/gen/go/sessionconfig"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // testSessionConfig builds a realistic SESSION_CONFIG document (matching
@@ -44,7 +44,7 @@ func testSessionConfigWithGen(gen int) sessionconfig.SessionConfig {
 		BootMode:          sessionconfig.SessionConfigBootModeFresh,
 		ControlPlaneWsUrl: "wss://cp.narvi.dev/sessions/sess-1/ws?type=sandbox",
 		Repos: []sessionconfig.SessionConfigReposElem{
-			{Name: "narvi", Url: "https://github.com/khazaddev/narvi.git", Branch: &branch},
+			{Name: "narvi", Url: "https://github.com/narvidev/narvi.git", Branch: &branch},
 		},
 		CorrelationId: &correlationID,
 	}

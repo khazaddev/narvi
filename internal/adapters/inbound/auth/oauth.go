@@ -4,7 +4,7 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/github"
 
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // oauthCallbackPath is the fixed path NewGitHubOAuthConfig appends to

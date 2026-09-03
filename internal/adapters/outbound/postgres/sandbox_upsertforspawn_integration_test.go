@@ -17,10 +17,10 @@ import (
 	"testing"
 	"time"
 
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/domain/sandbox"
-	"github.com/khazaddev/narvi/internal/platform"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/domain/sandbox"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // TestUpsertSandboxForSpawn_ResumeStyleClaim_ResetsLastSeenAt proves the

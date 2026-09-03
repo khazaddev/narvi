@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/upload"
+	"github.com/narvidev/narvi/internal/domain/upload"
 )
 
 // TestValidateUploadMetadata is table-driven over every branch

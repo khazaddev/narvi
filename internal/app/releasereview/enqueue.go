@@ -11,7 +11,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 )
 
 // PendingEnqueuer is the narrow slice of *postgres.ReleaseManifestPendingStore

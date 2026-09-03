@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 // ProviderAnthropic is this package's own provider name -- the value

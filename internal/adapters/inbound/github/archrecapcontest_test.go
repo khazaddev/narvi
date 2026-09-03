@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
+	appreviewverdict "github.com/narvidev/narvi/internal/app/reviewverdict"
 )
 
 const arIssueCommentPayload = `{

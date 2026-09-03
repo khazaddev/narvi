@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/khazaddev/narvi/internal/domain/reviewpost"
+	"github.com/narvidev/narvi/internal/domain/reviewpost"
 )
 
 // RenderComment renders findings (already-built via BuildFindingInputs +

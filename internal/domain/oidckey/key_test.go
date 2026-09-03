@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/domain/oidckey"
+	"github.com/narvidev/narvi/internal/domain/oidckey"
 )
 
 func TestIsActive(t *testing.T) {

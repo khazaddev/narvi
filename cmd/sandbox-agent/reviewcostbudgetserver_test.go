@@ -24,7 +24,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // serveInBackground launches s.Serve() via errgroup.Group.Go and registers

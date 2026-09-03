@@ -16,9 +16,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	githubingress "github.com/khazaddev/narvi/internal/adapters/inbound/github"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	githubingress "github.com/narvidev/narvi/internal/adapters/inbound/github"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 )
 
 // falsePositiveCommentBody builds a synthetic, real-shaped "issue_comment"

@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
 )
 
 // fallbackModel is this adapter's own pinned, last-resort default model

@@ -61,7 +61,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/domain/reviewtriage"
+	"github.com/narvidev/narvi/internal/domain/reviewtriage"
 )
 
 // reviewCostBudgetServer wraps this sandbox's own loopback review-cost-

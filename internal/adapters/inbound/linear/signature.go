@@ -3,7 +3,7 @@ package linear
 import (
 	"net/http"
 
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // Header names Linear itself sends with every webhook delivery -- all

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/domain/digest"
-	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/digest"
+	"github.com/narvidev/narvi/internal/domain/review"
 )
 
 func TestRender_NoRepos(t *testing.T) {

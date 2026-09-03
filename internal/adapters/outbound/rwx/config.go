@@ -1,6 +1,6 @@
 package rwx
 
-import "github.com/khazaddev/narvi/internal/platform"
+import "github.com/narvidev/narvi/internal/platform"
 
 // Config configures a Provider (New) -- the SandboxProvider half of this
 // package's two transports (doc.go): the pinned `rwx` CLI, shelled out as

@@ -3,8 +3,8 @@ package opencode
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
-	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 // These tests exercise dispatchEvent/dispatchPart directly with synthetic

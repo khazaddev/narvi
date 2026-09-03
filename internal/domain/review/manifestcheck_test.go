@@ -3,7 +3,7 @@ package review_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/review"
 )
 
 func int64Ptr(n int64) *int64 { return &n }

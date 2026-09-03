@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	domainautomation "github.com/khazaddev/narvi/internal/domain/automation"
-	"github.com/khazaddev/narvi/internal/domain/reposource"
-	"github.com/khazaddev/narvi/internal/domain/sandboxsecret"
+	domainautomation "github.com/narvidev/narvi/internal/domain/automation"
+	"github.com/narvidev/narvi/internal/domain/reposource"
+	"github.com/narvidev/narvi/internal/domain/sandboxsecret"
 )
 
 // Sentinel errors Validate's own per-item helpers wrap into an indexed

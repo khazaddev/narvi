@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/domain/automation"
+	"github.com/narvidev/narvi/internal/domain/automation"
 )
 
 func TestValidateCronExpr(t *testing.T) {

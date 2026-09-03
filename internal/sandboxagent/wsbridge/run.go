@@ -13,7 +13,7 @@ import (
 	"github.com/coder/websocket"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
 )
 
 // Run connects (retrying with exponential backoff, bounded

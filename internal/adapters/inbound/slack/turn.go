@@ -24,11 +24,11 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/intentclassifier"
-	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/narvidev/narvi/internal/adapters/inbound/httpapi"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/intentclassifier"
+	"github.com/narvidev/narvi/internal/app/sessionactor"
 )
 
 // addTurn enqueues a new Pending turn carrying prompt on the EXISTING

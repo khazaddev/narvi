@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/domain/outbox"
+	"github.com/narvidev/narvi/internal/domain/outbox"
 )
 
 func TestEvaluateBackoff(t *testing.T) {

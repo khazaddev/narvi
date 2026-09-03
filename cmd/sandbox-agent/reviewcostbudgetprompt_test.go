@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/review"
 )
 
 func TestRenderReviewCostBudgetToolPromptText(t *testing.T) {

@@ -18,10 +18,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	appreviewtriage "github.com/khazaddev/narvi/internal/app/reviewtriage"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	appreviewtriage "github.com/narvidev/narvi/internal/app/reviewtriage"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // stepFinishRaw marshals a real, schema-valid sandboxws.StepFinish wire

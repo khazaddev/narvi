@@ -7,7 +7,7 @@ import (
 	"net"
 	"net/http"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 // --- Config errors (New) -- named, structured, fail-fast, matching the

@@ -82,7 +82,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 // maxOpenPRsForUser bounds how many discovered candidate PRs

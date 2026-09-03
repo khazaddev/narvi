@@ -1,6 +1,6 @@
 package session
 
-import "github.com/khazaddev/narvi/internal/domain/turn"
+import "github.com/narvidev/narvi/internal/domain/turn"
 
 // Status is one of the session's own five states (§3.1), matching the
 // session_status enum exactly (migrations/000004_sessions.up.sql).

@@ -20,7 +20,7 @@ package main
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/sandboxagent/credentials"
+	"github.com/narvidev/narvi/internal/sandboxagent/credentials"
 )
 
 func strPtr(s string) *string { return &s }

@@ -4,8 +4,8 @@ import (
 	"path"
 	"strings"
 
-	"github.com/khazaddev/narvi/internal/domain/autoapproval"
-	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/autoapproval"
+	"github.com/narvidev/narvi/internal/domain/review"
 )
 
 // sensitiveTags is the fixed subset of review's eight-value BlastRadius

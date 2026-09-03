@@ -6,8 +6,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	domainautomation "github.com/khazaddev/narvi/internal/domain/automation"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	domainautomation "github.com/narvidev/narvi/internal/domain/automation"
 )
 
 // CreateInvocation is this Step's own minimal, durable "an invocation now

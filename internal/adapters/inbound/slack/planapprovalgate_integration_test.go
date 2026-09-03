@@ -26,12 +26,12 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/khazaddev/narvi/internal/adapters/inbound/slack"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
-	"github.com/khazaddev/narvi/internal/app/sessionactor"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/inbound/slack"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/adapters/outbound/slackapi"
+	"github.com/narvidev/narvi/internal/app/sessionactor"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // newSlackPlanGateTestRig mirrors identity_integration_test.go's own
@@ -80,7 +80,7 @@ func newSlackPlanGateTestRig(t *testing.T, pool *pgxpool.Pool, recordingSlackSer
 		Participants:        narvipg.NewParticipantStore(pool),
 		SigningSecret:       testSigningSecret,
 		DefaultRepoName:     "narvi",
-		DefaultRepoURL:      "https://github.com/khazaddev/narvi",
+		DefaultRepoURL:      "https://github.com/narvidev/narvi",
 		TimestampWindow:     5 * time.Minute,
 		AckTimeout:          platform.DefaultTimeouts().SlackAckTimeout,
 		SlackClient:         slackapi.New(recordingSlackServer.Client(), recordingSlackServer.URL, "test-bot-token"),

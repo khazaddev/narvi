@@ -3,8 +3,8 @@ package reviewtriage_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/reviewtriage"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/reviewtriage"
 )
 
 // TestCredentialedProviders_NoRows proves the overwhelming common case

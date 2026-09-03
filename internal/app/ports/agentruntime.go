@@ -3,7 +3,7 @@ package ports
 import (
 	"context"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
 )
 
 // AgentEvent is one wire-ready event produced while an AgentRuntime

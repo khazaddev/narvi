@@ -3,8 +3,8 @@ package autoapproval_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/autoapproval"
-	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/autoapproval"
+	"github.com/narvidev/narvi/internal/domain/review"
 )
 
 // cleanVerdict is a Shippable == auto verdict -- the one baseline every

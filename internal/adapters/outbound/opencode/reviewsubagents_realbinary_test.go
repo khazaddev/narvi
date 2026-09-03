@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/review"
-	"github.com/khazaddev/narvi/internal/sandboxagent/opencodeproc"
-	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
+	"github.com/narvidev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/sandboxagent/opencodeproc"
+	"github.com/narvidev/narvi/internal/sandboxagent/supervisor"
 )
 
 // realAgentEntry is this file's own decode target for GET /agent's real

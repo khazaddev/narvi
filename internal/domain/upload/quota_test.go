@@ -3,7 +3,7 @@ package upload_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/upload"
+	"github.com/narvidev/narvi/internal/domain/upload"
 )
 
 func TestEvaluateUploadSize(t *testing.T) {

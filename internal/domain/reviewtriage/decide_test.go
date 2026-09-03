@@ -3,7 +3,7 @@ package reviewtriage_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/reviewtriage"
+	"github.com/narvidev/narvi/internal/domain/reviewtriage"
 )
 
 func TestDecide_Default(t *testing.T) {

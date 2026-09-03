@@ -7,12 +7,12 @@ package main
 import (
 	"golang.org/x/tools/go/analysis/multichecker"
 
-	"github.com/khazaddev/narvi/tools/lint/narvichecks/demotionsweep"
-	"github.com/khazaddev/narvi/tools/lint/narvichecks/execimportban"
-	"github.com/khazaddev/narvi/tools/lint/narvichecks/httpclientban"
-	"github.com/khazaddev/narvi/tools/lint/narvichecks/nakedgoroutine"
-	"github.com/khazaddev/narvi/tools/lint/narvichecks/nilhttpclient"
-	"github.com/khazaddev/narvi/tools/lint/narvichecks/notimeliteral"
+	"github.com/narvidev/narvi/tools/lint/narvichecks/demotionsweep"
+	"github.com/narvidev/narvi/tools/lint/narvichecks/execimportban"
+	"github.com/narvidev/narvi/tools/lint/narvichecks/httpclientban"
+	"github.com/narvidev/narvi/tools/lint/narvichecks/nakedgoroutine"
+	"github.com/narvidev/narvi/tools/lint/narvichecks/nilhttpclient"
+	"github.com/narvidev/narvi/tools/lint/narvichecks/notimeliteral"
 )
 
 func main() {

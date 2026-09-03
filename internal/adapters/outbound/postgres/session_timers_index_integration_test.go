@@ -18,8 +18,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 )
 
 // TestListDueTimers_UsesFiresAtIndex proves the new index is a genuine,

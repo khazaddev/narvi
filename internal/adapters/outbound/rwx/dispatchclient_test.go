@@ -8,8 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/rwx"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/outbound/rwx"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // Black-box (`package rwx_test`) -- DispatchClient hits a real, documented

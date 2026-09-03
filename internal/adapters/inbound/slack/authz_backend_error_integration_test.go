@@ -25,12 +25,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/adapters/inbound/slack"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
-	"github.com/khazaddev/narvi/internal/app/sessionactor"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/inbound/slack"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/adapters/outbound/slackapi"
+	"github.com/narvidev/narvi/internal/app/sessionactor"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // TestHandler_ReplyOnMappedThread_AuthzBackendErrorReleasesClaim is the
@@ -102,7 +102,7 @@ func TestHandler_ReplyOnMappedThread_AuthzBackendErrorReleasesClaim(t *testing.T
 		Participants:    narvipg.NewParticipantStore(pool),
 		SigningSecret:   testSigningSecret,
 		DefaultRepoName: "narvi",
-		DefaultRepoURL:  "https://github.com/khazaddev/narvi",
+		DefaultRepoURL:  "https://github.com/narvidev/narvi",
 		TimestampWindow: 5 * time.Minute,
 		AckTimeout:      platform.DefaultTimeouts().SlackAckTimeout,
 		SlackClient:     slackapi.New(fakeSlack.Client(), fakeSlack.URL, "test-bot-token"),

@@ -16,8 +16,8 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/khazaddev/narvi/internal/platform"
-	"github.com/khazaddev/narvi/internal/sandboxagent/credentials"
+	"github.com/narvidev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/sandboxagent/credentials"
 )
 
 // classifyDeliveryFetchError marks err as platform.Permanent when it is a

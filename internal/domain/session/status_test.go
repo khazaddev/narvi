@@ -3,8 +3,8 @@ package session_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/session"
-	"github.com/khazaddev/narvi/internal/domain/turn"
+	"github.com/narvidev/narvi/internal/domain/session"
+	"github.com/narvidev/narvi/internal/domain/turn"
 )
 
 // TestDeriveStatus is table-driven over every turn-outcome-history shape

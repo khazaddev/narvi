@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
-	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 // fakeOpenCodeServer is a minimal, deliberately controllable httptest.Server

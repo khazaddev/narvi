@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // TestCorrelationIDMiddleware covers the four behaviors specified for

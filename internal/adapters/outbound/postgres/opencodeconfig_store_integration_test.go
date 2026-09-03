@@ -14,7 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
 )
 
 // jsonEqual compares two JSON documents SEMANTICALLY, not byte-for-byte

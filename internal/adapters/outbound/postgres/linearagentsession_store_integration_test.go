@@ -16,8 +16,8 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 )
 
 // TestLinearAgentSessionStore_Claim_FirstClaimInserted proves the first
@@ -156,7 +156,7 @@ func TestLinearAgentSessionStore_SetSessionID_AttachesRealID(t *testing.T) {
 
 	created, err := sessions.Create(ctx, sqlcgen.CreateSessionParams{
 		SpawnSource: sqlcgen.SessionSpawnSourceLinear,
-		Repos:       []byte(`[{"name":"narvi","url":"https://github.com/khazaddev/narvi","branch":null}]`),
+		Repos:       []byte(`[{"name":"narvi","url":"https://github.com/narvidev/narvi","branch":null}]`),
 	})
 	if err != nil {
 		t.Fatalf("create session: %v", err)
@@ -254,7 +254,7 @@ func TestLinearAgentSessionStore_Release_GuardedAgainstRowWithRealSessionID(t *t
 
 	created, err := sessions.Create(ctx, sqlcgen.CreateSessionParams{
 		SpawnSource: sqlcgen.SessionSpawnSourceLinear,
-		Repos:       []byte(`[{"name":"narvi","url":"https://github.com/khazaddev/narvi","branch":null}]`),
+		Repos:       []byte(`[{"name":"narvi","url":"https://github.com/narvidev/narvi","branch":null}]`),
 	})
 	if err != nil {
 		t.Fatalf("create session: %v", err)

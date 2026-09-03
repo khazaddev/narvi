@@ -33,8 +33,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/khazaddev/narvi/internal/app/shadowledger"
-	"github.com/khazaddev/narvi/internal/domain/shadowsentinel"
+	"github.com/narvidev/narvi/internal/app/shadowledger"
+	"github.com/narvidev/narvi/internal/domain/shadowsentinel"
 )
 
 // shadowRoundTripper intercepts mutating requests and records them.

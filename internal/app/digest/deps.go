@@ -9,9 +9,9 @@
 package digest
 
 import (
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	appreviewverdict "github.com/narvidev/narvi/internal/app/reviewverdict"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // Deps bundles every dependency this package's own functions need --

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
+	"github.com/narvidev/narvi/internal/adapters/inbound/httpapi"
 )
 
 // TestRenderLinearPlanOutcomeText is table-driven (§11) over every

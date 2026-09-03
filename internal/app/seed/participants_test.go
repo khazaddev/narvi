@@ -3,7 +3,7 @@ package seed
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 )
 
 // TestResolveInitialRole_OnlyInitialAdminEmailsGrantAdmin is a mutation

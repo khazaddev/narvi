@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
 )
 
 var testTimestamp = time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
@@ -178,7 +178,7 @@ func TestSandboxEventsRoundTrip(t *testing.T) {
 			SessionId:    testSessionID,
 			Gen:          1,
 			ArtifactType: sandboxws.ArtifactArtifactTypePr,
-			Url:          "https://github.com/khazaddev/narvi/pull/42",
+			Url:          "https://github.com/narvidev/narvi/pull/42",
 			Metadata:     sandboxws.ArtifactMetadata{"number": float64(42)},
 		})
 	})
@@ -577,7 +577,7 @@ func TestSandboxEventsArtifactStatus(t *testing.T) {
 			SessionId:    testSessionID,
 			Gen:          1,
 			ArtifactType: sandboxws.ArtifactArtifactTypePr,
-			Url:          "https://github.com/khazaddev/narvi/pull/42",
+			Url:          "https://github.com/narvidev/narvi/pull/42",
 			Metadata:     sandboxws.ArtifactMetadata{"number": float64(42)},
 		})
 	})

@@ -60,10 +60,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/khazaddev/narvi/internal/domain/sandboxsecret"
-	"github.com/khazaddev/narvi/internal/platform"
-	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
-	"github.com/khazaddev/narvi/internal/sandboxagent/credentials"
+	"github.com/narvidev/narvi/internal/domain/sandboxsecret"
+	"github.com/narvidev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/sandboxagent/boot"
+	"github.com/narvidev/narvi/internal/sandboxagent/credentials"
 )
 
 // openCodeEnvironmentConfigPath is where sandbox-agent writes the

@@ -13,7 +13,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/khazaddev/narvi/internal/app/shadowledger"
+	"github.com/narvidev/narvi/internal/app/shadowledger"
 )
 
 // NewGatedClient builds the http.Client this adapter must be constructed

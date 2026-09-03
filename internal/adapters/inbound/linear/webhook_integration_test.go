@@ -27,13 +27,13 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/khazaddev/narvi/internal/adapters/inbound/linear"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/linearapi"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/sessionactor"
-	"github.com/khazaddev/narvi/internal/domain/turn"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/inbound/linear"
+	"github.com/narvidev/narvi/internal/adapters/outbound/linearapi"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/sessionactor"
+	"github.com/narvidev/narvi/internal/domain/turn"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // newTestPool returns this package's own single, shared Postgres pool --
@@ -170,7 +170,7 @@ func newHandlerDeps(t *testing.T, pool *pgxpool.Pool) linear.Deps {
 		WebhookSecret:      []byte(testWebhookSecret),
 		TokenEncryptionKey: bytes.Repeat([]byte("k"), 32),
 		DefaultRepoName:    "narvi",
-		DefaultRepoURL:     "https://github.com/khazaddev/narvi",
+		DefaultRepoURL:     "https://github.com/narvidev/narvi",
 		Timeouts:           platform.DefaultTimeouts(),
 	}
 }

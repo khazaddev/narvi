@@ -1,6 +1,6 @@
 package reviewpost
 
-import "github.com/khazaddev/narvi/internal/domain/review"
+import "github.com/narvidev/narvi/internal/domain/review"
 
 // FormalReviewEvent is the GitHub "create a pull request review" event
 // (POST /repos/{owner}/{repo}/pulls/{number}/reviews' own "event" field)

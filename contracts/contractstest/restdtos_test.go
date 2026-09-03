@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
+	"github.com/narvidev/narvi/contracts/gen/go/restdtos"
 )
 
 // rest/v1/dtos.schema.json deliberately has no top-level oneOf (§6.3:
@@ -84,7 +84,7 @@ func TestCreateSessionRequestRoundTrip(t *testing.T) {
 		Title:       &title,
 		Prompt:      &prompt,
 		Repos: []restdtos.CreateSessionRequestReposElem{
-			{Name: "narvi", Url: "https://github.com/khazaddev/narvi.git", Branch: &branch},
+			{Name: "narvi", Url: "https://github.com/narvidev/narvi.git", Branch: &branch},
 		},
 		ModelId:      &modelID,
 		PlanMode:     true,
@@ -110,7 +110,7 @@ func TestCreateSessionRequestRoundTrip_NullOptionals(t *testing.T) {
 		Title:       nil,
 		Prompt:      nil,
 		Repos: []restdtos.CreateSessionRequestReposElem{
-			{Name: "narvi", Url: "https://github.com/khazaddev/narvi.git", Branch: nil},
+			{Name: "narvi", Url: "https://github.com/narvidev/narvi.git", Branch: nil},
 		},
 		ModelId:  nil,
 		PlanMode: false,
@@ -160,7 +160,7 @@ func TestCreateSessionRequestRoundTrip_WithEffort(t *testing.T) {
 		SpawnSource: restdtos.CreateSessionRequestSpawnSourceWeb,
 		Prompt:      &prompt,
 		Repos: []restdtos.CreateSessionRequestReposElem{
-			{Name: "narvi", Url: "https://github.com/khazaddev/narvi.git"},
+			{Name: "narvi", Url: "https://github.com/narvidev/narvi.git"},
 		},
 		ModelId:     &modelID,
 		Effort:      restdtos.CreateSessionRequestEffort(&effort),
@@ -203,7 +203,7 @@ func TestCreateSessionRequestRoundTrip_WithEpistemicCheckEnabled(t *testing.T) {
 		SpawnSource: restdtos.CreateSessionRequestSpawnSourceWeb,
 		Prompt:      &prompt,
 		Repos: []restdtos.CreateSessionRequestReposElem{
-			{Name: "narvi", Url: "https://github.com/khazaddev/narvi.git"},
+			{Name: "narvi", Url: "https://github.com/narvidev/narvi.git"},
 		},
 		PlanMode:              false,
 		EpistemicCheckEnabled: restdtos.CreateSessionRequestEpistemicCheckEnabled(&enabled),
@@ -1190,7 +1190,7 @@ func TestAutomationRoundTrip(t *testing.T) {
 	// one repo, so every fixture here carries a real entry.
 	repos := []restdtos.AutomationReposElem{{
 		Name:   "narvi",
-		Url:    "https://github.com/khazaddev/narvi.git",
+		Url:    "https://github.com/narvidev/narvi.git",
 		Branch: restdtos.AutomationReposElemBranch(&branch),
 	}}
 
@@ -1266,7 +1266,7 @@ func TestShadowLedgerSummaryRoundTrip(t *testing.T) {
 		promotedAt := time.Date(2026, 8, 12, 14, 3, 0, 0, time.UTC)
 		spend := 12.34
 		roundTrip(t, sch, restdtos.ShadowLedgerSummary{
-			RepoFullName:          "khazaddev/narvi",
+			RepoFullName:          "narvidev/narvi",
 			LiveEgressEnabled:     true,
 			LiveEgressPromotedAt:  restdtos.ShadowLedgerSummaryLiveEgressPromotedAt(&promotedAt),
 			PendingShadowEraCount: 0,
@@ -1283,7 +1283,7 @@ func TestShadowLedgerSummaryRoundTrip(t *testing.T) {
 		// false with a null llmSpendUsd is the "not computed" sentinel, not
 		// a real $0.00.
 		roundTrip(t, sch, restdtos.ShadowLedgerSummary{
-			RepoFullName:          "khazaddev/narvi",
+			RepoFullName:          "narvidev/narvi",
 			LiveEgressEnabled:     false,
 			LiveEgressPromotedAt:  nil,
 			PendingShadowEraCount: 3,

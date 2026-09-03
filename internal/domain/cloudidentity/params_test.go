@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/cloudidentity"
+	"github.com/narvidev/narvi/internal/domain/cloudidentity"
 )
 
 func TestValidateParams(t *testing.T) {

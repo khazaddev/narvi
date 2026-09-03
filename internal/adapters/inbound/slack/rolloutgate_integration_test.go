@@ -24,13 +24,13 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/khazaddev/narvi/internal/adapters/inbound/slack"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
-	"github.com/khazaddev/narvi/internal/app/identitylink"
-	"github.com/khazaddev/narvi/internal/app/sessionactor"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/inbound/slack"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/adapters/outbound/slackapi"
+	"github.com/narvidev/narvi/internal/app/identitylink"
+	"github.com/narvidev/narvi/internal/app/sessionactor"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // newSlackAckTestRigWithRolloutMode mirrors newSlackAckTestRig
@@ -81,7 +81,7 @@ func newSlackAckTestRigWithRolloutMode(t *testing.T, pool *pgxpool.Pool, mode pl
 		Participants:    narvipg.NewParticipantStore(pool),
 		SigningSecret:   testSigningSecret,
 		DefaultRepoName: "narvi",
-		DefaultRepoURL:  "https://github.com/khazaddev/narvi",
+		DefaultRepoURL:  "https://github.com/narvidev/narvi",
 		TimestampWindow: 5 * time.Minute,
 		AckTimeout:      platform.DefaultTimeouts().SlackAckTimeout,
 		SlackClient:     slackapi.New(ackServer.Client(), ackServer.URL, "test-bot-token"),
@@ -121,7 +121,7 @@ func TestHandler_NewMention_RolloutRefusal_PostsHonestAckAndKeepsClaims(t *testi
 	ctx := context.Background()
 	pool := newTestPool(t)
 	repoSettings := narvipg.NewRepoSettingsStore(pool)
-	// The rig's own fixed default repo ("https://github.com/khazaddev/narvi")
+	// The rig's own fixed default repo ("https://github.com/narvidev/narvi")
 	// is deliberately left unenrolled -- no UpsertSessionsEnabled call.
 	rig := newSlackAckTestRigWithRolloutMode(t, pool, platform.RolloutModeCohort, repoSettings)
 
@@ -193,7 +193,7 @@ func TestHandler_NewMention_RolloutGate_EnrolledRepoStillCreatesSession(t *testi
 	ctx := context.Background()
 	pool := newTestPool(t)
 	repoSettings := narvipg.NewRepoSettingsStore(pool)
-	if _, err := repoSettings.UpsertSessionsEnabled(ctx, "khazaddev/narvi", true); err != nil {
+	if _, err := repoSettings.UpsertSessionsEnabled(ctx, "narvidev/narvi", true); err != nil {
 		t.Fatalf("seed enrollment: %v", err)
 	}
 	rig := newSlackAckTestRigWithRolloutMode(t, pool, platform.RolloutModeCohort, repoSettings)

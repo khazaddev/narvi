@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
-	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
+	"github.com/narvidev/narvi/internal/sandboxagent/boot"
+	"github.com/narvidev/narvi/internal/sandboxagent/supervisor"
 )
 
 // maxHealthResponseBodySize bounds how much of /global/health's response

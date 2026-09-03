@@ -33,9 +33,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
-	"github.com/khazaddev/narvi/internal/domain/turn"
-	domainupload "github.com/khazaddev/narvi/internal/domain/upload"
+	"github.com/narvidev/narvi/contracts/gen/go/sessionconfig"
+	"github.com/narvidev/narvi/internal/domain/turn"
+	domainupload "github.com/narvidev/narvi/internal/domain/upload"
 )
 
 // TestRenderEpistemicOutcomeToolPromptText mirrors

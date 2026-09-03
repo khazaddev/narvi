@@ -107,7 +107,7 @@ test-integration:
 # hand-listed, so a newly added package is automatically covered (in group
 # 4) the moment it exists, instead of silently never running in CI until
 # someone remembers to add it to a group.
-INTEGRATION_MODULE := github.com/khazaddev/narvi
+INTEGRATION_MODULE := github.com/narvidev/narvi
 
 INTEGRATION_GROUP_1 := $(INTEGRATION_MODULE)/internal/adapters/inbound/httpapi
 
@@ -203,7 +203,7 @@ dev:
 	NARVI_LINEAR_CLIENT_ID=dev-linear-client-id-placeholder \
 	NARVI_LINEAR_CLIENT_SECRET=dev-linear-client-secret-placeholder \
 	NARVI_LINEAR_DEFAULT_REPO_NAME=narvi \
-	NARVI_LINEAR_DEFAULT_REPO_URL=https://github.com/khazaddev/narvi \
+	NARVI_LINEAR_DEFAULT_REPO_URL=https://github.com/narvidev/narvi \
 	NARVI_SLACK_SIGNING_SECRET=dev-slack-signing-secret-placeholder \
 	NARVI_SLACK_BOT_TOKEN=dev-slack-bot-token-placeholder \
 	NARVI_ANTHROPIC_API_KEY=dev-anthropic-api-key-placeholder \

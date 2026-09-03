@@ -8,9 +8,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/khazaddev/narvi/internal/app/auditlog"
-	"github.com/khazaddev/narvi/internal/app/repodemotion"
-	"github.com/khazaddev/narvi/internal/domain/seedmanifest"
+	"github.com/narvidev/narvi/internal/app/auditlog"
+	"github.com/narvidev/narvi/internal/app/repodemotion"
+	"github.com/narvidev/narvi/internal/domain/seedmanifest"
 )
 
 // seedRepoSetting reconciles ONE repoSettings manifest entry against

@@ -1,6 +1,6 @@
 package autoapproval
 
-import "github.com/khazaddev/narvi/internal/domain/review"
+import "github.com/narvidev/narvi/internal/domain/review"
 
 // defaultMaxFilesChanged is DefaultEligibilityConfig's own diff-size
 // threshold when a repo has never configured one (repo_settings.

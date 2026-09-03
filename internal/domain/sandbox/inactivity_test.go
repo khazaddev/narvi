@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/domain/sandbox"
+	"github.com/narvidev/narvi/internal/domain/sandbox"
 )
 
 // TestEvaluateInactivityTimeout exercises EvaluateInactivityTimeout's

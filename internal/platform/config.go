@@ -16,8 +16,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/khazaddev/narvi/internal/domain/reposource"
-	"github.com/khazaddev/narvi/internal/domain/rollout"
+	"github.com/narvidev/narvi/internal/domain/reposource"
+	"github.com/narvidev/narvi/internal/domain/rollout"
 )
 
 // Stage identifies which deployment stage the control plane is running in.

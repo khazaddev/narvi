@@ -10,7 +10,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 // GetOpenPR fetches owner/repo#number directly and builds its current

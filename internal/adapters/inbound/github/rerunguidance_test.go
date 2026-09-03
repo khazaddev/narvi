@@ -18,7 +18,7 @@ package github
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/reviewpost"
+	"github.com/narvidev/narvi/internal/domain/reviewpost"
 )
 
 // TestRerunGuidance_MatchesRealMentionPattern proves RerunGuidance's own

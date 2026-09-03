@@ -3,7 +3,7 @@ package opencode
 import (
 	"fmt"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
 )
 
 // turnOutcome is the result of deriveOutcome — the pure, directly

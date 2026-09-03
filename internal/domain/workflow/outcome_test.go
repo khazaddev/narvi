@@ -3,7 +3,7 @@ package workflow_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/workflow"
+	"github.com/narvidev/narvi/internal/domain/workflow"
 )
 
 // TestAllStepOutcomeStatuses_MatchesConstants pins the closed 3-value

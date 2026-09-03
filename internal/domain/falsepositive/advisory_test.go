@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/falsepositive"
+	"github.com/narvidev/narvi/internal/domain/falsepositive"
 )
 
 func TestRenderAdvisoryBlock_Empty(t *testing.T) {

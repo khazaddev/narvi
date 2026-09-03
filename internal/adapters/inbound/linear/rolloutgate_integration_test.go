@@ -22,9 +22,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/khazaddev/narvi/internal/adapters/inbound/linear"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/inbound/linear"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // TestWebhookHandler_Created_RolloutRefusal_AcknowledgesReleasesOnlyAgentSessionClaim
@@ -46,7 +46,7 @@ func TestWebhookHandler_Created_RolloutRefusal_AcknowledgesReleasesOnlyAgentSess
 	deps := newHandlerDeps(t, pool)
 	deps.RolloutMode = platform.RolloutModeCohort
 	deps.RepoSettings = narvipg.NewRepoSettingsStore(pool)
-	// deps.DefaultRepoURL ("https://github.com/khazaddev/narvi",
+	// deps.DefaultRepoURL ("https://github.com/narvidev/narvi",
 	// newHandlerDeps' own fixed default) is deliberately left unenrolled --
 	// no UpsertSessionsEnabled call for it anywhere in this test.
 
@@ -100,7 +100,7 @@ func TestWebhookHandler_Created_RolloutGate_EnrolledRepoStillCreatesSession(t *t
 	deps := newHandlerDeps(t, pool)
 	deps.RolloutMode = platform.RolloutModeCohort
 	deps.RepoSettings = narvipg.NewRepoSettingsStore(pool)
-	if _, err := deps.RepoSettings.UpsertSessionsEnabled(ctx, "khazaddev/narvi", true); err != nil {
+	if _, err := deps.RepoSettings.UpsertSessionsEnabled(ctx, "narvidev/narvi", true); err != nil {
 		t.Fatalf("seed enrollment: %v", err)
 	}
 

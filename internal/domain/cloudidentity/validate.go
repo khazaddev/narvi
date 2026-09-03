@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/khazaddev/narvi/internal/domain/providercredential"
+	"github.com/narvidev/narvi/internal/domain/providercredential"
 )
 
 // ErrInvalidKind is returned by ValidateBinding for a kind

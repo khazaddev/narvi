@@ -12,8 +12,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/contracts/gen/go/restdtos"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 )
 
 func TestListWorkflowBindings_IncludesTheThreeSeededGlobals(t *testing.T) {

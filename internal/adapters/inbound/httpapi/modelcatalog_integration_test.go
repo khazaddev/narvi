@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 )
 
 type modelCatalogModelForTest struct {

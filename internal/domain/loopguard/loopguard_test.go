@@ -3,7 +3,7 @@ package loopguard_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/loopguard"
+	"github.com/narvidev/narvi/internal/domain/loopguard"
 )
 
 func TestDefaultMaxAttempts_MatchesEstablishedThreshold(t *testing.T) {

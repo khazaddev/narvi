@@ -1,7 +1,7 @@
 package objstore
 
 import (
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // Config configures a Store (New). Every field is sourced from the

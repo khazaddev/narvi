@@ -3,7 +3,7 @@ package provenance_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/provenance"
+	"github.com/narvidev/narvi/internal/domain/provenance"
 )
 
 func strPtr(s string) *string { return &s }

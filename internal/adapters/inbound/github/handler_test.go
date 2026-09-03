@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres"
 )
 
 // githubSign mirrors GitHub's own "X-Hub-Signature-256: sha256=<hex>"

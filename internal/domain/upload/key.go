@@ -1,6 +1,6 @@
 package upload
 
-import "github.com/khazaddev/narvi/internal/app/ports"
+import "github.com/narvidev/narvi/internal/app/ports"
 
 // BuildBlobKey is the ONLY place in this codebase that produces a
 // ports.BlobKey (§28.1: "BlobKey is opaque to the adapter: only the CP's

@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"log/slog"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/contracts/gen/go/restdtos"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 )
 
 // sessionToDTO converts a stored sqlcgen.Session row into its REST wire

@@ -3,7 +3,7 @@ package sandbox_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/sandbox"
+	"github.com/narvidev/narvi/internal/domain/sandbox"
 )
 
 // TestReconcileTerminalSandboxStatus is table-driven over every state,
