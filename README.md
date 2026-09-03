@@ -42,4 +42,4 @@ make test    # go test -race ./...
 
 Copyright (C) 2026 Benoît LELEVÉ.
 
-Licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0).
+Source-available under the [Elastic License 2.0](LICENSE) (ELv2).
