@@ -23,8 +23,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/khazaddev/narvi/internal/adapters/inbound/linear"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/inbound/linear"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // linearAgentSessionSetSessionIDStore is the narrow slice of

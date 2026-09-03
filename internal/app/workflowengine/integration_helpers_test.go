@@ -24,8 +24,8 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"golang.org/x/sync/errgroup"
 
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/migrations"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/migrations"
 )
 
 // newTestPool spins up a throwaway Postgres container, runs every embedded

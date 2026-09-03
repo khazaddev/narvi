@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/khazaddev/narvi/internal/domain/cloudidentity"
+	"github.com/narvidev/narvi/internal/domain/cloudidentity"
 )
 
 // CloudParams is AuthKindCloud's own params shape -- §27.4: "which of the

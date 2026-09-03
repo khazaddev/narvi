@@ -4,10 +4,10 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/contracts/gen/go/restdtos"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // listSessionsDefaultLimit / listSessionsMaxLimit bound ?limit= on

@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/handoff"
+	"github.com/narvidev/narvi/internal/domain/handoff"
 )
 
 func TestScanTODOs_TableDriven(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/clusterbinding"
+	"github.com/narvidev/narvi/internal/domain/clusterbinding"
 )
 
 func TestIsValidAuthKind(t *testing.T) {

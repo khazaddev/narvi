@@ -3,8 +3,8 @@ package handoff
 import (
 	"fmt"
 
-	"github.com/khazaddev/narvi/internal/domain/review"
-	"github.com/khazaddev/narvi/internal/domain/reviewpost"
+	"github.com/narvidev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/reviewpost"
 )
 
 // Label is the fixed GitHub label v1's own "auto-apply a handoff label"

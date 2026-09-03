@@ -3,7 +3,7 @@ package workflowengine
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/workflow"
+	"github.com/narvidev/narvi/internal/domain/workflow"
 )
 
 func passthroughStep(id workflow.ID, order int) workflow.StepDefinition {

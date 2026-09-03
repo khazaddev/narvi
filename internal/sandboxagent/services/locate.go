@@ -8,7 +8,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/khazaddev/narvi/internal/domain/servicemanifest"
+	"github.com/narvidev/narvi/internal/domain/servicemanifest"
 )
 
 // manifestRelPath is where a services.yml lives within a repo, relative to

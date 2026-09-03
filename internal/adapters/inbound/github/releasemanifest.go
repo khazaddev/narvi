@@ -30,10 +30,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/khazaddev/narvi/internal/app/releasereview"
-	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
-	"github.com/khazaddev/narvi/internal/domain/reposource"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/app/releasereview"
+	intentdomain "github.com/narvidev/narvi/internal/domain/intent"
+	"github.com/narvidev/narvi/internal/domain/reposource"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // triggerReleaseManifestCheckBestEffort detects whether repoFullName#

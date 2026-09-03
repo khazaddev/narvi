@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/servicemanifest"
+	"github.com/narvidev/narvi/internal/domain/servicemanifest"
 )
 
 func intPtr(v int) *int       { return &v }

@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/sandboxagent/opencodeproc"
-	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/sandboxagent/opencodeproc"
+	"github.com/narvidev/narvi/internal/sandboxagent/supervisor"
 )
 
 // White-box (`package opencode`, not opencode_test) so these tests can

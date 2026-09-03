@@ -28,8 +28,8 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/khazaddev/narvi/internal/domain/seedmanifest"
-	"github.com/khazaddev/narvi/migrations"
+	"github.com/narvidev/narvi/internal/domain/seedmanifest"
+	"github.com/narvidev/narvi/migrations"
 )
 
 // testWhiteBoxTokenEncryptionKey mirrors seed_test's own

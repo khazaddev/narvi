@@ -7,7 +7,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/review"
 )
 
 // This file implements §8.2's own resolution of the tension named at

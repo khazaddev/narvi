@@ -4,9 +4,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/review"
-	"github.com/khazaddev/narvi/internal/domain/reviewpost"
-	"github.com/khazaddev/narvi/internal/domain/reviewtriage"
+	"github.com/narvidev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/reviewpost"
+	"github.com/narvidev/narvi/internal/domain/reviewtriage"
 )
 
 // deepValidInput mirrors validInput() but additionally fills in the three

@@ -3,7 +3,7 @@ package contractstest
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
 )
 
 func TestSandboxCommandsRoundTrip(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	plandomain "github.com/khazaddev/narvi/internal/domain/plan"
+	plandomain "github.com/narvidev/narvi/internal/domain/plan"
 )
 
 // TestFindSummaryStatus is table-driven over the lookup helper

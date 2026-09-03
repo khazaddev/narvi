@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/domain/imagebuild"
+	"github.com/narvidev/narvi/internal/domain/imagebuild"
 )
 
 // TestEvaluateBackoff_ExponentialGrowthCappedAtMax proves §3.5's one hard

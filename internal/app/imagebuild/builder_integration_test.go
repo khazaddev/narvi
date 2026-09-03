@@ -31,12 +31,12 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/imagebuild"
-	"github.com/khazaddev/narvi/internal/app/ports"
-	domainimagebuild "github.com/khazaddev/narvi/internal/domain/imagebuild"
-	"github.com/khazaddev/narvi/internal/platform"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/imagebuild"
+	"github.com/narvidev/narvi/internal/app/ports"
+	domainimagebuild "github.com/narvidev/narvi/internal/domain/imagebuild"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // newTestPool returns this package's own single, shared Postgres pool --

@@ -1,6 +1,6 @@
 package reviewpost
 
-import "github.com/khazaddev/narvi/internal/domain/review"
+import "github.com/narvidev/narvi/internal/domain/review"
 
 // The review:*-risk label vocabulary this Step's label sync ever adds or
 // removes, plus LabelNeedsHuman, which it never does. Exact strings match

@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/domain/review"
-	"github.com/khazaddev/narvi/internal/domain/reviewpost"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/reviewpost"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // matchableDiff/matchableSnippet are chosen so reviewpost.MatchPosition

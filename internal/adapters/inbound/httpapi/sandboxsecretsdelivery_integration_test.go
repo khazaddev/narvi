@@ -18,8 +18,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 type sandboxSecretsResp struct {

@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
+	"github.com/narvidev/narvi/internal/adapters/outbound/slackapi"
 )
 
 func TestGetUserEmail_Success(t *testing.T) {

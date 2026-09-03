@@ -12,7 +12,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres"
 )
 
 // dummyDSN is syntactically valid but never actually dialed by either test

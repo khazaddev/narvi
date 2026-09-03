@@ -24,8 +24,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/khazaddev/narvi/internal/domain/authz"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/domain/authz"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // requireManageIntegrations resolves the authenticated Narvi user

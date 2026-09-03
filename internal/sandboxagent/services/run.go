@@ -12,9 +12,9 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/khazaddev/narvi/internal/domain/servicemanifest"
-	"github.com/khazaddev/narvi/internal/platform"
-	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
+	"github.com/narvidev/narvi/internal/domain/servicemanifest"
+	"github.com/narvidev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/sandboxagent/supervisor"
 )
 
 // Phase names one point in a service's boot lifecycle, mirroring §6.1's

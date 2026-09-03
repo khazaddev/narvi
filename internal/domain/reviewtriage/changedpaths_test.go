@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/reviewtriage"
+	"github.com/narvidev/narvi/internal/domain/reviewtriage"
 )
 
 func TestExtractChangedPaths(t *testing.T) {

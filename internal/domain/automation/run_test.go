@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/domain/automation"
-	"github.com/khazaddev/narvi/internal/domain/turn"
+	"github.com/narvidev/narvi/internal/domain/automation"
+	"github.com/narvidev/narvi/internal/domain/turn"
 )
 
 func TestRunTransition(t *testing.T) {

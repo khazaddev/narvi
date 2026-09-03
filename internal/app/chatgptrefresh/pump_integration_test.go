@@ -30,12 +30,12 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/chatgptoauth"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/chatgptrefresh"
-	"github.com/khazaddev/narvi/internal/platform"
-	"github.com/khazaddev/narvi/migrations"
+	"github.com/narvidev/narvi/internal/adapters/outbound/chatgptoauth"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/chatgptrefresh"
+	"github.com/narvidev/narvi/internal/platform"
+	"github.com/narvidev/narvi/migrations"
 )
 
 // newTestPool mirrors internal/app/chatgptlink's own identically-named

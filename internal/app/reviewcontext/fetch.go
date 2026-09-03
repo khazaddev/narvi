@@ -4,10 +4,10 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
-	"github.com/khazaddev/narvi/internal/domain/review"
-	"github.com/khazaddev/narvi/internal/domain/reviewtriage"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/outbound/githubapi"
+	"github.com/narvidev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/reviewtriage"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // Fetcher is the narrow slice of *githubapi.Adapter's own real,

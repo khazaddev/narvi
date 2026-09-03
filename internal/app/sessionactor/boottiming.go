@@ -28,7 +28,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
 )
 
 // recordBootTiming is handleSandboxEvent's own "boot_timing" case

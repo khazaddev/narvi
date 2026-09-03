@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/review"
 )
 
 // TestClassifyChangedPaths_EmptyInput proves a nil/empty input returns

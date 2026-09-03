@@ -13,7 +13,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
 )
 
 // These tests need a REAL AI PROVIDER RESPONSE (an actual scripted turn

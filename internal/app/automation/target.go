@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	domainautomation "github.com/khazaddev/narvi/internal/domain/automation"
+	domainautomation "github.com/narvidev/narvi/internal/domain/automation"
 )
 
 // targetJSON is the on-wire shape automations.repos/automation_invocations.

@@ -28,8 +28,8 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric/noop"
 
-	"github.com/khazaddev/narvi/internal/domain/sandboxboot"
-	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
+	"github.com/narvidev/narvi/internal/domain/sandboxboot"
+	"github.com/narvidev/narvi/internal/sandboxagent/boot"
 )
 
 // TestSetupSandboxAgentOTel_InstallsRealMeterProvider proves the fix

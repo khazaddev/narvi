@@ -27,13 +27,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/sync/errgroup"
 
-	githubingress "github.com/khazaddev/narvi/internal/adapters/inbound/github"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/sessionactor"
-	"github.com/khazaddev/narvi/internal/domain/turn"
-	"github.com/khazaddev/narvi/internal/platform"
+	githubingress "github.com/narvidev/narvi/internal/adapters/inbound/github"
+	"github.com/narvidev/narvi/internal/adapters/outbound/githubapi"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/sessionactor"
+	"github.com/narvidev/narvi/internal/domain/turn"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 const testWebhookSecret = "test-github-webhook-secret"

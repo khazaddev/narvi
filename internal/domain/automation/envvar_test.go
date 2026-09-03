@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/automation"
+	"github.com/narvidev/narvi/internal/domain/automation"
 )
 
 func TestValidateEnvVars(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 type fakeLLM struct {

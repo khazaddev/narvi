@@ -13,7 +13,7 @@ package reviewtriage
 import (
 	"strconv"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres"
 )
 
 // pullRequestHTMLURL builds the SAME deterministic "https://github.com/

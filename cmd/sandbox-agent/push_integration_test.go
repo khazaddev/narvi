@@ -65,8 +65,8 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 const pushTestTimeout = 45 * time.Second

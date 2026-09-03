@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 type fakeStore struct {

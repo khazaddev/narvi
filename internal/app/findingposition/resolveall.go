@@ -3,8 +3,8 @@ package findingposition
 import (
 	"context"
 
-	"github.com/khazaddev/narvi/internal/domain/reviewpost"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/domain/reviewpost"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // resolveOneRelocation calls resolver.Resolve for ONE finding, scoping the

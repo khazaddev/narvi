@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
 )
 
 // deriveOutcome and the no-output-is-failure / error-name-to-outcome

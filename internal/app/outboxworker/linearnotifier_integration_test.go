@@ -37,12 +37,12 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/linearapi"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/outboxworker"
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/outbound/linearapi"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/outboxworker"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // linearTokenEncryptionKey is THE correct 32-byte AES-256-GCM key every

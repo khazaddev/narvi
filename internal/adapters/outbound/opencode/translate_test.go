@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
-	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 func TestToolInputEmpty(t *testing.T) {

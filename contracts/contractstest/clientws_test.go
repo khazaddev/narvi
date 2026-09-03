@@ -3,7 +3,7 @@ package contractstest
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/clientws"
+	"github.com/narvidev/narvi/contracts/gen/go/clientws"
 )
 
 // client-ws/v1/protocol.schema.json deliberately has no top-level oneOf
@@ -30,7 +30,7 @@ func TestSubscribedPayloadRoundTrip(t *testing.T) {
 			{"type": "token", "text": "hello"},
 		},
 		Artifacts: []clientws.SubscribedPayloadArtifactsElem{
-			{"artifactType": "pr", "url": "https://github.com/khazaddev/narvi/pull/1"},
+			{"artifactType": "pr", "url": "https://github.com/narvidev/narvi/pull/1"},
 		},
 		Participants: []clientws.SubscribedPayloadParticipantsElem{
 			{"clientId": "client-1", "userId": "user-1"},

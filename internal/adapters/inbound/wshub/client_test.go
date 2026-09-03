@@ -24,13 +24,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/clientws"
-	"github.com/khazaddev/narvi/internal/adapters/inbound/wshub"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/app/sessionactor"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/contracts/gen/go/clientws"
+	"github.com/narvidev/narvi/internal/adapters/inbound/wshub"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/sessionactor"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // clientTestRig bundles a fresh pool + every store + registry + hub +

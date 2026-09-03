@@ -27,15 +27,15 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	githubingress "github.com/khazaddev/narvi/internal/adapters/inbound/github"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/intentclassifier"
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/app/sessionactor"
-	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
-	"github.com/khazaddev/narvi/internal/platform"
+	githubingress "github.com/narvidev/narvi/internal/adapters/inbound/github"
+	"github.com/narvidev/narvi/internal/adapters/outbound/githubapi"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/intentclassifier"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/sessionactor"
+	intentdomain "github.com/narvidev/narvi/internal/domain/intent"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // capturingIntentLLM is a ports.LLM fake that records every Complete

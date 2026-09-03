@@ -12,8 +12,8 @@ import (
 	"github.com/coder/websocket"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // wsConnPair is one real WS connection, both ends: server (what

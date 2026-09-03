@@ -33,7 +33,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/opencode"
+	"github.com/narvidev/narvi/internal/adapters/outbound/opencode"
 )
 
 // TestCapabilityRestrictedProjectConfig_NeverTouchedBySandboxSecretInjection

@@ -8,10 +8,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	domainautomation "github.com/khazaddev/narvi/internal/domain/automation"
-	"github.com/khazaddev/narvi/internal/domain/turn"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	domainautomation "github.com/narvidev/narvi/internal/domain/automation"
+	"github.com/narvidev/narvi/internal/domain/turn"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // ReconcileOnce runs exactly one reconcile tick: lists a bounded batch of

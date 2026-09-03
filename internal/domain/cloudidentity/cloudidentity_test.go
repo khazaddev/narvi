@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/domain/cloudidentity"
-	"github.com/khazaddev/narvi/internal/domain/providercredential"
+	"github.com/narvidev/narvi/internal/domain/cloudidentity"
+	"github.com/narvidev/narvi/internal/domain/providercredential"
 )
 
 func TestIsValidKind(t *testing.T) {

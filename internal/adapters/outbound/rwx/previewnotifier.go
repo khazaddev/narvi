@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 // PreviewDispatchPayload is the JSON shape internal/app/outboxworker

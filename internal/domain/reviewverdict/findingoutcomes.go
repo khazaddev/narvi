@@ -3,7 +3,7 @@ package reviewverdict
 import (
 	"sort"
 
-	"github.com/khazaddev/narvi/internal/domain/reviewpost"
+	"github.com/narvidev/narvi/internal/domain/reviewpost"
 )
 
 // FindingStatusCount is one reviewpost.FindingStatus's own occurrence

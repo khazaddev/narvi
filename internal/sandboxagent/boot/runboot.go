@@ -7,9 +7,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/domain/sandboxboot"
-	"github.com/khazaddev/narvi/internal/sandboxagent/services"
-	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
+	"github.com/narvidev/narvi/internal/domain/sandboxboot"
+	"github.com/narvidev/narvi/internal/sandboxagent/services"
+	"github.com/narvidev/narvi/internal/sandboxagent/supervisor"
 )
 
 // RunBoot is the top-level per-repo boot dispatcher (§14.2): for each repo,

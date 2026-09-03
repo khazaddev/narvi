@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/reviewpost"
+	"github.com/narvidev/narvi/internal/domain/reviewpost"
 )
 
 // TestRenderAutofixBody_ProposedBeforeCollapsedOriginal proves §26.2's own

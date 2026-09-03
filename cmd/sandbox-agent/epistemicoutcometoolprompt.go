@@ -27,8 +27,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
-	"github.com/khazaddev/narvi/internal/domain/turn"
+	"github.com/narvidev/narvi/contracts/gen/go/sessionconfig"
+	"github.com/narvidev/narvi/internal/domain/turn"
 )
 
 // renderEpistemicOutcomeToolPromptText substitutes turn.

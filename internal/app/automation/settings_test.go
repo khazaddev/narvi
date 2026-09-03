@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/contracts/gen/go/restdtos"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 )
 
 // discardLogger is a *slog.Logger that writes nowhere -- every test in

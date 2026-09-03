@@ -3,7 +3,7 @@ package sandboxboot_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/sandboxboot"
+	"github.com/narvidev/narvi/internal/domain/sandboxboot"
 )
 
 // TestEvaluateHook_TruthTable enumerates every row of the truth

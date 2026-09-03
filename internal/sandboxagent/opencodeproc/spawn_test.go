@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/sandboxagent/opencodeproc"
-	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
+	"github.com/narvidev/narvi/internal/sandboxagent/opencodeproc"
+	"github.com/narvidev/narvi/internal/sandboxagent/supervisor"
 )
 
 // These tests need only the OpenCode SERVER itself (spawning it, hitting

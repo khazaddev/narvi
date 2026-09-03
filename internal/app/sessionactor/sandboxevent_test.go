@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/sandbox"
+	"github.com/narvidev/narvi/internal/domain/sandbox"
 )
 
 // TestSandboxTransitionTrigger is table-driven over every (event type,

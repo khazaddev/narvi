@@ -6,9 +6,9 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	domainautomation "github.com/khazaddev/narvi/internal/domain/automation"
+	"github.com/narvidev/narvi/contracts/gen/go/restdtos"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	domainautomation "github.com/narvidev/narvi/internal/domain/automation"
 )
 
 // unmarshalPathScope decodes automations.sandbox_path_scope -- a plain

@@ -24,12 +24,12 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/workflowengine"
-	"github.com/khazaddev/narvi/internal/domain/loopguard"
-	"github.com/khazaddev/narvi/internal/domain/turn"
-	"github.com/khazaddev/narvi/internal/domain/workflow"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/workflowengine"
+	"github.com/narvidev/narvi/internal/domain/loopguard"
+	"github.com/narvidev/narvi/internal/domain/turn"
+	"github.com/narvidev/narvi/internal/domain/workflow"
 )
 
 // auditFixLoopDef bundles the ids seedAuditFixLoopDefinition creates.

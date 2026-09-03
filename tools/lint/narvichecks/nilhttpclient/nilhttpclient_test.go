@@ -5,7 +5,7 @@ import (
 
 	"golang.org/x/tools/go/analysis/analysistest"
 
-	"github.com/khazaddev/narvi/tools/lint/narvichecks/nilhttpclient"
+	"github.com/narvidev/narvi/tools/lint/narvichecks/nilhttpclient"
 )
 
 // TestAnalyzer proves the check fires on a nil *http.Client in any

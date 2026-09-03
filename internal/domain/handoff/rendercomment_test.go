@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/handoff"
-	"github.com/khazaddev/narvi/internal/domain/reviewpost"
+	"github.com/narvidev/narvi/internal/domain/handoff"
+	"github.com/narvidev/narvi/internal/domain/reviewpost"
 )
 
 func TestRenderComment_TableDriven(t *testing.T) {

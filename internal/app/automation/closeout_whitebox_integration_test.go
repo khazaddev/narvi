@@ -20,11 +20,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/sessionactor"
-	domainautomation "github.com/khazaddev/narvi/internal/domain/automation"
-	"github.com/khazaddev/narvi/internal/platform"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/sessionactor"
+	domainautomation "github.com/narvidev/narvi/internal/domain/automation"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // newWhiteboxEngine builds a real Engine against the shared pool, exactly

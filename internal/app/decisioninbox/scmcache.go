@@ -19,8 +19,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // ttlEntry is one cached value plus when it was fetched.

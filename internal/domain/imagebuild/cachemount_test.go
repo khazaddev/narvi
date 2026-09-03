@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/imagebuild"
+	"github.com/narvidev/narvi/internal/domain/imagebuild"
 )
 
 // TestCacheVolumeKey_Deterministic proves the same (base, runtimeVersion)

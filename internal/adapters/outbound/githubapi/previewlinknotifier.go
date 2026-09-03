@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 // previewCommitStatusContext is the fixed GitHub commit-status "context"

@@ -4,8 +4,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/inbound/auth"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/inbound/auth"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // TestNewGitHubOAuthConfig proves the built oauth2.Config threads

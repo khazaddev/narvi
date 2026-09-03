@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/sandboxagent/credentials"
+	"github.com/narvidev/narvi/internal/sandboxagent/credentials"
 )
 
 const testExpiryBuffer = 5 * time.Minute

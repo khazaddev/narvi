@@ -30,7 +30,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
 )
 
 // recordStepFinishCost adds this step_finish event's own cost.usd (when

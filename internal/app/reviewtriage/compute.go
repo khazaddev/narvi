@@ -6,10 +6,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/khazaddev/narvi/internal/domain/review"
-	"github.com/khazaddev/narvi/internal/domain/reviewpost"
-	"github.com/khazaddev/narvi/internal/domain/reviewtriage"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/reviewpost"
+	"github.com/narvidev/narvi/internal/domain/reviewtriage"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // ComputeDecision is §26.3's own "never-throw" entry point (§26.3: "ANY

@@ -3,7 +3,7 @@ package integrations_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/integrations"
+	"github.com/narvidev/narvi/internal/domain/integrations"
 )
 
 // TestProviderForOutboxKind is table-driven over every NotificationKind

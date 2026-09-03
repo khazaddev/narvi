@@ -6,9 +6,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapp"
-	"github.com/khazaddev/narvi/internal/app/shadowledger"
-	"github.com/khazaddev/narvi/internal/domain/scmscope"
+	"github.com/narvidev/narvi/internal/adapters/outbound/githubapp"
+	"github.com/narvidev/narvi/internal/app/shadowledger"
+	"github.com/narvidev/narvi/internal/domain/scmscope"
 )
 
 // Minter mints a GitHub App installation access token scoped to owner's

@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // tryAdvisoryLockQuery / advisoryUnlockQuery hash the session id's string

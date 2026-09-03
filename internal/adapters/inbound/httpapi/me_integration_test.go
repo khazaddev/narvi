@@ -14,7 +14,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 )
 
 // TestGetMe_RequiresAuth proves the route is gated behind auth.Middleware

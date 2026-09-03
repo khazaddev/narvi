@@ -9,8 +9,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
-	"github.com/khazaddev/narvi/internal/sandboxagent/services"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
+	"github.com/narvidev/narvi/internal/sandboxagent/services"
 )
 
 // SendCritical marshals msg (already a fully-populated concrete

@@ -11,8 +11,8 @@
 package reviewverdict
 
 import (
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // Deps bundles every dependency this package's own functions need --

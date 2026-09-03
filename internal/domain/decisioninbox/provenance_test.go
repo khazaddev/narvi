@@ -3,7 +3,7 @@ package decisioninbox_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/decisioninbox"
+	"github.com/narvidev/narvi/internal/domain/decisioninbox"
 )
 
 func TestResolveProvenance(t *testing.T) {

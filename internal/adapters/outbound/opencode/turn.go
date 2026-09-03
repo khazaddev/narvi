@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
-	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 // turnState is the demux state for one in-flight StartTurn call, keyed by

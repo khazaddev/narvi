@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
+	"github.com/narvidev/narvi/internal/sandboxagent/supervisor"
 )
 
 // mkdirAllInternal/initGitRepoInternal/runGitInternal duplicate

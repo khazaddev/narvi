@@ -22,9 +22,9 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
-	"github.com/khazaddev/narvi/internal/domain/reposource"
-	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/adapters/outbound/githubapi"
+	"github.com/narvidev/narvi/internal/domain/reposource"
+	"github.com/narvidev/narvi/internal/domain/review"
 )
 
 // PullRequestResolver is the narrow slice of githubapi.Adapter's own real,

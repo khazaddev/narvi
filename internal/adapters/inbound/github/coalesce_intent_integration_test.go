@@ -22,14 +22,14 @@ import (
 	"testing"
 	"time"
 
-	githubingress "github.com/khazaddev/narvi/internal/adapters/inbound/github"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/intentclassifier"
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/app/sessionactor"
-	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
-	"github.com/khazaddev/narvi/internal/platform"
+	githubingress "github.com/narvidev/narvi/internal/adapters/inbound/github"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/intentclassifier"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/sessionactor"
+	intentdomain "github.com/narvidev/narvi/internal/domain/intent"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // intentTestCommenterID is the single already-linked commenter every test

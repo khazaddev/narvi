@@ -3,7 +3,7 @@ package workflowengine
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/workflow"
+	"github.com/narvidev/narvi/internal/domain/workflow"
 )
 
 // TestResolveLane covers every documented branch of resolveLane's own doc
@@ -90,14 +90,14 @@ func TestRepoFullNameFromSessionRepos(t *testing.T) {
 		{name: "malformed json", raw: []byte(`{not json`), wantOK: false},
 		{
 			name:     "single repo with a real owner/repo url",
-			raw:      []byte(`[{"name":"narvi","url":"https://github.com/khazaddev/narvi.git","branch":null}]`),
-			wantName: "khazaddev/narvi",
+			raw:      []byte(`[{"name":"narvi","url":"https://github.com/narvidev/narvi.git","branch":null}]`),
+			wantName: "narvidev/narvi",
 			wantOK:   true,
 		},
 		{
 			name:     "single repo, url with no .git suffix",
-			raw:      []byte(`[{"name":"narvi","url":"https://github.com/khazaddev/narvi","branch":"main"}]`),
-			wantName: "khazaddev/narvi",
+			raw:      []byte(`[{"name":"narvi","url":"https://github.com/narvidev/narvi","branch":"main"}]`),
+			wantName: "narvidev/narvi",
 			wantOK:   true,
 		},
 		{

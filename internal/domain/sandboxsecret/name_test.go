@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/cloudidentity"
-	"github.com/khazaddev/narvi/internal/domain/clusterbinding"
-	"github.com/khazaddev/narvi/internal/domain/providercredential"
+	"github.com/narvidev/narvi/internal/domain/cloudidentity"
+	"github.com/narvidev/narvi/internal/domain/clusterbinding"
+	"github.com/narvidev/narvi/internal/domain/providercredential"
 )
 
 func TestValidateName(t *testing.T) {

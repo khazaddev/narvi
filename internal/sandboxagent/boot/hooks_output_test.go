@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/domain/sandboxboot"
-	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
-	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
+	"github.com/narvidev/narvi/internal/domain/sandboxboot"
+	"github.com/narvidev/narvi/internal/sandboxagent/boot"
+	"github.com/narvidev/narvi/internal/sandboxagent/supervisor"
 )
 
 // recordingHandler is a minimal slog.Handler capturing every record's own

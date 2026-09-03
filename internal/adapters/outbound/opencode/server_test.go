@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
 )
 
 // These tests need only the OpenCode SERVER itself (spawning it, hitting

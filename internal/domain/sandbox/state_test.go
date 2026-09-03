@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/sandbox"
+	"github.com/narvidev/narvi/internal/domain/sandbox"
 )
 
 // TestTransition_LegalEdges is table-driven over every legal (from,

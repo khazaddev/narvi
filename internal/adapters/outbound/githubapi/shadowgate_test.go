@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 
-	"github.com/khazaddev/narvi/internal/domain/shadowsentinel"
+	"github.com/narvidev/narvi/internal/domain/shadowsentinel"
 )
 
 // recordingStore captures what the gate wrote, and can be made to fail.

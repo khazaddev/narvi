@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
-	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
-	"github.com/khazaddev/narvi/internal/domain/autoapproval"
-	"github.com/khazaddev/narvi/internal/domain/reposource"
+	"github.com/narvidev/narvi/internal/app/ports"
+	appreviewverdict "github.com/narvidev/narvi/internal/app/reviewverdict"
+	"github.com/narvidev/narvi/internal/domain/autoapproval"
+	"github.com/narvidev/narvi/internal/domain/reposource"
 )
 
 // RevalidateForMerge re-checks, LIVE and never cached (§16.2, §5.2's own

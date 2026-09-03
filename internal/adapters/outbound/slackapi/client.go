@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 // defaultAPIBaseURL is Slack's own real Web API base -- the ONLY place

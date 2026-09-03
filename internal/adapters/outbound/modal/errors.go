@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 // networkErrorCode/networkTimeoutCode are classifyNetworkError's own two

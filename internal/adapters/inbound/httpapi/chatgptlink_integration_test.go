@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/chatgptoauth"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/adapters/outbound/chatgptoauth"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 )
 
 type chatGPTLinkStatusForTest struct {

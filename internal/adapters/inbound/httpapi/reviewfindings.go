@@ -37,15 +37,15 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/app/shadowscm"
-	"github.com/khazaddev/narvi/internal/domain/authz"
-	"github.com/khazaddev/narvi/internal/domain/reposource"
-	"github.com/khazaddev/narvi/internal/domain/reviewpost"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/contracts/gen/go/restdtos"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/shadowscm"
+	"github.com/narvidev/narvi/internal/domain/authz"
+	"github.com/narvidev/narvi/internal/domain/reposource"
+	"github.com/narvidev/narvi/internal/domain/reviewpost"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // findingRouteContext resolves {sessionID}/{identityHash} into the values

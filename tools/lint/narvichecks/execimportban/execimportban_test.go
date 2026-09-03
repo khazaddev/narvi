@@ -5,7 +5,7 @@ import (
 
 	"golang.org/x/tools/go/analysis/analysistest"
 
-	"github.com/khazaddev/narvi/tools/lint/narvichecks/execimportban"
+	"github.com/narvidev/narvi/tools/lint/narvichecks/execimportban"
 )
 
 // TestAnalyzer proves the analyzer fires on an "os/exec" import outside

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 // classifyCompletionError maps err (whatever client.Messages.New returned)

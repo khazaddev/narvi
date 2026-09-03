@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/environment"
+	"github.com/narvidev/narvi/internal/domain/environment"
 )
 
 // TestValidatePathScope is table-driven over every pattern shape §14.1's

@@ -4,7 +4,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/review"
 )
 
 // DayBucket is one calendar day's own Shippable-classification counts --

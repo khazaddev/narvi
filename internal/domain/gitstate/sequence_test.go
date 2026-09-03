@@ -3,7 +3,7 @@ package gitstate_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/gitstate"
+	"github.com/narvidev/narvi/internal/domain/gitstate"
 )
 
 // TestResolveSessionBranch covers both branches (explicit vs. nil) plus

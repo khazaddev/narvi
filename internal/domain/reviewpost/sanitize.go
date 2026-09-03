@@ -1,6 +1,6 @@
 package reviewpost
 
-import "github.com/khazaddev/narvi/internal/domain/review"
+import "github.com/narvidev/narvi/internal/domain/review"
 
 // This file implements the review digest's own WRITE-PATH hardening
 // (an adversarial-review fix, hardening the class PR #188 closed on

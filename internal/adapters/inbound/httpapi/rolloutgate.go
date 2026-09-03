@@ -31,12 +31,12 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/domain/reposource"
-	"github.com/khazaddev/narvi/internal/domain/rollout"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/contracts/gen/go/restdtos"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/domain/reposource"
+	"github.com/narvidev/narvi/internal/domain/rollout"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // rolloutGateMeterName is this package's own OTel meter name for the

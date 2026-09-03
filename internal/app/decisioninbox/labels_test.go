@@ -13,7 +13,7 @@ package decisioninbox
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/reviewpost"
+	"github.com/narvidev/narvi/internal/domain/reviewpost"
 )
 
 func TestClassifyPRLabels_MostRestrictiveRiskLabelWins(t *testing.T) {

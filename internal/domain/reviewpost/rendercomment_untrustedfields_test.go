@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/review"
-	"github.com/khazaddev/narvi/internal/domain/reviewpost"
+	"github.com/narvidev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/reviewpost"
 )
 
 // digestInjectionPayload is the SAME "<details>...</details>" / "List<int>"

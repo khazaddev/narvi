@@ -20,9 +20,9 @@ package httpapi
 import (
 	"net/http"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
-	"github.com/khazaddev/narvi/internal/app/modelcatalog"
-	"github.com/khazaddev/narvi/internal/domain/authz"
+	"github.com/narvidev/narvi/contracts/gen/go/restdtos"
+	"github.com/narvidev/narvi/internal/app/modelcatalog"
+	"github.com/narvidev/narvi/internal/domain/authz"
 )
 
 // GetModelCatalog backs GET /api/models.

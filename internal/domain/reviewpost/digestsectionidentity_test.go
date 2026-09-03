@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/reviewpost"
+	"github.com/narvidev/narvi/internal/domain/reviewpost"
 )
 
 // TestComputeDigestSectionIdentity_SurvivesWhitespaceChurn is §26.5's own

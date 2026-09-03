@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/sandboxagent/credentials"
+	"github.com/narvidev/narvi/internal/sandboxagent/credentials"
 )
 
 // TestCPClient_FetchProviderCredentials_RequestShape proves the real

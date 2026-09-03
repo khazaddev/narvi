@@ -12,8 +12,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/domain/contractdrift"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/domain/contractdrift"
 )
 
 // escapePathSegments url.PathEscape's EACH "/"-delimited segment of p,

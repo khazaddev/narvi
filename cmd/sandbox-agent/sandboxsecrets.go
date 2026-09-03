@@ -105,10 +105,10 @@ import (
 	"log/slog"
 	"sort"
 
-	"github.com/khazaddev/narvi/internal/domain/sandboxsecret"
-	"github.com/khazaddev/narvi/internal/platform"
-	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
-	"github.com/khazaddev/narvi/internal/sandboxagent/credentials"
+	"github.com/narvidev/narvi/internal/domain/sandboxsecret"
+	"github.com/narvidev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/sandboxagent/boot"
+	"github.com/narvidev/narvi/internal/sandboxagent/credentials"
 )
 
 // fetchSandboxSecrets fetches this session's own resolved sandbox secrets

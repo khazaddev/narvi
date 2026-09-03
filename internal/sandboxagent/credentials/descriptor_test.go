@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/sandboxagent/credentials"
+	"github.com/narvidev/narvi/internal/sandboxagent/credentials"
 )
 
 func TestParseDescriptor_SeparateFields(t *testing.T) {

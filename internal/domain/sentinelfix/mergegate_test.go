@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/sentinelfix"
+	"github.com/narvidev/narvi/internal/domain/sentinelfix"
 )
 
 func TestIsTestOrDocPath_TableDriven(t *testing.T) {

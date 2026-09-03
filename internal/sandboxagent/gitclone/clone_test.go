@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
-	"github.com/khazaddev/narvi/internal/sandboxagent/gitclone"
-	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
+	"github.com/narvidev/narvi/contracts/gen/go/sessionconfig"
+	"github.com/narvidev/narvi/internal/sandboxagent/gitclone"
+	"github.com/narvidev/narvi/internal/sandboxagent/supervisor"
 )
 
 // These tests spawn real `git` subprocesses -- git is always present on

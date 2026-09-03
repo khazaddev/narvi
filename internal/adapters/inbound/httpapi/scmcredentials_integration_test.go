@@ -15,11 +15,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapp"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/domain/reposource"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/outbound/githubapp"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/domain/reposource"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // repoFullNamesFromJSON extracts "owner/repo" from every {name, url,
@@ -151,7 +151,7 @@ func createSandboxWithToken(ctx context.Context, t *testing.T, r testRig, sessio
 func createSessionWithGitHubIdentity(ctx context.Context, t *testing.T, r testRig, plaintextAccessToken string) sqlcgen.Session {
 	t.Helper()
 	return createSessionWithGitHubIdentityAndRepos(ctx, t, r, plaintextAccessToken,
-		`[{"name":"narvi","url":"https://github.com/khazaddev/narvi","branch":null}]`)
+		`[{"name":"narvi","url":"https://github.com/narvidev/narvi","branch":null}]`)
 }
 
 // createSessionWithGitHubIdentityAndRepos is createSessionWithGitHubIdentity's
@@ -425,7 +425,7 @@ func TestScmCredentials_NoCreatedBy(t *testing.T) {
 	promoteRepoLive(ctx, t, rig, reviewSessionRepos)
 	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{
 		SpawnSource: sqlcgen.SessionSpawnSourceWeb,
-		Repos:       []byte(`[{"name":"narvi","url":"https://github.com/khazaddev/narvi","branch":null}]`),
+		Repos:       []byte(`[{"name":"narvi","url":"https://github.com/narvidev/narvi","branch":null}]`),
 	})
 	if err != nil {
 		t.Fatalf("create session: %v", err)
@@ -457,7 +457,7 @@ func TestScmCredentials_NoGitHubIdentity(t *testing.T) {
 	promoteRepoLive(ctx, t, rig, reviewSessionRepos)
 	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{
 		SpawnSource: sqlcgen.SessionSpawnSourceWeb, CreatedBy: user.ID,
-		Repos: []byte(`[{"name":"narvi","url":"https://github.com/khazaddev/narvi","branch":null}]`),
+		Repos: []byte(`[{"name":"narvi","url":"https://github.com/narvidev/narvi","branch":null}]`),
 	})
 	if err != nil {
 		t.Fatalf("create session: %v", err)
@@ -554,7 +554,7 @@ func TestScmCredentials_NoStoredToken(t *testing.T) {
 	promoteRepoLive(ctx, t, rig, reviewSessionRepos)
 	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{
 		SpawnSource: sqlcgen.SessionSpawnSourceWeb, CreatedBy: user.ID,
-		Repos: []byte(`[{"name":"narvi","url":"https://github.com/khazaddev/narvi","branch":null}]`),
+		Repos: []byte(`[{"name":"narvi","url":"https://github.com/narvidev/narvi","branch":null}]`),
 	})
 	if err != nil {
 		t.Fatalf("create session: %v", err)
@@ -601,7 +601,7 @@ func TestScmCredentials_HostMatch_Succeeds(t *testing.T) {
 	ctx := context.Background()
 
 	session := createSessionWithGitHubIdentityAndRepos(ctx, t, rig, "gho_realGitHubAccessToken",
-		`[{"name":"narvi","url":"https://GitHub.COM/khazaddev/narvi","branch":null}]`)
+		`[{"name":"narvi","url":"https://GitHub.COM/narvidev/narvi","branch":null}]`)
 	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
 
 	status, got := postScmCredentials(t, rig, session.ID.String(), "sandbox-bearer-token")
@@ -906,7 +906,7 @@ func (r testRig) createOwnedGitHubReviewSessionWithRepos(ctx context.Context, t 
 // own default names ("github.com" host, matching postScmCredentials' own
 // default request body) -- kept as its own named constant here (rather
 // than inlined at each call site) purely for readability.
-const reviewSessionRepos = `[{"name":"narvi","url":"https://github.com/khazaddev/narvi","branch":null}]`
+const reviewSessionRepos = `[{"name":"narvi","url":"https://github.com/narvidev/narvi","branch":null}]`
 
 // TestScmCredentials_ReviewSession_UsesBotToken proves the audit
 // remediation this Step's own confirmed finding required: a review
@@ -1012,7 +1012,7 @@ func TestScmCredentials_NonReviewSession_HostScopingStillEnforced(t *testing.T) 
 	ctx := context.Background()
 
 	session := createSessionWithGitHubIdentityAndRepos(ctx, t, rig, "gho_realGitHubAccessToken",
-		`[{"name":"narvi","url":"https://gitlab.com/khazaddev/narvi","branch":null}]`)
+		`[{"name":"narvi","url":"https://gitlab.com/narvidev/narvi","branch":null}]`)
 	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
 
 	status, _ := postScmCredentials(t, rig, session.ID.String(), "sandbox-bearer-token")
@@ -1282,7 +1282,7 @@ func TestScmCredentials_Shadow_LedgerRecordFailureIs500(t *testing.T) {
 
 	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{
 		SpawnSource: sqlcgen.SessionSpawnSourceWeb,
-		Repos:       []byte(`[{"name":"narvi","url":"https://github.com/khazaddev/narvi","branch":null}]`),
+		Repos:       []byte(`[{"name":"narvi","url":"https://github.com/narvidev/narvi","branch":null}]`),
 	})
 	if err != nil {
 		t.Fatalf("create session: %v", err)
@@ -1307,7 +1307,7 @@ func TestScmCredentials_Shadow_MintErrorIsInternalError(t *testing.T) {
 
 	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{
 		SpawnSource: sqlcgen.SessionSpawnSourceWeb,
-		Repos:       []byte(`[{"name":"narvi","url":"https://github.com/khazaddev/narvi","branch":null}]`),
+		Repos:       []byte(`[{"name":"narvi","url":"https://github.com/narvidev/narvi","branch":null}]`),
 	})
 	if err != nil {
 		t.Fatalf("create session: %v", err)
@@ -1457,7 +1457,7 @@ func TestScmCredentials_Shadow_SubstitutionLedgerFailureIs500(t *testing.T) {
 
 	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{
 		SpawnSource: sqlcgen.SessionSpawnSourceWeb,
-		Repos:       []byte(`[{"name":"narvi","url":"https://github.com/khazaddev/narvi","branch":null}]`),
+		Repos:       []byte(`[{"name":"narvi","url":"https://github.com/narvidev/narvi","branch":null}]`),
 	})
 	if err != nil {
 		t.Fatalf("create session: %v", err)

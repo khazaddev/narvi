@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/review"
 )
 
 // TestMergeReviewSubAgentsConfig_NoExistingFile proves the common case: a

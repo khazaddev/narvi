@@ -6,9 +6,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/khazaddev/narvi/internal/domain/cloudidentity"
-	"github.com/khazaddev/narvi/internal/domain/clusterbinding"
-	"github.com/khazaddev/narvi/internal/domain/providercredential"
+	"github.com/narvidev/narvi/internal/domain/cloudidentity"
+	"github.com/narvidev/narvi/internal/domain/clusterbinding"
+	"github.com/narvidev/narvi/internal/domain/providercredential"
 )
 
 // maxNameLength bounds a sandbox_secrets name. Not specified by §27.1;

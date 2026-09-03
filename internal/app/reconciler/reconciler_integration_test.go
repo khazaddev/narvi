@@ -33,12 +33,12 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"golang.org/x/sync/errgroup"
 
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/app/reconciler"
-	"github.com/khazaddev/narvi/internal/platform"
-	"github.com/khazaddev/narvi/migrations"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/reconciler"
+	"github.com/narvidev/narvi/internal/platform"
+	"github.com/narvidev/narvi/migrations"
 )
 
 // newTestPool spins up a throwaway Postgres container, runs every embedded

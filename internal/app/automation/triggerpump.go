@@ -11,9 +11,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	domainautomation "github.com/khazaddev/narvi/internal/domain/automation"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	domainautomation "github.com/narvidev/narvi/internal/domain/automation"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // cronTriggerConfigJSON is the on-wire shape of a TriggerTypeCron

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 // TestNew_UnsupportedProvider proves the "configure a nonsense provider

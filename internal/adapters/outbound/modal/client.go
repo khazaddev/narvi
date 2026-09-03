@@ -7,8 +7,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // maxResponseBodySize bounds how much of a Modal response body ever gets

@@ -73,16 +73,16 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/auditlog"
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/app/reviewcontext"
-	appreviewtriage "github.com/khazaddev/narvi/internal/app/reviewtriage"
-	"github.com/khazaddev/narvi/internal/domain/reposource"
-	"github.com/khazaddev/narvi/internal/domain/review"
-	"github.com/khazaddev/narvi/internal/domain/reviewpost"
-	domainreviewtriage "github.com/khazaddev/narvi/internal/domain/reviewtriage"
+	"github.com/narvidev/narvi/internal/adapters/outbound/githubapi"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/auditlog"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/reviewcontext"
+	appreviewtriage "github.com/narvidev/narvi/internal/app/reviewtriage"
+	"github.com/narvidev/narvi/internal/domain/reposource"
+	"github.com/narvidev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/reviewpost"
+	domainreviewtriage "github.com/narvidev/narvi/internal/domain/reviewtriage"
 )
 
 // reviewAutoRetriggerBudget is §24.6's own per-PR budget on the AUTOMATIC

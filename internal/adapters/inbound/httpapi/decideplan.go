@@ -89,15 +89,15 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/linearapi"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/app/sessionactor"
-	plandomain "github.com/khazaddev/narvi/internal/domain/plan"
-	"github.com/khazaddev/narvi/internal/domain/turn"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/outbound/linearapi"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/adapters/outbound/slackapi"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/sessionactor"
+	plandomain "github.com/narvidev/narvi/internal/domain/plan"
+	"github.com/narvidev/narvi/internal/domain/turn"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // PlanVerdict is the decision DecidePlan/DecidePlanOnTx renders.

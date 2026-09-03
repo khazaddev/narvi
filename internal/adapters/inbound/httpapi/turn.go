@@ -10,17 +10,17 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/intentclassifier"
-	"github.com/khazaddev/narvi/internal/app/sessionactor"
-	"github.com/khazaddev/narvi/internal/app/workflowengine"
-	"github.com/khazaddev/narvi/internal/domain/authz"
-	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
-	"github.com/khazaddev/narvi/internal/domain/turn"
-	domainupload "github.com/khazaddev/narvi/internal/domain/upload"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/contracts/gen/go/restdtos"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/intentclassifier"
+	"github.com/narvidev/narvi/internal/app/sessionactor"
+	"github.com/narvidev/narvi/internal/app/workflowengine"
+	"github.com/narvidev/narvi/internal/domain/authz"
+	intentdomain "github.com/narvidev/narvi/internal/domain/intent"
+	"github.com/narvidev/narvi/internal/domain/turn"
+	domainupload "github.com/narvidev/narvi/internal/domain/upload"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // hasOpenTurn reports whether ANY turn in turns is non-terminal (Pending,

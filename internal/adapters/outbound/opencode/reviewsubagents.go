@@ -3,7 +3,7 @@ package opencode
 import (
 	"encoding/json"
 
-	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/review"
 )
 
 // This file implements §26.4's own (§26.4/§26.6, "review deep path:

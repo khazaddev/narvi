@@ -3,7 +3,7 @@ package turn_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/turn"
+	"github.com/narvidev/narvi/internal/domain/turn"
 )
 
 // TestHasInFlightTurn is table-driven over every shape of turn-status

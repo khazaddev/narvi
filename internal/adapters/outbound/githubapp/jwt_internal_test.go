@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/oidcsigning"
+	"github.com/narvidev/narvi/internal/adapters/outbound/oidcsigning"
 )
 
 // TestSignAppJWT_ClaimsAndSignature proves signAppJWT produces a token

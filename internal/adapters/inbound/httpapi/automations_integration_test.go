@@ -12,9 +12,9 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/contracts/gen/go/restdtos"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 const createManualAutomationBody = `{"name":"nightly audit","prompt":"do the thing","repos":[{"name":"widgets","url":"https://github.com/acme/widgets","branch":null}],"triggerType":"manual"}`

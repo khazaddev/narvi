@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/auditlog"
-	"github.com/khazaddev/narvi/internal/domain/sandboxsecret"
-	"github.com/khazaddev/narvi/internal/domain/seedmanifest"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/auditlog"
+	"github.com/narvidev/narvi/internal/domain/sandboxsecret"
+	"github.com/narvidev/narvi/internal/domain/seedmanifest"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // secretKey renders s as a safe, human-readable Item.Key -- scope, repo

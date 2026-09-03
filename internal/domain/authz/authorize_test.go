@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/authz"
+	"github.com/narvidev/narvi/internal/domain/authz"
 )
 
 // TestMatrix_CoversEveryAction proves every Action in authz.AllActions has

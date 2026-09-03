@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/rwx"
-	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/adapters/outbound/rwx"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 // TestPreviewNotifier_Deliver proves Deliver decodes a

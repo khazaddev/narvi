@@ -6,8 +6,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	digestdomain "github.com/khazaddev/narvi/internal/domain/digest"
-	"github.com/khazaddev/narvi/internal/platform"
+	digestdomain "github.com/narvidev/narvi/internal/domain/digest"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // maxReposPerDiscoveryTick bounds Pump's own per-tick repo enumeration --

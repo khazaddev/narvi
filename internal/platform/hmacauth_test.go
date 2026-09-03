@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // TestVerify is table-driven over the sentinel-error cases hmacauth.go

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/domain/shadowcompare"
+	"github.com/narvidev/narvi/internal/domain/shadowcompare"
 )
 
 func timePtr(t time.Time) *time.Time { return &t }

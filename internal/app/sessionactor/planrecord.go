@@ -58,13 +58,13 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
-	"github.com/khazaddev/narvi/internal/app/auditlog"
-	"github.com/khazaddev/narvi/internal/app/ports"
-	plandomain "github.com/khazaddev/narvi/internal/domain/plan"
-	"github.com/khazaddev/narvi/internal/domain/turn"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/adapters/outbound/slackapi"
+	"github.com/narvidev/narvi/internal/app/auditlog"
+	"github.com/narvidev/narvi/internal/app/ports"
+	plandomain "github.com/narvidev/narvi/internal/domain/plan"
+	"github.com/narvidev/narvi/internal/domain/turn"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // recordPlanIfNeeded is completeProcessingTurn's own plan-row-creation

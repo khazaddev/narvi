@@ -8,8 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
-	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/adapters/outbound/slackapi"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 func TestDeliver_Success(t *testing.T) {

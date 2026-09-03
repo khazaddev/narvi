@@ -13,7 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
 )
 
 // TestRepoSettingsStore_Get_MissingRow proves a repo with no settings row

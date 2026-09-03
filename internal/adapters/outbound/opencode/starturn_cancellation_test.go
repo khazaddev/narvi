@@ -7,8 +7,8 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
-	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 // These three tests exercise Finding 5's own three real return paths that

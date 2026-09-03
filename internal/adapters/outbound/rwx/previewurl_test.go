@@ -3,7 +3,7 @@ package rwx_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/rwx"
+	"github.com/narvidev/narvi/internal/adapters/outbound/rwx"
 )
 
 func TestFriendlyPreviewURL(t *testing.T) {

@@ -7,8 +7,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // SandboxRegistry is the in-process, session-keyed registry of live

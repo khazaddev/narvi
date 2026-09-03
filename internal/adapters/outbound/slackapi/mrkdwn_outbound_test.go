@@ -3,7 +3,7 @@ package slackapi_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
+	"github.com/narvidev/narvi/internal/adapters/outbound/slackapi"
 )
 
 // TestMarkdownToMrkdwn_Conversions proves this package's own FIRST EVER

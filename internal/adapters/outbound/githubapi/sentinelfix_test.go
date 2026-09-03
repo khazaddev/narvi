@@ -8,8 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
-	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/adapters/outbound/githubapi"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 // §8.2 ("sentinels + suggestions", §12.2 item 2, §17.2/§17.6): GetFileContent/

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 // captureDefaultLoggerJSON temporarily replaces slog.Default() with a JSON

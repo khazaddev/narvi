@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
+	"github.com/narvidev/narvi/internal/adapters/outbound/slackapi"
 )
 
 // TestEncodeDecodePlanActionValue_RoundTrip proves the button-value

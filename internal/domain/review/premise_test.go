@@ -3,7 +3,7 @@ package review_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/review"
 )
 
 // TestPremiseFloor is exhaustive over every legal PremiseState value plus

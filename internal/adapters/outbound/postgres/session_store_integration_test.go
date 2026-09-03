@@ -30,7 +30,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
 )
 
 // decodeJSONObject unmarshals raw into a generic map for semantic

@@ -3,8 +3,8 @@ package upload_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/domain/upload"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/domain/upload"
 )
 
 func TestBuildBlobKey(t *testing.T) {

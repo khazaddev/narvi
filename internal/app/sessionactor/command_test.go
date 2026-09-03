@@ -3,7 +3,7 @@ package sessionactor_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/narvidev/narvi/internal/app/sessionactor"
 )
 
 // TestTimerFired_IsCommand proves TimerFired satisfies the Command

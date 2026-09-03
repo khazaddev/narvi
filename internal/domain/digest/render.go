@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/review"
 )
 
 // Provider is which channel dialect Render formats for -- a closed,

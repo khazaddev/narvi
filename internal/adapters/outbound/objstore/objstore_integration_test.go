@@ -29,9 +29,9 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcminio "github.com/testcontainers/testcontainers-go/modules/minio"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/objstore"
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/outbound/objstore"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // minioImage is pinned to a real, currently-published tag (verified

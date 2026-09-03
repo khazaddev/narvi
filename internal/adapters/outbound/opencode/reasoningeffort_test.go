@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
 )
 
 // H1 (adversarial review): the entire reasoning-effort feature (§29.8) was

@@ -3,7 +3,7 @@ package decisioninbox
 import (
 	"time"
 
-	"github.com/khazaddev/narvi/internal/domain/decisioninbox"
+	"github.com/narvidev/narvi/internal/domain/decisioninbox"
 )
 
 // Item is one decision-inbox row, ready to convert 1:1 into the REST

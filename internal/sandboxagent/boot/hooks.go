@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/domain/sandboxboot"
-	"github.com/khazaddev/narvi/internal/platform"
-	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
+	"github.com/narvidev/narvi/internal/domain/sandboxboot"
+	"github.com/narvidev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/sandboxagent/supervisor"
 )
 
 // workspaceMovedFor looks up repoName in moved (§19.4's per-repo

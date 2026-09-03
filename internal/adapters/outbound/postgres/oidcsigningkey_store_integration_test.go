@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
 )
 
 // TestOIDCSigningKeyStoreRotate_ConcurrentRotation_ReturnedRetiredRowIsAuthoritative

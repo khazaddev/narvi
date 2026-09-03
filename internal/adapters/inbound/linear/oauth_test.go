@@ -5,8 +5,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/inbound/linear"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/inbound/linear"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // TestNewOAuthConfig proves the built oauth2.Config threads

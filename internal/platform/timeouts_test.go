@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // TestDefaultTimeouts_Valid proves the real shipped defaults actually

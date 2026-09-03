@@ -20,7 +20,7 @@ package outboxworker
 import (
 	"fmt"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 // EgressClass is §30.2's own External/Internal classification for one

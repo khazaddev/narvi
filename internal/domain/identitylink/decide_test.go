@@ -3,7 +3,7 @@ package identitylink_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/identitylink"
+	"github.com/narvidev/narvi/internal/domain/identitylink"
 )
 
 // TestDecide is exhaustive over the shapes §13.2 step 2/3/4 names: zero

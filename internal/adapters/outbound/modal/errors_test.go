@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 func TestConfigErrors_Error(t *testing.T) {

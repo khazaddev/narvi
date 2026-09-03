@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/sandboxboot"
+	"github.com/narvidev/narvi/internal/domain/sandboxboot"
 )
 
 func TestParseBootMode_Valid(t *testing.T) {

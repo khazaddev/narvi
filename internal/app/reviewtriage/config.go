@@ -8,8 +8,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/khazaddev/narvi/internal/domain/reviewtriage"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/domain/reviewtriage"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // LoadConfig resolves repoFullName's own §26.3 reviewDepth config.

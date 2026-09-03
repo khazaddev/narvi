@@ -6,7 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/khazaddev/narvi/internal/domain/reviewverdict"
+	"github.com/narvidev/narvi/internal/domain/reviewverdict"
 )
 
 // GetLatest fetches (repoFullName, prNumber)'s own most-recently-posted

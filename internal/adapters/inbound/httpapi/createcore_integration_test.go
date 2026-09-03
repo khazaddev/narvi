@@ -29,11 +29,11 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/sessionactor"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/contracts/gen/go/restdtos"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/sessionactor"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // newCoreTestPool now simply delegates to this whole binary's ONE shared
@@ -84,7 +84,7 @@ func TestCreateSessionCore_NilCreator_StoresNullCreatedBy(t *testing.T) {
 	req := restdtos.CreateSessionRequest{
 		SpawnSource: restdtos.CreateSessionRequestSpawnSourceGithub,
 		Repos: []restdtos.CreateSessionRequestReposElem{
-			{Name: "narvi", Url: "https://github.com/khazaddev/narvi"},
+			{Name: "narvi", Url: "https://github.com/narvidev/narvi"},
 		},
 	}
 
@@ -145,7 +145,7 @@ func TestCreateSessionCore_NilCreator_WithPromptDispatches(t *testing.T) {
 		SpawnSource: restdtos.CreateSessionRequestSpawnSourceGithub,
 		Prompt:      restdtos.CreateSessionRequestPrompt(&prompt),
 		Repos: []restdtos.CreateSessionRequestReposElem{
-			{Name: "narvi", Url: "https://github.com/khazaddev/narvi"},
+			{Name: "narvi", Url: "https://github.com/narvidev/narvi"},
 		},
 	}
 
@@ -192,7 +192,7 @@ func TestCreateSessionOnTx_CallerRollback_PersistsNothing(t *testing.T) {
 		SpawnSource: restdtos.CreateSessionRequestSpawnSourceGithub,
 		Prompt:      restdtos.CreateSessionRequestPrompt(&prompt),
 		Repos: []restdtos.CreateSessionRequestReposElem{
-			{Name: "narvi", Url: "https://github.com/khazaddev/narvi"},
+			{Name: "narvi", Url: "https://github.com/narvidev/narvi"},
 		},
 	}
 
@@ -260,7 +260,7 @@ func TestCreateSessionOnTx_CallerCommit_Persists(t *testing.T) {
 		SpawnSource: restdtos.CreateSessionRequestSpawnSourceGithub,
 		Prompt:      restdtos.CreateSessionRequestPrompt(&prompt),
 		Repos: []restdtos.CreateSessionRequestReposElem{
-			{Name: "narvi", Url: "https://github.com/khazaddev/narvi"},
+			{Name: "narvi", Url: "https://github.com/narvidev/narvi"},
 		},
 	}
 
@@ -460,7 +460,7 @@ func TestTriggerDispatch_ExistingSession_SucceedsAndSpawns(t *testing.T) {
 		SpawnSource: restdtos.CreateSessionRequestSpawnSourceGithub,
 		Prompt:      restdtos.CreateSessionRequestPrompt(&prompt),
 		Repos: []restdtos.CreateSessionRequestReposElem{
-			{Name: "narvi", Url: "https://github.com/khazaddev/narvi"},
+			{Name: "narvi", Url: "https://github.com/narvidev/narvi"},
 		},
 	}
 

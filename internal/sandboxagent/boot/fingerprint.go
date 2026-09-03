@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/domain/sandboxboot"
+	"github.com/narvidev/narvi/internal/domain/sandboxboot"
 )
 
 // CollectFingerprint assembles the boot fingerprint §5.3 requires

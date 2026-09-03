@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/app/ports"
-	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
+	"github.com/narvidev/narvi/internal/app/ports"
+	intentdomain "github.com/narvidev/narvi/internal/domain/intent"
 )
 
 // captureDefaultLoggerJSON temporarily replaces slog.Default() with a JSON

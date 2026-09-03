@@ -38,8 +38,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/sandboxagent/services"
-	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
+	"github.com/narvidev/narvi/internal/sandboxagent/services"
+	"github.com/narvidev/narvi/internal/sandboxagent/supervisor"
 )
 
 // dockerdServiceName is the boot_progress "service" name RunDocker

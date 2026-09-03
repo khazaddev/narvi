@@ -24,7 +24,7 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/khazaddev/narvi/internal/domain/reviewpost"
+	"github.com/narvidev/narvi/internal/domain/reviewpost"
 )
 
 // createReviewRequest is the body POSTed to

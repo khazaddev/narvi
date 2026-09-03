@@ -10,8 +10,8 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
-	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
+	"github.com/narvidev/narvi/contracts/gen/go/sessionconfig"
 )
 
 // CommandHandler is the pluggable dispatch target for the 5 business

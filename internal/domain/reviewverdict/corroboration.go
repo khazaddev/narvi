@@ -1,6 +1,6 @@
 package reviewverdict
 
-import "github.com/khazaddev/narvi/internal/domain/review"
+import "github.com/narvidev/narvi/internal/domain/review"
 
 // This file implements §26.4's own named residual, closed by §26.4:
 // "Corroborating the claim against the persisted sub_task_finish trace is

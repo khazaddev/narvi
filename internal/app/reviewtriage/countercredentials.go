@@ -1,8 +1,8 @@
 package reviewtriage
 
 import (
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/domain/providercredential"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/domain/providercredential"
 )
 
 // CredentialedProviders reduces rows (every provider_credentials candidate

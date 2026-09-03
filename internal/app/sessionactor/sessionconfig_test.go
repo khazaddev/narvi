@@ -7,9 +7,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/domain/provenance"
+	"github.com/narvidev/narvi/contracts/gen/go/sessionconfig"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/domain/provenance"
 )
 
 // sessionRowWithRepos builds a minimal sqlcgen.Session carrying a real,

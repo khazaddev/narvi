@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
-	"github.com/khazaddev/narvi/internal/domain/sandboxboot"
+	"github.com/narvidev/narvi/contracts/gen/go/sessionconfig"
+	"github.com/narvidev/narvi/internal/domain/sandboxboot"
 )
 
 // The environment variables Load reads. bootModeEnvVar is the only one

@@ -25,10 +25,10 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/app/intentclassifier"
-	"github.com/khazaddev/narvi/internal/app/ports"
-	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/app/intentclassifier"
+	"github.com/narvidev/narvi/internal/app/ports"
+	intentdomain "github.com/narvidev/narvi/internal/domain/intent"
 )
 
 // lockProbingPlanFollowupLLM is a ports.LLM fake whose Complete method,

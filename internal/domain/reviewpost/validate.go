@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/khazaddev/narvi/internal/domain/review"
-	"github.com/khazaddev/narvi/internal/domain/reviewtriage"
+	"github.com/narvidev/narvi/internal/domain/review"
+	"github.com/narvidev/narvi/internal/domain/reviewtriage"
 )
 
 // VerdictInput is the shape of a review-verdict-posting-tool call's own

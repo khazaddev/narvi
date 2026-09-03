@@ -3,7 +3,7 @@ package automation
 import (
 	"fmt"
 
-	"github.com/khazaddev/narvi/internal/domain/environment"
+	"github.com/narvidev/narvi/internal/domain/environment"
 )
 
 // SandboxSettings is §8.4's own "sandboxSettings honored on automation

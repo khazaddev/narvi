@@ -13,12 +13,12 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/ports"
-	domainimagebuild "github.com/khazaddev/narvi/internal/domain/imagebuild"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/contracts/gen/go/sessionconfig"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/ports"
+	domainimagebuild "github.com/narvidev/narvi/internal/domain/imagebuild"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // This file proves the audit fix ("warm-boot image access control", HIGH)

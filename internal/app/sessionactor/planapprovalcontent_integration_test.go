@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/adapters/outbound/slackapi"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // This file proves §8.1's ("plan mode, cross-channel", §8.1/§13.3) own

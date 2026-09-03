@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
-	"github.com/khazaddev/narvi/internal/domain/environment"
-	"github.com/khazaddev/narvi/internal/domain/reposource"
-	"github.com/khazaddev/narvi/internal/platform"
-	"github.com/khazaddev/narvi/internal/sandboxagent/githarden"
-	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
+	"github.com/narvidev/narvi/contracts/gen/go/sessionconfig"
+	"github.com/narvidev/narvi/internal/domain/environment"
+	"github.com/narvidev/narvi/internal/domain/reposource"
+	"github.com/narvidev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/sandboxagent/githarden"
+	"github.com/narvidev/narvi/internal/sandboxagent/supervisor"
 )
 
 // CloneResult is one repo's outcome from CloneAll.

@@ -37,13 +37,13 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
-	"github.com/khazaddev/narvi/internal/adapters/inbound/wshub"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/app/sessionactor"
-	"github.com/khazaddev/narvi/internal/platform"
-	"github.com/khazaddev/narvi/migrations"
+	"github.com/narvidev/narvi/internal/adapters/inbound/wshub"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/sessionactor"
+	"github.com/narvidev/narvi/internal/platform"
+	"github.com/narvidev/narvi/migrations"
 )
 
 // Harness is the shared, real multi-component rig every test/resilience

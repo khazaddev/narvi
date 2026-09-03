@@ -35,14 +35,14 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/actorauthz"
-	"github.com/khazaddev/narvi/internal/app/auditlog"
-	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
-	"github.com/khazaddev/narvi/internal/domain/archrecap"
-	"github.com/khazaddev/narvi/internal/domain/authz"
-	"github.com/khazaddev/narvi/internal/domain/reviewpost"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/actorauthz"
+	"github.com/narvidev/narvi/internal/app/auditlog"
+	appreviewverdict "github.com/narvidev/narvi/internal/app/reviewverdict"
+	"github.com/narvidev/narvi/internal/domain/archrecap"
+	"github.com/narvidev/narvi/internal/domain/authz"
+	"github.com/narvidev/narvi/internal/domain/reviewpost"
 )
 
 // ArchRecapContestCapturer is the narrow slice of *postgres.

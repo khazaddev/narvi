@@ -111,8 +111,8 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"golang.org/x/sync/errgroup"
 
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/migrations"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/migrations"
 )
 
 // sharedPool/sharedConnStr are set exactly once, by TestMain below,

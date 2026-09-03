@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/archrecap"
+	"github.com/narvidev/narvi/internal/domain/archrecap"
 )
 
 func TestMatch(t *testing.T) {

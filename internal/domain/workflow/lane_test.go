@@ -3,8 +3,8 @@ package workflow_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/intent"
-	"github.com/khazaddev/narvi/internal/domain/workflow"
+	"github.com/narvidev/narvi/internal/domain/intent"
+	"github.com/narvidev/narvi/internal/domain/workflow"
 )
 
 // TestAllLanes_MatchesLaneConstants pins AllLanes to exactly the three

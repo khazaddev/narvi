@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/workflow"
+	"github.com/narvidev/narvi/internal/domain/workflow"
 )
 
 // passthroughStep builds a minimal valid step, mirroring the built-in

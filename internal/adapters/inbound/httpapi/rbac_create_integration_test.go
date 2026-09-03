@@ -35,7 +35,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 )
 
 // TestCreateSession_Viewer_Returns403 proves the viewer role -- the ONLY

@@ -23,12 +23,12 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/khazaddev/narvi/internal/adapters/inbound/linear"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/linearapi"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/identitylink"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/inbound/linear"
+	"github.com/narvidev/narvi/internal/adapters/outbound/linearapi"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/identitylink"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // newLinearGraphQLStub stands in for Linear's real GraphQL API, answering

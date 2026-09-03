@@ -3,7 +3,7 @@ package codeowners_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/codeowners"
+	"github.com/narvidev/narvi/internal/domain/codeowners"
 )
 
 func TestParse(t *testing.T) {

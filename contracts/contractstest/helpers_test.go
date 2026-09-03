@@ -16,7 +16,7 @@ import (
 
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 
-	"github.com/khazaddev/narvi/contracts"
+	"github.com/narvidev/narvi/contracts"
 )
 
 // testSessionID is a syntactically valid UUID (format: uuid is asserted, see

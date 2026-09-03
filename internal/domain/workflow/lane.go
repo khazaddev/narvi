@@ -1,6 +1,6 @@
 package workflow
 
-import "github.com/khazaddev/narvi/internal/domain/intent"
+import "github.com/narvidev/narvi/internal/domain/intent"
 
 // Lane is one of the three dispatch lanes a workflow definition serves --
 // a closed enum matching the workflow_lane Postgres enum

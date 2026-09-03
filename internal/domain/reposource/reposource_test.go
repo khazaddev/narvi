@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/reposource"
+	"github.com/narvidev/narvi/internal/domain/reposource"
 )
 
 func TestValidateRepoName(t *testing.T) {
@@ -452,12 +452,12 @@ func TestParseOwnerRepo(t *testing.T) {
 		wantRepo  string
 		wantErr   bool
 	}{
-		{"plain https", "https://github.com/khazaddev/narvi", "khazaddev", "narvi", false},
-		{"dot-git suffix", "https://github.com/khazaddev/narvi.git", "khazaddev", "narvi", false},
-		{"trailing slash", "https://github.com/khazaddev/narvi/", "khazaddev", "narvi", false},
+		{"plain https", "https://github.com/narvidev/narvi", "narvidev", "narvi", false},
+		{"dot-git suffix", "https://github.com/narvidev/narvi.git", "narvidev", "narvi", false},
+		{"trailing slash", "https://github.com/narvidev/narvi/", "narvidev", "narvi", false},
 		{"gitlab host (generic parsing)", "https://gitlab.com/some-group/some-repo.git", "some-group", "some-repo", false},
-		{"too few path segments", "https://github.com/khazaddev", "", "", true},
-		{"too many path segments", "https://github.com/khazaddev/narvi/extra", "", "", true},
+		{"too few path segments", "https://github.com/narvidev", "", "", true},
+		{"too many path segments", "https://github.com/narvidev/narvi/extra", "", "", true},
 		{"empty path", "https://github.com/", "", "", true},
 		{"malformed url", "://not a url", "", "", true},
 		// Audit-remediation batch B3 round 2 (finding #8): ParseOwnerRepo's
@@ -467,9 +467,9 @@ func TestParseOwnerRepo(t *testing.T) {
 		// these two cases exercise the guard clause (parts[0] == "" ||
 		// parts[1] == "") that fix must not regress: a future edit that
 		// trims ".git" PER-SEGMENT (rather than on the whole trimmed path,
-		// as today) could plausibly start returning owner="khazaddev",
+		// as today) could plausibly start returning owner="narvidev",
 		// repo="" for the first case instead of erroring.
-		{"trailing .git with no repo segment (empty repo after trim)", "https://github.com/khazaddev/.git", "", "", true},
+		{"trailing .git with no repo segment (empty repo after trim)", "https://github.com/narvidev/.git", "", "", true},
 		{"embedded double slash (empty owner segment)", "https://github.com//narvi", "", "", true},
 	}
 

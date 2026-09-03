@@ -9,7 +9,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/khazaddev/narvi/internal/app/shadowledger"
+	"github.com/narvidev/narvi/internal/app/shadowledger"
 )
 
 // Client is every Slack Web API operation internal/adapters/inbound/slack

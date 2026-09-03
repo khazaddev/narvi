@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // defaultDispatchBaseURL is RWX's own real Dispatches API host — the ONLY

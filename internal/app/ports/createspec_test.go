@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
+	"github.com/narvidev/narvi/contracts/gen/go/sessionconfig"
 )
 
 func TestCreateSpec_Validate(t *testing.T) {

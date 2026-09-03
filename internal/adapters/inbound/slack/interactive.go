@@ -84,16 +84,16 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
-	"github.com/khazaddev/narvi/internal/app/actorauthz"
-	"github.com/khazaddev/narvi/internal/app/identitylink"
-	"github.com/khazaddev/narvi/internal/app/sessionactor"
-	"github.com/khazaddev/narvi/internal/app/shadowslack"
-	"github.com/khazaddev/narvi/internal/domain/authz"
-	plandomain "github.com/khazaddev/narvi/internal/domain/plan"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/inbound/httpapi"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/slackapi"
+	"github.com/narvidev/narvi/internal/app/actorauthz"
+	"github.com/narvidev/narvi/internal/app/identitylink"
+	"github.com/narvidev/narvi/internal/app/sessionactor"
+	"github.com/narvidev/narvi/internal/app/shadowslack"
+	"github.com/narvidev/narvi/internal/domain/authz"
+	plandomain "github.com/narvidev/narvi/internal/domain/plan"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // InteractiveDeps bundles every dependency NewInteractivityHandler needs --

@@ -1,6 +1,6 @@
 package cloudidentity
 
-import "github.com/khazaddev/narvi/internal/domain/providercredential"
+import "github.com/narvidev/narvi/internal/domain/providercredential"
 
 // BindingScopes is the restricted set of internal/domain/providercredential
 // .Scope values a cloud_identity_bindings row may ever declare --

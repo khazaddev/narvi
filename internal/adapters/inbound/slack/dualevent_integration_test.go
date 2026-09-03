@@ -35,13 +35,13 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/khazaddev/narvi/internal/adapters/inbound/slack"
-	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
-	"github.com/khazaddev/narvi/internal/app/identitylink"
-	"github.com/khazaddev/narvi/internal/app/sessionactor"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/inbound/slack"
+	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/adapters/outbound/slackapi"
+	"github.com/narvidev/narvi/internal/app/identitylink"
+	"github.com/narvidev/narvi/internal/app/sessionactor"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // drainAllSlackRequests reads every request rig's fake Slack API server
@@ -378,7 +378,7 @@ func TestHandler_DualDelivery_FailedFirstAttemptReleasesBothClaimsForRedelivery(
 		Participants:    narvipg.NewParticipantStore(pool),
 		SigningSecret:   testSigningSecret,
 		DefaultRepoName: "narvi",
-		DefaultRepoURL:  "https://github.com/khazaddev/narvi",
+		DefaultRepoURL:  "https://github.com/narvidev/narvi",
 		TimestampWindow: 5 * time.Minute,
 		AckTimeout:      platform.DefaultTimeouts().SlackAckTimeout,
 		SlackClient:     slackapi.New(fakeSlack.Client(), fakeSlack.URL, "test-bot-token"),
@@ -446,7 +446,7 @@ func TestHandler_DualDelivery_FailedFirstAttemptReleasesBothClaimsForRedelivery(
 		Participants:    narvipg.NewParticipantStore(pool),
 		SigningSecret:   testSigningSecret,
 		DefaultRepoName: "narvi",
-		DefaultRepoURL:  "https://github.com/khazaddev/narvi",
+		DefaultRepoURL:  "https://github.com/narvidev/narvi",
 		TimestampWindow: 5 * time.Minute,
 		AckTimeout:      platform.DefaultTimeouts().SlackAckTimeout,
 		SlackClient:     slackapi.New(fakeSlack.Client(), fakeSlack.URL, "test-bot-token"),

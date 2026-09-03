@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
-	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/adapters/outbound/githubapi"
+	"github.com/narvidev/narvi/internal/app/ports"
 )
 
 // TestListOpenPRsForUser_FullScenario exercises ListOpenPRsForUser end to

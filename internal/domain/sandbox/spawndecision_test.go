@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/domain/sandbox"
+	"github.com/narvidev/narvi/internal/domain/sandbox"
 )
 
 // TestEvaluateSpawnDecision exercises EvaluateSpawnDecision's scenarios:

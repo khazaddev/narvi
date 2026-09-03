@@ -7,7 +7,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/khazaddev/narvi/internal/domain/seedmanifest"
+	"github.com/narvidev/narvi/internal/domain/seedmanifest"
 )
 
 // LoadManifest reads path (the ONLY I/O in this package that touches the

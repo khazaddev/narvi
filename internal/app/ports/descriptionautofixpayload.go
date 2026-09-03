@@ -1,6 +1,6 @@
 package ports
 
-import "github.com/khazaddev/narvi/internal/domain/review"
+import "github.com/narvidev/narvi/internal/domain/review"
 
 // DescriptionAutofixPayload is NotificationKindGitHubDescriptionAutofix's
 // own outbox payload shape ("review digest: description

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
 )
 
 // TestFinalize_SecondCallIsNoOp proves tryFinalize's own double-finalize

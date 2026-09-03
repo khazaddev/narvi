@@ -28,12 +28,12 @@ import (
 	"github.com/coder/websocket"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
-	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
-	"github.com/khazaddev/narvi/internal/platform"
-	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
-	"github.com/khazaddev/narvi/internal/sandboxagent/credentials"
-	"github.com/khazaddev/narvi/internal/sandboxagent/wsbridge"
+	"github.com/narvidev/narvi/contracts/gen/go/sandboxws"
+	"github.com/narvidev/narvi/contracts/gen/go/sessionconfig"
+	"github.com/narvidev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/sandboxagent/boot"
+	"github.com/narvidev/narvi/internal/sandboxagent/credentials"
+	"github.com/narvidev/narvi/internal/sandboxagent/wsbridge"
 )
 
 const snapshotTestWait = 5 * time.Second

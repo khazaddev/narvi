@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/sandboxagent/services"
+	"github.com/narvidev/narvi/internal/sandboxagent/services"
 )
 
 func TestLocate_Found(t *testing.T) {

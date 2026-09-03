@@ -3,7 +3,7 @@ package auth_test
 import (
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/inbound/auth"
+	"github.com/narvidev/narvi/internal/adapters/inbound/auth"
 )
 
 // TestAllowlistConfig_EmailAllowed is table-driven over the exact-email and

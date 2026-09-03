@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 var errBoom = errors.New("boom")

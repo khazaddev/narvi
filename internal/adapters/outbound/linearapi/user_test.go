@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/linearapi"
+	"github.com/narvidev/narvi/internal/adapters/outbound/linearapi"
 )
 
 // TestGetUserEmail_Success proves GetUserEmail queries user(id) { email },

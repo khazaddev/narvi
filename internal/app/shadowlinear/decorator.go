@@ -9,7 +9,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/khazaddev/narvi/internal/app/shadowledger"
+	"github.com/narvidev/narvi/internal/app/shadowledger"
 )
 
 // Client is every Linear operation internal/adapters/inbound/linear needs

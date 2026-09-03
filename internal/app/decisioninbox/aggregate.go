@@ -72,17 +72,17 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/ports"
-	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
-	"github.com/khazaddev/narvi/internal/domain/authz"
-	"github.com/khazaddev/narvi/internal/domain/autoapproval"
-	"github.com/khazaddev/narvi/internal/domain/automation"
-	"github.com/khazaddev/narvi/internal/domain/decisioninbox"
-	"github.com/khazaddev/narvi/internal/domain/handoff"
-	"github.com/khazaddev/narvi/internal/domain/reviewpost"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/narvidev/narvi/internal/app/ports"
+	appreviewverdict "github.com/narvidev/narvi/internal/app/reviewverdict"
+	"github.com/narvidev/narvi/internal/domain/authz"
+	"github.com/narvidev/narvi/internal/domain/autoapproval"
+	"github.com/narvidev/narvi/internal/domain/automation"
+	"github.com/narvidev/narvi/internal/domain/decisioninbox"
+	"github.com/narvidev/narvi/internal/domain/handoff"
+	"github.com/narvidev/narvi/internal/domain/reviewpost"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // maxAttentionRowsPerSource bounds each of the three needs_attention

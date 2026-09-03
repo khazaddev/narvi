@@ -26,7 +26,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/khazaddev/narvi/internal/domain/reposource"
+	"github.com/narvidev/narvi/internal/domain/reposource"
 )
 
 // CommentPoster is the narrow slice of githubapi.Adapter's own real,

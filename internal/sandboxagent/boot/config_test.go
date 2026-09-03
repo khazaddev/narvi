@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/khazaddev/narvi/internal/domain/sandboxboot"
-	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
+	"github.com/narvidev/narvi/internal/domain/sandboxboot"
+	"github.com/narvidev/narvi/internal/sandboxagent/boot"
 )
 
 // validSessionConfigJSON is a well-formed SESSION_CONFIG document (every

@@ -11,10 +11,10 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
-	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/app/reviewcontext"
-	"github.com/khazaddev/narvi/internal/platform"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres"
+	"github.com/narvidev/narvi/internal/app/ports"
+	"github.com/narvidev/narvi/internal/app/reviewcontext"
+	"github.com/narvidev/narvi/internal/platform"
 )
 
 // meterName is this package's own OTel meter name (§14.3, "mocking +

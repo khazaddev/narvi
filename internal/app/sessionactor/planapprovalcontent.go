@@ -34,8 +34,8 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	plandomain "github.com/khazaddev/narvi/internal/domain/plan"
+	"github.com/narvidev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	plandomain "github.com/narvidev/narvi/internal/domain/plan"
 )
 
 // planContentFallbackText is a local alias for plandomain.ContentFallbackText

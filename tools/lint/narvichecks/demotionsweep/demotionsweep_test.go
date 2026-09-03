@@ -5,7 +5,7 @@ import (
 
 	"golang.org/x/tools/go/analysis/analysistest"
 
-	"github.com/khazaddev/narvi/tools/lint/narvichecks/demotionsweep"
+	"github.com/narvidev/narvi/tools/lint/narvichecks/demotionsweep"
 )
 
 // TestAnalyzer proves the analyzer fires on a new caller that flips
