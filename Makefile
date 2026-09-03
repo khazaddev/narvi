@@ -182,8 +182,12 @@ test-integration-group-4:
 # every credential above, these are not placeholders, uploads actually
 # work end to end against this local MinIO. NARVI_OBJECT_STORE_USE_PATH_STYLE
 # is required true for MinIO (§28.7's own path-style toggle).
+# minio-init lives on docker-compose.dev.yml's "init" profile (see that
+# file's own comment): a one-shot that exits 0 after bucket creation,
+# which `up --wait` would treat as failure if it were in the default stack.
 dev:
 	docker compose -f docker-compose.dev.yml up -d --wait
+	docker compose -f docker-compose.dev.yml --profile init run --rm minio-init
 	NARVI_STAGE=development \
 	NARVI_DATABASE_URL=postgres://narvi:narvi@localhost:$${NARVI_DEV_PG_PORT:-5432}/narvi?sslmode=disable \
 	NARVI_HMAC_SANDBOX_SECRET=dev-only-insecure-sandbox-secret \
