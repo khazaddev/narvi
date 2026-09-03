@@ -40,6 +40,13 @@ make lint    # golangci-lint + the project's custom static-analysis checks
 make test    # go test -race ./...
 ```
 
+## Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). A signed
+[Contributor License Agreement](CLA.md) is required on your first pull request
+(an automated check walks you through signing). For anything
+security-sensitive, see [SECURITY.md](SECURITY.md).
+
 ## License
 
 Copyright (C) 2026 Benoît LELEVÉ.
