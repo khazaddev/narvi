@@ -10,6 +10,8 @@ Narvi runs autonomous coding agents inside isolated cloud sandboxes. A person �
 
 This project was started after running [OpenInspect](https://github.com/ColeMurray/background-agents) in production at [Fountain](https://github.com/onboardiq). Narvi draws on that experience, but is an independent project — not a fork or a rewrite of OpenInspect, and shares no code with it.
 
+Narvi — this repository — is the source-available engine and team web UI, complete on its own. Two commercial products are planned on top of it: **Narvi Desktop** (the individual, post-IDE client) and **Narvi Gatekeeper** (organization-scale review governance and compliance). Everything per-repository stays in the engine — the full review pipeline, RBAC, SSO via OIDC, sandbox isolation: no security feature sits behind a paywall. See [`LICENSING.md`](LICENSING.md).
+
 ## Architecture at a glance
 
 - **Two Go services** — a control plane and an in-sandbox agent — packaged as containers that run on any Kubernetes cluster or plain Docker/VMs, with **Postgres as the single source of truth**. Host it wherever you like; no cloud lock-in.
@@ -22,7 +24,7 @@ This project was started after running [OpenInspect](https://github.com/ColeMurr
 | Path | What it is |
 |---|---|
 | [`docs/TECHNICAL_PLAN.md`](docs/TECHNICAL_PLAN.md) | The full technical specification: architecture, domain model, ports, cross-cutting invariants, wire contracts, feature set, identity/RBAC, the product-prototyping workflow, release review, and the decision inbox. Self-contained. |
-| [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) | The work broken into ~65 ordered Steps across 7 phases (0–6), each shippable as one pull request and referencing the technical-plan section that specifies it. |
+| [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) | The work broken into 112 ordered Steps across 11 scheduled phases (0–10), plus a running list of named gaps (Phase 11) — each Step shippable as one pull request and referencing the technical-plan section that specifies it. |
 | [`docs/design/mockups.html`](docs/design/mockups.html) | Visual specification — nine UI views with numbered design decisions. Open in a browser. |
 | [`docs/environments.md`](docs/environments.md) | Requirements for an Environment's own `setup.sh`/`start.sh` — notably the `setup.sh` idempotency contract every repo must satisfy under warm-boot shared images. |
 
