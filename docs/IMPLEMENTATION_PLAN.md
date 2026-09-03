@@ -3,9 +3,10 @@
 ## Context
 
 Narvi's technical specification (autonomous coding agents in sandboxes) is in
-[docs/TECHNICAL_PLAN.md](TECHNICAL_PLAN.md) (§0–§31), and the nine-view UI design spec is in
-[docs/design/mockups.html](design/mockups.html). This plan breaks the 10 phases (0–9) into **104 ordered Steps**
-(including Phase 4's own 5 additive Steps, 40-44, Phase 8's 9 shadow-mode Steps, 93-101, and Phase 9's 6 knowledge Steps, 102-107), each individually shippable and CI-green,
+[docs/TECHNICAL_PLAN.md](TECHNICAL_PLAN.md) (§0–§33), and the nine-view UI design spec is in
+[docs/design/mockups.html](design/mockups.html). This plan breaks the 11 scheduled phases (0–10) into **112 ordered Steps**
+(including Phase 4's own 5 additive Steps, 40-44, Phase 8's 9 shadow-mode Steps, 96-104, and Phase 9's 6 knowledge Steps, 105-110), plus Phase 11 — a running
+list of named gaps, additive and unscheduled. Each Step is individually shippable and CI-green,
 executable by a developer assisted by coding agents (Sonnet 5).
 Every Step references the technical-plan section that specifies it. Each Step becomes exactly one PR when
 implemented — but a Step's number (e.g. Step 6) is the plan's own row number, not the GitHub PR number it
@@ -375,6 +376,9 @@ be cited by a scheduled Step as a prerequisite — if it is, it has stopped belo
 | 126 | structured plan document | §12.2 item 3's numbered steps with file refs and scope estimate. `Plan.content` is unstructured model-authored prose because the plan domain model has no structured schema; the screen renders it as prose | §12.2 |
 | 127 | sandbox runtime fingerprint & correlation id | §12.2 item 1's rail names both; sandbox-agent computes a fingerprint but only logs it locally, and a correlation id is per-request and never persisted. The rail prints "not reported yet" for each | §12.2, §5.2 |
 | 128 | Step citations outside the checker's reach | `TestNoStepRefInSource` scans `internal/`, `cmd/`, `contracts/` and `web/src`. 183 Step citations live outside it — 155 in `migrations/`, the rest across `docs/runbooks`, `docs/guides`, `deploy/` and `.github/` — so a renumber silently invalidates them. The sweep must verify each citation against the title of the row it names, never shift it arithmetically: that was tried on the technical plan during Phase 7 and got five wrong, three of them already broken by an earlier renumber in a way no shift repairs. Widening the checker to those roots is the second half and cannot land before the sweep, or CI goes red on 183 pre-existing citations | §11 |
+| 129 | opencode adapter: `TestRealTurn_Aborted` under the full suite | Fails intermittently under the full parallel `-race` run and passes in isolation every time; the package was untouched by the Phase 8 work that surfaced it (observed three times, 2026-08). Filed rather than patched: there is no hypothesis yet that explains the failure, and stabilizing a timing test without one is how flakes get papered over instead of understood (Step 118's own rule) | — |
+| 130 | githarden: the content-filter class | `githarden`'s shared `hardeningFlags` neutralizes hooks, fsmonitor, credential helpers, `core.sshCommand`, `diff.external` and the pager, and its own doc records that git content filters (`filter.<name>.clean`/`smudge`) are a class it does not cover. A checked-in `.gitattributes` alone cannot arm one — the command half lives in config, which the sandbox controls — but the class deserves either explicit neutralization (an empty `filter.*` reset, the `credential.helper=` precedent) or a recorded argument that no in-sandbox flow can supply the config half | — |
+| 131 | real-spawn hook tests time out under full-suite load | `TestCloudIdentityTokenReachesRealSpawnedHook` and `TestOIDCClusterBindingTokenReachesRealSpawnedHook` (`cmd/sandbox-agent`) run a real `setup.sh` under a 5-second ceiling; under a full local `make test` with concurrent compile load both timed out (2026-09-03) and passed isolated immediately after. Same family as Steps 118/173, same honesty rule: filed with the observation, and any raised ceiling should follow from a worst-case spawn-latency argument, not from one loaded run | — |
 
 ## Sequencing & parallelism
 
