@@ -46,6 +46,44 @@ Never hand-edit anything under `gen/go/` or `gen/ts/`; edit the source
 `.schema.json` file and regenerate instead. CI runs `make contracts-check`
 on every push/PR (`.github/workflows/ci.yml`).
 
+### The Go post-generation patch
+
+The Go runs are followed by `go run ./tools/contractspatch`, which rewrites
+the *defined* pointer types go-jsonschema emits for nullable properties into
+type *aliases* — `type AutomationLastRunAt = *time.Time` rather than
+`type AutomationLastRunAt *time.Time`.
+
+This is a correctness fix, not cosmetics. A defined type whose underlying
+type is a pointer has an empty method set, and Go will not let one be given
+methods at all (`invalid receiver type … (pointer or interface type)`), so
+it never implements `json.Unmarshaler` the way `*time.Time` itself does.
+Decoding a populated value into such a field therefore failed with
+`json: cannot unmarshal string into Go struct field Plain.lastRunAt of type
+time.Time`, while a JSON `null` decoded fine — which is why the defect
+survived unseen until a test first round-tripped a real timestamp. Only the
+Go decode path was ever affected: marshaling already dereferenced the
+pointer and found `time.Time`'s own `MarshalJSON`, and the TS output
+(`string | null`) was never involved.
+
+The rewrite is a byte-level insertion that leaves the rest of each generated
+file identical to go-jsonschema's output, and it is idempotent, so
+`contracts-check`'s regenerate-and-diff stays clean. Pointees that are
+predeclared basic types (`*string`, `*int`, …) are deliberately left as
+defined types: they can never carry methods, so `encoding/json` handles them
+natively — 155 of the 161 generated pointer declarations today. The six that
+are aliased are the nullable `date-time` fields: `AutomationLastRunAt`,
+`AutomationInvocationClosedAt`, `AutomationRunCompletedAt`,
+`AutomationRunRunningAt`, `ReleaseManifestReadoutComputedAt`, and
+`ShadowLedgerSummaryLiveEgressPromotedAt`.
+
+The same rule also covers a case no schema exercises yet: a nullable
+*object* property. There, a defined pointer type would bypass the generated
+struct's own validating `UnmarshalJSON` and skip validation silently rather
+than fail loudly.
+
+See `tools/contractspatch/main.go`'s package comment for the full writeup
+and `tools/contractspatch/main_test.go` for the classification rule.
+
 ## Testing
 
 - `go test ./contracts/...` (`contractstest/`): for every schema, the
@@ -57,6 +95,20 @@ on every push/PR (`.github/workflows/ci.yml`).
   **object** (`{input, output, cached?}`), never a bare number — a
   number-shaped payload is asserted to fail both JSON Schema validation and
   Go unmarshal.
+- `contractstest/restdtos_test.go`'s `TestAutomationRoundTrip` and
+  `TestShadowLedgerSummaryRoundTrip`: the behavioral regression tests for
+  the nullable date-time decode defect described under "The Go
+  post-generation patch" above. Each round-trips a real (non-null)
+  timestamp — the exact case that had never been exercised on the Go side —
+  alongside the null shape that passed even while the bug was live.
+- `contractstest/genshape_test.go`'s
+  `TestGeneratedNullablePointerTypesAreAliases`: the structural guard for
+  the same defect. It parses every generated Go file and fails on any
+  defined (non-alias) pointer type with a non-basic pointee, so a schema
+  change that adds a nullable date-time nobody wrote a round-trip test for
+  cannot regress silently — which is exactly how the original defect
+  reached `main`. A failure here almost always means `contracts/gen` was
+  regenerated without the patch step.
 - `typecheck/step-finish-tokens.ts`: the same `tokens`-shape regression
   pinned on the TypeScript side, via a `@ts-expect-error` fixture asserted
   by `npm run typecheck` (part of `make contracts-check`).

@@ -364,7 +364,7 @@ type AutomationInvocation struct {
 }
 
 // Null while status is 'pending' (still waiting on one or more runs).
-type AutomationInvocationClosedAt *time.Time
+type AutomationInvocationClosedAt = *time.Time
 
 type AutomationInvocationStatus string
 
@@ -438,7 +438,7 @@ func (j *AutomationInvocation) UnmarshalJSON(value []byte) error {
 }
 
 // Null until this automation's first invocation ever closes.
-type AutomationLastRunAt *time.Time
+type AutomationLastRunAt = *time.Time
 
 type AutomationLastRunStatus struct {
 	Value interface{}
@@ -567,11 +567,11 @@ type AutomationRun struct {
 }
 
 // Null while status is starting/running.
-type AutomationRunCompletedAt *time.Time
+type AutomationRunCompletedAt = *time.Time
 
 // Null until this run's own linked turn first reaches Processing
 // (automation.RunTriggerProcessing).
-type AutomationRunRunningAt *time.Time
+type AutomationRunRunningAt = *time.Time
 
 // Null when this run failed before a session could even be created for its target
 // (automation_runs.session_id, ON DELETE SET NULL). Non-null is this row's own
@@ -6580,7 +6580,7 @@ type ReleaseManifestReadout struct {
 type ReleaseManifestReadoutBaseRef *string
 
 // When this check ran -- null when computed is false.
-type ReleaseManifestReadoutComputedAt *time.Time
+type ReleaseManifestReadoutComputedAt = *time.Time
 
 type ReleaseManifestReadoutHeadRef *string
 
@@ -9215,7 +9215,7 @@ type ShadowLedgerSummary struct {
 // repo_settings.live_egress_promoted_at (§30.8's own promotion fence,
 // migrations/000104). Null means never promoted, or demoted since the last
 // promotion.
-type ShadowLedgerSummaryLiveEgressPromotedAt *time.Time
+type ShadowLedgerSummaryLiveEgressPromotedAt = *time.Time
 
 // Null iff llmSpendComputed is false. The running total of every session naming
 // this repository's own turns.cost_usd, summed -- reuses the SAME figure

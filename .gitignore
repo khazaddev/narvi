@@ -15,6 +15,12 @@
 # above, never committed.
 /narvi
 
+# Same, for the repo tooling under tools/ (`go build ./tools/...`). The
+# Makefile only ever `go run`s these, so a binary here is a stray from a
+# manual build, never something a target needs.
+/contractspatch
+/narvichecks
+
 # Web UI build output (§12.1): `make web-build`/`vite build` writes directly
 # here -- see web/vite.config.ts's own comment for why the frontend
 # bundler's outDir points inside this Go package instead of the more
