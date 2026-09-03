@@ -148,32 +148,23 @@ func TestPostActivateShadowLedger_AdminActivatesWithNoPendingRows(t *testing.T) 
 	const repoFullName = "acme/shadow-ledger-activate-ok"
 	rig.markRepoKnown(ctx, t, repoFullName)
 
-	// Decoded as a raw map, not restdtos.ShadowLedgerSummary: a genuine
-	// (non-null) liveEgressPromotedAt value exposes a PRE-EXISTING
-	// go-jsonschema codegen limitation shared by every nullable
-	// *time.Time-wrapped field this schema has ever generated
-	// (AutomationInvocationClosedAt, AutomationLastRunAt,
-	// AutomationRunCompletedAt/RunningAt, ReleaseManifestReadoutComputedAt,
-	// and now ShadowLedgerSummaryLiveEgressPromotedAt): the generated named
-	// pointer type does not inherit time.Time's own UnmarshalJSON (Go
-	// method sets are never inherited by a renamed type), so
-	// encoding/json's generated Plain-struct decode fails outright the
-	// moment the field is non-null -- verified in isolation, unrelated to
-	// this handler's own marshaling, which is unaffected (only Go-side
-	// UNmarshaling of a populated value breaks; a null value, and every
-	// other field, decode fine, which is why this bug went unnoticed
-	// until a test round-tripped a REAL promotion timestamp back through
-	// the generated Go type). Raw-JSON decoding here sidesteps it; see
-	// this test's own comment for the pre-existing scope.
-	var raw map[string]any
-	status := rig.doJSON(t, http.MethodPost, "/api/repos/"+repoFullName+"/shadow-ledger/activate", nil, &raw, token)
+	// Decoded into the real generated DTO, deliberately: a genuine
+	// (non-null) liveEgressPromotedAt is the exact shape whose Go-side
+	// decode used to fail outright (go-jsonschema's defined-pointer-type
+	// output -- see tools/contractspatch's package comment), which forced
+	// this test's first version to decode a raw map[string]any instead.
+	// contractstest's TestShadowLedgerSummaryRoundTrip pins the fixed
+	// shape in isolation; this decode pins it end to end through the real
+	// handler and router.
+	var got restdtos.ShadowLedgerSummary
+	status := rig.doJSON(t, http.MethodPost, "/api/repos/"+repoFullName+"/shadow-ledger/activate", nil, &got, token)
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want %d", status, http.StatusOK)
 	}
-	if liveEgressEnabled, _ := raw["liveEgressEnabled"].(bool); !liveEgressEnabled {
-		t.Errorf("response liveEgressEnabled = %v, want true", raw["liveEgressEnabled"])
+	if !got.LiveEgressEnabled {
+		t.Errorf("response liveEgressEnabled = false, want true")
 	}
-	if raw["liveEgressPromotedAt"] == nil {
+	if got.LiveEgressPromotedAt == nil {
 		t.Errorf("response liveEgressPromotedAt = nil, want a fresh promotion timestamp")
 	}
 
