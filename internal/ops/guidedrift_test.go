@@ -91,7 +91,7 @@ func TestCheckGuideDrift(t *testing.T) {
 
 // TestNoGuideDrift is §10's own CI-enforcing structural guard,
 // TestNoMetricDrift's own direct sibling (drift_test.go): scans this
-// repo's REAL cmd/control-plane route wiring and REAL internal/domain/
+// repo's REAL controlplane route wiring and REAL internal/domain/
 // intent + sqlcgen vocabulary, loads the REAL docs/guides/*.md files, and
 // fails if any documented command's route or classifier binding names
 // something the code does not actually implement. Runs as a plain `go
@@ -101,7 +101,7 @@ func TestCheckGuideDrift(t *testing.T) {
 // Mutation-tested by hand as part of this Step's own verification (see
 // the PR description): (1) documenting a command with a route that maps
 // to no real endpoint makes this test fail; (2) renaming a real route in
-// cmd/control-plane/main.go without updating the guide makes this test
+// the controlplane package without updating the guide makes this test
 // fail identically; (3) malforming a guide file (breaking its embedded
 // JSON) makes LoadGuides itself fail the test, rather than silently
 // skipping that file. All three mutations were reverted byte-identical
@@ -109,7 +109,7 @@ func TestCheckGuideDrift(t *testing.T) {
 func TestNoGuideDrift(t *testing.T) {
 	root := repoRoot(t)
 
-	routes, err := ScanRegisteredRoutes(filepath.Join(root, "cmd", "control-plane"))
+	routes, err := ScanRegisteredRoutes(filepath.Join(root, "controlplane"))
 	if err != nil {
 		t.Fatalf("ScanRegisteredRoutes: %v", err)
 	}

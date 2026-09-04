@@ -8,7 +8,7 @@
 // Mirrors cmd/sandbox-agent/main_test.go's own
 // TestShutdownSandboxAgentOTel_BoundsAHungShutdown/
 // _FastShutdown_ReturnsPromptly pair exactly, one binary over.
-package main
+package controlplane
 
 import (
 	"context"

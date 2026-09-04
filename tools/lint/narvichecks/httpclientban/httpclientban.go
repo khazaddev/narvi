@@ -22,20 +22,21 @@
 // # The composition-root exception, and why it is narrower than the
 // fully allowed trees
 //
-// cmd/control-plane is this binary's own composition root: the one place
-// a concrete *http.Client is legitimately constructed and wired into an
-// outbound adapter's constructor (githubapp.New(http.DefaultClient, ...),
-// chatgptoauth.New(http.DefaultClient, ...), and this Step's own
-// slackapi.New/linearapi.New(http.DefaultClient, ...) fixes). It is NOT
-// exempt from the INVOCATION half of the banned set: constructing a
-// client there and handing it to a constructor is the composition root
-// doing its job, but cmd/control-plane calling http.Get/http.Post/
-// http.NewRequest(WithContext) directly would be the composition root
-// issuing a live request itself, which is exactly the egress capability
-// this whole arch-test exists to keep out of every place except the
-// outbound adapters that are supposed to hold it. So cmd/control-plane
-// gets construction symbols only; internal/adapters/outbound, internal/
-// sandboxagent, and cmd/sandbox-agent get the full set, unconditionally.
+// github.com/narvidev/narvi/controlplane is this binary's own composition
+// root: the one place a concrete *http.Client is legitimately constructed
+// and wired into an outbound adapter's constructor (githubapp.New(http.
+// DefaultClient, ...), chatgptoauth.New(http.DefaultClient, ...), and this
+// Step's own slackapi.New/linearapi.New(http.DefaultClient, ...) fixes).
+// It is NOT exempt from the INVOCATION half of the banned set:
+// constructing a client there and handing it to a constructor is the
+// composition root doing its job, but controlplane calling http.Get/
+// http.Post/http.NewRequest(WithContext) directly would be the
+// composition root issuing a live request itself, which is exactly the
+// egress capability this whole arch-test exists to keep out of every
+// place except the outbound adapters that are supposed to hold it. So
+// controlplane gets construction symbols only; internal/adapters/
+// outbound, internal/sandboxagent, and cmd/sandbox-agent get the full
+// set, unconditionally.
 //
 // # The ratcheted baseline
 //
@@ -79,7 +80,7 @@ capability (technical plan §30.3). Server-side net/http (ResponseWriter,
 *Request, HandlerFunc, status/method constants) is unaffected and remains
 permitted everywhere. Outside internal/adapters/outbound, internal/
 sandboxagent, and cmd/sandbox-agent -- and, for construction only,
-cmd/control-plane's own composition root -- any of these symbols is a new,
+controlplane's own composition root -- any of these symbols is a new,
 unreviewed egress path. A short, explicit, ratcheted baseline of
 pre-existing audited call sites is defined in this package; anything else
 must move behind one of this codebase's own gated outbound clients
@@ -115,7 +116,7 @@ var bannedSymbols = map[string]bool{
 	"Transport":             true,
 }
 
-// invocationSymbols is the subset the composition root (cmd/control-plane)
+// invocationSymbols is the subset the composition root (controlplane)
 // may NOT reference even though it is otherwise exempt -- see this
 // package's own doc comment ("narrower than the fully allowed trees") for
 // why construction is the composition root's job and invocation is not.
@@ -138,7 +139,7 @@ var allowedDirs = []string{
 
 // compositionRootDir gets a NARROWER pass: construction symbols only, per
 // this package's own doc comment.
-const compositionRootDir = "/cmd/control-plane/"
+const compositionRootDir = "/controlplane/"
 
 // baseline is the ratcheted, EXACT set of files this arch-test's own
 // day-one adversarial pass audited and pinned rather than silently
@@ -185,7 +186,7 @@ func run(pass *analysis.Pass) (any, error) {
 				// allowed, see this package's own doc comment.
 				return true
 			}
-			pass.Reportf(sel.Pos(), "net/http.%s is a client-side (egress) symbol (technical plan §30.3); it may be constructed or invoked only in internal/adapters/outbound, internal/sandboxagent, cmd/sandbox-agent, or (construction only) cmd/control-plane's own composition root -- server-side net/http (http.ResponseWriter, *http.Request, http.HandlerFunc, status/method constants) remains permitted everywhere", symbol)
+			pass.Reportf(sel.Pos(), "net/http.%s is a client-side (egress) symbol (technical plan §30.3); it may be constructed or invoked only in internal/adapters/outbound, internal/sandboxagent, cmd/sandbox-agent, or (construction only) controlplane's own composition root -- server-side net/http (http.ResponseWriter, *http.Request, http.HandlerFunc, status/method constants) remains permitted everywhere", symbol)
 			return true
 		})
 	}

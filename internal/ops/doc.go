@@ -47,7 +47,7 @@
 // source rather than a second, forked mechanism.
 //
 //   - ScanRegisteredRoutes (routes.go) is instruments.go's own shape
-//     applied to cmd/control-plane/main.go's chi route wiring instead of
+//     applied to the controlplane package's chi route wiring instead of
 //     OTel instrument registration: a go/ast walk collecting every real
 //     "METHOD /path" this binary actually serves.
 //   - ScanIntentVocabulary (intentvocab.go) is the same shape again,

@@ -28,8 +28,8 @@ type RegisteredRoute struct {
 // chiRouterMethods is the set of chi.Router method names this codebase's
 // own established convention uses to register a route handler (confirmed
 // against every real router.<Method>(...)/r.<Method>(...) call site in
-// cmd/control-plane/main.go at the time this scanner was written — see
-// ScanRegisteredRoutes's own doc comment for the "cmd/control-plane only"
+// the controlplane package at the time this scanner was written — see
+// ScanRegisteredRoutes's own doc comment for the "controlplane only"
 // scope decision this mirrors ScanRegisteredInstruments's identical
 // "instrumentMethods" precedent for). Unlike that map, a call matching one
 // of these five names is NOT guaranteed to be a real chi.Router — "Get"/
@@ -38,7 +38,7 @@ type RegisteredRoute struct {
 // "route". That is harmless for drift-detection purposes (it can only
 // ENLARGE the registered set, never omit a real route — see CheckDrift's
 // own identical "a false extra entry never hides a genuine one" property
-// in drift.go), and scanning is restricted to cmd/control-plane
+// in drift.go), and scanning is restricted to controlplane
 // specifically (the one place chi routes are registered in this codebase
 // — confirmed by grepping for chi.NewRouter/chi.Router across internal/
 // and cmd/) to keep the noise minimal.

@@ -16,14 +16,14 @@ import (
 const stubBody = "real-handler:"
 
 // newProtectedRouter builds a chi.Router registering literally the SAME
-// top-level path shapes cmd/control-plane/main.go registers today for each
+// top-level path shapes the controlplane package registers today for each
 // of the 6 route groups doc.go/mount.go's protectedPrefixes describe --
 // one representative route per group, with a stub handler standing in for
 // the real one, plus the group's own name in the response body. If
-// main.go's own route wiring for one of these groups is ever renamed or
-// restructured, THIS function is the one place that needs updating to
+// controlplane's own route wiring for one of these groups is ever renamed
+// or restructured, THIS function is the one place that needs updating to
 // match -- see this file's own package comment for why a synthetic router
-// (rather than spinning up cmd/control-plane's real one, which needs a
+// (rather than spinning up controlplane's real one, which needs a
 // live Postgres pool and a fully loaded platform.Config) is what proves
 // Mount's own contract instead.
 func newProtectedRouter(t *testing.T) chi.Router {
