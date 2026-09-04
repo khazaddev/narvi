@@ -29,12 +29,15 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/golang-migrate/migrate/v4"
 	migratepg "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
@@ -223,4 +226,78 @@ func formatRouteList(routes []string) string {
 		return "(none)"
 	}
 	return "\n  " + strings.Join(routes, "\n  ")
+}
+
+// TestBuild_EveryAPIRouteCarriesAGuardBeyondTheGlobalChain closes the half
+// of the proof routes.golden cannot express.
+//
+// The golden pins WHICH paths exist. It says nothing about what guards
+// them, because App.Routes discards chi.Walk's middleware chain -- so a
+// route could keep its path and silently lose auth.Middleware and the
+// golden would still match. That is the most dangerous defect this
+// package's extraction could have introduced, and the one its own proof
+// was blind to.
+//
+// The property asserted here is relational, not a snapshot: every /api
+// route must carry MORE middlewares than the router's own global chain.
+// The baseline is read from the live router rather than hardcoded, so
+// adding a global middleware raises the bar for every route instead of
+// silently lowering it -- a hardcoded "at least 3" would keep passing for
+// an unguarded route the day a third global middleware lands.
+//
+// /api is the whole scope on purpose. The sandbox-facing routes
+// (/sessions/{sessionID}/..., /auth/..., /health, /.well-known/...) sit at
+// exactly the global baseline because they authenticate inside their own
+// handlers -- HMAC and bearer schemes chi middleware never sees -- so a
+// middleware-count rule would be meaningless there, and asserting one
+// would only teach a future reader to weaken it.
+func TestBuild_EveryAPIRouteCarriesAGuardBeyondTheGlobalChain(t *testing.T) {
+	setRequiredEnv(t)
+
+	pool, connStr := newTestPool(t)
+	t.Setenv("NARVI_DATABASE_URL", connStr)
+
+	cfg, err := platform.Load()
+	if err != nil {
+		t.Fatalf("platform.Load: %v", err)
+	}
+
+	app, err := Build(context.Background(), cfg, pool)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	mux, ok := app.Router.(*chi.Mux)
+	if !ok {
+		t.Fatalf("app.Router is %T, not *chi.Mux -- this test reads the global middleware chain off the mux", app.Router)
+	}
+	baseline := len(mux.Middlewares())
+	if baseline == 0 {
+		t.Fatal("global middleware chain is empty -- Recoverer and the correlation-id middleware are both expected, so this test would be vacuous")
+	}
+
+	var unguarded []string
+	apiRoutes := 0
+	err = chi.Walk(app.Router, func(method, route string, _ http.Handler, mws ...func(http.Handler) http.Handler) error {
+		if !strings.HasPrefix(route, "/api/") {
+			return nil
+		}
+		apiRoutes++
+		if len(mws) <= baseline {
+			unguarded = append(unguarded, fmt.Sprintf("%s %s (%d middlewares, global chain is %d)", method, route, len(mws), baseline))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("chi.Walk: %v", err)
+	}
+
+	if apiRoutes == 0 {
+		t.Fatal("walked zero /api routes -- the prefix changed and this test is now vacuous")
+	}
+	if len(unguarded) > 0 {
+		sort.Strings(unguarded)
+		t.Errorf("%d /api route(s) carry nothing beyond the global middleware chain -- an /api route with no auth.Middleware is an unauthenticated endpoint:\n\t%s",
+			len(unguarded), strings.Join(unguarded, "\n\t"))
+	}
 }

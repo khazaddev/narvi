@@ -116,18 +116,46 @@ func TestPlanFollowupClassifier_NeverImportedByWshub(t *testing.T) {
 // FUTURE route whose own path names the classification surface directly.
 func TestPlanFollowupClassifier_NoDedicatedRoute(t *testing.T) {
 	root := repoRootForTest(t)
-	mainGoPath := filepath.Join(root, "cmd", "control-plane", "main.go")
-	raw, err := os.ReadFile(mainGoPath)
-	if err != nil {
-		t.Fatalf("read %s: %v", mainGoPath, err)
+
+	// Scan the DIRECTORY that owns route wiring, never one hardcoded file.
+	// The wiring moved out of cmd/control-plane/main.go into the importable
+	// controlplane package, and a check pinned to the old path kept passing
+	// against a 16-line stub containing no routes at all -- structurally
+	// unable to fail, which is worse than absent. cmd/control-plane is kept
+	// in the list so a route registered back there is caught too.
+	dirs := []string{
+		filepath.Join(root, "controlplane"),
+		filepath.Join(root, "cmd", "control-plane"),
 	}
-	content := strings.ToLower(string(raw))
 
 	forbidden := []string{"plan-followup", "planfollowup", "plan_followup"}
-	for _, needle := range forbidden {
-		if strings.Contains(content, needle) {
-			t.Errorf("cmd/control-plane/main.go must never register a route naming the plan_followup classification surface directly (%q found) -- §23.4: excluded from public routes by construction", needle)
+	scanned := 0
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("read %s: %v -- this test is worthless if it silently scans nothing", dir, err)
 		}
+		for _, e := range entries {
+			name := e.Name()
+			if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+				continue
+			}
+			path := filepath.Join(dir, name)
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read %s: %v", path, err)
+			}
+			scanned++
+			content := strings.ToLower(string(raw))
+			for _, needle := range forbidden {
+				if strings.Contains(content, needle) {
+					t.Errorf("%s must never register a route naming the plan_followup classification surface directly (%q found) -- §23.4: excluded from public routes by construction", path, needle)
+				}
+			}
+		}
+	}
+	if scanned == 0 {
+		t.Fatal("scanned no wiring files -- the composition root moved again and this check is now vacuous")
 	}
 }
 
