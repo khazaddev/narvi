@@ -4,9 +4,10 @@
 
 Narvi's technical specification (autonomous coding agents in sandboxes) is in
 [docs/TECHNICAL_PLAN.md](TECHNICAL_PLAN.md) (§0–§33), and the nine-view UI design spec is in
-[docs/design/mockups.html](design/mockups.html). This plan breaks the 11 scheduled phases (0–10) into **112 ordered Steps**
+[docs/design/mockups.html](design/mockups.html). This plan breaks the 12 scheduled phases (0–10 and 12) into **116 ordered Steps**
 (including Phase 4's own 5 additive Steps, 40-44, Phase 8's 9 shadow-mode Steps, 96-104, and Phase 9's 6 knowledge Steps, 105-110), plus Phase 11 — a running
-list of named gaps, additive and unscheduled. Each Step is individually shippable and CI-green,
+list of named gaps, additive and unscheduled, which Phase 12 follows numerically without
+waiting on. Each Step is individually shippable and CI-green,
 executable by a developer assisted by coding agents (Sonnet 5).
 Every Step references the technical-plan section that specifies it. Each Step becomes exactly one PR when
 implemented — but a Step's number (e.g. Step 6) is the plan's own row number, not the GitHub PR number it
@@ -379,6 +380,44 @@ be cited by a scheduled Step as a prerequisite — if it is, it has stopped belo
 | 129 | opencode adapter: `TestRealTurn_Aborted` under the full suite | Fails intermittently under the full parallel `-race` run and passes in isolation every time; the package was untouched by the Phase 8 work that surfaced it (observed three times, 2026-08). Filed rather than patched: there is no hypothesis yet that explains the failure, and stabilizing a timing test without one is how flakes get papered over instead of understood (Step 118's own rule) | — |
 | 130 | githarden: the content-filter class | `githarden`'s shared `hardeningFlags` neutralizes hooks, fsmonitor, credential helpers, `core.sshCommand`, `diff.external` and the pager, and its own doc records that git content filters (`filter.<name>.clean`/`smudge`) are a class it does not cover. A checked-in `.gitattributes` alone cannot arm one — the command half lives in config, which the sandbox controls — but the class deserves either explicit neutralization (an empty `filter.*` reset, the `credential.helper=` precedent) or a recorded argument that no in-sandbox flow can supply the config half | — |
 | 131 | real-spawn hook tests time out under full-suite load | `TestCloudIdentityTokenReachesRealSpawnedHook` and `TestOIDCClusterBindingTokenReachesRealSpawnedHook` (`cmd/sandbox-agent`) run a real `setup.sh` under a 5-second ceiling; under a full local `make test` with concurrent compile load both timed out (2026-09-03) and passed isolated immediately after. Same family as Steps 118/173, same honesty rule: filed with the observation, and any raised ceiling should follow from a worst-case spawn-latency argument, not from one loaded run | — |
+
+## Phase 12 — Extension boundaries (4 Steps, additive)
+
+The seams that let an optional module compose a second binary on top of this repository
+without this repository ever knowing that module exists. Technical plan §34 is the
+normative specification; `docs/design/boundaries-design.md` holds the Go shapes and the
+test lists.
+
+On placement: this is appended rather than folded in, for the reason Phases 8, 9 and 10
+each give for themselves — those phases' Steps were long since scoped and shipped,
+folding new Steps into a closed phase would rewrite history, and inserting them
+mid-sequence would shift every Step after them and every cross-reference that names one
+(the Phase 4 standing rule; Step 128's own 183 citations are the standing evidence). It
+follows Phase 11 numerically because Phase 11 is a holding list with no exit criterion,
+not a phase this one waits on.
+
+Execution order: **Step 132 → 133 → {134, 135}**. Step 132 is a prerequisite of
+everything else here (nothing can be injected into a `main` that cannot be imported).
+Step 134 is a **prerequisite of Step 107** and must ship before it, so that mode A's
+selector is built against the seam rather than retrofitted onto it — that is the one
+hard ordering constraint this phase places on work outside it. Step 135 is independent
+of 134 and waits only on the capability vocabulary being settled, because its wire enum
+is the first thing here that becomes a published contract.
+
+Two pieces of this work are deliberately **not** Steps. The specification itself (§34)
+is a documentation change, not a shippable unit. The enterprise composition — the
+separate repository's own module, composition binary and boundary CI — lives outside
+this repository entirely; a plan that tracks this repository's Steps has no business
+claiming credit for a commit it does not contain. What *is* recorded here is the
+property that repository proves: with no module registered, the composed binary is the
+same product as this one.
+
+| Step | Title | Content | Ref. |
+|---|---|---|---|
+| 132 | importable composition root | `cmd/control-plane`'s ~2280-line `serve()` moved verbatim into a non-`internal` `controlplane` package, split into `Main` (subcommand dispatch + non-wiring boot pre-flights), `Build` (all wiring, against an already-open pool), `Run` (listener + the one errgroup) and `Routes` (a `chi.Walk` enumeration); `cmd/control-plane/main.go` becomes a one-line `main`. Proof obligation: a route-table golden generated by `ops.ScanRegisteredRoutes` from the **pre-move** tree, asserted against the live router post-move — two enumeration methods, two code states. Its own blind spot is closed in the same Step: the golden pins paths, so a second test asserts every `/api` route carries more middlewares than the router's global chain, with the baseline read off the live mux so a future global middleware raises the bar instead of lowering it. Retargets every scanner that hardcoded the old path — a scanner left pointing at the 16-line stub passes vacuously, which is worse than absent | §34 |
+| 133 | capability registry, module façade, import ban | `internal/domain/license` (pure, Ed25519, offline, no `time.Now()`), `internal/app/capability.Registry` answering `Enabled = installed AND licensed AND valid-now`, the non-`internal` `extension` façade (Go's `internal` rule means a separate module can never import `internal/...`; every crossing type is re-exported by alias, which makes the crossing set an explicit, small list), `httpapi.RequireCapability`, and the module insertion points in the composition root (own migrations table, routes under a reserved prefix behind auth, workers in the existing errgroup, web assets). The two properties that matter more than the feature: a key can entitle but never create behavior (with no module composed nothing is installed, proven by a build that never consults the registry at all), and **a licence state can never be an input to a §30 suppression decision** — enforced by a seventh `narvichecks` analyzer banning the *import* of the registry, the licence domain and the façade outside a named allow-list, because an import is a syntactic fact a wrapper cannot dodge | §34, §30 |
+| 134 ∥ | knowledge-retrieval seam | **Blocks Step 107.** `internal/domain/knowledge` (`Candidate`, `Query`, `OrderByScores`, `TakeTop`, `RecencyRanker`) and `ports.KnowledgeRanker`, whose `Score` returns **one score per candidate and no candidates at all**: a ranker receives what the gate already admitted and can reorder it, never add, drop, replace or re-select. §31.6's gate-then-rank stops being a convention someone must remember and becomes the shape of a signature. The public implementation keeps the gate's recency order; degradation on a failing or inconsistent ranker falls back to that order, never to empty, and is recorded on the turn so the mode A/B comparison never counts a degraded turn as the B arm | §34, §31.6, §31.5 |
+| 135 ∥ | capabilities read model & UI slot | `GET /api/capabilities` as a derived read model — installed/licensed/expired per capability, never the key and never the subject — plus a runtime slot registry in the SPA and an honest affordance naming what a capability is and why it is unavailable here, in the "not available yet" idiom the analytics and settings views already use. No new Settings tab: the eight-tab mockup keeps screenshot parity and the affordance rides the repo-settings card column. Waits on the capability vocabulary being settled: this Step is where those names become a published wire enum, and a published enum value is expensive to rename | §34, §12.2 |
 
 ## Sequencing & parallelism
 

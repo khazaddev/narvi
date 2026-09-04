@@ -5225,12 +5225,13 @@ query time, not a defect, but it is a difference from the single-process recordi
 
 ## 34. Extension & licensing boundaries
 
-Narvi is source-available under the Elastic License 2.0. Two proprietary products are
+Narvi is source-available under the Elastic License 2.0. Two companion projects are
 planned on top of it: **Narvi Gatekeeper**, an organization-scale review-governance
-module composed into a second binary from a private repository, and **Narvi Desktop**,
+module composed into a second binary from a separate repository, and **Narvi Desktop**,
 an individual client that talks to this system only through its versioned wire API.
-This section specifies the seams that make that possible **without this repository ever
-knowing either product exists**. The detailed design, with Go shapes and test lists, is
+Neither exists yet and how either is distributed is undecided; nothing here depends on
+that answer. This section specifies the seams that make composition possible **without
+this repository ever knowing either project exists**. The detailed design, with Go shapes and test lists, is
 `docs/design/boundaries-design.md`; what follows is the part future work must obey.
 
 Naming, fixed: this repository is Narvi, the product. It is never "core" and never a
@@ -5241,10 +5242,11 @@ Naming, fixed: this repository is Narvi, the product. It is never "core" and nev
 Everything per-repository: the full review pipeline, sessions and sandboxes, RBAC and
 SSO, shadow mode (§30) and its Activate surface, the ingress surfaces, metrics export
 (§33), and mode A of per-repository knowledge (§31). **No security capability is ever
-gated by a licence key.** A deployment with no key is a complete, secure product; the
-paid tier sells organization scale and compliance, never base safety. A change that
-would move a shipped capability out of this repository is out of bounds — the paid tier
-is built from work that has not happened yet.
+gated by an entitlement.** A deployment with no key configured is a complete, secure
+product; what a composed module may add is organization scale and compliance, never base
+safety. A change that would move a shipped capability out of this repository is out of
+bounds — a module is built from work that has not happened yet, never from work
+subtracted from here.
 
 ### 34.2 The constraint that shapes every seam
 

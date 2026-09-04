@@ -2,7 +2,7 @@
 
 Status: design note, 2026-09-04. Not a plan amendment; the `docs/TECHNICAL_PLAN.md`
 section is separate work. Naming is fixed: this repository is **Narvi**, the product;
-the paid tier is **Narvi Gatekeeper** (private repository `narvidev/enterprise`,
+the composed module is **Narvi Gatekeeper** (separate repository `narvidev/enterprise`,
 module codename `khazad`). Nothing here, in code or copy, calls this repository
 "core" or a "community edition".
 
@@ -273,10 +273,10 @@ repo therefore runs the same analyzers with the same directory layout.
   version prefix, so a `narvi2` payload can never verify under `narvi1` rules). The
   format version is in the prefix, not a header, mirroring `oidcsigning.Verify`'s
   "hardcode the algorithm, never trust the token to name it".
-- **Claims** (all required): `kid`, `sub` (opaque customer id), `product`
+- **Claims** (all required): `kid`, `sub` (opaque deployment id), `product`
   (`"narvi-gatekeeper"`), `iat`, `nbf`, `exp` (Unix seconds), `caps` (every name
   must be in `license.All` for the deployed build, else `ErrUnknownCapability`).
-  No seat counts in v1. Nothing about the customer's data. No host binding in v1
+  No seat counts in v1. Nothing about the deployment's data. No host binding in v1
   (decided: a self-hosted deployment legitimately changes hostname, and binding
   converts a routine migration into a support incident).
 - **Where the public key lives:** `internal/domain/license/keys.go`, a literal
