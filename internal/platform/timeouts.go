@@ -2509,6 +2509,27 @@ type Timeouts struct {
 	// comfortably inside ScmCredentialTTL (15min) so a slow mint cannot
 	// itself eat the credential's own advertised lifetime.
 	GitHubAppMintTimeout time.Duration
+
+	// LicenseNotBeforeSkew is internal/app/capability.Registry's own
+	// nbfSkew (docs/design/boundaries-design.md, section 1.5): how far a host
+	// clock is tolerated to run BEHIND the licence issuer's before a
+	// grant's own "nbf" claim is treated as not-yet-valid. Widens nbf
+	// only, in the direction that makes a grant activate slightly early
+	// rather than slightly late -- it never widens a grant's own "exp",
+	// which stays exact (a host clock running AHEAD expires a key early;
+	// that is the safe direction, so nothing compensates for it). Not
+	// given an explicit figure by any technical-plan section -- chosen as
+	// 5 minutes, the same figure this file's own HMACWindow uses for its
+	// own (unrelated) freshness window (§5.2): a deliberately round,
+	// generous-enough default for the kind of drift a real self-hosted
+	// deployment's own clock can have, without being so wide that a
+	// genuinely stale key reads as current for long. A DISTINCT field
+	// from HMACWindow despite the shared value, exactly like
+	// GitHubAppJWTClockSkew's own neighbouring "distinct field,
+	// coincidentally equal default" precedent above: this guards a
+	// licence grant's own activation instant, never an HMAC bearer
+	// token's freshness window.
+	LicenseNotBeforeSkew time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -2727,6 +2748,8 @@ func DefaultTimeouts() Timeouts {
 		GitHubAppJWTClockSkew:      60 * time.Second, // §30.4; not specified, chosen with margin under GitHub's own hard 10-minute App-JWT ceiling -- see field doc comment
 		GitHubAppScopeCheckTimeout: 10 * time.Second, // §30.4; not specified, chosen, matches RepoSHAResolutionTimeout's own "lightweight call" reasoning
 		GitHubAppMintTimeout:       20 * time.Second, // §30.4; not specified, chosen -- see field doc comment
+
+		LicenseNotBeforeSkew: 5 * time.Minute, // design note section 1.5, explicit ("default 5 minutes")
 	}
 }
 

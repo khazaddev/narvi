@@ -34,7 +34,7 @@ func TestNoSectionRefDrift(t *testing.T) {
 		t.Fatalf("ScanPlanSections found only %d sections; the plan has well over 100 — the scan is broken, not the plan", len(defined))
 	}
 
-	unresolved, err := CheckSectionRefs(root, []string{"internal", "cmd", "controlplane", "contracts", "docs"}, defined)
+	unresolved, err := CheckSectionRefs(root, []string{"internal", "cmd", "controlplane", "extension", "contracts", "docs"}, defined)
 	if err != nil {
 		t.Fatalf("CheckSectionRefs: %v", err)
 	}

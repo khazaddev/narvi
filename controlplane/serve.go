@@ -32,9 +32,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/narvidev/narvi/extension"
 	"github.com/narvidev/narvi/internal/adapters/inbound/auth"
 	"github.com/narvidev/narvi/internal/adapters/inbound/automationwebhook"
 	githubingress "github.com/narvidev/narvi/internal/adapters/inbound/github"
@@ -54,8 +56,10 @@ import (
 	"github.com/narvidev/narvi/internal/adapters/outbound/postgres"
 	"github.com/narvidev/narvi/internal/adapters/outbound/rwx"
 	"github.com/narvidev/narvi/internal/adapters/outbound/slackapi"
+	"github.com/narvidev/narvi/internal/app/auditlog"
 	"github.com/narvidev/narvi/internal/app/automation"
 	"github.com/narvidev/narvi/internal/app/automerge"
+	"github.com/narvidev/narvi/internal/app/capability"
 	"github.com/narvidev/narvi/internal/app/chatgptlink"
 	"github.com/narvidev/narvi/internal/app/chatgptrefresh"
 	"github.com/narvidev/narvi/internal/app/decisioninbox"
@@ -125,6 +129,20 @@ type App struct {
 	uploadSweeper           *uploadsweep.Sweeper
 	providerCredentialStore *postgres.ProviderCredentialStore
 	chatGPTDeviceFlow       *chatgptoauth.Client
+
+	// capabilities is docs/design/boundaries-design.md, section 1's own
+	// capability registry -- built once, here, from cfg.LicenseKey and the union of
+	// every composed module's own declared Capabilities. Named
+	// "capabilities", not "registry", specifically to stay distinct from
+	// the sessionactor.Registry field immediately above -- two
+	// completely unrelated concepts that happen to share the word
+	// "registry" in this codebase.
+	capabilities *capability.Registry
+
+	// moduleWorkers is the combined list of every worker every composed
+	// module contributed (extension.Module.Workers) -- started through
+	// Run's own errgroup exactly like every internal background loop.
+	moduleWorkers []extension.Worker
 }
 
 // Main is intentionally a bare-bones dispatch, not a flag-parsing
@@ -143,7 +161,12 @@ type App struct {
 // cmd/control-plane's own main() -- now just
 // `os.Exit(controlplane.Main(os.Args))` -- is the ONLY place this binary
 // ever actually exits, and this function stays unit-testable.
-func Main(args []string) int {
+//
+// modules is the extension seam docs/design/boundaries-design.md,
+// section 3, adds: zero for the public binary (cmd/control-plane's own call site
+// passes none), one or more for a private binary composed on top of this
+// package. Threaded straight through to serve, unchanged.
+func Main(args []string, modules ...extension.Module) int {
 	if len(args) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: control-plane <serve|seed> [args...]")
 		return 1
@@ -152,7 +175,7 @@ func Main(args []string) int {
 	var err error
 	switch args[1] {
 	case "serve":
-		err = serve()
+		err = serve(modules...)
 	case "seed":
 		err = runSeedCommand(args[2:])
 	default:
@@ -173,7 +196,7 @@ func Main(args []string) int {
 // within Timeouts.ShutdownGracePeriod. The listen goroutine and the
 // shutdown-watcher goroutine are both launched via errgroup.Group.Go —
 // never a bare `go` statement (§11: no naked goroutines).
-func serve() error {
+func serve(modules ...extension.Module) error {
 	cfg, err := platform.Load()
 	if err != nil {
 		return err
@@ -255,7 +278,7 @@ func serve() error {
 		return err
 	}
 
-	app, err := Build(ctx, cfg, pool)
+	app, err := Build(ctx, cfg, pool, modules...)
 	if err != nil {
 		return err
 	}
@@ -270,7 +293,32 @@ func serve() error {
 // signal handling, no os.Exit -- a caller that already has a *pgxpool.Pool
 // (this package's own integration tests; a future private module) can call
 // this directly without going through Main at all.
-func Build(ctx context.Context, cfg *platform.Config, pool *pgxpool.Pool) (*App, error) {
+//
+// modules (docs/design/boundaries-design.md, section 3) is validated FIRST,
+// before this function does anything else with cfg or pool: a module
+// declaring a malformed Name, a Name already used by another composed
+// module, or a capability this build does not define fails boot loudly,
+// once, rather than mounting a broken or half-wired route table. With
+// zero modules -- the public binary's own shape -- every module-shaped
+// insertion point below (migrations, the route mount loop, the worker
+// list) is exactly a no-op, and the capability registry's own installed
+// set is empty (internal/app/capability.Registry.Enabled is then false
+// for everything, whatever cfg.LicenseKey holds -- technical plan
+// §34.5).
+func Build(ctx context.Context, cfg *platform.Config, pool *pgxpool.Pool, modules ...extension.Module) (*App, error) {
+	if err := validateModules(modules); err != nil {
+		return nil, err
+	}
+
+	for _, m := range modules {
+		if m.Migrations == nil {
+			continue
+		}
+		if err := applyModuleMigrations(cfg.DatabaseURL, m.Name+"_schema_migrations", m.Migrations); err != nil {
+			return nil, fmt.Errorf("apply module %q migrations: %w", m.Name, err)
+		}
+	}
+
 	// hub is the single shared piece of state connecting the app-layer
 	// actor to the adapter-layer client sockets (§6.2's "→ broadcast
 	// stream"): constructed once here, then threaded through to
@@ -910,6 +958,13 @@ func Build(ctx context.Context, cfg *platform.Config, pool *pgxpool.Pool) (*App,
 	// internal/platform/authcookie.go's own doc comment).
 	secureCookies := cfg.Stage != platform.StageDevelopment
 
+	// capabilities (docs/design/boundaries-design.md, section 1) is built here,
+	// once, before the router: RequireCapability closures wired onto
+	// module routes below all close over this SAME *capability.Registry,
+	// re-checked per request rather than once at boot -- see
+	// buildCapabilityRegistry's own doc comment.
+	capabilities := buildCapabilityRegistry(slog.Default(), cfg, modules)
+
 	router := chi.NewRouter()
 	router.Use(middleware.Recoverer)
 	router.Use(platform.CorrelationIDMiddleware)
@@ -933,7 +988,11 @@ func Build(ctx context.Context, cfg *platform.Config, pool *pgxpool.Pool) (*App,
 	// was built with `-tags web_assets` (after `make web-build`) -- see
 	// that package's own doc comment for why the default build never
 	// requires its embed source directory to exist on disk at all.
-	webui.Mount(router, webui.DistFS)
+	// selectWebAssets substitutes a composed module's own WebAssets when
+	// present (docs/design/boundaries-design.md, sections 3.2 and 4.3's
+	// own future private-bundle seam) -- webui.DistFS unchanged for the
+	// public binary, which composes none.
+	webui.Mount(router, selectWebAssets(webui.DistFS, modules))
 
 	// OIDC discovery + JWKS ("cloud identity: OIDC issuer,
 	// bindings, minting", §27.3): deliberately mounted PUBLICLY,
@@ -2100,6 +2159,37 @@ func Build(ctx context.Context, cfg *platform.Config, pool *pgxpool.Pool) (*App,
 		RepoSettings: repoSettingsStore,
 	}))
 
+	// Module routes (docs/design/boundaries-design.md, section 3.2): mounted
+	// AFTER every public route group, under /api/ext/<Name>/, behind the
+	// SAME auth.Middleware every public route above already uses --
+	// mountModules' own doc comment. moduleRuntime is the single value
+	// every composed module's own Mount/Workers receives; every field on
+	// it is either a plain external type or an extension.-prefixed
+	// alias, per extension.Runtime's own doc comment -- never an
+	// internal type, so this stays constructible from a private module
+	// that cannot import internal/... at all.
+	requireAuth := auth.Middleware(userSessionStore, userStore)
+	moduleRuntime := extension.Runtime{
+		Pool:         pool,
+		Logger:       slog.Default(),
+		Capabilities: capabilities,
+		RequireAuth:  requireAuth,
+		RequireCapability: func(c extension.Capability) func(http.Handler) http.Handler {
+			return httpapi.RequireCapability(capabilities, c)
+		},
+		PublicBaseURL: cfg.PublicBaseURL,
+		Audit: func(ctx context.Context, actorUserID string, action, targetType, targetID string, detail map[string]any) error {
+			var actorID pgtype.UUID
+			if actorUserID != "" {
+				if err := actorID.Scan(actorUserID); err != nil {
+					return fmt.Errorf("extension: parse actor user id for audit log: %w", err)
+				}
+			}
+			return auditlog.Record(ctx, auditLogStore, actorID, action, targetType, targetID, detail)
+		},
+	}
+	moduleWorkers := mountModules(router, modules, requireAuth, moduleRuntime)
+
 	// Outbox delivery worker ("outbox delivery", §5.1/§9.3
 	// scenario 9): three real ports.Notifier implementations, one per
 	// NotificationKind, assembled into a single kind->Notifier routing map
@@ -2287,6 +2377,9 @@ func Build(ctx context.Context, cfg *platform.Config, pool *pgxpool.Pool) (*App,
 		uploadSweeper:           uploadSweeper,
 		providerCredentialStore: providerCredentialStore,
 		chatGPTDeviceFlow:       chatGPTDeviceFlow,
+
+		capabilities:  capabilities,
+		moduleWorkers: moduleWorkers,
 	}, nil
 }
 
@@ -2309,6 +2402,7 @@ func (a *App) Run(ctx context.Context, addr string) error {
 	uploadSweeper := a.uploadSweeper
 	providerCredentialStore := a.providerCredentialStore
 	chatGPTDeviceFlow := a.chatGPTDeviceFlow
+	moduleWorkers := a.moduleWorkers
 
 	srv := &http.Server{
 		Addr:    addr,
@@ -2470,6 +2564,22 @@ func (a *App) Run(ctx context.Context, addr string) error {
 		}
 		return nil
 	})
+
+	// Module workers (docs/design/boundaries-design.md, section 3.2): every
+	// worker every composed module contributed (extension.Module.Workers),
+	// started/shut down through this SAME errgroup as every internal
+	// background loop above -- no naked goroutine (§11) -- with the
+	// identical context.Canceled carve-out every internal loop already
+	// establishes for normal shutdown. Empty for the public binary, which
+	// composes no module.
+	for _, worker := range moduleWorkers {
+		group.Go(func() error {
+			if err := worker.Run(groupCtx); err != nil && !errors.Is(err, context.Canceled) {
+				return fmt.Errorf("module worker: %w", err)
+			}
+			return nil
+		})
+	}
 
 	group.Go(func() error {
 		<-groupCtx.Done()

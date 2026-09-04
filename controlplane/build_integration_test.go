@@ -33,6 +33,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -46,6 +47,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
+	"github.com/narvidev/narvi/extension"
 	narvipg "github.com/narvidev/narvi/internal/adapters/outbound/postgres"
 	"github.com/narvidev/narvi/internal/platform"
 	"github.com/narvidev/narvi/migrations"
@@ -299,5 +301,179 @@ func TestBuild_EveryAPIRouteCarriesAGuardBeyondTheGlobalChain(t *testing.T) {
 		sort.Strings(unguarded)
 		t.Errorf("%d /api route(s) carry nothing beyond the global middleware chain -- an /api route with no auth.Middleware is an unauthenticated endpoint:\n\t%s",
 			len(unguarded), strings.Join(unguarded, "\n\t"))
+	}
+}
+
+// TestBuild_BadKey_BootsAsNarvi is docs/design/boundaries-design.md,
+// section 1.6's own named test: a malformed NARVI_LICENSE_KEY yields the
+// exact same route table as no key at all, and Build never refuses to
+// boot over it (technical plan §34.5: "boot never fails on a bad key --
+// a licensing lapse must not become an outage"). Both builds compose
+// zero modules, matching the public binary's own shape exactly -- the
+// row this proof cares about is "public build, any key" from the
+// design note's own section 1.3 table, all four of whose key-state rows
+// collapse to the SAME "silent, nothing enabled" behavior.
+func TestBuild_BadKey_BootsAsNarvi(t *testing.T) {
+	setRequiredEnv(t)
+
+	pool, connStr := newTestPool(t)
+	t.Setenv("NARVI_DATABASE_URL", connStr)
+
+	cfg, err := platform.Load()
+	if err != nil {
+		t.Fatalf("platform.Load: %v", err)
+	}
+
+	appNoKey, err := Build(context.Background(), cfg, pool)
+	if err != nil {
+		t.Fatalf("Build (no key): %v", err)
+	}
+
+	cfgBadKey := *cfg
+	cfgBadKey.LicenseKey = "not-even-close-to-a-valid-narvi1-license-key"
+	appBadKey, err := Build(context.Background(), &cfgBadKey, pool)
+	if err != nil {
+		t.Fatalf("Build (bad key): %v -- boot must never fail on a bad licence key", err)
+	}
+
+	if !slices.Equal(appNoKey.Routes(), appBadKey.Routes()) {
+		t.Errorf("route table differs between no key and a bad key:\nno key:  %v\nbad key: %v", appNoKey.Routes(), appBadKey.Routes())
+	}
+}
+
+// fakeModuleWorker is a trivial extension.Worker used only to prove
+// mountModules threads a module's own Workers through to the built App
+// without error -- Run itself is never called by this test (no listener,
+// no errgroup), so this never actually executes.
+type fakeModuleWorker struct{}
+
+func (fakeModuleWorker) Run(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// TestBuild_WithModules_AddsOnlyExtRoutes is docs/design/
+// boundaries-design.md, section 3.5's own named test: composing a module adds
+// ONLY /api/ext/<name>/... routes, changes no existing route, and hands
+// that module's own Mount a Runtime with every field populated.
+func TestBuild_WithModules_AddsOnlyExtRoutes(t *testing.T) {
+	setRequiredEnv(t)
+
+	pool, connStr := newTestPool(t)
+	t.Setenv("NARVI_DATABASE_URL", connStr)
+
+	cfg, err := platform.Load()
+	if err != nil {
+		t.Fatalf("platform.Load: %v", err)
+	}
+
+	baseApp, err := Build(context.Background(), cfg, pool)
+	if err != nil {
+		t.Fatalf("Build (no modules): %v", err)
+	}
+	baseRoutes := baseApp.Routes()
+
+	fakeModule := extension.Module{
+		Name: "acmetest",
+		Mount: func(r chi.Router, rt extension.Runtime) {
+			r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			})
+			if rt.Capabilities == nil {
+				t.Error("extension.Runtime.Capabilities is nil in Mount")
+			}
+			if rt.RequireAuth == nil {
+				t.Error("extension.Runtime.RequireAuth is nil in Mount")
+			}
+			if rt.RequireCapability == nil {
+				t.Error("extension.Runtime.RequireCapability is nil in Mount")
+			}
+			if rt.Audit == nil {
+				t.Error("extension.Runtime.Audit is nil in Mount")
+			}
+			if rt.Pool == nil {
+				t.Error("extension.Runtime.Pool is nil in Mount")
+			}
+		},
+		Workers: func(extension.Runtime) []extension.Worker {
+			return []extension.Worker{fakeModuleWorker{}}
+		},
+	}
+
+	moduleApp, err := Build(context.Background(), cfg, pool, fakeModule)
+	if err != nil {
+		t.Fatalf("Build (with module): %v", err)
+	}
+	if len(moduleApp.moduleWorkers) != 1 {
+		t.Errorf("moduleApp.moduleWorkers has %d entries, want exactly 1 (the fake module's own Workers)", len(moduleApp.moduleWorkers))
+	}
+	moduleRoutes := moduleApp.Routes()
+
+	baseSet := make(map[string]bool, len(baseRoutes))
+	for _, r := range baseRoutes {
+		baseSet[r] = true
+	}
+
+	var extRoutes []string
+	for _, r := range moduleRoutes {
+		if !baseSet[r] {
+			extRoutes = append(extRoutes, r)
+		}
+	}
+
+	if len(extRoutes) == 0 {
+		t.Fatal("Build with a composed module added zero new routes")
+	}
+	for _, r := range extRoutes {
+		if !strings.Contains(r, "/api/ext/acmetest") {
+			t.Errorf("new route %q is not under /api/ext/acmetest -- a composed module must add ONLY its own /api/ext/<name>/ routes", r)
+		}
+	}
+
+	// Every route the base (moduleless) app already had must still be
+	// present, unchanged, once a module is composed -- a module must add
+	// routes, never remove or shadow a public one.
+	moduleSet := make(map[string]bool, len(moduleRoutes))
+	for _, r := range moduleRoutes {
+		moduleSet[r] = true
+	}
+	for _, r := range baseRoutes {
+		if !moduleSet[r] {
+			t.Errorf("public route %q (present with no modules composed) disappeared once a module was composed", r)
+		}
+	}
+
+	// The module's own route must carry MORE middlewares than the
+	// router's own global chain -- extension.Module.Mount's own doc
+	// comment promises a module route "is already mounted ... behind the
+	// same authentication as every other API route", so a module route
+	// with nothing beyond the global chain would be reachable
+	// unauthenticated, mirroring
+	// TestBuild_EveryAPIRouteCarriesAGuardBeyondTheGlobalChain's own
+	// reasoning for public routes.
+	mux, ok := moduleApp.Router.(*chi.Mux)
+	if !ok {
+		t.Fatalf("moduleApp.Router is %T, not *chi.Mux", moduleApp.Router)
+	}
+	baseline := len(mux.Middlewares())
+	if baseline == 0 {
+		t.Fatal("global middleware chain is empty -- this test would be vacuous")
+	}
+	foundModuleRoute := false
+	err = chi.Walk(moduleApp.Router, func(method, route string, _ http.Handler, mws ...func(http.Handler) http.Handler) error {
+		if !strings.Contains(route, "/api/ext/acmetest") {
+			return nil
+		}
+		foundModuleRoute = true
+		if len(mws) <= baseline {
+			t.Errorf("module route %s %s carries %d middleware(s), no more than the global chain's own %d -- it must be authenticated by construction", method, route, len(mws), baseline)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("chi.Walk: %v", err)
+	}
+	if !foundModuleRoute {
+		t.Fatal("chi.Walk found no route under /api/ext/acmetest -- this test is vacuous")
 	}
 }
