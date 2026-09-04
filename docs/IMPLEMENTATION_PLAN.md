@@ -421,6 +421,22 @@ same product as this one.
 | 134 ∥ | knowledge-retrieval seam | **Blocks Step 107.** `internal/domain/knowledge` (`Candidate`, `Query`, `OrderByScores`, `TakeTop`, `RecencyRanker`) and `ports.KnowledgeRanker`, whose `Score` returns **one score per candidate and no candidates at all**: a ranker receives what the gate already admitted and can reorder it, never add, drop, replace or re-select. §31.6's gate-then-rank stops being a convention someone must remember and becomes the shape of a signature. The public implementation keeps the gate's recency order; degradation on a failing or inconsistent ranker falls back to that order, never to empty, and is recorded on the turn so the mode A/B comparison never counts a degraded turn as the B arm | §34, §31.6, §31.5 |
 | 135 ∥ | capabilities read model & UI slot | `GET /api/capabilities` as a derived read model — installed/licensed/expired per capability, never the key and never the subject — plus a runtime slot registry in the SPA and an honest affordance naming what a capability is and why it is unavailable here, in the "not available yet" idiom the analytics and settings views already use. No new Settings tab: the eight-tab mockup keeps screenshot parity and the affordance rides the repo-settings card column. Waits on the capability vocabulary being settled: this Step is where those names become a published wire enum, and a published enum value is expensive to rename | §34, §12.2 |
 
+**Phase 12 milestone**: a binary composed in a separate repository builds against this
+repository's `main` and, with no module registered, serves a route table identical to the
+public binary's own golden — the property that keeps this repository honest, because it
+means nothing was subtracted from here to make room for a module. In a build with no
+module composed, a key in any state (absent, malformed, expired, valid) enables nothing,
+proven by a build that never consults the registry at all rather than by a test of what it
+answers. A registry import planted in a suppression package fails `make lint` with a
+diagnostic naming §30. And Step 107 can ship its deterministic selector against the
+ranking port with no module present.
+
+Steps 134 and 135 are marked parallel by **dependency**, not by review: neither needs the
+other's output, but each still ships as its own PR with its own exit criterion green
+before the next begins, and each is audited on its own diff. Grouping Steps into a
+delivery batch is a scheduling convenience for whoever is driving; it never becomes an
+execution mode. A batch has no exit criterion — Steps do, and this phase does.
+
 ## Sequencing & parallelism
 
 - **Parallel streams in phase 1**: control-plane (07-08, 09-12, 18-20) ∥ sandbox-agent (13-17) — converge at 21.
