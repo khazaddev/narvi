@@ -90,14 +90,23 @@ var bannedImportPaths = []string{
 // wiring); and internal/app/capability and internal/domain/license
 // themselves (capability's own registry.go legitimately imports license
 // for Grant/Capability; a package does not "import" itself, but this
-// keeps the matching rule uniform with demotionsweep's own identical
-// directory-substring shape rather than special-casing "the banned
-// package's own directory needs no entry").
-var allowedDirs = []string{
-	"/controlplane/",
-	"/extension/",
-	"/internal/app/capability/",
-	"/internal/domain/license/",
+// keeps the matching rule uniform rather than special-casing "the banned
+// package's own path needs no entry").
+//
+// These are Go IMPORT PATHS, matched exactly -- deliberately not
+// filesystem-path substrings, which is what this list used to be. A
+// substring rule over the absolute filename made the whole ban depend on
+// where the repository happens to be checked out: a clone under any
+// directory named "extension" or "controlplane" exempted every file in
+// the repository, and the analyzer's own test then failed with "no
+// diagnostic" for its planted violations. A package path is a property of
+// the code; an absolute filename is a property of the machine, and a
+// guarantee that is supposed to be structural cannot rest on one.
+var allowedPackages = []string{
+	"github.com/narvidev/narvi/controlplane",
+	"github.com/narvidev/narvi/extension",
+	"github.com/narvidev/narvi/internal/app/capability",
+	"github.com/narvidev/narvi/internal/domain/license",
 }
 
 // allowedFiles are the two httpapi handler files docs/design/
@@ -106,9 +115,9 @@ var allowedDirs = []string{
 // /api/capabilities -- separate, later work; pre-declared here so landing
 // it never requires touching this analyzer) and requirecapability.go
 // (RequireCapability, this PR).
-var allowedFiles = []string{
-	"/internal/adapters/inbound/httpapi/capabilities.go",
-	"/internal/adapters/inbound/httpapi/requirecapability.go",
+var allowedFiles = []struct{ pkg, base string }{
+	{"github.com/narvidev/narvi/internal/adapters/inbound/httpapi", "capabilities.go"},
+	{"github.com/narvidev/narvi/internal/adapters/inbound/httpapi", "requirecapability.go"},
 }
 
 func run(pass *analysis.Pass) (any, error) {
@@ -117,7 +126,7 @@ func run(pass *analysis.Pass) (any, error) {
 	}
 	for _, file := range pass.Files {
 		filename := pass.Fset.Position(file.Pos()).Filename
-		if skipFile(filename) {
+		if skipFile(pass.Pkg.Path(), filename) {
 			continue
 		}
 		for _, imp := range file.Imports {
@@ -164,22 +173,25 @@ func isBanned(path string) bool {
 
 // skipFile exempts _test.go files -- a test constructing a registry is
 // not a production decision point, demotionsweep.skipFile's own identical
-// reasoning -- and every allowed directory/file.
-func skipFile(filename string) bool {
-	if strings.HasSuffix(filename, "_test.go") {
+// reasoning -- and every allowed package and file.
+//
+// The decision is made on pkgPath (the Go import path) and on the file's
+// BASE name, never on its absolute path. Both are properties of the code
+// rather than of the checkout, so the ban holds identically in CI, in a
+// contributor's home directory, and in a temporary clone whose path
+// happens to contain one of the allowed names.
+func skipFile(pkgPath, filename string) bool {
+	base := filepath.Base(filepath.ToSlash(filename))
+	if strings.HasSuffix(base, "_test.go") {
 		return true
 	}
-	clean := filepath.ToSlash(filename)
-	if !strings.HasPrefix(clean, "/") {
-		clean = "/" + clean
-	}
-	for _, dir := range allowedDirs {
-		if strings.Contains(clean, dir) {
+	for _, pkg := range allowedPackages {
+		if pkgPath == pkg {
 			return true
 		}
 	}
 	for _, f := range allowedFiles {
-		if strings.HasSuffix(clean, f) {
+		if pkgPath == f.pkg && base == f.base {
 			return true
 		}
 	}
