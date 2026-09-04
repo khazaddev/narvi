@@ -5222,3 +5222,118 @@ in the same pass.
 One consequence to state rather than discover: with the control plane recording these histograms, a
 multi-pod deployment splits each one across pods' exporters. That is ordinary OTel bucket merging at
 query time, not a defect, but it is a difference from the single-process recording it replaces.
+
+## 34. Extension & licensing boundaries
+
+Narvi is source-available under the Elastic License 2.0. Two proprietary products are
+planned on top of it: **Narvi Gatekeeper**, an organization-scale review-governance
+module composed into a second binary from a private repository, and **Narvi Desktop**,
+an individual client that talks to this system only through its versioned wire API.
+This section specifies the seams that make that possible **without this repository ever
+knowing either product exists**. The detailed design, with Go shapes and test lists, is
+`docs/design/boundaries-design.md`; what follows is the part future work must obey.
+
+Naming, fixed: this repository is Narvi, the product. It is never "core" and never a
+"community edition" — in code, comments, copy or commit messages.
+
+### 34.1 What stays here, always
+
+Everything per-repository: the full review pipeline, sessions and sandboxes, RBAC and
+SSO, shadow mode (§30) and its Activate surface, the ingress surfaces, metrics export
+(§33), and mode A of per-repository knowledge (§31). **No security capability is ever
+gated by a licence key.** A deployment with no key is a complete, secure product; the
+paid tier sells organization scale and compliance, never base safety. A change that
+would move a shipped capability out of this repository is out of bounds — the paid tier
+is built from work that has not happened yet.
+
+### 34.2 The constraint that shapes every seam
+
+Go's `internal` rule means a separate module can never import
+`github.com/narvidev/narvi/internal/...`. Every type that crosses to a composed module
+must therefore be re-exported by a non-`internal` package. Two exist for that purpose:
+
+- `controlplane` — the importable composition root (§34.6).
+- `extension` — a leaf façade re-exporting, through type aliases, exactly the types a
+  composed module needs.
+
+This is a property to keep, not a limitation to work around: **the crossing set is an
+explicit, small, reviewable list**, and widening it is a deliberate PR in this
+repository. Dependency direction is one-way and total: `controlplane` → `extension` →
+`internal/...`. No `internal` package may import either.
+
+### 34.3 The minimal-delta rule
+
+If a capability can be written without touching this repository, it belongs in the
+private module. If it needs a change here, this repository gains a **generic** extension
+point and the private module holds the **specific** use. This repository never
+references the private one — not by import, not by build tag, not by a name in a
+conditional.
+
+### 34.4 No private types in public contracts
+
+The wire contracts in `/contracts` express **capabilities**, never a private module's
+internal shapes. A read model may say that a capability is present, absent, or
+unlicensed; it may never carry a licence key, a subject, or a module's own vocabulary.
+The capability enum on the wire mirrors the Go enum exactly, and adding a value is a
+deliberate contract change.
+
+### 34.5 The capability registry, and the guarantee it must never touch
+
+A single point of truth answers `Enabled(capability) bool`, computed as **installed AND
+licensed AND valid-now**: a capability is enabled only when a composed module actually
+supplied its implementation, the verified key grants it, and the grant's window contains
+the current instant. Consequences that are requirements, not implementation notes:
+
+- **A key can entitle; it can never create behavior.** With no module composed, the
+  installed set is empty and every capability is disabled whatever the key says.
+- **Every failure is a bare `false`.** Absent, malformed, wrongly signed, wrong-product,
+  expired, not-yet-valid: all disabled, none returning an error a caller could discard
+  on the way to treating "unknown" as "enabled" (§30.4's own reasoning about
+  fail-direction at a boundary). Boot never fails on a bad key: a licensing lapse must
+  not become an outage.
+- **Clock skew widens `nbf` only, never `exp`.** A host clock ahead expires a key early,
+  which is the safe direction; there is no grace window after expiry.
+- **The registry is unreachable from any suppression path.** §30's guarantees are
+  required to be structural — a future contributor cannot silently un-make them — and a
+  licence state must never be an input to a suppression decision. This is enforced by a
+  `narvichecks` analyzer that bans *importing* the registry, the licence domain or the
+  `extension` façade outside a named allow-list (the composition root, the façade, and
+  two named handler files). An import is a syntactic fact; a banned call by name is not,
+  because a wrapper or a method value dodges it. No shadow, egress, outbox, mint or
+  session-actor package can reach the registry at all.
+- **The registry type cannot express "deny".** It has no method that turns a public
+  behavior off. Every consumer reads
+  `if enabled { private implementation } else { the public one }`, and the `else` branch
+  is the wiring that already exists.
+
+Licence keys are verified offline against public keys embedded in the binary — no
+phone-home, ever. Key custody and minting live in the private repository.
+
+### 34.6 The composition root
+
+The wiring that assembles this system is an importable package, not a `main`. It exposes
+an entry point taking zero or more modules; `cmd/control-plane` is a one-line `main`, and
+the private binary is the same line plus its module. Modules are an **explicit struct of
+nil-able hooks** — capabilities, migrations, routes, workers, a knowledge ranker, web
+assets — validated at boot: a module claiming a capability it does not implement refuses
+to start.
+
+Rejected, and worth recording: a module registering itself through `init()` side effects.
+A module that can appear invisibly can also un-make a guarantee invisibly, and the
+composition root could not validate the combination at boot.
+
+Module routes mount under a reserved prefix behind the same authentication as every
+other API route; module migrations run in the module's own migrations table, never
+sharing a version counter with this repository's chain.
+
+### 34.7 Gate-then-rank as a signature
+
+§31.6 requires that eligibility and ordering be separate: a deterministic, path-scoped
+selector decides which prior decisions may be injected at all, and ranking decides only
+their order. The seam that lets a private ranker replace the ordering substrate makes
+that **structural**: a ranker receives the already-gated candidates and returns
+**scores, never candidates**. It has no return channel through which a candidate could
+enter, so it cannot add, drop, replace or re-select — and the cap on how many are
+injected is applied by the caller, after ordering. Degradation (a slow, failing or
+inconsistent ranker) falls back to the gate's own order, never to empty, and is recorded
+on the turn so the mode A/B comparison never counts a degraded turn as the B arm.
