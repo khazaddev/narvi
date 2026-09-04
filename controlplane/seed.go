@@ -6,7 +6,8 @@
 // which owns every actual decision. See internal/app/seed/doc.go for the
 // full "why this lives here, not its own cmd/ binary" writeup (deps.go's
 // own doc comment on Deps has the short version).
-package main
+
+package controlplane
 
 import (
 	"context"

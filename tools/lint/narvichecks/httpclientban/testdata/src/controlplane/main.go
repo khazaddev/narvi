@@ -1,4 +1,4 @@
-package main
+package controlplane
 
 import "net/http"
 

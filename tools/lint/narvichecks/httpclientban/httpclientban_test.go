@@ -14,7 +14,7 @@ import (
 // side net/http in the SAME file is untouched (package "a"); the fully
 // allowed trees stay silent on every banned symbol (internal/adapters/
 // outbound/githubapi, internal/sandboxagent/boot, cmd/sandbox-agent);
-// cmd/control-plane, the composition root, stays silent on CONSTRUCTION
+// controlplane, the composition root, stays silent on CONSTRUCTION
 // but is still reported for INVOCATION; and the pinned baseline file
 // (internal/adapters/inbound/auth/callback.go) is silent while an
 // unaudited SIBLING file in the very same package (other.go) is still
@@ -27,7 +27,7 @@ func TestAnalyzer(t *testing.T) {
 		"internal/adapters/outbound/githubapi",
 		"internal/sandboxagent/boot",
 		"cmd/sandbox-agent",
-		"cmd/control-plane",
+		"controlplane",
 		"internal/adapters/inbound/auth",
 	)
 }

@@ -44,6 +44,7 @@ func TestNoMetricDrift(t *testing.T) {
 	registered, err := ScanRegisteredInstruments(
 		filepath.Join(root, "internal"),
 		filepath.Join(root, "cmd"),
+		filepath.Join(root, "controlplane"),
 	)
 	if err != nil {
 		t.Fatalf("ScanRegisteredInstruments: %v", err)
@@ -173,6 +174,7 @@ func TestNoRunbookMetricDrift(t *testing.T) {
 	registered, err := ScanRegisteredInstruments(
 		filepath.Join(root, "internal"),
 		filepath.Join(root, "cmd"),
+		filepath.Join(root, "controlplane"),
 	)
 	if err != nil {
 		t.Fatalf("ScanRegisteredInstruments: %v", err)

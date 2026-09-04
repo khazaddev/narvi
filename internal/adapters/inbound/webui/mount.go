@@ -9,9 +9,9 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// protectedPrefixes are the 6 top-level route groups cmd/control-plane/
-// main.go registers today (confirmed against every router.<Method>/
-// router.Route call in that file at the time this was written) --
+// protectedPrefixes are the 6 top-level route groups the controlplane
+// package registers today (confirmed against every router.<Method>/
+// router.Route call in that package at the time this was written) --
 // enumerated here ONLY as a second, independent guard on top of Mount's
 // real structural protection (r.NotFound, doc.go's own top comment), never
 // as the sole mechanism: isProtectedPath's whole job is to keep answering
@@ -28,7 +28,7 @@ var protectedPrefixes = []string{
 }
 
 // isProtectedPath also treats "/health" and any "/health/..." path as
-// protected, even though main.go registers no wildcard sibling route under
+// protected, even though controlplane registers no wildcard sibling route under
 // it today -- a health-check consumer (infra/monitoring) probing anything
 // shaped like a health path must see a real 404 on a miss, never a 200 SPA
 // shell that could read as "healthy".
@@ -72,7 +72,7 @@ Run <code>make web-build</code>, then rebuild with
 // reaching for the package-level DistFS itself, so it is testable with an
 // in-memory fstest.MapFS -- see mount_test.go, which is also where this
 // function's own no-shadowing guarantee is pinned against every top-level
-// route group main.go actually registers.
+// route group controlplane actually registers.
 func Mount(r chi.Router, assets fs.FS) {
 	r.NotFound(func(w http.ResponseWriter, req *http.Request) {
 		if isProtectedPath(req.URL.Path) {

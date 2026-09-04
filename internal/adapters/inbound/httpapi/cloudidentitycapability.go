@@ -36,12 +36,12 @@
 // RequireCloudIdentityCapability also fits the admin-only signing-keys
 // rotation route group (cloudidentitykeys.go) -- see
 // RotateCloudIdentitySigningKey's own doc comment for why it too refuses
-// when the capability is off. cmd/control-plane/main.go applies this
+// when the capability is off. The controlplane package applies this
 // middleware to all three groups uniformly; RotateCloudIdentitySigningKey
 // itself keeps NO redundant inline check once this middleware covers its
 // own route group, so there is exactly one place per request path that
 // decides "is cloud identity on". Exported (unlike most of this package's
-// own handler-internal helpers) because cmd/control-plane/main.go, not
+// own handler-internal helpers) because controlplane, not
 // this package, owns route-group construction (r.Use(...)) -- mirrors
 // auth.Middleware's own identical cross-package export shape.
 
