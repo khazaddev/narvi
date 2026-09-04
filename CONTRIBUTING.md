@@ -25,6 +25,9 @@ prompt you on the PR — signing is a single comment:
 The CLA is a license, not a copyright assignment: you keep ownership of your
 work. It exists so the project can keep a single, coherent licensing story.
 
+Signatures are recorded on the repository's `cla-signatures` branch, which
+holds nothing else.
+
 ## Ground rules (CI-enforced)
 
 - **Branch names**: `<type>/<short-kebab-description>` — e.g.

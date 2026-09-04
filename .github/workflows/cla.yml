@@ -26,3 +26,6 @@ jobs:
           path-to-document: https://github.com/narvidev/narvi/blob/main/CLA.md
           branch: cla-signatures
           allowlist: bleleve,dependabot[bot]
+          custom-notsigned-prcomment: 'Thanks for the contribution. Narvi is **source-available** under the [Elastic License 2.0](https://github.com/narvidev/narvi/blob/main/LICENSE), and first-time contributors sign a short [Contributor License Agreement](https://github.com/narvidev/narvi/blob/main/CLA.md) — a license, not an assignment: you keep ownership of your work. Sign by posting the comment below.'
+          custom-pr-sign-comment: 'I have read the CLA Document and I hereby sign the CLA'
+          custom-allsigned-prcomment: 'All committers have signed the CLA. Thank you.'
