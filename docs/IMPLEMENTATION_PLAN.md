@@ -4,10 +4,12 @@
 
 Narvi's technical specification (autonomous coding agents in sandboxes) is in
 [docs/TECHNICAL_PLAN.md](TECHNICAL_PLAN.md) (§0–§33), and the nine-view UI design spec is in
-[docs/design/mockups.html](design/mockups.html). This plan breaks the 12 scheduled phases (0–10 and 12) into **116 ordered Steps**
-(including Phase 4's own 5 additive Steps, 40-44, Phase 8's 9 shadow-mode Steps, 96-104, and Phase 9's 6 knowledge Steps, 105-110), plus Phase 11 — a running
-list of named gaps, additive and unscheduled, which Phase 12 follows numerically without
-waiting on. Each Step is individually shippable and CI-green,
+[docs/design/mockups.html](design/mockups.html). This plan breaks 13 phases (0–12) into **135 Steps**.
+116 of them are scheduled work — including Phase 4's own 5 additive Steps, 40-44, Phase 8's 9
+shadow-mode Steps, 96-104, Phase 9's 6 knowledge Steps, 105-110, and Phase 12's 4 boundary Steps,
+132-135. The other 19 are Phase 11 (Steps 113-131): named gaps, additive and unscheduled, gating
+nothing — a holding list rather than a phase of work, which is why Phase 12 follows it numerically
+without waiting on it. Each Step is individually shippable and CI-green,
 executable by a developer assisted by coding agents (Sonnet 5).
 Every Step references the technical-plan section that specifies it. Each Step becomes exactly one PR when
 implemented — but a Step's number (e.g. Step 6) is the plan's own row number, not the GitHub PR number it
