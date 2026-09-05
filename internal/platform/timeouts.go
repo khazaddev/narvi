@@ -2530,6 +2530,27 @@ type Timeouts struct {
 	// licence grant's own activation instant, never an HMAC bearer
 	// token's freshness window.
 	LicenseNotBeforeSkew time.Duration
+
+	// KnowledgeRankerTimeout bounds a single call to a composed module's
+	// own ports.KnowledgeRanker.Score (docs/design/boundaries-design.md,
+	// section 2.2), layered onto the caller's own context by
+	// controlplane's capabilitySwitchRanker before delegating to it --
+	// never applied to the public knowledge.RecencyRanker, which is
+	// first-party, synchronous, zero-I/O code this codebase already
+	// trusts not to block. A composed module's own ranker is arbitrary
+	// third-party code this switch cannot assume respects ctx's own
+	// deadline unprompted, so it is bounded explicitly rather than
+	// trusted to bound itself (the KnowledgeRanker port's own doc
+	// comment: "an implementation should still honor ctx's own deadline
+	// ... it must never assume it will always be given unlimited time").
+	// Not given an explicit figure by any technical-plan section --
+	// chosen as 10 seconds, matching GitHubAppScopeCheckTimeout/
+	// OpenCodeConfigFetchTimeout/CloudIdentityConfigFetchTimeout's own
+	// shared "a single, bounded external call" reasoning: generous enough
+	// for a real hybrid lexical+embeddings retrieval call, short enough
+	// that a stuck module ranker cannot stall a review turn for long
+	// before degrading to the gate's own order.
+	KnowledgeRankerTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -2750,6 +2771,8 @@ func DefaultTimeouts() Timeouts {
 		GitHubAppMintTimeout:       20 * time.Second, // §30.4; not specified, chosen -- see field doc comment
 
 		LicenseNotBeforeSkew: 5 * time.Minute, // design note section 1.5, explicit ("default 5 minutes")
+
+		KnowledgeRankerTimeout: 10 * time.Second, // design note section 2.2; not specified numerically, chosen -- see field doc comment
 	}
 }
 
