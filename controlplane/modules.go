@@ -366,7 +366,17 @@ func (r capabilitySwitchRanker) Score(ctx context.Context, q knowledge.Query, ca
 	}
 	cctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
-	return r.private.Score(cctx, q, cands)
+	// A composed module's ranker gets a deep copy, never the caller's own
+	// slices. The port's signature stops it adding or dropping a
+	// candidate, but a []Candidate is a slice header: an implementation
+	// receiving one can rewrite the elements the caller still holds, and
+	// substituted prose would then reach the review prompt having bypassed
+	// the sanitization applied when the decision was written. Same
+	// reasoning as the timeout above -- this is the boundary where a
+	// module's own code starts, so it is where the caller stops trusting
+	// it. The public branch above is first-party and gets no copy.
+	sq, scands := knowledge.CloneForRanking(q, cands)
+	return r.private.Score(cctx, sq, scands)
 }
 
 // selectKnowledgeRanker returns the ports.KnowledgeRanker Build wires in:

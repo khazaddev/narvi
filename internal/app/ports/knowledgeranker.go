@@ -13,9 +13,19 @@ import (
 // that never merge; §34.7 makes that structural rather than a convention
 // an implementer has to remember: Score's ONLY output is one float64 per
 // candidate, in the same order it was given them. There is no Candidate
-// anywhere in this interface's own signature -- nothing to add one to,
-// nothing to drop one from, nothing to replace or re-select through -- so
-// no implementation can un-do gate-then-rank by itself. The only way to
+// anywhere in this interface's own RETURN types -- nothing to add one to,
+// nothing to drop one from, nothing to re-select through -- so no
+// implementation can widen eligibility by itself.
+//
+// What the signature does NOT close, and a caller must: cands is a slice
+// header, so an implementation can rewrite the elements the caller still
+// holds. That is content substitution rather than widening, and it is the
+// stricter failure of the two, because substituted prose reaches the
+// review prompt having bypassed the sanitization applied when the
+// decision was written. A caller handing candidates to an implementation
+// it does not control passes knowledge.CloneForRanking's output instead
+// of its own slices; controlplane's capability-aware wrapper already does
+// this at the boundary where a composed module's code begins. The only way to
 // even ATTEMPT it is to widen this interface's own declared Score
 // signature, which is a reviewable, CI-visible edit to this file (and the
 // arch-test that pins it), never a silent one buried in an

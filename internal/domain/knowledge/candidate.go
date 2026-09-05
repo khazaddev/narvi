@@ -103,3 +103,52 @@ type Query struct {
 // to raise it: Score returns scores, never a count, and never a
 // candidate.
 const MaxInjected = 12
+
+// CloneForRanking returns a deep copy of q and cands, safe to hand to a
+// ranker whose implementation the caller does not control.
+//
+// The port's signature closes the obvious hole -- Score returns scores
+// and no Candidate, so nothing can be added, dropped or re-selected
+// through it -- but a []Candidate is a slice HEADER, and an
+// implementation that receives one can rewrite the elements the caller
+// still holds. Demonstrated rather than assumed: a ranker doing
+// `cands[i].Decision = "..."` and `cands[i].Tags[0] = "..."` rewrites the
+// caller's own candidates, and the substituted prose then reaches the
+// review prompt having bypassed the sanitization applied when the
+// decision was written (§31.7). Content substitution is a stricter
+// failure than widening, and "scores, never candidates" does not close
+// it: only a copy does.
+//
+// Both levels are copied, because copying the outer slice alone would
+// leave Tags, Roots and ChangedPaths sharing their backing arrays and the
+// hole open one level down. Every other field is a string or a scalar and
+// is copied by assignment.
+//
+// The caller decides when this is worth its allocation: the public
+// RecencyRanker is first-party and needs no copy, so this is not applied
+// on the path every deployment takes.
+func CloneForRanking(q Query, cands []Candidate) (Query, []Candidate) {
+	q.Tags = cloneStrings(q.Tags)
+	q.Roots = cloneStrings(q.Roots)
+	q.ChangedPaths = cloneStrings(q.ChangedPaths)
+
+	out := make([]Candidate, len(cands))
+	copy(out, cands)
+	for i := range out {
+		out[i].Tags = cloneStrings(out[i].Tags)
+		out[i].Roots = cloneStrings(out[i].Roots)
+	}
+	return q, out
+}
+
+// cloneStrings copies s, preserving the nil/empty distinction: a nil
+// slice stays nil so a copy is indistinguishable from the original to a
+// caller that checks for nil.
+func cloneStrings(s []string) []string {
+	if s == nil {
+		return nil
+	}
+	out := make([]string, len(s))
+	copy(out, s)
+	return out
+}
