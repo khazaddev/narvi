@@ -25,7 +25,7 @@ import (
 func TestNoStepRefInSource(t *testing.T) {
 	root := repoRoot(t)
 
-	refs, err := CheckStepRefs(root, []string{"internal", "cmd", "controlplane", "contracts", "web/src"})
+	refs, err := CheckStepRefs(root, []string{"internal", "cmd", "controlplane", "extension", "contracts", "web/src"})
 	if err != nil {
 		t.Fatalf("CheckStepRefs: %v", err)
 	}

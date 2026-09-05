@@ -700,6 +700,14 @@ func (e *InvalidCloudIdentityIssuerURLError) Error() string {
 // a loud boot-time refusal.
 const otlpEndpointEnvVarName = "NARVI_OTLP_ENDPOINT"
 
+// licenseKeyEnvVarName is the env var Load reads for Config.LicenseKey
+// (docs/design/boundaries-design.md, section 1.5) -- see that field's own doc
+// comment for why, unlike every other credential-shaped field in this
+// file, a non-empty value here gets NO validation at Load time: this
+// value is opaque to platform entirely, and its own shape is
+// internal/domain/license's own concern.
+const licenseKeyEnvVarName = "NARVI_LICENSE_KEY"
+
 // InvalidOTLPEndpointError is returned by Load when NARVI_OTLP_ENDPOINT is
 // set but is not a well-formed absolute http(s) URL with no path/query/
 // fragment -- platform.SetupOTel's own OTLP exporters each use their own
@@ -1541,6 +1549,26 @@ type Config struct {
 	// degrades) -- see objectStoreEndpointEnvVarName's own doc comment
 	// above for the exact gating rule and every field's env var.
 	ObjectStorage *ObjectStorageConfig
+
+	// LicenseKey is docs/design/boundaries-design.md, section 1's own raw licence
+	// key, read from NARVI_LICENSE_KEY -- DELIBERATELY OPTIONAL and
+	// DELIBERATELY UNVALIDATED here: empty means no key configured (the
+	// public binary's own default, and a fully supported one -- §34.5:
+	// "the public binary composes no module, so installed is empty and
+	// Enabled is false for everything regardless of any key"), and a
+	// NON-empty value is stored exactly as given, with no parsing, no
+	// signature check, and no error path that could fail Load over it.
+	// This is the one deliberate exception to every other credential-
+	// shaped field's own "validate a non-empty value at boot" precedent
+	// (see cloudIdentityIssuerURLEnvVarName's doc comment for that
+	// precedent) -- a licence key is verified by internal/domain/license.
+	// Parse, at the composition root, specifically so a malformed,
+	// expired, or wrong-product key degrades every capability to
+	// disabled and logs a warning (in a private build) rather than
+	// failing this process's own boot: "a licensing lapse must not
+	// become an outage" (technical plan §34.5). Never logged, never
+	// echoed on any wire response, in whole or in part.
+	LicenseKey string
 }
 
 // ObjectStorageConfig is §8.6's typed object-storage configuration
@@ -2031,6 +2059,12 @@ func Load() (*Config, error) {
 		}
 	}
 
+	// licenseKey (docs/design/boundaries-design.md, section 1.5): DELIBERATELY
+	// UNVALIDATED -- see Config.LicenseKey's own doc comment for why a
+	// malformed value here must never fail this function, unlike every
+	// other credential-shaped field above.
+	licenseKey := os.Getenv(licenseKeyEnvVarName)
+
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
@@ -2094,5 +2128,7 @@ func Load() (*Config, error) {
 		OTLPEndpoint: otlpEndpoint,
 
 		ObjectStorage: objectStorage,
+
+		LicenseKey: licenseKey,
 	}, nil
 }
